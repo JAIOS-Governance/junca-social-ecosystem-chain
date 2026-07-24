@@ -17,7 +17,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile readback controller
         run: python -m py_compile scripts/aws_binding_readback.py
-      - name: Run fail-closed unit and negative tests\n        run: python -m unittest tests/test_aws_binding_readback.py -v\n      - name: Assert institutional and release boundaries
+      - name: Run fail-closed unit and negative tests
+        run: python -m unittest tests/test_aws_binding_readback.py -v
+      - name: Assert institutional and release boundaries
         run: |
           grep -F 'JAIOS Institutional Governance' scripts/aws_binding_readback.py
           grep -F 'Public Testnet / No Monetary Value' scripts/aws_binding_readback.py
