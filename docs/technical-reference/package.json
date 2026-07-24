@@ -1,0 +1,15 @@
+{
+  "name": "@junca/social-ecosystem-chain-technical-reference",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "node ./scripts/clean.mjs",
+    "build": "node ./scripts/build.mjs",
+    "lint": "node --check ./scripts/build.mjs && node --check ./scripts/qa.mjs && node --check ./scripts/clean.mjs",
+    "test": "npm run build && node ./scripts/qa.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">JUNCA Social Ecosystem Chain Technical Reference</title>
+  <desc id="desc">Editorial title card for the official technical reference.</desc>
+  <rect width="1200" height="630" fill="#f4f1e9"/>
+  <path d="M0 88h1200M0 542h1200" stroke="#173f69" stroke-opacity=".25"/>
+  <path d="M92 0v630M1108 0v630" stroke="#173f69" stroke-opacity=".15"/>
+  <text x="92" y="140" fill="#9d7a3d" font-family="Inter, sans-serif" font-size="20" letter-spacing="5">OFFICIAL TECHNICAL REFERENCE</text>
+  <text x="92" y="290" fill="#13243b" font-family="Cormorant Garamond, serif" font-size="88">JUNCA Social</text>
+  <text x="92" y="380" fill="#13243b" font-family="Cormorant Garamond, serif" font-size="88">Ecosystem Chain</text>
+  <text x="92" y="492" fill="#526174" font-family="Inter, sans-serif" font-size="24">Protocol · Assets · Interoperability · Governance · Evidence</text>
+  <text x="1108" y="585" text-anchor="end" fill="#173f69" font-family="Inter, sans-serif" font-size="18">PUBLIC TESTNET / NO MONETARY VALUE</text>
+</svg>
