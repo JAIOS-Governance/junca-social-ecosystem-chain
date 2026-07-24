@@ -1,6 +1,12 @@
 name: JUNCA Chain Publication Reliability
 
 on:
+  pull_request:
+    paths:
+      - "docs/technical-reference/**"
+      - "infra/aws/docs-publication/**"
+      - ".github/workflows/junca-chain-docs-production.yml"
+      - ".github/workflows/junca-chain-publication-reliability.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -64,7 +70,7 @@ jobs:
           } >>"${GITHUB_STEP_SUMMARY}"
 
   aws-readback:
-    if: inputs.mode == 'aws-readback'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'aws-readback'
     needs: source-and-public-preflight
     runs-on: ubuntu-latest
     environment: junca-chain-docs-production
