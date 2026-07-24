@@ -1,4 +1,5 @@
 name: JUNCA Chain AWS Production Recovery
+# OIDC repository configuration normalized before this run.
 
 on:
   push:
