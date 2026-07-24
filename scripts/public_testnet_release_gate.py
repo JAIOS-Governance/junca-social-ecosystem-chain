@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -92,6 +93,11 @@ def evaluate(
         (source.get("chain_id"), source.get("genesis_hash"))
         for source in (binding, runtime, rollback)
     }
+    source_commits = {source.get("source_commit") for source in (binding, runtime, rollback)}
+    if any(not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit) for commit in source_commits):
+        failures.append("source_commit:missing_or_invalid")
+    elif len(source_commits) != 1:
+        failures.append("source_commit:mismatch")
     if any(chain_id in (None, "") or genesis in (None, "") for chain_id, genesis in identities):
         failures.append("chain_identity:missing")
     elif len(identities) != 1:
@@ -118,6 +124,7 @@ def evaluate(
         "network_label": NETWORK_LABEL,
         "decision": "PUBLIC_TESTNET_ACCEPTED" if accepted else "PUBLIC_TESTNET_REJECTED",
         "accepted": accepted,
+        "source_commit": next(iter(source_commits)) if len(source_commits) == 1 else None,
         "failure_count": len(failures),
         "failures": failures,
         "release_boundary": {
