@@ -17,8 +17,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile readback controller
         run: python -m py_compile scripts/aws_binding_readback.py
-      - name: Run fail-closed unit and negative tests
-        run: python -m unittest tests/test_aws_binding_readback.py -v
+      - name: Verify successful redacted evidence path
+        id: success_path
+        continue-on-error: true
+        run: python -m unittest tests.test_aws_binding_readback.AwsBindingReadbackTest.test_generates_redacted_verified_evidence -v
+      - name: Verify failure-domain fail-closed path
+        id: failure_domains
+        continue-on-error: true
+        run: python -m unittest tests.test_aws_binding_readback.AwsBindingReadbackTest.test_fails_closed_without_three_failure_domains -v
+      - name: Verify signer-isolation fail-closed path
+        id: signer_isolation
+        continue-on-error: true
+        run: python -m unittest tests.test_aws_binding_readback.AwsBindingReadbackTest.test_fails_closed_for_duplicate_signers -v
+      - name: Enforce all AWS readback tests
+        if: always()
+        env:
+          SUCCESS_PATH: ${{ steps.success_path.outcome }}
+          FAILURE_DOMAINS: ${{ steps.failure_domains.outcome }}
+          SIGNER_ISOLATION: ${{ steps.signer_isolation.outcome }}
+        run: test "$SUCCESS_PATH" = success && test "$FAILURE_DOMAINS" = success && test "$SIGNER_ISOLATION" = success
       - name: Assert institutional and release boundaries
         run: |
           grep -F 'JAIOS Institutional Governance' scripts/aws_binding_readback.py
