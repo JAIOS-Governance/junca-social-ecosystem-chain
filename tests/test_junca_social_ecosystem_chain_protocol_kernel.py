@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from protocol_kernel import (
+from jaios.social_ecosystem_chain.protocol_kernel import (
     AccountState,
     ProtocolConfig,
     ProtocolTransitionError,
