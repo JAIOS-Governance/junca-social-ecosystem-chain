@@ -3,9 +3,5 @@
   "release_commit": "13d897bba59b539e158a1ce47b4aa8982e76699e",
   "governance": "JAIOS Institutional Governance",
   "notice": "Public Testnet / No Monetary Value",
-  "failure_domains": [
-    "failure-domain-a",
-    "failure-domain-b",
-    "failure-domain-c"
-  ]
+  "failure_domains": ["failure-domain-a", "failure-domain-b", "failure-domain-c"]
 }

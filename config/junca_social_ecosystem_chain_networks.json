@@ -1,0 +1,30 @@
+{
+  "networks": [
+    {
+      "name": "mainnet",
+      "chain_id": 668,
+      "rpc_urls": [
+        "https://rpc.juncachain.com"
+      ],
+      "websocket_urls": [
+        "wss://ws.juncachain.com"
+      ],
+      "explorer_url": "https://scan.juncachain.com",
+      "governance_url": "https://master.juncachain.com",
+      "max_block_age_seconds": 300
+    },
+    {
+      "name": "testnet",
+      "chain_id": 669,
+      "rpc_urls": [
+        "https://rpc-testnet.juncachain.com"
+      ],
+      "websocket_urls": [
+        "wss://ws-testnet.juncachain.com"
+      ],
+      "explorer_url": "https://scan-testnet.juncachain.com",
+      "governance_url": "https://master-testnet.juncachain.com",
+      "max_block_age_seconds": 300
+    }
+  ]
+}

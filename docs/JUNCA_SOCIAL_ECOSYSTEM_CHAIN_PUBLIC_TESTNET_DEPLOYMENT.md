@@ -5,15 +5,9 @@
 
 ## Deployment topology
 
-The Public Testnet uses three validator nodes placed in distinct failure
-domains. Validator JSON-RPC binds to loopback and is never exposed directly.
-Public traffic terminates at a replicated TLS gateway that permits read-only
-methods, applies rate limits, and rejects transaction broadcast and
-administrative namespaces.
+The Public Testnet uses three validator nodes placed in distinct failure domains. Validator JSON-RPC binds to loopback and is never exposed directly. Public traffic terminates at a replicated TLS gateway that permits read-only methods, applies rate limits, and rejects transaction broadcast and administrative namespaces.
 
-The Explorer reads finalized indexed state through a separate read-only
-boundary. Monitoring observes validator quorum, RPC head lag, disk capacity,
-and public health independently from the validator hosts.
+The Explorer reads finalized indexed state through a separate read-only boundary. Monitoring observes validator quorum, RPC head lag, disk capacity, and public health independently from the validator hosts.
 
 ## Controlled rollout
 
@@ -29,14 +23,8 @@ and public health independently from the validator hosts.
 
 ## Rollback
 
-Public endpoints are withdrawn before validator recovery. Bridge routes remain
-paused. Logs, audit evidence and the last finalized checkpoint are preserved.
-The last verified binary and genesis are restored, quorum is re-established,
-and read-only endpoints return only after acceptance passes again.
+Public endpoints are withdrawn before validator recovery. Bridge routes remain paused. Logs, audit evidence and the last finalized checkpoint are preserved. The last verified binary and genesis are restored, quorum is re-established, and read-only endpoints return only after acceptance passes again.
 
 ## Release boundary
 
-This deployment plan does not create infrastructure, bind secrets, activate
-bridge routes, move assets, or modify Mainnet. Actual resource creation and
-endpoint publication require the accepted deployment binding evidence and
-independent readback.
+This deployment plan does not create infrastructure, bind secrets, activate bridge routes, move assets, or modify Mainnet. Actual resource creation and endpoint publication require the accepted deployment binding evidence and independent readback.

@@ -1,0 +1,54 @@
+name: JUNCA Chain Release Hardening
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/**"
+      - "contracts/junca-social-ecosystem-chain/**"
+      - "scripts/junca_social_ecosystem_chain_deployment_bundle_v2.py"
+      - "tests/test_junca_social_ecosystem_chain_release_hardening.py"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_INCIDENT_RUNBOOK.md"
+      - ".github/workflows/junca-social-ecosystem-chain-release-hardening.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Compile release controls
+        run: python -m compileall -q jaios/social_ecosystem_chain scripts/junca_social_ecosystem_chain_deployment_bundle_v2.py tests/test_junca_social_ecosystem_chain_release_hardening.py
+      - name: Run release hardening tests
+        run: python -m unittest tests.test_junca_social_ecosystem_chain_release_hardening -v
+      - name: Compile pinned bridge contracts
+        run: |
+          mkdir -p artifacts/bridge-contract
+          npx --yes solc@0.8.24 --optimize --bin --abi contracts/junca-social-ecosystem-chain/*.sol -o artifacts/bridge-contract
+      - name: Build deterministic non-deployment evidence
+        run: |
+          python scripts/junca_social_ecosystem_chain_deployment_bundle_v2.py \
+            --sources contracts/junca-social-ecosystem-chain \
+            --compiler-output artifacts/bridge-contract \
+            --output artifacts/junca-social-ecosystem-chain-bridge-build-bundle.json
+          grep -q '"deployment_performed": false' artifacts/junca-social-ecosystem-chain-bridge-build-bundle.json
+          grep -q '"governance": "JAIOS Institutional Governance"' artifacts/junca-social-ecosystem-chain-bridge-build-bundle.json
+          grep -q '"notice": "Public Testnet / No Monetary Value"' artifacts/junca-social-ecosystem-chain-bridge-build-bundle.json
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-release-hardening-${{ github.run_id }}
+          path: |
+            artifacts/junca-social-ecosystem-chain-bridge-build-bundle.json
+            artifacts/bridge-contract/**
+          if-no-files-found: error
+          retention-days: 90

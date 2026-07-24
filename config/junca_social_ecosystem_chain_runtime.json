@@ -1,0 +1,36 @@
+{
+  "schema_version": "junca-public-testnet-runtime/v1",
+  "network": "public-preview",
+  "issuance_management": "JAIOS Institutional Governance",
+  "chain_id": 20260723,
+  "consensus": {"engine": "posv", "period_seconds": 2, "epoch_blocks": 900},
+  "validators": [
+    {"name": "validator-1", "key_file": "/run/secrets/validator-1.key", "data_volume": "validator-1-data"},
+    {"name": "validator-2", "key_file": "/run/secrets/validator-2.key", "data_volume": "validator-2-data"},
+    {"name": "validator-3", "key_file": "/run/secrets/validator-3.key", "data_volume": "validator-3-data"}
+  ],
+  "rpc": {
+    "http_port": 8545,
+    "ws_port": 8546,
+    "allowed_modules": ["eth", "net", "web3"],
+    "denied_modules": ["admin", "debug", "miner", "personal", "txpool"],
+    "cors_policy": "explicit-origin-only",
+    "rate_limit_required": true
+  },
+  "services": {
+    "explorer": {"required": true, "head_parity_required": true},
+    "faucet": {"required": true, "rate_limit_required": true, "testnet_only": true},
+    "status": {"required": true, "independent_readback_required": true}
+  },
+  "custody": {
+    "key_generation": "deployment-environment-only",
+    "key_mount": "read-only-secret",
+    "legacy_key_reuse": false,
+    "repository_secret_material": false
+  },
+  "release": {
+    "public_label": "Public Testnet / No Monetary Value",
+    "mainnet": false,
+    "rollback_bundle_required": true
+  }
+}

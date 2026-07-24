@@ -27,9 +27,7 @@ class InfrastructurePlanTests(unittest.TestCase):
         self.assertTrue(all(not node["public_rpc"] for node in validators))
 
     def test_public_gateway_is_tls_readonly_and_rate_limited(self):
-        gateway = build_infrastructure_plan(specification()).plan["topology"][
-            "public_rpc_gateway"
-        ]
+        gateway = build_infrastructure_plan(specification()).plan["topology"]["public_rpc_gateway"]
         self.assertEqual(gateway["ingress"], ["443/tcp"])
         self.assertTrue(gateway["tls_required"])
         self.assertTrue(gateway["rate_limit_required"])

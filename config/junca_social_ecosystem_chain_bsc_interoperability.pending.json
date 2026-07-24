@@ -1,0 +1,36 @@
+{
+  "asset_type": "fungible",
+  "attestations": {
+    "destination_contract_deployed": false,
+    "incident_runbook_approved": false,
+    "independent_security_review": false,
+    "relayer_keys_verified": false,
+    "source_contract_deployed": false
+  },
+  "bridge_mode": "lock-mint-burn-release",
+  "controls": {
+    "custody": "multisig",
+    "daily_limit": 1000000,
+    "finality_confirmations": 20,
+    "paused": true,
+    "per_transaction_limit": 10000,
+    "replay_protection": true,
+    "role_separation": true
+  },
+  "destination_contract": "0x2222222222222222222222222222222222222222",
+  "destination_network": "bsc-testnet",
+  "destination_standard": "BEP-20",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "relayer_threshold": 2,
+  "relayers": [
+    {"id": "jaios-testnet-relayer-a"},
+    {"id": "jaios-testnet-relayer-b"},
+    {"id": "independent-testnet-relayer-c"}
+  ],
+  "rpc_url": "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
+  "source_chain_id": 20260723,
+  "source_contract": "0x1111111111111111111111111111111111111111",
+  "source_network": "junca-public-testnet",
+  "source_standard": "ERC-20"
+}

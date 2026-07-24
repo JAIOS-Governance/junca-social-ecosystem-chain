@@ -1,0 +1,35 @@
+{
+  "schema_version": "junca-legacy-build-contract/v1",
+  "source": {
+    "repository": "https://github.com/juncachain/juncachain",
+    "commit": "a3e47b6a96c36378606764c35cfcdb2de97cb685",
+    "tag": "v0.2.8",
+    "go_module": "github.com/juncachain/juncachain",
+    "go_directive": "1.17"
+  },
+  "build": {
+    "command": [
+      "go",
+      "run",
+      "build/ci.go",
+      "install",
+      "-static",
+      "./cmd/junca"
+    ],
+    "output_path": "build/bin/junca",
+    "status": "pending-toolchain"
+  },
+  "container": {
+    "builder_image": "golang:1.18-alpine",
+    "runtime_image": "alpine:latest",
+    "image_digest_status": "mutable-tags-unpinned"
+  },
+  "release_gates": {
+    "pin_builder_image_digest": true,
+    "pin_runtime_image_digest": true,
+    "produce_binary_sha256": true,
+    "produce_container_digest": true,
+    "produce_sbom": true,
+    "public_release_allowed": false
+  }
+}
