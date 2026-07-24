@@ -4,9 +4,9 @@ output "deployment_state" {
 
 output "registrar_delegation_boundary" {
   value = {
-    registrar = "external"
-    domain    = var.root_domain
-    route53_zone_id = var.route53_zone_id
+    registrar                    = "external"
+    domain                       = var.root_domain
+    route53_zone_id              = var.route53_zone_id
     nameserver_readback_required = true
   }
 }
@@ -21,8 +21,8 @@ output "public_urls" {
 
 output "immutable_boundaries" {
   value = {
-    mainnet_changed = false
-    assets_moved    = false
+    mainnet_changed  = false
+    assets_moved     = false
     bridge_activated = false
   }
 }

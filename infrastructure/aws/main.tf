@@ -67,9 +67,9 @@ resource "aws_iam_role" "validator" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -247,12 +247,12 @@ resource "aws_acm_certificate_validation" "public" {
 }
 
 resource "aws_lb" "public" {
-  count              = local.create
-  name               = "junca-public-testnet"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.public_service[0].id]
-  subnets            = var.public_subnet_ids
+  count                      = local.create
+  name                       = "junca-public-testnet"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.public_service[0].id]
+  subnets                    = var.public_subnet_ids
   drop_invalid_header_fields = true
 }
 
@@ -267,9 +267,9 @@ resource "aws_iam_role" "ecs_execution" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -289,8 +289,8 @@ resource "aws_ecs_task_definition" "rpc" {
   memory                   = 2048
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   container_definitions = jsonencode([{
-    name  = "readonly-rpc"
-    image = var.rpc_gateway_image
+    name         = "readonly-rpc"
+    image        = var.rpc_gateway_image
     portMappings = [{ containerPort = 8545 }]
     environment = [
       { name = "CHAIN_NAME", value = "JUNCA Social Ecosystem Chain" },
@@ -351,8 +351,8 @@ resource "aws_ecs_task_definition" "explorer" {
   memory                   = 2048
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   container_definitions = jsonencode([{
-    name  = "finalized-explorer"
-    image = var.explorer_image
+    name         = "finalized-explorer"
+    image        = var.explorer_image
     portMappings = [{ containerPort = 8080 }]
     environment = [
       { name = "FINALIZED_INDEX_ONLY", value = "true" },
