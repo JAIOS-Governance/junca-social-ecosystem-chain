@@ -60,6 +60,15 @@ jobs:
       - name: Rebuild exact source artifact
         working-directory: docs/technical-reference
         run: npm test
+      - name: Require configured publication role
+        env:
+          AWS_DOCS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+        run: |
+          test -n "$AWS_DOCS_DEPLOYMENT_ROLE_ARN"
+          case "$AWS_DOCS_DEPLOYMENT_ROLE_ARN" in
+            arn:aws:iam::*:role/JuncaChainDocsProductionDeployment) ;;
+            *) echo "AWS_DOCS_DEPLOYMENT_ROLE_ARN is missing or unexpected" >&2; exit 1 ;;
+          esac
       - name: Configure publication-only AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -73,8 +82,19 @@ jobs:
           set -euo pipefail
           account_id="$(aws sts get-caller-identity --query Account --output text)"
           caller_arn="$(aws sts get-caller-identity --query Arn --output text)"
-          organization_id="$(aws organizations describe-organization --query Organization.Id --output text)"
+          organization_id="$(aws organizations describe-organization --query Organization.Id --output text 2>/tmp/aws-organization.err || true)"
+          if [[ -z "${organization_id}" || "${organization_id}" == "None" ]]; then
+            if grep -Fq "AWSOrganizationsNotInUseException" /tmp/aws-organization.err; then
+              organization_id="NOT_IN_USE"
+            else
+              cat /tmp/aws-organization.err >&2
+              exit 1
+            fi
+          fi
           account_alias="$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text)"
+          if [[ -z "${account_alias}" || "${account_alias}" == "None" ]]; then
+            account_alias="NONE"
+          fi
           bucket="junca-chain-docs-${account_id}"
           distribution_id="$(aws cloudfront list-distributions \
             --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" \
