@@ -1,0 +1,52 @@
+{
+  "attestations": [
+    {
+      "cryptographic_verification": true,
+      "key_id": "kms://testnet/relayer-a/v1",
+      "relayer_id": "jaios-testnet-relayer-a",
+      "signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "cryptographic_verification": true,
+      "key_id": "kms://testnet/relayer-b/v1",
+      "relayer_id": "jaios-testnet-relayer-b",
+      "signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "confirmations": 20,
+  "execution_transaction": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "message": {
+    "asset_type": "fungible",
+    "destination_asset": "0x2222222222222222222222222222222222222222",
+    "destination_network": "bsc-testnet",
+    "direction": "junca-public-testnet->bsc-testnet",
+    "governance": "JAIOS Institutional Governance",
+    "nonce": 1,
+    "notice": "Public Testnet / No Monetary Value",
+    "recipient": "0x4444444444444444444444444444444444444444",
+    "route_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "schema_version": 1,
+    "sender": "0x5555555555555555555555555555555555555555",
+    "source_asset": "0x1111111111111111111111111111111111111111",
+    "source_block": 100,
+    "source_network": "junca-public-testnet",
+    "source_transaction": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "token_id": null,
+    "value": 100
+  },
+  "policy": {
+    "allowed_networks": ["junca-public-testnet", "bsc-testnet"],
+    "daily_limit": 1000000,
+    "paused": true,
+    "per_transaction_limit": 10000,
+    "relayer_ids": [
+      "jaios-testnet-relayer-a",
+      "jaios-testnet-relayer-b",
+      "independent-testnet-relayer-c"
+    ],
+    "required_confirmations": 20,
+    "route_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "threshold": 2
+  },
+  "unpause_for_simulation": true
+}

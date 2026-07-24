@@ -1,0 +1,122 @@
+{
+  "schema_version": "junca-global-major-chain-architecture/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "baseline_commit": "11fa5c55cbd5bf2dbc2887ed8d025ed9be2d6f35",
+  "axes": [
+    {"id": "one_core", "status": "IMPLEMENTED", "requirements": ["Connect Knowledge, Production, Governance, AI, and Capital through explicit chain functions and evidence outputs."]},
+    {"id": "trust_stack", "status": "IMPLEMENTED", "requirements": ["Map requirement to control, evidence, and reporting for every trust layer."]},
+    {"id": "protocol_kernel", "status": "IMPLEMENTED", "requirements": ["Define deterministic identity, compatibility, migration, finality, and rollback boundaries."]},
+    {"id": "execution", "status": "IMPLEMENTED", "requirements": ["Treat EVM compatibility as a conformance profile and future runtimes as versioned plug-ins."]},
+    {"id": "developer_experience", "status": "IMPLEMENTED", "requirements": ["Version RPC, SDK, build, verification, local development, and migration contracts."]},
+    {"id": "enterprise_adoption", "status": "IMPLEMENTED", "requirements": ["Separate permissions, custody, tenants, projects, regulated assets, and credentials."]},
+    {"id": "scalability", "status": "IMPLEMENTED", "requirements": ["Separate targets from verified measurements and reject inferred performance claims."]},
+    {"id": "security", "status": "IMPLEMENTED", "requirements": ["Gate supply chain, upgrades, keys, incidents, recovery, reviews, and bounty readiness."]},
+    {"id": "interoperability", "status": "IMPLEMENTED", "requirements": ["Use a paused route registry with finality, replay, limits, custody, and review gates."]},
+    {"id": "ai_native_operations", "status": "IMPLEMENTED", "requirements": ["Route Read, Write, Execute, Evidence, Approval, and Maintenance under institutional governance."]},
+    {"id": "global_operations", "status": "IMPLEMENTED", "requirements": ["Define region, failure-domain, SLO, observability, backup, DR, residency, and compliance contracts."]},
+    {"id": "ecosystem_selection", "status": "IMPLEMENTED", "requirements": ["Compare ecosystems only through common dimensions and official primary evidence."]},
+    {"id": "roadmap", "status": "IMPLEMENTED", "requirements": ["Gate Public Testnet through Mainnet using machine-readable exit criteria."]}
+  ],
+  "one_core_contract": [
+    {"id": "knowledge", "chain_functions": ["versioned provenance anchors", "credential verification", "knowledge attestation registry"], "evidence_outputs": ["source digest", "issuer identity", "verification report"]},
+    {"id": "production", "chain_functions": ["release manifest anchors", "reproducible artifact identity", "asset provenance boundary"], "evidence_outputs": ["artifact digest", "SBOM reference", "release gate result"]},
+    {"id": "governance", "chain_functions": ["policy version registry", "role separation", "decision evidence"], "evidence_outputs": ["policy digest", "approval route", "audit record"]},
+    {"id": "ai", "chain_functions": ["policy-evaluated operation routing", "machine-readable state", "human approval boundary"], "evidence_outputs": ["input digest", "decision trace", "execution evidence"]},
+    {"id": "capital", "chain_functions": ["regulated asset pattern", "payment evidence", "policy-controlled transaction boundary"], "evidence_outputs": ["authorization evidence", "custody role map", "reporting record"]}
+  ],
+  "trust_stack": [
+    {"id": "identity", "requirement": "Actors and workloads are attributable.", "control": "Versioned identity and role bindings.", "evidence": "Binding digest and issuer reference.", "reporting": "Identity assurance report."},
+    {"id": "compliance", "requirement": "Applicable obligations are traceable.", "control": "Policy and jurisdiction mapping.", "evidence": "Policy evaluation record.", "reporting": "Compliance status report."},
+    {"id": "payment", "requirement": "Value actions require explicit authorization.", "control": "Custody and transaction policy separation.", "evidence": "Authorization and settlement references.", "reporting": "Payment control report."},
+    {"id": "data", "requirement": "Data use is scoped and attributable.", "control": "Tenant, project, residency, and retention rules.", "evidence": "Access and provenance records.", "reporting": "Data governance report."},
+    {"id": "auditability", "requirement": "Material actions are independently reconstructable.", "control": "Tamper-evident evidence chains.", "evidence": "Digest-linked audit records.", "reporting": "Audit evidence package."},
+    {"id": "reporting", "requirement": "Measured state is separated from target state.", "control": "Versioned report schemas and source requirements.", "evidence": "Primary-source references and digests.", "reporting": "Machine-readable and human-readable release report."}
+  ],
+  "protocol_kernel": {
+    "deterministic_genesis": true,
+    "versioned_network_config": true,
+    "validator_quorum_finality": true,
+    "upgrade_compatibility": true,
+    "state_migration": true,
+    "rollback_boundary": true
+  },
+  "execution": {
+    "plugin_interface_version": "v1",
+    "profiles": [
+      {"id": "evm", "status": "UNVERIFIED", "conformance_status": "UNVERIFIED", "test_suite_required": true},
+      {"id": "wasm", "status": "PLANNED", "conformance_status": "UNVERIFIED", "test_suite_required": true},
+      {"id": "custom", "status": "PLANNED", "conformance_status": "UNVERIFIED", "test_suite_required": true}
+    ]
+  },
+  "developer_experience": {
+    "versioned_rpc_schema": true,
+    "sdk_api_compatibility_contract": true,
+    "local_dev_profile": true,
+    "contract_verification": true,
+    "reproducible_build": true,
+    "migration_tooling": true
+  },
+  "enterprise_adoption": {
+    "permission_role_separation": true,
+    "tenant_project_isolation": true,
+    "regulated_asset_pattern": true,
+    "credential_pattern": true,
+    "account_abstraction": "DESIGN_BOUNDARY",
+    "sponsored_fee": "DESIGN_BOUNDARY",
+    "policy_controlled_transaction": "DESIGN_BOUNDARY"
+  },
+  "scalability_metrics": [
+    {"id": "throughput", "target": null, "verified_result": null, "status": "UNVERIFIED", "measurement": "Sustained accepted transactions per second under declared workload."},
+    {"id": "finality", "target": null, "verified_result": null, "status": "UNVERIFIED", "measurement": "Time from accepted transaction to finalized state."},
+    {"id": "latency", "target": null, "verified_result": null, "status": "UNVERIFIED", "measurement": "End-to-end RPC latency distribution by method and load."},
+    {"id": "state_growth", "target": null, "verified_result": null, "status": "UNVERIFIED", "measurement": "Canonical state and index growth per declared workload unit."},
+    {"id": "availability", "target": null, "verified_result": null, "status": "UNVERIFIED", "measurement": "Successful service time over a declared observation window."}
+  ],
+  "security": {
+    "threat_model": true,
+    "sbom": true,
+    "dependency_policy": true,
+    "upgrade_safety": true,
+    "key_rotation": true,
+    "incident_pause": true,
+    "recovery": true,
+    "formal_verification_readiness": true,
+    "security_review_gate": true,
+    "bug_bounty_gate": true
+  },
+  "interoperability": [
+    {"id": "ethereum-erc", "status": "PAUSED", "assets_moved": false, "mainnet_connection": false, "finality_gate": true, "replay_gate": true, "limit_gate": true, "custody_gate": true, "security_review_gate": true},
+    {"id": "bsc-testnet", "status": "PAUSED", "assets_moved": false, "mainnet_connection": false, "finality_gate": true, "replay_gate": true, "limit_gate": true, "custody_gate": true, "security_review_gate": true},
+    {"id": "tron-shasta", "status": "PAUSED", "assets_moved": false, "mainnet_connection": false, "finality_gate": true, "replay_gate": true, "limit_gate": true, "custody_gate": true, "security_review_gate": true}
+  ],
+  "ai_native_operations": {
+    "routes": [
+      {"id": "read", "policy": "read authorization and evidence scope"},
+      {"id": "write", "policy": "bounded mutation and readback"},
+      {"id": "execute", "policy": "explicit execution authority and runtime evidence"},
+      {"id": "evidence", "policy": "deterministic provenance and retention"},
+      {"id": "approval", "policy": "human approval only at declared authority boundary"},
+      {"id": "maintenance", "policy": "versioned operation, rollback, and audit"}
+    ],
+    "machine_readable_state": true,
+    "policy_evaluation": true,
+    "audit_evidence": true,
+    "human_approval_boundary": true,
+    "personal_control_representation": false
+  },
+  "global_operations": {
+    "multi_region_design": true,
+    "failure_domain_separation": true,
+    "observability": true,
+    "slo_sli_schema": true,
+    "backup_snapshot": true,
+    "disaster_recovery": true,
+    "data_residency_mapping": true,
+    "compliance_mapping": true
+  },
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

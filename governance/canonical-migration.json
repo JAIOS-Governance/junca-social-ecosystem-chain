@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "chain_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "network_notice": "Public Testnet / No Monetary Value",
+  "destination_repository": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain",
+  "source_repository": "https://github.com/juncaGlobal/junca-Project",
+  "source_main_sha": "9366de4b603231daddb1276adbd574d923b63ac0",
+  "source_merge_commits": [
+    "a8500bc45f4c7239a6f12e67bf532c648db57fcf",
+    "13d897bba59b539e158a1ce47b4aa8982e76699e",
+    "8ee007c0482b10048944cedc37bcf2a1610f9306",
+    "11fa5c6214a26cc1ca1977582c6826f1bad77133",
+    "9366de4b603231daddb1276adbd574d923b63ac0"
+  ],
+  "included_scopes": [
+    ".github/workflows/junca-social-ecosystem-chain-*",
+    "config/junca_social_ecosystem_chain_*",
+    "contracts/junca-social-ecosystem-chain",
+    "deploy/junca-social-ecosystem-chain",
+    "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_*",
+    "jaios/social_ecosystem_chain",
+    "partner-guidance/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_*",
+    "scripts/junca_social_ecosystem_chain_*",
+    "tests/test_junca_social_ecosystem_chain_*"
+  ],
+  "excluded_scopes": [
+    "voice-admin",
+    "mailing",
+    "kids-drawing",
+    "corporate-websites",
+    "company-administration",
+    "unrelated-business-applications",
+    "private-keys",
+    "seed-phrases",
+    "signer-secret-values"
+  ],
+  "release_boundary": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "cloud_binding_ready": false
+  },
+  "migration_state": "SOURCE_VERIFIED_DESTINATION_PENDING_MERGE"
+}

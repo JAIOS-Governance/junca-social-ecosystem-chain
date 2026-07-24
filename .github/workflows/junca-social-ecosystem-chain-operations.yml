@@ -1,0 +1,362 @@
+name: JUNCA Social Ecosystem Chain Operations
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Network to probe
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - mainnet
+          - testnet
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/**"
+      - "contracts/junca-social-ecosystem-chain/**"
+      - "config/junca_social_ecosystem_chain_networks.json"
+      - "config/junca_social_ecosystem_chain_brand.json"
+      - "config/junca_social_ecosystem_chain_release_policy.json"
+      - "config/junca_social_ecosystem_chain_readiness.json"
+      - "config/junca_social_ecosystem_chain_public_testnet.json"
+      - "config/junca_social_ecosystem_chain_runtime.json"
+      - "config/junca_social_ecosystem_chain_deployment_preflight.json"
+      - "config/junca_social_ecosystem_chain_launch_manifest.json"
+      - "config/junca_social_ecosystem_chain_runtime_acceptance_policy.json"
+      - "config/junca_social_ecosystem_chain_partner_token.pending.json"
+      - "config/junca_social_ecosystem_chain_partner_nft.pending.json"
+      - "config/junca_social_ecosystem_chain_bsc_interoperability.pending.json"
+      - "config/junca_social_ecosystem_chain_tron_interoperability.pending.json"
+      - "config/junca_social_ecosystem_chain_bsc_bridge.simulation.json"
+      - "config/junca_social_ecosystem_chain_tron_bridge.simulation.json"
+      - "config/junca_social_ecosystem_chain_bridge_deployment.pending.json"
+      - "config/junca_social_ecosystem_chain_runtime_observations.pending.json"
+      - "deploy/junca-social-ecosystem-chain/**"
+      - "config/junca_social_ecosystem_chain_build_manifest.json"
+      - "config/junca_social_ecosystem_chain_testnet_bootstrap.json"
+      - "config/junca_social_ecosystem_chain_scalability_profile.json"
+      - "scripts/junca_social_ecosystem_chain_probe.py"
+      - "scripts/junca_social_ecosystem_chain_release_policy.py"
+      - "scripts/junca_social_ecosystem_chain_readiness.py"
+      - "scripts/junca_social_ecosystem_chain_public_testnet.py"
+      - "scripts/junca_social_ecosystem_chain_runtime.py"
+      - "scripts/junca_social_ecosystem_chain_deployment_preflight.py"
+      - "scripts/junca_social_ecosystem_chain_deployment_bundle.py"
+      - "scripts/junca_social_ecosystem_chain_fingerprint.py"
+      - "scripts/junca_social_ecosystem_chain_bootstrap.py"
+      - "scripts/junca_social_ecosystem_chain_runtime_acceptance.py"
+      - "scripts/junca_social_ecosystem_chain_asset_issuance.py"
+      - "scripts/junca_social_ecosystem_chain_interoperability.py"
+      - "scripts/junca_social_ecosystem_chain_bridge_simulation.py"
+      - "scripts/verify_junca_testnet_bridge_contract.py"
+      - "scripts/junca_social_ecosystem_chain_bridge_deployment.py"
+      - "tests/test_junca_social_ecosystem_chain_health.py"
+      - "tests/test_junca_social_ecosystem_chain_release_policy.py"
+      - "tests/test_junca_social_ecosystem_chain_legacy.py"
+      - "tests/test_junca_social_ecosystem_chain_bootstrap.py"
+      - "tests/test_junca_social_ecosystem_chain_architecture.py"
+      - "tests/test_junca_social_ecosystem_chain_branding.py"
+      - "tests/test_junca_social_ecosystem_chain_readiness.py"
+      - "tests/test_junca_social_ecosystem_chain_public_testnet.py"
+      - "tests/test_junca_social_ecosystem_chain_runtime.py"
+      - "tests/test_junca_social_ecosystem_chain_deployment_preflight.py"
+      - "tests/test_junca_social_ecosystem_chain_deployment_bundle.py"
+      - "tests/test_junca_social_ecosystem_chain_runtime_acceptance.py"
+      - "tests/test_junca_social_ecosystem_chain_asset_issuance.py"
+      - "tests/test_junca_social_ecosystem_chain_interoperability.py"
+      - "tests/test_junca_social_ecosystem_chain_bridge_protocol.py"
+      - "tests/test_junca_social_ecosystem_chain_bridge_contract.py"
+      - "tests/test_junca_social_ecosystem_chain_asset_adapter.py"
+      - "tests/test_junca_social_ecosystem_chain_relayer_journal.py"
+      - "tests/test_junca_social_ecosystem_chain_mintable_assets.py"
+      - "tests/test_junca_social_ecosystem_chain_event_indexer.py"
+      - "tests/test_junca_social_ecosystem_chain_runtime_connectors.py"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_PARTNER_ASSET_ISSUANCE.md"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_INTEROPERABILITY.md"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_BRIDGE_CONTRACT.md"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_RUNTIME_ACCEPTANCE.md"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_OPERATIONS.md"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_SOVEREIGN_RELEASE.md"
+      - ".github/workflows/junca-social-ecosystem-chain-operations.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout audited legacy source
+        uses: actions/checkout@v4
+        with:
+          repository: juncachain/juncachain
+          ref: a3e47b6a96c36378606764c35cfcdb2de97cb685
+          path: legacy-chain
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Compile control plane
+        run: python -m compileall -q jaios/social_ecosystem_chain scripts/junca_social_ecosystem_chain_probe.py scripts/junca_social_ecosystem_chain_release_policy.py scripts/junca_social_ecosystem_chain_fingerprint.py scripts/junca_social_ecosystem_chain_bootstrap.py tests/test_junca_social_ecosystem_chain_health.py tests/test_junca_social_ecosystem_chain_release_policy.py tests/test_junca_social_ecosystem_chain_legacy.py tests/test_junca_social_ecosystem_chain_bootstrap.py tests/test_junca_social_ecosystem_chain_architecture.py tests/test_junca_social_ecosystem_chain_branding.py tests/test_junca_social_ecosystem_chain_readiness.py scripts/junca_social_ecosystem_chain_readiness.py tests/test_junca_social_ecosystem_chain_public_testnet.py scripts/junca_social_ecosystem_chain_public_testnet.py tests/test_junca_social_ecosystem_chain_runtime.py scripts/junca_social_ecosystem_chain_runtime.py scripts/junca_social_ecosystem_chain_deployment_preflight.py tests/test_junca_social_ecosystem_chain_deployment_preflight.py scripts/junca_social_ecosystem_chain_deployment_bundle.py tests/test_junca_social_ecosystem_chain_deployment_bundle.py scripts/junca_social_ecosystem_chain_runtime_acceptance.py tests/test_junca_social_ecosystem_chain_runtime_acceptance.py scripts/junca_social_ecosystem_chain_asset_issuance.py tests/test_junca_social_ecosystem_chain_asset_issuance.py scripts/junca_social_ecosystem_chain_interoperability.py tests/test_junca_social_ecosystem_chain_interoperability.py scripts/junca_social_ecosystem_chain_bridge_simulation.py tests/test_junca_social_ecosystem_chain_bridge_protocol.py scripts/verify_junca_testnet_bridge_contract.py tests/test_junca_social_ecosystem_chain_bridge_contract.py tests/test_junca_social_ecosystem_chain_asset_adapter.py tests/test_junca_social_ecosystem_chain_relayer_journal.py tests/test_junca_social_ecosystem_chain_mintable_assets.py tests/test_junca_social_ecosystem_chain_event_indexer.py scripts/junca_social_ecosystem_chain_bridge_deployment.py tests/test_junca_social_ecosystem_chain_runtime_connectors.py
+
+      - name: Compile pinned bridge contract
+        run: |
+          mkdir -p artifacts/bridge-contract
+          npx --yes solc@0.8.24 --optimize --bin --abi \
+            contracts/junca-social-ecosystem-chain/*.sol \
+            -o artifacts/bridge-contract
+          sha256sum artifacts/bridge-contract/* > artifacts/bridge-contract/sha256sums.txt
+
+      - name: Run control-plane tests
+        run: python -m unittest tests.test_junca_social_ecosystem_chain_health tests.test_junca_social_ecosystem_chain_release_policy tests.test_junca_social_ecosystem_chain_legacy tests.test_junca_social_ecosystem_chain_bootstrap tests.test_junca_social_ecosystem_chain_architecture tests.test_junca_social_ecosystem_chain_branding tests.test_junca_social_ecosystem_chain_readiness tests.test_junca_social_ecosystem_chain_public_testnet tests.test_junca_social_ecosystem_chain_runtime tests.test_junca_social_ecosystem_chain_deployment_preflight tests.test_junca_social_ecosystem_chain_deployment_bundle tests.test_junca_social_ecosystem_chain_runtime_acceptance tests.test_junca_social_ecosystem_chain_asset_issuance tests.test_junca_social_ecosystem_chain_interoperability tests.test_junca_social_ecosystem_chain_bridge_protocol tests.test_junca_social_ecosystem_chain_bridge_contract tests.test_junca_social_ecosystem_chain_asset_adapter tests.test_junca_social_ecosystem_chain_relayer_journal tests.test_junca_social_ecosystem_chain_mintable_assets tests.test_junca_social_ecosystem_chain_event_indexer tests.test_junca_social_ecosystem_chain_runtime_connectors -v
+
+      - name: Validate configuration
+        run: |
+          python -c "from jaios.social_ecosystem_chain import load_network_specs; assert len(load_network_specs('config/junca_social_ecosystem_chain_networks.json')) == 2"
+          python -c "from jaios.social_ecosystem_chain import load_brand_contract; assert load_brand_contract('config/junca_social_ecosystem_chain_brand.json').official_name == 'JUNCA Social Ecosystem Chain'"
+          python scripts/junca_social_ecosystem_chain_release_policy.py
+          python scripts/junca_social_ecosystem_chain_bootstrap.py
+          mkdir -p artifacts
+          python scripts/junca_social_ecosystem_chain_readiness.py --expect-state blocked --output artifacts/junca-social-ecosystem-chain-readiness.json
+          python scripts/junca_social_ecosystem_chain_public_testnet.py --output artifacts/junca-social-ecosystem-chain-public-testnet-plan.json
+          python scripts/junca_social_ecosystem_chain_runtime.py --output artifacts/junca-social-ecosystem-chain-runtime.json
+          python scripts/junca_social_ecosystem_chain_deployment_preflight.py --expect-state blocked --output artifacts/junca-social-ecosystem-chain-deployment-preflight.json
+          python scripts/junca_social_ecosystem_chain_deployment_bundle.py --expect-state pending-bindings > artifacts/junca-social-ecosystem-chain-launch-manifest.json
+          python scripts/junca_social_ecosystem_chain_runtime_acceptance.py \
+            --policy config/junca_social_ecosystem_chain_runtime_acceptance_policy.json \
+            --observations config/junca_social_ecosystem_chain_runtime_observations.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-runtime-acceptance.json \
+            --expect-state BLOCKED
+          python scripts/junca_social_ecosystem_chain_asset_issuance.py \
+            --specification config/junca_social_ecosystem_chain_partner_token.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-partner-token.json \
+            --expect-state BLOCKED
+          python scripts/junca_social_ecosystem_chain_asset_issuance.py \
+            --specification config/junca_social_ecosystem_chain_partner_nft.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-partner-nft.json \
+            --expect-state BLOCKED
+          python scripts/junca_social_ecosystem_chain_interoperability.py \
+            --specification config/junca_social_ecosystem_chain_bsc_interoperability.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-bsc-interoperability.json \
+            --expect-state BLOCKED
+          python scripts/junca_social_ecosystem_chain_interoperability.py \
+            --specification config/junca_social_ecosystem_chain_tron_interoperability.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-tron-interoperability.json \
+            --expect-state BLOCKED
+          python scripts/junca_social_ecosystem_chain_bridge_simulation.py \
+            --scenario config/junca_social_ecosystem_chain_bsc_bridge.simulation.json \
+            --output artifacts/junca-social-ecosystem-chain-bsc-bridge-simulation.json \
+            --expect-state EXECUTED
+          python scripts/junca_social_ecosystem_chain_bridge_simulation.py \
+            --scenario config/junca_social_ecosystem_chain_tron_bridge.simulation.json \
+            --output artifacts/junca-social-ecosystem-chain-tron-bridge-simulation.json \
+            --expect-state EXECUTED
+          python scripts/verify_junca_testnet_bridge_contract.py \
+            --output artifacts/junca-social-ecosystem-chain-bridge-contract-static-evidence.json
+          python scripts/junca_social_ecosystem_chain_bridge_deployment.py \
+            --specification config/junca_social_ecosystem_chain_bridge_deployment.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-bridge-deployment.json \
+            --expect-state BLOCKED
+          docker compose -f deploy/junca-social-ecosystem-chain/docker-compose.public-testnet.yml config --quiet
+
+      - name: Verify audited legacy source fingerprint
+        run: |
+          mkdir -p artifacts
+          python scripts/junca_social_ecosystem_chain_fingerprint.py \
+            --source-root legacy-chain \
+            --output artifacts/junca-social-ecosystem-chain-legacy-fingerprint.json
+
+      - name: Probe selected network
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          NETWORK: ${{ inputs.network }}
+        run: |
+          mkdir -p artifacts
+          if [ "$NETWORK" = "all" ]; then
+            python scripts/junca_social_ecosystem_chain_probe.py --output artifacts/junca-social-ecosystem-chain-health.json
+          else
+            python scripts/junca_social_ecosystem_chain_probe.py --network "$NETWORK" --output artifacts/junca-social-ecosystem-chain-health.json
+          fi
+
+      - name: Upload redacted health evidence
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-health-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-health.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload legacy fingerprint evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-legacy-fingerprint-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-legacy-fingerprint.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload release readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-readiness-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-readiness.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload runtime contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-runtime-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-runtime.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload public testnet launch-plan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-public-testnet-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-public-testnet-plan.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload deployment preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-deployment-preflight-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-deployment-preflight.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload deterministic launch-manifest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-launch-manifest-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-launch-manifest.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload runtime acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-runtime-acceptance-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-runtime-acceptance.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload partner asset issuance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-partner-assets-${{ github.run_id }}
+          path: |
+            artifacts/junca-social-ecosystem-chain-partner-token.json
+            artifacts/junca-social-ecosystem-chain-partner-nft.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload interoperability evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-interoperability-${{ github.run_id }}
+          path: |
+            artifacts/junca-social-ecosystem-chain-bsc-interoperability.json
+            artifacts/junca-social-ecosystem-chain-tron-interoperability.json
+            artifacts/junca-social-ecosystem-chain-bsc-bridge-simulation.json
+            artifacts/junca-social-ecosystem-chain-tron-bridge-simulation.json
+            artifacts/junca-social-ecosystem-chain-bridge-contract-static-evidence.json
+            artifacts/junca-social-ecosystem-chain-bridge-deployment.json
+            artifacts/bridge-contract/**
+          if-no-files-found: warn
+          retention-days: 90
+
+  build-node-binary:
+    name: Build audited node binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout audited legacy source
+        uses: actions/checkout@v4
+        with:
+          repository: juncachain/juncachain
+          ref: a3e47b6a96c36378606764c35cfcdb2de97cb685
+          path: legacy-chain
+
+      - name: Build node container
+        run: |
+          docker build --pull \
+            --build-arg COMMIT=a3e47b6a96c36378606764c35cfcdb2de97cb685 \
+            --build-arg VERSION=v0.2.8-public-preview \
+            --build-arg BUILDNUM=${{ github.run_id }} \
+            --tag junca-social-ecosystem-chain:testnet-a3e47b6 \
+            legacy-chain
+
+      - name: Extract binary and evidence
+        run: |
+          mkdir -p artifacts
+          container_id=$(docker create junca-social-ecosystem-chain:testnet-a3e47b6)
+          docker cp "$container_id:/usr/local/bin/junca" artifacts/junca
+          docker rm "$container_id"
+          chmod 0755 artifacts/junca
+          sha256sum artifacts/junca > artifacts/junca.sha256
+          artifacts/junca version > artifacts/junca-version.txt
+          docker image inspect junca-social-ecosystem-chain:testnet-a3e47b6 \
+            --format='{{json .RepoDigests}} {{.Id}}' \
+            > artifacts/junca-container-identity.txt
+
+      - name: Verify reproducible binary build
+        run: |
+          docker build --no-cache \
+            --build-arg COMMIT=a3e47b6a96c36378606764c35cfcdb2de97cb685 \
+            --build-arg VERSION=v0.2.8-public-preview \
+            --build-arg BUILDNUM=${{ github.run_id }} \
+            --tag junca-social-ecosystem-chain:testnet-rebuild \
+            legacy-chain
+          rebuild_id=$(docker create junca-social-ecosystem-chain:testnet-rebuild)
+          docker cp "$rebuild_id:/usr/local/bin/junca" artifacts/junca-rebuild
+          docker rm "$rebuild_id"
+          sha256sum artifacts/junca-rebuild > artifacts/junca-rebuild.sha256
+          cmp artifacts/junca artifacts/junca-rebuild
+          test "$(cut -d' ' -f1 artifacts/junca.sha256)" = "$(cut -d' ' -f1 artifacts/junca-rebuild.sha256)"
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: artifacts
+          format: spdx-json
+          output-file: artifacts/junca-node.spdx.json
+          upload-artifact: false
+
+      - name: Upload reproducible build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-node-build-${{ github.run_id }}
+          path: |
+            artifacts/junca
+            artifacts/junca.sha256
+            artifacts/junca-rebuild.sha256
+            artifacts/junca-version.txt
+            artifacts/junca-container-identity.txt
+            artifacts/junca-node.spdx.json
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,36 @@
+{
+  "asset_type": "nft",
+  "attestations": {
+    "destination_contract_deployed": false,
+    "incident_runbook_approved": false,
+    "independent_security_review": false,
+    "relayer_keys_verified": false,
+    "source_contract_deployed": false
+  },
+  "bridge_mode": "lock-mint-burn-release",
+  "controls": {
+    "custody": "multisig",
+    "daily_limit": 1000,
+    "finality_confirmations": 20,
+    "paused": true,
+    "per_transaction_limit": 10,
+    "replay_protection": true,
+    "role_separation": true
+  },
+  "destination_contract": "411111111111111111111111111111111111111111",
+  "destination_network": "tron-shasta",
+  "destination_standard": "TRC-721",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "relayer_threshold": 2,
+  "relayers": [
+    {"id": "jaios-testnet-relayer-a"},
+    {"id": "jaios-testnet-relayer-b"},
+    {"id": "independent-testnet-relayer-c"}
+  ],
+  "rpc_url": "https://api.shasta.trongrid.io",
+  "source_chain_id": 20260723,
+  "source_contract": "0x3333333333333333333333333333333333333333",
+  "source_network": "junca-public-testnet",
+  "source_standard": "ERC-721"
+}

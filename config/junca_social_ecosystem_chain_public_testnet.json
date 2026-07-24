@@ -1,0 +1,34 @@
+{
+  "schema_version": "junca-public-testnet-plan/v1",
+  "network_name": "JUNCA Social Ecosystem Chain Public Preview Testnet",
+  "release_stage": "public-preview",
+  "audience": "public-technical-evaluation",
+  "issuance_management": "JAIOS Institutional Governance",
+  "public_label": "Public Testnet / No Monetary Value",
+  "mainnet": false,
+  "monetary_value": false,
+  "legacy_key_reuse": false,
+  "topology": {
+    "validators": 3,
+    "validator_quorum": 3,
+    "bootnodes": 2,
+    "rpc_nodes": 2
+  },
+  "services": {
+    "rpc": {"public": true, "status": "pending-deployment"},
+    "explorer": {"public": true, "status": "pending-deployment"},
+    "faucet": {"public": true, "status": "pending-deployment"},
+    "status": {"public": true, "status": "pending-deployment"}
+  },
+  "launch_gates": {
+    "new_keys_attested": false,
+    "genesis_fingerprint_verified": false,
+    "validator_quorum_verified": false,
+    "rpc_boundary_verified": false,
+    "explorer_head_parity_verified": false,
+    "faucet_rate_limit_verified": false,
+    "status_page_verified": false,
+    "rollback_package_verified": false,
+    "independent_readback_verified": false
+  }
+}

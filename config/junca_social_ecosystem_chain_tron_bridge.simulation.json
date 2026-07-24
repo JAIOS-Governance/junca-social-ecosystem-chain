@@ -1,0 +1,52 @@
+{
+  "attestations": [
+    {
+      "cryptographic_verification": true,
+      "key_id": "kms://testnet/relayer-a/v1",
+      "relayer_id": "jaios-testnet-relayer-a",
+      "signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "cryptographic_verification": true,
+      "key_id": "kms://testnet/relayer-b/v1",
+      "relayer_id": "jaios-testnet-relayer-b",
+      "signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "confirmations": 20,
+  "execution_transaction": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "message": {
+    "asset_type": "nft",
+    "destination_asset": "411111111111111111111111111111111111111111",
+    "destination_network": "junca-public-testnet",
+    "direction": "tron-shasta->junca-public-testnet",
+    "governance": "JAIOS Institutional Governance",
+    "nonce": 7,
+    "notice": "Public Testnet / No Monetary Value",
+    "recipient": "0x6666666666666666666666666666666666666666",
+    "route_digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    "schema_version": 1,
+    "sender": "TTestnetSimulationSender",
+    "source_asset": "411111111111111111111111111111111111111111",
+    "source_block": 500,
+    "source_network": "tron-shasta",
+    "source_transaction": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "token_id": 42,
+    "value": 1
+  },
+  "policy": {
+    "allowed_networks": ["junca-public-testnet", "tron-shasta"],
+    "daily_limit": 1000,
+    "paused": true,
+    "per_transaction_limit": 10,
+    "relayer_ids": [
+      "jaios-testnet-relayer-a",
+      "jaios-testnet-relayer-b",
+      "independent-testnet-relayer-c"
+    ],
+    "required_confirmations": 20,
+    "route_digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    "threshold": 2
+  },
+  "unpause_for_simulation": true
+}

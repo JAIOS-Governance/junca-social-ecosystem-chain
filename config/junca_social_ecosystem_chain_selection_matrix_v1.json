@@ -1,0 +1,45 @@
+{
+  "schema_version": "junca-ecosystem-selection-matrix/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "dimensions": ["compatibility", "performance", "security", "operations", "enterprise_adoption", "regulatory_evidence", "cost", "developer_experience"],
+  "evidence_policy": {
+    "verified_cell_requires": ["official primary source URL", "retrieval timestamp", "content digest", "measurement or exact source value"],
+    "missing_evidence_status": "UNVERIFIED",
+    "ranking_without_complete_comparable_evidence": "FORBIDDEN"
+  },
+  "chains": [
+    {"id": "JUNCA Social Ecosystem Chain", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null},
+      {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]},
+    {"id": "Ethereum", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]},
+    {"id": "Solana", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]},
+    {"id": "Avalanche", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]},
+    {"id": "Polygon", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]},
+    {"id": "BNB Chain", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]},
+    {"id": "TRON", "dimensions": [
+      {"id": "compatibility", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "performance", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "security", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "operations", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "enterprise_adoption", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "regulatory_evidence", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "cost", "status": "UNVERIFIED", "value": null, "evidence": null}, {"id": "developer_experience", "status": "UNVERIFIED", "value": null, "evidence": null}
+    ]}
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": "junca-social-ecosystem-chain-scale-profile/v1",
+  "generation": "sovereign-v2",
+  "legacy_protocol_role": "audit-reference-only",
+  "performance_targets": {
+    "sustained_tps": 2000,
+    "burst_tps": 5000,
+    "finality_p95_seconds": 6,
+    "rpc_read_p95_ms": 250,
+    "availability_percent": 99.95,
+    "status": "target-not-guarantee"
+  },
+  "production_topology": {
+    "validators": 9,
+    "validator_quorum": 7,
+    "rpc_nodes": 6,
+    "indexer_nodes": 3,
+    "archive_nodes": 2,
+    "failure_domains": 5
+  },
+  "state_and_storage": {
+    "full_node_mode": "pruned-with-snapshots",
+    "archive_tier": "isolated",
+    "state_snapshot_export": true,
+    "online_schema_migration": true
+  },
+  "extension_architecture": {
+    "boundaries": [
+      "execution-client",
+      "consensus-engine",
+      "precompile-registry",
+      "bridge-adapter",
+      "indexer-sink",
+      "rpc-policy",
+      "fee-policy",
+      "governance-adapter"
+    ],
+    "api_versioning": "semver-and-capability-negotiation",
+    "consensus_coupled_business_logic": false
+  },
+  "verification_gates": {
+    "load_test_passed": false,
+    "chaos_test_passed": false,
+    "state_growth_test_passed": false,
+    "upgrade_rehearsal_passed": false,
+    "bridge_security_review_passed": false,
+    "public_slo_claim_allowed": false
+  }
+}

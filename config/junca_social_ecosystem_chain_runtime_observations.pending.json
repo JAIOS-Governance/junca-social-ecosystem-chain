@@ -1,0 +1,26 @@
+{
+  "schema_version": "junca-runtime-observations/v1",
+  "chain_id": 20260723,
+  "head_samples": [
+    {"number": 0, "timestamp": 1},
+    {"number": 0, "timestamp": 1}
+  ],
+  "validator_signers": [
+    "0x1111111111111111111111111111111111111111",
+    "0x2222222222222222222222222222222222222222",
+    "0x3333333333333333333333333333333333333333"
+  ],
+  "peer_count": 0,
+  "rpc": {
+    "url": "https://pending.invalid/rpc",
+    "rejected_methods": ["admin_addPeer"]
+  },
+  "explorer": {
+    "url": "https://pending.invalid",
+    "head": 0
+  },
+  "public_metadata": {
+    "governance": "JAIOS Institutional Governance",
+    "notice": "Public Testnet / No Monetary Value"
+  }
+}

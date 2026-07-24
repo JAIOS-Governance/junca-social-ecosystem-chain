@@ -1,0 +1,28 @@
+{
+  "schema_version": "junca-social-ecosystem-chain-brand/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "display_name": "JUNCA SOCIAL ECOSYSTEM CHAIN",
+  "short_reference": "JUNCA Chain",
+  "japanese_descriptor": "社会・経済・地域・文化・産業をつなぐ分散型価値循環基盤",
+  "brand_hierarchy": [
+    "ONE CORE",
+    "JUNCA Intelligence Ecosystem",
+    "JUNCA Social Ecosystem Chain"
+  ],
+  "architecture_role": "trust-participation-and-value-circulation-layer",
+  "canonical_narrative": {
+    "en": "A sovereign distributed trust layer connecting participation, identity and value circulation across the JUNCA social ecosystem.",
+    "ja": "JUNCAの社会実装領域において、参加・アイデンティティ・価値循環を接続する主権型分散信頼基盤。"
+  },
+  "naming_policy": {
+    "former_public_name": "JUNCA Global Chain",
+    "former_name_usage": "legacy-history-and-migration-reference-only",
+    "unapproved_abbreviations": [
+      "JSEC"
+    ],
+    "reserved_superordinate_names": [
+      "ONE CORE",
+      "JUNCA Intelligence Ecosystem"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "environment": "public-testnet",
+  "provider": "PENDING_CANONICAL_PROVIDER",
+  "account_scope": "PENDING_CANONICAL_ACCOUNT_SCOPE",
+  "project_id": "PENDING_CANONICAL_PROJECT",
+  "region": "PENDING_CANONICAL_REGION",
+  "network_id": "PENDING_CANONICAL_NETWORK",
+  "dns_zone": "PENDING_CANONICAL_DNS_ZONE",
+  "failure_domains": [
+    "PENDING_FAILURE_DOMAIN_01",
+    "PENDING_FAILURE_DOMAIN_02",
+    "PENDING_FAILURE_DOMAIN_03"
+  ],
+  "state_backend_resource": "PENDING_STATE_BACKEND_RESOURCE",
+  "deployment_principal_resource": "PENDING_DEPLOYMENT_PRINCIPAL_RESOURCE",
+  "signer_resources": [
+    "PENDING_SIGNER_RESOURCE_01",
+    "PENDING_SIGNER_RESOURCE_02",
+    "PENDING_SIGNER_RESOURCE_03"
+  ],
+  "release_commit": "8ee00768536aa54df6d83f47283dd6d5fd7ddcc6",
+  "billing_active": false,
+  "identity_authenticated": false,
+  "dns_zone_authoritative": false,
+  "secret_resources_present": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}
+

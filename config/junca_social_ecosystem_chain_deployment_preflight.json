@@ -1,0 +1,33 @@
+{
+  "schema_version": "junca-public-testnet-deployment-preflight/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "release_target": "public-testnet",
+  "governance_entity": "JAIOS Institutional Governance",
+  "source_commit": "pending",
+  "custody": {
+    "generation_environment": "deployment-environment-only",
+    "key_provider": "secret-manager-or-hsm",
+    "legacy_key_reuse": false,
+    "repository_secret_material": false,
+    "validators": [
+      {"name": "validator-1", "public_address": "pending", "key_id_digest": "pending", "created_at": "pending", "attested": false},
+      {"name": "validator-2", "public_address": "pending", "key_id_digest": "pending", "created_at": "pending", "attested": false},
+      {"name": "validator-3", "public_address": "pending", "key_id_digest": "pending", "created_at": "pending", "attested": false}
+    ]
+  },
+  "rollback": {
+    "package_version": "v1",
+    "genesis_digest": "pending",
+    "binary_digest": "pending",
+    "backup_manifest_digest": "pending",
+    "restore_tested": false,
+    "governance_entity": "JAIOS Institutional Governance"
+  },
+  "runtime": {
+    "validator_quorum_verified": false,
+    "rpc_boundary_verified": false,
+    "explorer_head_parity_verified": false,
+    "governance_readback_verified": false,
+    "independent_readback_verified": false
+  }
+}

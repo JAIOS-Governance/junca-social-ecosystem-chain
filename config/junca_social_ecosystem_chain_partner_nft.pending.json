@@ -1,0 +1,29 @@
+{
+  "asset_id": "partner-membership-nft-example",
+  "asset_type": "nft-collection",
+  "standard": "ERC-721",
+  "name": "Partner Membership",
+  "symbol": "PMB",
+  "chain_id": 20260723,
+  "roles": {
+    "admin": "0x1111111111111111111111111111111111111111",
+    "treasury": "0x2222222222222222222222222222222222222222",
+    "pauser": "0x3333333333333333333333333333333333333333"
+  },
+  "controls": {
+    "mintable": true,
+    "burnable": true,
+    "pausable": true,
+    "upgradeable": false,
+    "multisig_required": true
+  },
+  "max_supply": 10000,
+  "base_uri": "ipfs://pending-partner-metadata/",
+  "attestations": {
+    "partner_authorized": false,
+    "legal_review_complete": false,
+    "security_review_complete": false,
+    "metadata_rights_confirmed": false,
+    "testnet_only": true
+  }
+}

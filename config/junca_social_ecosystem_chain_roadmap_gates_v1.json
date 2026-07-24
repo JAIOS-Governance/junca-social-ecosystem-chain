@@ -1,0 +1,16 @@
+{
+  "schema_version": "junca-chain-roadmap-gates/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "stages": [
+    {"id": "public-testnet", "status": "BLOCKED", "exit_criteria": ["canonical cloud binding", "three-validator quorum", "advancing and finalized head", "public read-only RPC acceptance", "explorer parity", "monitoring and alerting", "rollback readback"]},
+    {"id": "partner-testnet", "status": "PENDING", "exit_criteria": ["public testnet accepted", "partner isolation tests", "SDK compatibility report", "regulated asset and credential pattern review", "capacity report"]},
+    {"id": "security-review", "status": "PENDING", "exit_criteria": ["independent protocol review", "smart-contract review", "threat-model closure", "dependency and SBOM review", "remediation evidence"]},
+    {"id": "candidate-mainnet", "status": "PENDING", "exit_criteria": ["security review accepted", "mainnet genesis review", "custody and key ceremony evidence", "disaster-recovery drill", "governance approval"]},
+    {"id": "mainnet", "status": "PENDING", "exit_criteria": ["candidate mainnet exit accepted", "production SLO evidence", "incident and rollback readiness", "release authorization", "public disclosure package"]}
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

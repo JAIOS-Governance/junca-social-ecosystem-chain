@@ -1,0 +1,30 @@
+{
+  "asset_id": "partner-utility-token-example",
+  "asset_type": "fungible-token",
+  "standard": "ERC-20",
+  "name": "Partner Utility Token",
+  "symbol": "PUT",
+  "chain_id": 20260723,
+  "roles": {
+    "admin": "0x1111111111111111111111111111111111111111",
+    "treasury": "0x2222222222222222222222222222222222222222",
+    "pauser": "0x3333333333333333333333333333333333333333"
+  },
+  "controls": {
+    "mintable": false,
+    "burnable": true,
+    "pausable": true,
+    "upgradeable": false,
+    "multisig_required": true
+  },
+  "decimals": 18,
+  "initial_supply": 1000000,
+  "max_supply": 1000000,
+  "attestations": {
+    "partner_authorized": false,
+    "legal_review_complete": false,
+    "security_review_complete": false,
+    "metadata_rights_confirmed": true,
+    "testnet_only": true
+  }
+}

@@ -1,0 +1,101 @@
+name: JUNCA Chain Global Major Architecture v1
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/global_major_architecture.py"
+      - "config/junca_social_ecosystem_chain_*_v1.json"
+      - "tests/test_junca_social_ecosystem_chain_global_major_architecture_v1.py"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_GLOBAL_MAJOR_ARCHITECTURE_V1.md"
+      - ".github/workflows/junca-social-ecosystem-chain-global-major-architecture-v1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile controls
+        run: |
+          python -m compileall -q \
+            jaios/social_ecosystem_chain/global_major_architecture.py \
+            tests/test_junca_social_ecosystem_chain_global_major_architecture_v1.py
+      - name: Validate machine-readable JSON
+        run: |
+          python -m json.tool config/junca_social_ecosystem_chain_global_major_architecture_v1.json >/dev/null
+          python -m json.tool config/junca_social_ecosystem_chain_capability_registry_v1.json >/dev/null
+          python -m json.tool config/junca_social_ecosystem_chain_selection_matrix_v1.json >/dev/null
+          python -m json.tool config/junca_social_ecosystem_chain_roadmap_gates_v1.json >/dev/null
+          python -m json.tool config/junca_social_ecosystem_chain_benchmark_plan_v1.json >/dev/null
+          python -m json.tool config/junca_social_ecosystem_chain_security_plan_v1.json >/dev/null
+      - name: Run architecture and negative tests
+        run: |
+          python -m unittest \
+            tests.test_junca_social_ecosystem_chain_global_major_architecture_v1 -v
+      - name: Generate architecture evidence
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import json
+          from jaios.social_ecosystem_chain.global_major_architecture import load_evidence_bundle
+          evidence = load_evidence_bundle("config")
+          assert evidence.state == "VERIFIED"
+          assert evidence.as_dict()["mainnet_changed"] is False
+          assert evidence.as_dict()["assets_moved"] is False
+          assert evidence.as_dict()["bridge_activated"] is False
+          with open(
+              "artifacts/junca-global-major-chain-architecture-v1.json",
+              "w",
+              encoding="utf-8",
+          ) as output:
+              json.dump(evidence.as_dict(), output, indent=2, sort_keys=True)
+              output.write("\n")
+          PY
+      - name: Reject unsupported claims and secret material
+        run: |
+          ! grep -RIE \
+            "(世界一|world.?s best|best blockchain|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key)" \
+            artifacts config docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_GLOBAL_MAJOR_ARCHITECTURE_V1.md
+      - name: Record evidence digests and SBOM
+        run: |
+          python -m pip freeze --all > artifacts/python-dependencies.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          dependencies = [
+              line.strip()
+              for line in Path("artifacts/python-dependencies.txt").read_text().splitlines()
+              if line.strip()
+          ]
+          sbom = {
+              "spdxVersion": "SPDX-2.3",
+              "dataLicense": "CC0-1.0",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": "junca-global-major-chain-architecture-v1",
+              "documentNamespace": "https://github.com/juncaGlobal/junca-Project/actions/runs/${{ github.run_id }}",
+              "packages": [
+                  {"SPDXID": f"SPDXRef-Package-{index}", "name": value, "downloadLocation": "NOASSERTION"}
+                  for index, value in enumerate(dependencies, 1)
+              ],
+          }
+          Path("artifacts/SBOM.spdx.json").write_text(
+              json.dumps(sbom, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          sha256sum artifacts/* > artifacts/SHA256SUMS
+      - name: Upload architecture evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-global-major-chain-architecture-v1-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+

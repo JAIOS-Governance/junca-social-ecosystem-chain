@@ -1,0 +1,21 @@
+{
+  "schema_version": "junca-chain-security-plan/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "gates": [
+    {"id": "threat-model", "status": "IMPLEMENTED", "evidence_requirements": ["assets, actors, trust boundaries, threats, mitigations, residual risks"]},
+    {"id": "supply-chain-sbom", "status": "IMPLEMENTED", "evidence_requirements": ["reproducible build digest", "SPDX SBOM", "artifact provenance"]},
+    {"id": "dependency-policy", "status": "IMPLEMENTED", "evidence_requirements": ["pinned dependencies", "vulnerability policy", "exception record"]},
+    {"id": "upgrade-safety", "status": "IMPLEMENTED", "evidence_requirements": ["compatibility tests", "state migration rehearsal", "rollback target"]},
+    {"id": "key-rotation", "status": "UNVERIFIED", "evidence_requirements": ["resource identifiers", "versions", "permissions", "non-secret rotation drill"]},
+    {"id": "incident-pause", "status": "IMPLEMENTED", "evidence_requirements": ["pause authority", "route scope", "audit evidence"]},
+    {"id": "recovery", "status": "IMPLEMENTED", "evidence_requirements": ["backup", "checkpoint", "restore", "quorum", "endpoint recovery"]},
+    {"id": "formal-verification-readiness", "status": "IMPLEMENTED", "evidence_requirements": ["invariants", "state transitions", "deterministic interfaces", "proof scope"]},
+    {"id": "independent-security-review", "status": "PENDING", "evidence_requirements": ["review scope", "reviewer independence", "findings", "remediation"]},
+    {"id": "bug-bounty", "status": "PENDING", "evidence_requirements": ["scope", "rules", "severity model", "response process"]}
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}
