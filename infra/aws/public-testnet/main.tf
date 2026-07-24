@@ -49,7 +49,7 @@ resource "terraform_data" "canonical_binding_gate" {
 }
 
 locals {
-  name = "junca-social-ecosystem-chain-testnet"
+  name                 = "junca-social-ecosystem-chain-testnet"
   public_subnet_cidrs  = ["10.67.0.0/24", "10.67.1.0/24", "10.67.2.0/24"]
   private_subnet_cidrs = ["10.67.16.0/20", "10.67.32.0/20", "10.67.48.0/20"]
   rpc_hostname         = "rpc.${var.domain_name}"
@@ -84,7 +84,7 @@ resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.testnet.id
   availability_zone = var.availability_zones[count.index]
   cidr_block        = local.private_subnet_cidrs[count.index]
-  tags               = { Name = "${local.name}-private-${count.index + 1}" }
+  tags              = { Name = "${local.name}-private-${count.index + 1}" }
 }
 
 resource "aws_route_table" "public" {
@@ -209,9 +209,9 @@ resource "aws_iam_role" "validator" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -305,9 +305,9 @@ resource "aws_iam_role" "read_only" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -422,7 +422,7 @@ resource "aws_lb_listener" "https" {
   certificate_arn   = var.certificate_arn
 
   default_action {
-    type             = "fixed-response"
+    type = "fixed-response"
     fixed_response {
       content_type = "application/json"
       message_body = "{\"error\":\"unknown host\"}"
@@ -438,7 +438,11 @@ resource "aws_lb_listener_rule" "rpc" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.rpc.arn
   }
-  condition { host_header { values = [local.rpc_hostname, local.health_hostname] } }
+  condition {
+    host_header {
+      values = [local.rpc_hostname, local.health_hostname]
+    }
+  }
 }
 
 resource "aws_lb_listener_rule" "explorer" {
@@ -448,7 +452,11 @@ resource "aws_lb_listener_rule" "explorer" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.explorer.arn
   }
-  condition { host_header { values = [local.explorer_hostname] } }
+  condition {
+    host_header {
+      values = [local.explorer_hostname]
+    }
+  }
 }
 
 resource "aws_route53_record" "public" {
