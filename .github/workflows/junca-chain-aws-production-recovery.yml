@@ -8,17 +8,47 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: junca-chain-docs-production
   cancel-in-progress: false
 
 jobs:
+  normalize-github-oidc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Restore AWS-compatible repository OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail-with-body --location \
+            --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub" \
+            --data '{"use_default":true,"use_immutable_subject":false}'
+          state="$(curl --silent --show-error --fail --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub")"
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is True and s.get("use_immutable_subject") is False, s'
+
   deploy-exact-source:
+    needs: normalize-github-oidc
     runs-on: ubuntu-latest
     environment: junca-chain-docs-production
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     env:
       EXACT_SHA: 3248cee42e114e83a4d2d27f7e5fb438fc24e2e0
       AWS_REGION: us-east-1
@@ -47,7 +77,7 @@ jobs:
           set -euo pipefail
           response="$(curl --silent --show-error --fail -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
           jwt="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-          JWT="$jwt" python3 -c 'import base64,json,os; p=os.environ["JWT"].split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); print(json.dumps({k:c.get(k) for k in ("sub","aud","repository","environment","ref","sha","actor")},sort_keys=True))'
+          JWT="$jwt" python3 -c 'import base64,json,os; p=os.environ["JWT"].split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); expected="repo:JAIOS-Governance/junca-social-ecosystem-chain:environment:junca-chain-docs-production"; assert c.get("sub")==expected, c.get("sub"); print(json.dumps({k:c.get(k) for k in ("sub","aud","repository","environment","ref","sha","actor")},sort_keys=True))'
       - name: Configure publication-only AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
