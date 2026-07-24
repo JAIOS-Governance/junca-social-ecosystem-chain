@@ -1,0 +1,250 @@
+name: JUNCA Chain Docs AWS Identity Probe
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-chain-docs-aws-identity-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  readback:
+    if: github.head_ref == 'agent/junca-chain-docs-aws-publication-20260724'
+    runs-on: ubuntu-latest
+    environment: public-testnet
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-1' }}
+          role-session-name: junca-docs-readback-${{ github.run_id }}
+
+      - name: Produce non-secret AWS publication readback
+        shell: bash
+        env:
+          CANONICAL_REGION: ${{ vars.AWS_REGION || 'ap-northeast-1' }}
+        run: |
+          set -euo pipefail
+          mkdir -p readback
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          DOMAIN = "jaios-governance.org."
+          DOCS_DOMAIN = "docs.jaios-governance.org"
+          REGION = os.environ["CANONICAL_REGION"]
+
+          def aws_json(*args):
+              proc = subprocess.run(
+                  ["aws", *args, "--output", "json"],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+              )
+              if proc.returncode == 0:
+                  return {"status": "ok", "data": json.loads(proc.stdout or "{}")}
+              stderr = proc.stderr.lower()
+              if "accessdenied" in stderr or "not authorized" in stderr:
+                  category = "access_denied"
+              elif "not found" in stderr or "nosuch" in stderr:
+                  category = "not_found"
+              else:
+                  category = "unavailable"
+              return {"status": category}
+
+          caller_result = aws_json("sts", "get-caller-identity")
+          if caller_result["status"] != "ok":
+              raise SystemExit("STS caller identity readback failed")
+          caller = caller_result["data"]
+
+          org = aws_json("organizations", "describe-organization")
+          aliases = aws_json("iam", "list-account-aliases")
+          oidc = aws_json("iam", "list-open-id-connect-providers")
+          zones = aws_json("route53", "list-hosted-zones")
+          certificates = aws_json(
+              "acm",
+              "list-certificates",
+              "--region",
+              "us-east-1",
+              "--certificate-statuses",
+              "PENDING_VALIDATION",
+              "ISSUED",
+              "INACTIVE",
+              "EXPIRED",
+              "VALIDATION_TIMED_OUT",
+              "REVOKED",
+              "FAILED",
+          )
+          distributions = aws_json("cloudfront", "list-distributions")
+
+          zone_summary = []
+          matching_public_zones = []
+          if zones["status"] == "ok":
+              for zone in zones["data"].get("HostedZones", []):
+                  item = {
+                      "id": zone.get("Id", "").split("/")[-1],
+                      "name": zone.get("Name"),
+                      "private": bool(zone.get("Config", {}).get("PrivateZone")),
+                      "record_count": zone.get("ResourceRecordSetCount"),
+                  }
+                  zone_summary.append(item)
+                  if item["name"] == DOMAIN and not item["private"]:
+                      matching_public_zones.append(item)
+
+          route53_detail = {"status": zones["status"], "zones": zone_summary}
+          if len(matching_public_zones) == 1:
+              zone_id = matching_public_zones[0]["id"]
+              zone_detail = aws_json("route53", "get-hosted-zone", "--id", zone_id)
+              records = aws_json(
+                  "route53",
+                  "list-resource-record-sets",
+                  "--hosted-zone-id",
+                  zone_id,
+              )
+              nameservers = []
+              if zone_detail["status"] == "ok":
+                  nameservers = zone_detail["data"].get("DelegationSet", {}).get("NameServers", [])
+              record_inventory = []
+              if records["status"] == "ok":
+                  for record in records["data"].get("ResourceRecordSets", []):
+                      record_inventory.append(
+                          {
+                              "name": record.get("Name"),
+                              "type": record.get("Type"),
+                              "alias_target": (
+                                  record.get("AliasTarget", {}).get("DNSName")
+                                  if record.get("AliasTarget")
+                                  else None
+                              ),
+                          }
+                      )
+              route53_detail.update(
+                  {
+                      "matching_public_zone_count": 1,
+                      "hosted_zone_id": zone_id,
+                      "name_servers": nameservers,
+                      "dnssec": aws_json(
+                          "route53",
+                          "get-dnssec",
+                          "--hosted-zone-id",
+                          zone_id,
+                      ),
+                      "records_status": records["status"],
+                      "record_inventory": record_inventory,
+                  }
+              )
+          else:
+              route53_detail["matching_public_zone_count"] = len(matching_public_zones)
+
+          certificate_inventory = []
+          if certificates["status"] == "ok":
+              for cert in certificates["data"].get("CertificateSummaryList", []):
+                  names = [cert.get("DomainName"), *cert.get("SubjectAlternativeNameSummaries", [])]
+                  if DOCS_DOMAIN in names:
+                      certificate_inventory.append(
+                          {
+                              "arn": cert.get("CertificateArn"),
+                              "domain": cert.get("DomainName"),
+                              "status": cert.get("Status"),
+                              "in_use": bool(cert.get("InUse")),
+                          }
+                      )
+
+          distribution_inventory = []
+          if distributions["status"] == "ok":
+              for distribution in distributions["data"].get("DistributionList", {}).get("Items", []):
+                  aliases_list = distribution.get("Aliases", {}).get("Items", [])
+                  if DOCS_DOMAIN in aliases_list:
+                      distribution_inventory.append(
+                          {
+                              "id": distribution.get("Id"),
+                              "arn": distribution.get("ARN"),
+                              "domain_name": distribution.get("DomainName"),
+                              "status": distribution.get("Status"),
+                              "enabled": distribution.get("Enabled"),
+                              "aliases": aliases_list,
+                          }
+                      )
+
+          account_id = caller["Account"]
+          bucket_name = f"junca-chain-docs-{account_id}"
+          bucket = {
+              "name": bucket_name,
+              "location": aws_json("s3api", "get-bucket-location", "--bucket", bucket_name),
+              "versioning": aws_json("s3api", "get-bucket-versioning", "--bucket", bucket_name),
+              "encryption": aws_json("s3api", "get-bucket-encryption", "--bucket", bucket_name),
+              "public_access_block": aws_json(
+                  "s3api",
+                  "get-public-access-block",
+                  "--bucket",
+                  bucket_name,
+              ),
+          }
+
+          output = {
+              "schema": "junca-chain-docs-aws-readback-v1",
+              "identity": {
+                  "account_id": account_id,
+                  "caller_arn": caller["Arn"],
+                  "organization_id": (
+                      org["data"].get("Organization", {}).get("Id")
+                      if org["status"] == "ok"
+                      else None
+                  ),
+                  "organization_status": org["status"],
+                  "account_aliases": (
+                      aliases["data"].get("AccountAliases", [])
+                      if aliases["status"] == "ok"
+                      else []
+                  ),
+                  "account_aliases_status": aliases["status"],
+                  "canonical_region": REGION,
+              },
+              "oidc": {
+                  "status": oidc["status"],
+                  "providers": (
+                      [
+                          item.get("Arn")
+                          for item in oidc["data"].get("OpenIDConnectProviderList", [])
+                      ]
+                      if oidc["status"] == "ok"
+                      else []
+                  ),
+              },
+              "route53": route53_detail,
+              "acm_us_east_1": {
+                  "status": certificates["status"],
+                  "matching_certificates": certificate_inventory,
+              },
+              "cloudfront": {
+                  "status": distributions["status"],
+                  "matching_distributions": distribution_inventory,
+              },
+              "s3": bucket,
+          }
+
+          with open("readback/aws-publication-readback.json", "w", encoding="utf-8") as file:
+              json.dump(output, file, ensure_ascii=False, indent=2, sort_keys=True)
+              file.write("\n")
+
+          print(f"AWS account: {account_id}")
+          print(f"Caller ARN: {caller['Arn']}")
+          print(f"Canonical region: {REGION}")
+          print(f"Matching public hosted zones: {len(matching_public_zones)}")
+          print(f"Matching ACM certificates: {len(certificate_inventory)}")
+          print(f"Matching CloudFront distributions: {len(distribution_inventory)}")
+          PY
+
+      - name: Upload AWS publication readback
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-chain-docs-aws-readback-${{ github.event.pull_request.head.sha }}
+          path: readback/aws-publication-readback.json
+          if-no-files-found: error
+          retention-days: 7
