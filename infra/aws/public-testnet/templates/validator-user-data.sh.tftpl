@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 027
+
+install -d -m 0750 /etc/junca /var/lib/junca /var/log/junca
+
+cat >/etc/junca/runtime.env <<'EOF'
+CHAIN_NAME=JUNCA Social Ecosystem Chain
+GOVERNANCE=JAIOS Institutional Governance
+NETWORK_NOTICE=Public Testnet / No Monetary Value
+VALIDATOR_ID=${validator_id}
+CHAIN_ID=${chain_id}
+GENESIS_SHA256=${genesis_sha256}
+NODE_ARTIFACT_SHA256=${node_sha256}
+SIGNER_RESOURCE_ARN=${signer_arn}
+PUBLIC_RPC=false
+BRIDGE_ACTIVATED=false
+EOF
+chmod 0640 /etc/junca/runtime.env
+
+# The approved AMI must provide /usr/local/bin/junca and /etc/junca/genesis.json.
+# No private key, mnemonic or signer secret is written by this bootstrap.
+test -x /usr/local/bin/junca
+printf '%s  %s\n' '${genesis_sha256}' /etc/junca/genesis.json | sha256sum --check --strict
+printf '%s  %s\n' '${node_sha256}' /usr/local/bin/junca | sha256sum --check --strict
+
+cat >/etc/systemd/system/junca-validator.service <<'EOF'
+[Unit]
+Description=JUNCA Social Ecosystem Chain Validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/junca/runtime.env
+ExecStart=/usr/local/bin/junca --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json --http.addr 127.0.0.1 --http.api eth,net,web3 --mine --signer-resource "$SIGNER_RESOURCE_ARN"
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/junca /var/log/junca
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now junca-validator.service
+
+logger -t junca-bootstrap "validator=${validator_id} governance=JAIOS_Institutional_Governance log_group=${cloudwatch_log_name} state=started"

@@ -1,0 +1,62 @@
+name: JUNCA Chain AWS IaC
+
+on:
+  pull_request:
+    paths:
+      - "infra/aws/public-testnet/**"
+      - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform format
+        run: terraform -chdir=infra/aws/public-testnet fmt -check -recursive
+
+      - name: Terraform initialize without backend
+        run: terraform -chdir=infra/aws/public-testnet init -backend=false -input=false
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/aws/public-testnet validate -no-color
+
+      - name: Validate fail-closed AWS binding
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("config/junca_social_ecosystem_chain_aws_binding.pending.json")
+          binding = json.loads(path.read_text(encoding="utf-8"))
+          assert binding["chain_name"] == "JUNCA Social Ecosystem Chain"
+          assert binding["governance"] == "JAIOS Institutional Governance"
+          assert binding["notice"] == "Public Testnet / No Monetary Value"
+          assert binding["provider"] == "aws"
+          assert binding["binding_state"] == "BLOCKED"
+          assert binding["mainnet_changed"] is False
+          assert binding["assets_moved"] is False
+          assert binding["bridge_activated"] is False
+          assert binding["bridge_route_paused"] is True
+          assert len(binding["availability_zones"]) == 3
+          assert len(binding["validator_signer_arns"]) == 3
+          assert all("PENDING" in value for value in binding["validator_signer_arns"])
+          PY
+
+      - name: Reject secret material
+        run: |
+          ! grep -RIE '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key[[:space:]]*=)' \
+            --exclude='README.md' \
+            --exclude='*.tftpl' \
+            infra/aws/public-testnet config/junca_social_ecosystem_chain_aws_binding.pending.json
