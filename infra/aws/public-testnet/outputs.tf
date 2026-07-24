@@ -13,7 +13,6 @@ output "availability_zones" {
 output "validator_instance_ids" {
   value = aws_instance.validator[*].id
 }
-}
 
 output "public_rpc_url" {
   value = "https://${local.rpc_hostname}"
