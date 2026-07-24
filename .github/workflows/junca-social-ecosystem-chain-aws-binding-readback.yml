@@ -1,0 +1,61 @@
+name: JUNCA Social Ecosystem Chain AWS Binding Readback
+
+on:
+  pull_request:
+    paths:
+      - scripts/aws_binding_readback.py
+      - .github/workflows/junca-social-ecosystem-chain-aws-binding-readback.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile readback controller
+        run: python -m py_compile scripts/aws_binding_readback.py
+      - name: Assert institutional and release boundaries
+        run: |
+          grep -F 'JAIOS Institutional Governance' scripts/aws_binding_readback.py
+          grep -F 'Public Testnet / No Monetary Value' scripts/aws_binding_readback.py
+          grep -F '"mainnet_changed": False' scripts/aws_binding_readback.py
+          grep -F '"assets_moved": False' scripts/aws_binding_readback.py
+          grep -F '"bridge_activated": False' scripts/aws_binding_readback.py
+
+  live-readback:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: public-testnet
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS identity using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-1' }}
+      - name: Create redacted binding evidence
+        env:
+          AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+          AWS_VALIDATOR_01_SIGNER_ARN: ${{ vars.AWS_VALIDATOR_01_SIGNER_ARN }}
+          AWS_VALIDATOR_02_SIGNER_ARN: ${{ vars.AWS_VALIDATOR_02_SIGNER_ARN }}
+          AWS_VALIDATOR_03_SIGNER_ARN: ${{ vars.AWS_VALIDATOR_03_SIGNER_ARN }}
+        run: |
+          python scripts/aws_binding_readback.py \
+            --region "${{ vars.AWS_REGION || 'ap-northeast-1' }}" \
+            --output aws-binding-readback.json
+      - name: Upload immutable readback evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-binding-readback-${{ github.run_id }}
+          path: |
+            aws-binding-readback.json
+            aws-binding-readback.json.sha256
+          if-no-files-found: error
+          retention-days: 90
