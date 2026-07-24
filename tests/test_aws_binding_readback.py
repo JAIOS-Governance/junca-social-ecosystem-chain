@@ -76,7 +76,7 @@ class AwsBindingReadbackTest(unittest.TestCase):
             self.assertFalse(evidence["release_boundary"]["assets_moved"])
             self.assertFalse(evidence["release_boundary"]["bridge_activated"])
             self.assertFalse(evidence["secrets_included"])
-            self.assertNotIn("secret", output.read_text(encoding="utf-8").lower())
+            serialized = output.read_text(encoding="utf-8").lower()\n            self.assertNotIn("aws_access_key_id", serialized)\n            self.assertNotIn("aws_secret_access_key", serialized)\n            self.assertNotIn("session_token", serialized)
             self.assertTrue(Path(f"{output}.sha256").exists())
 
     def test_fails_closed_without_three_failure_domains(self) -> None:
