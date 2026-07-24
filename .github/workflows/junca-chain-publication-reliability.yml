@@ -1,0 +1,146 @@
+name: JUNCA Chain Publication Reliability
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Select a public preflight or authenticated AWS readback
+        required: true
+        type: choice
+        options:
+          - public-preflight
+          - aws-readback
+        default: public-preflight
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-chain-publication-reliability
+  cancel-in-progress: false
+
+jobs:
+  source-and-public-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify exact source artifact
+        working-directory: docs/technical-reference
+        run: npm test
+      - name: Verify runner clock and AWS TLS path
+        shell: bash
+        run: |
+          set -euo pipefail
+          date -u +'%Y-%m-%dT%H:%M:%SZ'
+          curl --silent --show-error \
+            --connect-timeout 10 --max-time 20 \
+            --output /dev/null \
+            https://sts.us-east-1.amazonaws.com/
+      - name: Read public DNS and publication state
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Public publication preflight"
+            echo "- UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            if getent ahosts docs.jaios-governance.org >/tmp/docs-addresses.txt; then
+              echo "- DNS: RESOLVED"
+              sed 's/^/  - `/' /tmp/docs-addresses.txt | sed 's/$/`/'
+            else
+              echo "- DNS: PENDING"
+            fi
+            if curl --silent --show-error --location \
+              --connect-timeout 10 --max-time 30 \
+              --output /tmp/home.html \
+              --write-out '%{http_code}' \
+              https://docs.jaios-governance.org/ >/tmp/http-code.txt; then
+              echo "- HTTPS: $(cat /tmp/http-code.txt)"
+            else
+              echo "- HTTPS: PENDING"
+            fi
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+  aws-readback:
+    if: inputs.mode == 'aws-readback'
+    needs: source-and-public-preflight
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Require exact publication role
+        env:
+          ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ROLE_ARN}"
+          case "${ROLE_ARN}" in
+            arn:aws:iam::*:role/JuncaChainDocsProductionDeployment) ;;
+            *) echo "AWS_BINDING_PENDING: publication role is missing or unexpected" >&2; exit 1 ;;
+          esac
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: junca-chain-reliability-${{ github.run_id }}
+      - name: Verify identity, DNS, ACM, CloudFront, and S3
+        env:
+          ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_account="$(cut -d: -f5 <<<"${ROLE_ARN}")"
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          caller_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          test "${account_id}" = "${expected_account}"
+
+          distribution_id="$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" \
+            --output text)"
+          test -n "${distribution_id}" && test "${distribution_id}" != "None"
+          distribution_status="$(aws cloudfront get-distribution \
+            --id "${distribution_id}" --query Distribution.Status --output text)"
+          test "${distribution_status}" = "Deployed"
+
+          certificate_arn="$(aws cloudfront get-distribution \
+            --id "${distribution_id}" \
+            --query Distribution.DistributionConfig.ViewerCertificate.ACMCertificateArn \
+            --output text)"
+          certificate_status="$(aws acm describe-certificate \
+            --certificate-arn "${certificate_arn}" \
+            --query Certificate.Status --output text)"
+          test "${certificate_status}" = "ISSUED"
+
+          bucket="junca-chain-docs-${account_id}"
+          versioning="$(aws s3api get-bucket-versioning \
+            --bucket "${bucket}" --query Status --output text)"
+          test "${versioning}" = "Enabled"
+
+          zone_id="$(aws route53 list-hosted-zones-by-name \
+            --dns-name jaios-governance.org \
+            --query "HostedZones[?Name=='jaios-governance.org.'] | [0].Id" \
+            --output text)"
+          zone_id="${zone_id#/hostedzone/}"
+          test -n "${zone_id}" && test "${zone_id}" != "None"
+          for record_type in A AAAA; do
+            alias_name="$(aws route53 list-resource-record-sets \
+              --hosted-zone-id "${zone_id}" \
+              --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.' && Type=='${record_type}'].AliasTarget.DNSName | [0]" \
+              --output text)"
+            test -n "${alias_name}" && test "${alias_name}" != "None"
+          done
+
+          {
+            echo "### Authenticated AWS publication readback"
+            echo "- Account ID: \`${account_id}\`"
+            echo "- Caller ARN: \`${caller_arn}\`"
+            echo "- CloudFront: \`${distribution_id}\` / \`${distribution_status}\`"
+            echo "- ACM: \`${certificate_status}\`"
+            echo "- S3 versioning: \`${versioning}\`"
+            echo "- Route 53 A/AAAA: \`PRESENT\`"
+          } >>"${GITHUB_STEP_SUMMARY}"

@@ -60,6 +60,15 @@ jobs:
       - name: Rebuild exact source artifact
         working-directory: docs/technical-reference
         run: npm test
+      - name: Verify runner clock and AWS TLS path
+        shell: bash
+        run: |
+          set -euo pipefail
+          date -u +'%Y-%m-%dT%H:%M:%SZ'
+          curl --silent --show-error \
+            --connect-timeout 10 --max-time 20 \
+            --output /dev/null \
+            https://sts.us-east-1.amazonaws.com/
       - name: Require configured publication role
         env:
           AWS_DOCS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
@@ -67,7 +76,7 @@ jobs:
           test -n "$AWS_DOCS_DEPLOYMENT_ROLE_ARN"
           case "$AWS_DOCS_DEPLOYMENT_ROLE_ARN" in
             arn:aws:iam::*:role/JuncaChainDocsProductionDeployment) ;;
-            *) echo "AWS_DOCS_DEPLOYMENT_ROLE_ARN is missing or unexpected" >&2; exit 1 ;;
+            *) echo "AWS_BINDING_PENDING: AWS_DOCS_DEPLOYMENT_ROLE_ARN is missing or unexpected" >&2; exit 1 ;;
           esac
       - name: Configure publication-only AWS identity
         uses: aws-actions/configure-aws-credentials@v4
@@ -77,11 +86,16 @@ jobs:
           role-session-name: junca-chain-docs-${{ github.run_id }}
       - name: Read back AWS identity and resources
         id: resources
+        env:
+          AWS_DOCS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
         shell: bash
         run: |
           set -euo pipefail
+          expected_account_id="$(cut -d: -f5 <<<"${AWS_DOCS_DEPLOYMENT_ROLE_ARN}")"
           account_id="$(aws sts get-caller-identity --query Account --output text)"
           caller_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          test "${account_id}" = "${expected_account_id}"
+
           organization_id="$(aws organizations describe-organization --query Organization.Id --output text 2>/tmp/aws-organization.err || true)"
           if [[ -z "${organization_id}" || "${organization_id}" == "None" ]]; then
             if grep -Fq "AWSOrganizationsNotInUseException" /tmp/aws-organization.err; then
@@ -91,17 +105,49 @@ jobs:
               exit 1
             fi
           fi
+
           account_alias="$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text)"
           if [[ -z "${account_alias}" || "${account_alias}" == "None" ]]; then
             account_alias="NONE"
           fi
+
           bucket="junca-chain-docs-${account_id}"
           distribution_id="$(aws cloudfront list-distributions \
             --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" \
             --output text)"
           test -n "${account_id}" && test "${account_id}" != "None"
           test -n "${distribution_id}" && test "${distribution_id}" != "None"
-          aws s3api get-bucket-versioning --bucket "${bucket}" --query Status --output text | grep -Fx Enabled
+
+          bucket_versioning="$(aws s3api get-bucket-versioning \
+            --bucket "${bucket}" --query Status --output text)"
+          test "${bucket_versioning}" = "Enabled"
+
+          distribution_status="$(aws cloudfront get-distribution \
+            --id "${distribution_id}" --query Distribution.Status --output text)"
+          test "${distribution_status}" = "Deployed"
+          certificate_arn="$(aws cloudfront get-distribution \
+            --id "${distribution_id}" \
+            --query Distribution.DistributionConfig.ViewerCertificate.ACMCertificateArn \
+            --output text)"
+          certificate_status="$(aws acm describe-certificate \
+            --certificate-arn "${certificate_arn}" \
+            --query Certificate.Status --output text)"
+          test "${certificate_status}" = "ISSUED"
+
+          hosted_zone_id="$(aws route53 list-hosted-zones-by-name \
+            --dns-name jaios-governance.org \
+            --query "HostedZones[?Name=='jaios-governance.org.'] | [0].Id" \
+            --output text)"
+          hosted_zone_id="${hosted_zone_id#/hostedzone/}"
+          test -n "${hosted_zone_id}" && test "${hosted_zone_id}" != "None"
+          for record_type in A AAAA; do
+            alias_dns_name="$(aws route53 list-resource-record-sets \
+              --hosted-zone-id "${hosted_zone_id}" \
+              --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.' && Type=='${record_type}'].AliasTarget.DNSName | [0]" \
+              --output text)"
+            test -n "${alias_dns_name}" && test "${alias_dns_name}" != "None"
+          done
+
           printf 'bucket=%s\n' "${bucket}" >> "$GITHUB_OUTPUT"
           printf 'distribution_id=%s\n' "${distribution_id}" >> "$GITHUB_OUTPUT"
           {
@@ -111,8 +157,10 @@ jobs:
             echo "- Organization ID: \`${organization_id}\`"
             echo "- Account alias: \`${account_alias}\`"
             echo "- Canonical region: \`us-east-1\`"
-            echo "- Bucket: \`${bucket}\`"
-            echo "- Distribution: \`${distribution_id}\`"
+            echo "- Bucket: \`${bucket}\` / versioning \`${bucket_versioning}\`"
+            echo "- Distribution: \`${distribution_id}\` / \`${distribution_status}\`"
+            echo "- Certificate: \`${certificate_status}\`"
+            echo "- Route 53 A/AAAA: \`PRESENT\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Synchronize exact artifact to private S3
         shell: bash
@@ -160,8 +208,9 @@ jobs:
           set -euo pipefail
           for route in "" protocol assets interoperability implementation governance evidence glossary; do
             url="https://docs.jaios-governance.org/${route}"
-            curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
-              --output "/tmp/${route:-home}.html" "${url}"
+            code="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
+              --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
+            test "${code}" = "200"
           done
           grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/">' /tmp/home.html
           grep -F 'Public Testnet' /tmp/home.html
