@@ -1,0 +1,153 @@
+name: JUNCA Chain Docs Production
+
+on:
+  pull_request:
+    paths:
+      - "docs/technical-reference/**"
+      - "infra/aws/docs-publication/**"
+      - ".github/workflows/junca-chain-docs-production.yml"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the exact verified artifact to AWS
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-chain-docs-production
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs/technical-reference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Lint generators and QA
+        run: npm run lint
+      - name: Build and verify eight-route artifact
+        run: npm test
+      - name: Upload exact publication artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-chain-docs-${{ github.sha }}
+          path: docs/technical-reference/dist
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: quality
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Rebuild exact source artifact
+        working-directory: docs/technical-reference
+        run: npm test
+      - name: Configure publication-only AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: junca-chain-docs-${{ github.run_id }}
+      - name: Read back AWS identity and resources
+        id: resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          caller_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          organization_id="$(aws organizations describe-organization --query Organization.Id --output text)"
+          account_alias="$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text)"
+          bucket="junca-chain-docs-${account_id}"
+          distribution_id="$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" \
+            --output text)"
+          test -n "${account_id}" && test "${account_id}" != "None"
+          test -n "${distribution_id}" && test "${distribution_id}" != "None"
+          aws s3api get-bucket-versioning --bucket "${bucket}" --query Status --output text | grep -Fx Enabled
+          printf 'bucket=%s\n' "${bucket}" >> "$GITHUB_OUTPUT"
+          printf 'distribution_id=%s\n' "${distribution_id}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### AWS publication identity"
+            echo "- Account ID: \`${account_id}\`"
+            echo "- Caller ARN: \`${caller_arn}\`"
+            echo "- Organization ID: \`${organization_id}\`"
+            echo "- Account alias: \`${account_alias}\`"
+            echo "- Canonical region: \`us-east-1\`"
+            echo "- Bucket: \`${bucket}\`"
+            echo "- Distribution: \`${distribution_id}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Synchronize exact artifact to private S3
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 sync docs/technical-reference/dist/ \
+            "s3://${{ steps.resources.outputs.bucket }}/" \
+            --delete \
+            --exclude "*.html" \
+            --exclude "robots.txt" \
+            --exclude "sitemap.xml" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 sync docs/technical-reference/dist/ \
+            "s3://${{ steps.resources.outputs.bucket }}/" \
+            --exclude "*" \
+            --include "*.html" \
+            --include "robots.txt" \
+            --include "sitemap.xml" \
+            --cache-control "public,max-age=0,must-revalidate"
+      - name: Verify deployed manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://${{ steps.resources.outputs.bucket }}/release-manifest.json" /tmp/release-manifest.readback.json
+          cmp docs/technical-reference/dist/release-manifest.json /tmp/release-manifest.readback.json
+      - name: Invalidate and wait for completion
+        id: invalidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.resources.outputs.distribution_id }}" \
+            --paths "/*" --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ steps.resources.outputs.distribution_id }}" --id "${invalidation_id}"
+          status="$(aws cloudfront get-invalidation \
+            --distribution-id "${{ steps.resources.outputs.distribution_id }}" --id "${invalidation_id}" \
+            --query Invalidation.Status --output text)"
+          test "${status}" = "Completed"
+          printf 'invalidation_id=%s\n' "${invalidation_id}" >> "$GITHUB_OUTPUT"
+          printf 'status=%s\n' "${status}" >> "$GITHUB_OUTPUT"
+      - name: Production HTTP and metadata readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          for route in "" protocol assets interoperability implementation governance evidence glossary; do
+            url="https://docs.jaios-governance.org/${route}"
+            curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
+              --output "/tmp/${route:-home}.html" "${url}"
+          done
+          grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/">' /tmp/home.html
+          grep -F 'Public Testnet' /tmp/home.html
+          {
+            echo "- Invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
+            echo "- Invalidation status: \`${{ steps.invalidate.outputs.status }}\`"
+            echo "- Public URL: https://docs.jaios-governance.org"
+            echo "- Eight-route HTTP readback: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"

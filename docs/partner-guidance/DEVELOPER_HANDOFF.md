@@ -1,5 +1,55 @@
 # Developer Handoff
 
+## AWS technical reference publication — 2026-07-24
+
+### Canonical production target
+
+- Repository: `JAIOS-Governance/junca-social-ecosystem-chain`
+- Public URL: `https://docs.jaios-governance.org`
+- GitHub Environment: `junca-chain-docs-production`
+- Static source: `docs/technical-reference`
+- Publication stack: `infra/aws/docs-publication/main.yaml`
+- Deployment workflow: `.github/workflows/junca-chain-docs-production.yml`
+
+### Deterministic local QA
+
+```bash
+cd docs/technical-reference
+npm run lint
+npm test
+```
+
+The build writes `dist/release-manifest.json` with the canonical route list
+and SHA-256 digest for every deployed file.
+
+### Exact-environment execution order
+
+1. Read back AWS Account ID, Caller ARN, Organization ID, account alias, and
+   existing GitHub OIDC provider ARN.
+2. Read back all DNS records for `jaios-governance.org`; do not create or
+   modify a hosted zone until ownership and migration safety are confirmed.
+3. Deploy `infra/aws/docs-publication/main.yaml` in `us-east-1`, passing the
+   verified public Hosted Zone ID and existing OIDC provider ARN when present.
+4. Confirm the role trust subject is exactly
+   `repo:JAIOS-Governance/junca-social-ecosystem-chain:environment:junca-chain-docs-production`.
+5. Set the non-secret GitHub Environment variable
+   `AWS_DOCS_DEPLOYMENT_ROLE_ARN` to the observed stack output.
+6. If XServer delegates elsewhere, preserve all existing DNS records and
+   change nameservers only after the Route 53 zone is complete.
+7. Dispatch `JUNCA Chain Docs Production` with `deploy=true`.
+8. Accept completion only after ACM is `ISSUED`, CloudFront is `Deployed`,
+   invalidation is `Completed`, the S3 manifest matches, and all eight routes
+   pass public HTTPS and responsive readback.
+
+### Publication boundary
+
+- Official name: `JUNCA Social Ecosystem Chain`
+- Governance: `JAIOS Institutional Governance`
+- Network: `Public Testnet / No Monetary Value`
+- This package does not launch mainnet, validators, bridges, tokens, NFTs,
+  KMS/HSM resources, or asset movement.
+- AWS and DNS state remains **UNVERIFIED** until same-deployment readback.
+
 ## Scope
 
 This package implements the controlled institutional technical-reference layer. It does not

@@ -1,5 +1,31 @@
 # ChangeLog
 
+## 2026-07-24 — AWS technical reference publication package
+
+### Added
+
+- Dedicated eight-route static technical reference for
+  `https://docs.jaios-governance.org`.
+- Direct routes for protocol, assets, interoperability, implementation,
+  governance, evidence, and glossary; the overview is no longer a long
+  single-page publication.
+- Canonical, OGP, sitemap, robots, 404, responsive layout, keyboard focus,
+  reduced-motion handling, and approved institutional publication labels.
+- Deterministic SHA-256 release manifest generation and local
+  publication-boundary QA.
+- Publication-only CloudFormation for private versioned S3, OAC-restricted
+  CloudFront, ACM, Route 53 A/AAAA, extensionless routing, and a
+  repository/environment-scoped GitHub OIDC role.
+- GitHub Actions quality and production deployment workflow without a
+  long-term AWS access key.
+
+### Pending exact-environment verification
+
+- AWS Account ID, Caller ARN, Organization ID and account alias.
+- Route 53 Hosted Zone and XServer nameserver delegation.
+- ACM issuance, CloudFront deployment, S3 artifact equality, invalidation,
+  DNS, TLS and public eight-route HTTP/readback.
+
 ## 2026-07-23 — Controlled partner guidance production
 
 ### Added
