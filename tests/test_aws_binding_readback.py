@@ -72,7 +72,7 @@ class AwsBindingReadbackTest(unittest.TestCase):
                 return Result({"AvailabilityZones": [{"ZoneName": "ap-northeast-1a", "State": "available"}]})
             return aws_response(command, **kwargs)
 
-        with patch.object(sys, "argv", ["aws_binding_readback.py"]), patch.object(module.subprocess, "run", side_effect=insufficient_zones):
+        with patch.object(sys, "argv", ["aws_binding_readback.py", "--chain-id", "20260724", "--genesis-hash", "0xgenesis", "--source-commit", "a" * 40]), patch.object(module.subprocess, "run", side_effect=insufficient_zones):
             with self.assertRaisesRegex(RuntimeError, "Fewer than three"):
                 module.main()
 
@@ -80,7 +80,7 @@ class AwsBindingReadbackTest(unittest.TestCase):
         module = load_module()
         role = "arn:aws:iam::123456789012:role/junca-public-testnet"
         signer = "arn:aws:kms:ap-northeast-1:123456789012:key/duplicate"
-        argv = ["aws_binding_readback.py", "--deployment-role-arn", role]
+        argv = ["aws_binding_readback.py", "--deployment-role-arn", role, "--chain-id", "20260724", "--genesis-hash", "0xgenesis", "--source-commit", "a" * 40]
         for _ in range(3):
             argv.extend(["--signer-arn", signer])
         with patch.object(sys, "argv", argv), patch.object(module.subprocess, "run", side_effect=aws_response):
