@@ -25,6 +25,7 @@ def identity() -> dict:
         "network_label": release_gate.NETWORK_LABEL,
         "chain_id": "20260724",
         "genesis_hash": "0xcanonical-genesis",
+        "source_commit": "a" * 40,
         "release_boundary": dict(BOUNDARY),
     }
 
@@ -86,6 +87,13 @@ class PublicTestnetReleaseGateTest(unittest.TestCase):
         decision = release_gate.evaluate(binding, runtime, rollback)
         self.assertFalse(decision["accepted"])
         self.assertIn("chain_identity:mismatch", decision["failures"])
+
+    def test_rejects_source_commit_mismatch(self) -> None:
+        binding, runtime, rollback = accepted_evidence()
+        rollback["source_commit"] = "b" * 40
+        decision = release_gate.evaluate(binding, runtime, rollback)
+        self.assertFalse(decision["accepted"])
+        self.assertIn("source_commit:mismatch", decision["failures"])
 
     def test_rejects_mainnet_asset_or_bridge_change(self) -> None:
         binding, runtime, rollback = accepted_evidence()
