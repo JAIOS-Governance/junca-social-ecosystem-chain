@@ -1,0 +1,25 @@
+{
+  "schema_version": "junca-public-rpc-policy/v1",
+  "default_action": "deny",
+  "allowed_methods": [
+    "eth_blockNumber",
+    "eth_chainId",
+    "eth_getBlockByHash",
+    "eth_getBlockByNumber",
+    "eth_getLogs",
+    "eth_getTransactionByHash",
+    "eth_getTransactionReceipt",
+    "net_version",
+    "web3_clientVersion"
+  ],
+  "denied_method_prefixes": [
+    "admin_",
+    "debug_",
+    "miner_",
+    "personal_"
+  ],
+  "denied_methods": [
+    "eth_sendRawTransaction",
+    "eth_sendTransaction"
+  ]
+}

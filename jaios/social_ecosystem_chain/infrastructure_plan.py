@@ -7,16 +7,11 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-
 GOVERNANCE = "JAIOS Institutional Governance"
 NOTICE = "Public Testnet / No Monetary Value"
 UNSAFE_RPC_METHODS = (
-    "admin_*",
-    "debug_*",
-    "personal_*",
-    "miner_*",
-    "eth_sendRawTransaction",
-    "eth_sendTransaction",
+    "admin_*", "debug_*", "personal_*", "miner_*",
+    "eth_sendRawTransaction", "eth_sendTransaction",
 )
 
 
@@ -86,26 +81,18 @@ def build_infrastructure_plan(specification: Mapping[str, Any]) -> Infrastructur
             },
         },
         "rollout": [
-            "verify-artifact-digests",
-            "bind-external-signer-resources",
-            "deploy-validator-01",
-            "deploy-validator-02",
-            "deploy-validator-03",
-            "verify-validator-quorum",
-            "deploy-readonly-rpc-gateway",
-            "verify-rpc-acceptance",
-            "deploy-explorer",
-            "verify-explorer-head-parity",
-            "enable-monitoring",
+            "verify-artifact-digests", "bind-external-signer-resources",
+            "deploy-validator-01", "deploy-validator-02", "deploy-validator-03",
+            "verify-validator-quorum", "deploy-readonly-rpc-gateway",
+            "verify-rpc-acceptance", "deploy-explorer",
+            "verify-explorer-head-parity", "enable-monitoring",
             "publish-public-testnet-endpoints",
         ],
         "rollback": [
-            "withdraw-public-endpoints",
-            "pause-bridge-routes",
+            "withdraw-public-endpoints", "pause-bridge-routes",
             "preserve-logs-and-finalized-checkpoint",
             "restore-last-verified-binary-and-genesis",
-            "verify-validator-quorum",
-            "restore-readonly-endpoints",
+            "verify-validator-quorum", "restore-readonly-endpoints",
         ],
         "release_boundary": {
             "mainnet_changed": False,

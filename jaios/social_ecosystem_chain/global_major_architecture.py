@@ -579,4 +579,3 @@ def _reject_secret_material(value: Any, path: str = "root") -> None:
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for index, child in enumerate(value):
             _reject_secret_material(child, f"{path}[{index}]")
-

@@ -1,0 +1,46 @@
+name: JUNCA Social Ecosystem Chain AWS Plan
+
+on:
+  pull_request:
+    paths:
+      - "infrastructure/aws/**"
+      - "scripts/junca_social_ecosystem_chain_aws_preflight.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_infrastructure.py"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-plan.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+      - name: Terraform format
+        run: terraform -chdir=infrastructure/aws fmt -check -recursive
+      - name: Terraform init without backend
+        run: terraform -chdir=infrastructure/aws init -backend=false
+      - name: Terraform validate
+        run: terraform -chdir=infrastructure/aws validate
+      - name: Verify fail-closed AWS boundary
+        run: |
+          mkdir -p artifacts
+          python scripts/junca_social_ecosystem_chain_aws_preflight.py \
+            > artifacts/junca-aws-preflight.json
+          grep -q '"state": "BLOCKED_FAIL_CLOSED"' artifacts/junca-aws-preflight.json
+          grep -q '"apply_authorized": false' artifacts/junca-aws-preflight.json
+          python -m unittest tests.test_junca_social_ecosystem_chain_aws_infrastructure -v
+      - name: Upload AWS plan evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-aws-plan-${{ github.run_id }}
+          path: artifacts/junca-aws-preflight.json
+          if-no-files-found: error
+          retention-days: 90

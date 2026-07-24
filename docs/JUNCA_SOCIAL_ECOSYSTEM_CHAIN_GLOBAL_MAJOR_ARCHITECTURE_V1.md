@@ -130,4 +130,3 @@ Future or unverified:
 - Independent security review and bug bounty
 - Public Testnet Cloud deployment and Runtime Acceptance
 - Partner Testnet, Candidate Mainnet, and Mainnet exit criteria
-
