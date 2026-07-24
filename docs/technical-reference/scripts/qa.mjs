@@ -51,7 +51,7 @@ for (const required of [
   "TLSv1.2_2021",
   "DocsAliasA:",
   "DocsAliasAAAA:",
-  "repo:${Repository}:environment:${EnvironmentName}",
+  "repo:JAIOS-Governance@${RepositoryOwnerId}/junca-social-ecosystem-chain@${RepositoryId}:environment:${EnvironmentName}",
   "junca-chain-docs-production"
 ]) {
   if (!infrastructure.includes(required)) failures.push(`infrastructure missing ${required}`);
