@@ -19,19 +19,22 @@ def boundary():
 
 
 class RepositoryGovernanceTests(unittest.TestCase):
-    def test_pending_owner_binding_is_fail_closed(self):
+    def test_canonical_owner_binding_is_ready(self):
         evidence = load_repository_boundary()
-        self.assertEqual(evidence["state"], "BLOCKED")
-        self.assertEqual(evidence["blockers"], ["repository_owner_binding"])
+        self.assertEqual(evidence["state"], "READY")
+        self.assertEqual(evidence["blockers"], [])
+        self.assertEqual(evidence["repository_owner_binding"], "JAIOS-Governance")
         self.assertFalse(evidence["corporate_ownership_represented"])
         self.assertFalse(evidence["personal_control_represented"])
 
-    def test_verified_jaios_owner_binding_is_ready(self):
+    def test_pending_owner_binding_is_fail_closed(self):
         specification = boundary()
-        specification["repository_owner_binding"] = "JAIOS"
+        specification["repository_owner_binding"] = (
+            "PENDING_JAIOS_GITHUB_ORGANIZATION"
+        )
         evidence = evaluate_repository_boundary(specification)
-        self.assertEqual(evidence["state"], "READY")
-        self.assertEqual(evidence["blockers"], [])
+        self.assertEqual(evidence["state"], "BLOCKED")
+        self.assertEqual(evidence["blockers"], ["repository_owner_binding"])
 
     def test_rejects_company_or_personal_ownership(self):
         for key in (

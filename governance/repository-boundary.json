@@ -4,7 +4,7 @@
   "governance": "JAIOS Institutional Governance",
   "network_notice": "Public Testnet / No Monetary Value",
   "canonical_repository_name": "junca-social-ecosystem-chain",
-  "repository_owner_binding": "PENDING_JAIOS_GITHUB_ORGANIZATION",
+  "repository_owner_binding": "JAIOS-Governance",
   "repository_role": "canonical-protocol-source",
   "corporate_ownership_represented": false,
   "personal_control_represented": false,

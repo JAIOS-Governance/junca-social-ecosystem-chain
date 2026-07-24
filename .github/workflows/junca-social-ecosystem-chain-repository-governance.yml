@@ -23,8 +23,9 @@ jobs:
           mkdir -p artifacts
           python scripts/junca_social_ecosystem_chain_repository_governance.py \
             --output artifacts/junca-social-ecosystem-chain-repository-governance.json \
-            --expect-state BLOCKED
-          grep -q '"state": "BLOCKED"' artifacts/junca-social-ecosystem-chain-repository-governance.json
+            --expect-state READY
+          grep -q '"state": "READY"' artifacts/junca-social-ecosystem-chain-repository-governance.json
+          grep -q '"repository_owner_binding": "JAIOS-Governance"' artifacts/junca-social-ecosystem-chain-repository-governance.json
           grep -q '"corporate_ownership_represented": false' artifacts/junca-social-ecosystem-chain-repository-governance.json
           grep -q '"personal_control_represented": false' artifacts/junca-social-ecosystem-chain-repository-governance.json
       - name: Upload repository governance evidence
