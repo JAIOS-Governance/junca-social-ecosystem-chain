@@ -41,6 +41,13 @@ jobs:
       - name: Build and verify eight-route artifact
         working-directory: docs/technical-reference
         run: npm test
+      - name: Read back GitHub OIDC claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --silent --show-error --fail -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          jwt="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          JWT="$jwt" python3 -c 'import base64,json,os; p=os.environ["JWT"].split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); print(json.dumps({k:c.get(k) for k in ("sub","aud","repository","environment","ref","sha","actor")},sort_keys=True))'
       - name: Configure publication-only AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
