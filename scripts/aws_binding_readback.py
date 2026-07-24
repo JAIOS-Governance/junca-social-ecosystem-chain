@@ -44,8 +44,14 @@ def main() -> int:
     parser.add_argument("--region", default=os.getenv("AWS_REGION", "ap-northeast-1"))
     parser.add_argument("--deployment-role-arn", default=os.getenv("AWS_DEPLOYMENT_ROLE_ARN"))
     parser.add_argument("--signer-arn", action="append", default=[])
+    parser.add_argument("--chain-id", default=os.getenv("JUNCA_CHAIN_ID"))
+    parser.add_argument("--genesis-hash", default=os.getenv("JUNCA_GENESIS_HASH"))
+    parser.add_argument("--source-commit", default=os.getenv("GITHUB_SHA"))
     parser.add_argument("--output", default="aws-binding-readback.json")
     args = parser.parse_args()
+    chain_id = require(args.chain_id, "chain ID")
+    genesis_hash = require(args.genesis_hash, "genesis hash")
+    source_commit = require(args.source_commit, "source commit")
 
     identity = aws_json(["sts", "get-caller-identity"])
     account_id = require(identity.get("Account"), "AWS account ID")
@@ -109,6 +115,9 @@ def main() -> int:
         "official_chain_name": "JUNCA Social Ecosystem Chain",
         "governance": GOVERNANCE,
         "network_label": NETWORK,
+        "chain_id": chain_id,
+        "genesis_hash": genesis_hash,
+        "source_commit": source_commit,
         "aws": {
             "account_id": account_id,
             "caller_arn": caller_arn,
