@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "environment": "public-testnet",
+  "chain_id": 6699,
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "release_commit": "a8500bc45f4c7239a6f12e67bf532c648db57fcf",
+  "validators": [
+    {
+      "id": "validator-01",
+      "signer_secret_resource": "PENDING_VALIDATOR_01_SECRET_RESOURCE"
+    },
+    {
+      "id": "validator-02",
+      "signer_secret_resource": "PENDING_VALIDATOR_02_SECRET_RESOURCE"
+    },
+    {
+      "id": "validator-03",
+      "signer_secret_resource": "PENDING_VALIDATOR_03_SECRET_RESOURCE"
+    }
+  ],
+  "endpoints": {
+    "rpc": "PENDING_PUBLIC_RPC_HTTPS_URL",
+    "explorer": "PENDING_EXPLORER_HTTPS_URL",
+    "health": "PENDING_HEALTH_HTTPS_URL"
+  },
+  "attestations": {
+    "dns_tls_verified": false,
+    "validator_quorum_verified": false,
+    "rpc_acceptance_verified": false,
+    "explorer_parity_verified": false,
+    "monitoring_verified": false,
+    "rollback_verified": false,
+    "security_review_approved": false
+  }
+}

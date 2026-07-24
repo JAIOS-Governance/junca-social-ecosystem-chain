@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "chain_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "network_notice": "Public Testnet / No Monetary Value",
+  "canonical_repository_name": "junca-social-ecosystem-chain",
+  "repository_owner_binding": "PENDING_JAIOS_GITHUB_ORGANIZATION",
+  "repository_role": "canonical-protocol-source",
+  "corporate_ownership_represented": false,
+  "personal_control_represented": false,
+  "required_paths": [
+    "GOVERNANCE.md",
+    "SECURITY.md",
+    "jaios/social_ecosystem_chain",
+    "config",
+    "docs",
+    "tests"
+  ],
+  "excluded_scopes": [
+    "corporate-websites",
+    "company-administration",
+    "unrelated-business-applications",
+    "private-keys",
+    "seed-phrases",
+    "signer-secret-values"
+  ],
+  "release_boundary": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "cloud_binding_ready": false
+  }
+}

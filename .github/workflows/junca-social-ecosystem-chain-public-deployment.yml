@@ -1,0 +1,45 @@
+name: JUNCA Chain Public Deployment Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/public_deployment.py"
+      - "scripts/junca_social_ecosystem_chain_public_deployment.py"
+      - "config/junca_social_ecosystem_chain_public_deployment.pending.json"
+      - "tests/test_junca_social_ecosystem_chain_public_deployment.py"
+      - ".github/workflows/junca-social-ecosystem-chain-public-deployment.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile public deployment controls
+        run: python -m compileall -q jaios/social_ecosystem_chain/public_deployment.py scripts/junca_social_ecosystem_chain_public_deployment.py tests/test_junca_social_ecosystem_chain_public_deployment.py
+      - name: Run public deployment tests
+        run: python -m unittest tests.test_junca_social_ecosystem_chain_public_deployment -v
+      - name: Generate fail-closed deployment evidence
+        run: |
+          mkdir -p artifacts
+          python scripts/junca_social_ecosystem_chain_public_deployment.py \
+            --specification config/junca_social_ecosystem_chain_public_deployment.pending.json \
+            --output artifacts/junca-social-ecosystem-chain-public-deployment.json \
+            --expect-state BLOCKED
+          grep -q '"state": "BLOCKED"' artifacts/junca-social-ecosystem-chain-public-deployment.json
+          grep -q '"mainnet_changed": false' artifacts/junca-social-ecosystem-chain-public-deployment.json
+          grep -q '"assets_moved": false' artifacts/junca-social-ecosystem-chain-public-deployment.json
+      - name: Upload deployment handoff evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-public-deployment-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-public-deployment.json
+          if-no-files-found: error
+          retention-days: 90

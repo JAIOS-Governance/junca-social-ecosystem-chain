@@ -1,0 +1,36 @@
+name: JUNCA Social Ecosystem Chain Repository Governance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  repository-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run chain governance tests
+        run: python -m unittest discover -s tests -p "test_junca_social_ecosystem_chain_*.py" -v
+      - name: Generate fail-closed repository evidence
+        run: |
+          mkdir -p artifacts
+          python scripts/junca_social_ecosystem_chain_repository_governance.py \
+            --output artifacts/junca-social-ecosystem-chain-repository-governance.json \
+            --expect-state BLOCKED
+          grep -q '"state": "BLOCKED"' artifacts/junca-social-ecosystem-chain-repository-governance.json
+          grep -q '"corporate_ownership_represented": false' artifacts/junca-social-ecosystem-chain-repository-governance.json
+          grep -q '"personal_control_represented": false' artifacts/junca-social-ecosystem-chain-repository-governance.json
+      - name: Upload repository governance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-repository-governance-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-repository-governance.json
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,45 @@
+name: JUNCA Chain Infrastructure Plan
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/infrastructure_plan.py"
+      - "scripts/junca_social_ecosystem_chain_infrastructure_plan.py"
+      - "config/junca_social_ecosystem_chain_infrastructure_plan.json"
+      - "tests/test_junca_social_ecosystem_chain_infrastructure_plan.py"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_PUBLIC_TESTNET_DEPLOYMENT.md"
+      - ".github/workflows/junca-social-ecosystem-chain-infrastructure-plan.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile infrastructure planning controls
+        run: python -m compileall -q jaios/social_ecosystem_chain/infrastructure_plan.py scripts/junca_social_ecosystem_chain_infrastructure_plan.py tests/test_junca_social_ecosystem_chain_infrastructure_plan.py
+      - name: Run infrastructure plan tests
+        run: python -m unittest tests.test_junca_social_ecosystem_chain_infrastructure_plan -v
+      - name: Generate deterministic plan evidence
+        run: |
+          mkdir -p artifacts
+          python scripts/junca_social_ecosystem_chain_infrastructure_plan.py \
+            --specification config/junca_social_ecosystem_chain_infrastructure_plan.json \
+            --output artifacts/junca-social-ecosystem-chain-infrastructure-plan.json
+          grep -q '"automatic_deployment": false' artifacts/junca-social-ecosystem-chain-infrastructure-plan.json
+          grep -q '"mainnet_changed": false' artifacts/junca-social-ecosystem-chain-infrastructure-plan.json
+          grep -q '"assets_moved": false' artifacts/junca-social-ecosystem-chain-infrastructure-plan.json
+      - name: Upload infrastructure plan evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-infrastructure-plan-${{ github.run_id }}
+          path: artifacts/junca-social-ecosystem-chain-infrastructure-plan.json
+          if-no-files-found: error
+          retention-days: 90
