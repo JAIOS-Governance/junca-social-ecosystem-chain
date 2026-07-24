@@ -13,7 +13,22 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
-from jaios.health import DashboardStatus, HealthProbeResult
+class DashboardStatus(str, Enum):
+    """Chain-local dashboard compatibility status."""
+
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNHEALTHY = "unhealthy"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class HealthProbeResult:
+    """Chain-local health probe result without business-runtime coupling."""
+
+    status: DashboardStatus
+    summary: str
+    metrics: Mapping[str, Any]
 
 
 class ChainHealthError(RuntimeError):
@@ -250,7 +265,7 @@ def json_rpc_request(
         headers={
             "accept": "application/json",
             "content-type": "application/json",
-            "user-agent": "JUNCA-Global-Chain-Ops/1.0",
+            "user-agent": "JUNCA-Social-Ecosystem-Chain-Ops/1.0",
         },
         method="POST",
     )

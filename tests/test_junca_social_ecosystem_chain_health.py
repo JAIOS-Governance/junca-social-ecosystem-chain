@@ -14,7 +14,7 @@ from jaios.social_ecosystem_chain import (
     load_network_specs,
     make_dashboard_probe,
 )
-from jaios.health import DashboardStatus
+from jaios.social_ecosystem_chain.health import DashboardStatus
 
 
 NOW = datetime(2026, 7, 23, 8, 0, tzinfo=timezone.utc)
