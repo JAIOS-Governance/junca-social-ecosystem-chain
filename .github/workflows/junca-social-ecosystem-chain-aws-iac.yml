@@ -3,7 +3,7 @@ name: JUNCA Chain AWS IaC
 on:
   pull_request:
     paths:
-      - "infra/aws/public-testnet/**"
+      - "infra/aws/**"
       - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
       - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
   workflow_dispatch:
@@ -15,6 +15,11 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        module:
+          - infra/aws/bootstrap
+          - infra/aws/public-testnet
     steps:
       - uses: actions/checkout@v4
 
@@ -24,15 +29,16 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform format
-        run: terraform -chdir=infra/aws/public-testnet fmt -check -recursive
+        run: terraform -chdir=${{ matrix.module }} fmt -check -recursive
 
       - name: Terraform initialize without backend
-        run: terraform -chdir=infra/aws/public-testnet init -backend=false -input=false
+        run: terraform -chdir=${{ matrix.module }} init -backend=false -input=false
 
       - name: Terraform validate
-        run: terraform -chdir=infra/aws/public-testnet validate -no-color
+        run: terraform -chdir=${{ matrix.module }} validate -no-color
 
       - name: Validate fail-closed AWS binding
+        if: matrix.module == 'infra/aws/public-testnet'
         run: |
           python - <<'PY'
           import json
@@ -59,4 +65,4 @@ jobs:
           ! grep -RIE '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key[[:space:]]*=)' \
             --exclude='README.md' \
             --exclude='*.tftpl' \
-            infra/aws/public-testnet config/junca_social_ecosystem_chain_aws_binding.pending.json
+            infra/aws config/junca_social_ecosystem_chain_aws_binding.pending.json
