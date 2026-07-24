@@ -1,0 +1,73 @@
+name: JUNCA Chain Deployment Recovery
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/canonical_binding.py"
+      - "jaios/social_ecosystem_chain/runtime_acceptance_v2.py"
+      - "jaios/social_ecosystem_chain/rollback_acceptance.py"
+      - "config/junca_social_ecosystem_chain_cloud_binding.pending.json"
+      - "tests/test_junca_social_ecosystem_chain_deployment_recovery.py"
+      - "docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_DEPLOYMENT_RECOVERY.md"
+      - ".github/workflows/junca-social-ecosystem-chain-deployment-recovery.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile deployment recovery controls
+        run: |
+          python -m compileall -q \
+            jaios/social_ecosystem_chain/canonical_binding.py \
+            jaios/social_ecosystem_chain/runtime_acceptance_v2.py \
+            jaios/social_ecosystem_chain/rollback_acceptance.py \
+            tests/test_junca_social_ecosystem_chain_deployment_recovery.py
+      - name: Run binding, runtime and rollback tests
+        run: |
+          python -m unittest \
+            tests.test_junca_social_ecosystem_chain_deployment_recovery -v
+      - name: Generate redacted fail-closed binding evidence
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import json
+          from jaios.social_ecosystem_chain.canonical_binding import load_canonical_binding
+          evidence = load_canonical_binding(
+              "config/junca_social_ecosystem_chain_cloud_binding.pending.json"
+          )
+          assert evidence.state == "BLOCKED"
+          assert evidence.evidence["mainnet_changed"] is False
+          assert evidence.evidence["assets_moved"] is False
+          assert evidence.evidence["bridge_activated"] is False
+          with open(
+              "artifacts/junca-social-ecosystem-chain-cloud-binding.json",
+              "w",
+              encoding="utf-8",
+          ) as output:
+              json.dump(evidence.as_dict(), output, indent=2, sort_keys=True)
+              output.write("\n")
+          PY
+      - name: Verify no secret material
+        run: |
+          ! grep -RIE \
+            '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key)' \
+            artifacts config/junca_social_ecosystem_chain_cloud_binding.pending.json
+      - name: Record evidence digests
+        run: sha256sum artifacts/* > artifacts/SHA256SUMS
+      - name: Upload recovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-social-ecosystem-chain-deployment-recovery-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+

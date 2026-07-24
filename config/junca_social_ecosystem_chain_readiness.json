@@ -1,0 +1,19 @@
+{
+  "schema_version": "junca-social-ecosystem-chain-readiness/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "release_target": "private-testnet",
+  "source_commit": "pending",
+  "gates": {
+    "brand-contract": true,
+    "source-provenance": true,
+    "reproducible-build": false,
+    "genesis-fingerprint": true,
+    "new-key-custody": false,
+    "validator-quorum": false,
+    "rpc-method-boundary": false,
+    "explorer-head-parity": false,
+    "governance-readback": false,
+    "rollback-package": false,
+    "independent-post-release-readback": false
+  }
+}

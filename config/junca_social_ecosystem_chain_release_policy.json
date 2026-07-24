@@ -1,0 +1,45 @@
+{
+  "schema_version": "junca-social-ecosystem-chain-release/v2",
+  "release_model": "institutional-governance",
+  "authority": {
+    "public_governance_entity": "JAIOS Institutional Governance",
+    "approval_model": "internal-governance-control",
+    "operator_model": "jaios-controlled-automation",
+    "source_repository": "juncaGlobal/junca-Project",
+    "former_team_dependency": "prohibited",
+    "personal_control_representation": "prohibited"
+  },
+  "asset_policy": {
+    "legacy_source": "audit-reference-only",
+    "legacy_binaries": "verification-reference-only",
+    "legacy_keys": "prohibited",
+    "legacy_credentials": "prohibited",
+    "new_keys_required": true,
+    "secrets_in_repository": false
+  },
+  "network_strategy": {
+    "brand": "JUNCA Social Ecosystem Chain",
+    "testnet": "new-genesis",
+    "mainnet": "snapshot-audit-before-continuity-decision",
+    "legacy_chain_ids": [668, 669],
+    "reuse_legacy_chain_id_before_decision": false
+  },
+  "public_representation": {
+    "issuance_management": "JAIOS Institutional Governance",
+    "testnet_label": "Public Testnet / No Monetary Value",
+    "decentralization_claims": "evidence-required",
+    "responsibility_disclosure": "mandatory"
+  },
+  "required_controls": [
+    "source-provenance",
+    "reproducible-build",
+    "genesis-fingerprint",
+    "new-key-custody",
+    "validator-quorum",
+    "rpc-method-boundary",
+    "explorer-head-parity",
+    "governance-readback",
+    "rollback-package",
+    "independent-post-release-readback"
+  ]
+}

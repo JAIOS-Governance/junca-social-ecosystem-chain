@@ -1,0 +1,14 @@
+{
+  "schema_version": "junca-runtime-acceptance-policy/v1",
+  "network": "JUNCA Social Ecosystem Chain Public Testnet",
+  "chain_id": 20260723,
+  "validator_addresses": [
+    "0x1111111111111111111111111111111111111111",
+    "0x2222222222222222222222222222222222222222",
+    "0x3333333333333333333333333333333333333333"
+  ],
+  "address_binding_status": "placeholder-only-blocked",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "release_rule": "Replace placeholder addresses with independently verified custody-bound addresses before runtime acceptance."
+}

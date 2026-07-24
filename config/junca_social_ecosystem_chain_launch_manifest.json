@@ -1,0 +1,24 @@
+{
+  "schema_version": "junca-public-testnet-launch-manifest/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "network_name": "JUNCA Social Ecosystem Chain Public Preview Testnet",
+  "chain_id": 20260723,
+  "governance_entity": "JAIOS Institutional Governance",
+  "public_label": "Public Testnet / No Monetary Value",
+  "consensus": {"engine": "posv", "period_seconds": 2, "epoch_blocks": 900},
+  "validators": [
+    {"name": "validator-1", "address": "pending"},
+    {"name": "validator-2", "address": "pending"},
+    {"name": "validator-3", "address": "pending"}
+  ],
+  "foundation_address": "pending",
+  "prefund": [],
+  "gas_limit": "0x1c9c380",
+  "difficulty": "0x1",
+  "release": {
+    "mainnet": false,
+    "monetary_value": false,
+    "legacy_state_import": false,
+    "legacy_key_reuse": false
+  }
+}

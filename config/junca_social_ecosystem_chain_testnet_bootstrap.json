@@ -1,0 +1,45 @@
+{
+  "schema_version": "junca-sovereign-testnet-bootstrap/v1",
+  "network_name": "JUNCA Social Ecosystem Chain Sovereign Testnet",
+  "release_stage": "private-bootstrap",
+  "chain_identity": {
+    "chain_id": 20260723,
+    "status": "private-candidate",
+    "registry": "ethereum-lists/chains",
+    "registration_status": "pending",
+    "public_use_allowed": false
+  },
+  "consensus": {
+    "engine": "posv",
+    "period_seconds": 2,
+    "epoch_blocks": 900
+  },
+  "topology": {
+    "validators": 9,
+    "validator_quorum": 7,
+    "bootnodes": 5,
+    "rpc_nodes": 6,
+    "failure_domains": 5
+  },
+  "custody": {
+    "validator_key_source": "new-at-deployment",
+    "bootnode_key_source": "new-at-deployment",
+    "legacy_key_reuse": false,
+    "secrets_in_repository": false
+  },
+  "genesis": {
+    "strategy": "new-genesis",
+    "legacy_state_import": false,
+    "legacy_balance_import": false,
+    "prefund_policy": "jaios-governed-manifest-only"
+  },
+  "publication_gates": {
+    "chain_id_registration_verified": false,
+    "new_keys_attested": false,
+    "genesis_fingerprint_verified": false,
+    "validator_quorum_verified": false,
+    "rpc_boundary_verified": false,
+    "explorer_head_parity_verified": false,
+    "rollback_package_verified": false
+  }
+}

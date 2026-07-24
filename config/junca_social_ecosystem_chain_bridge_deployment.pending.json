@@ -1,0 +1,34 @@
+{
+  "attestations": {
+    "bytecode_reproduced": true,
+    "explorer_source_verified": false,
+    "guardian_bound": false,
+    "independent_security_review": false,
+    "multisig_bound": false,
+    "relayer_keys_bound": false,
+    "runtime_acceptance": false
+  },
+  "contracts": {
+    "asset_adapter": {
+      "address": "",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "bridge": {
+      "address": "",
+      "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "mintable_erc20": {
+      "address": "",
+      "source_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "mintable_erc721": {
+      "address": "",
+      "source_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  },
+  "environment": "public-testnet",
+  "governance": "JAIOS Institutional Governance",
+  "network": "bsc-testnet",
+  "notice": "Public Testnet / No Monetary Value",
+  "paused_on_deploy": true
+}

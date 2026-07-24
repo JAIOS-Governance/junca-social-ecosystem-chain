@@ -1,0 +1,78 @@
+services:
+  validator-1: &validator
+    image: junca-social-ecosystem-chain:testnet-a3e47b6
+    restart: unless-stopped
+    read_only: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      junca --datadir=/var/lib/junca init /run/config/genesis.json &&
+      exec junca --datadir=/var/lib/junca --networkid=20260723
+      --nodekey=/run/secrets/validator-1.key --port=30303 --mine
+      --syncmode=full --ipcdisable
+    volumes:
+      - validator-1-data:/var/lib/junca
+      - ./genesis.json:/run/config/genesis.json:ro
+    secrets:
+      - source: validator-1-key
+        target: validator-1.key
+    networks: [validator]
+  validator-2:
+    <<: *validator
+    command: >-
+      junca --datadir=/var/lib/junca init /run/config/genesis.json &&
+      exec junca --datadir=/var/lib/junca --networkid=20260723
+      --nodekey=/run/secrets/validator-2.key --port=30303 --mine
+      --syncmode=full --ipcdisable
+    volumes:
+      - validator-2-data:/var/lib/junca
+      - ./genesis.json:/run/config/genesis.json:ro
+    secrets:
+      - source: validator-2-key
+        target: validator-2.key
+  validator-3:
+    <<: *validator
+    command: >-
+      junca --datadir=/var/lib/junca init /run/config/genesis.json &&
+      exec junca --datadir=/var/lib/junca --networkid=20260723
+      --nodekey=/run/secrets/validator-3.key --port=30303 --mine
+      --syncmode=full --ipcdisable
+    volumes:
+      - validator-3-data:/var/lib/junca
+      - ./genesis.json:/run/config/genesis.json:ro
+    secrets:
+      - source: validator-3-key
+        target: validator-3.key
+  rpc:
+    image: junca-social-ecosystem-chain:testnet-a3e47b6
+    restart: unless-stopped
+    read_only: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      junca --datadir=/var/lib/junca init /run/config/genesis.json &&
+      exec junca --datadir=/var/lib/junca --networkid=20260723
+      --syncmode=full --http --http.addr=0.0.0.0 --http.port=8545
+      --http.api=eth,net,web3 --ws --ws.addr=0.0.0.0 --ws.port=8546
+      --ws.api=eth,net,web3 --ipcdisable
+    volumes:
+      - rpc-data:/var/lib/junca
+      - ./genesis.json:/run/config/genesis.json:ro
+    networks: [validator, edge]
+
+networks:
+  validator:
+    internal: true
+  edge: {}
+
+volumes:
+  validator-1-data: {}
+  validator-2-data: {}
+  validator-3-data: {}
+  rpc-data: {}
+
+secrets:
+  validator-1-key:
+    external: true
+  validator-2-key:
+    external: true
+  validator-3-key:
+    external: true
