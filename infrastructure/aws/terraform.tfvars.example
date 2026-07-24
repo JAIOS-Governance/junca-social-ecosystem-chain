@@ -1,0 +1,20 @@
+# Examples are deliberately invalid placeholders. Do not apply or commit real secrets.
+deployment_enabled = false
+aws_account_id      = "REQUIRED_CANONICAL_READBACK"
+aws_region          = "REQUIRED_CANONICAL_READBACK"
+vpc_id              = "REQUIRED_CANONICAL_READBACK"
+private_subnet_ids  = ["REQUIRED_AZ1", "REQUIRED_AZ2", "REQUIRED_AZ3"]
+public_subnet_ids   = ["REQUIRED_PUBLIC_AZ1", "REQUIRED_PUBLIC_AZ2"]
+route53_zone_id     = "REQUIRED_AFTER_EXTERNAL_REGISTRAR_DELEGATION"
+root_domain         = "jaios-governance.org"
+validator_ami_id    = "REQUIRED_IMMUTABLE_AMI"
+validator_instance_type = "REQUIRED_CAPACITY_REVIEW"
+validator_signer_kms_key_arns = [
+  "REQUIRED_VALIDATOR_01_KMS_OR_CLOUDHSM_REFERENCE",
+  "REQUIRED_VALIDATOR_02_KMS_OR_CLOUDHSM_REFERENCE",
+  "REQUIRED_VALIDATOR_03_KMS_OR_CLOUDHSM_REFERENCE"
+]
+rpc_gateway_image = "REQUIRED_IMAGE@sha256:REQUIRED_DIGEST"
+explorer_image    = "REQUIRED_IMAGE@sha256:REQUIRED_DIGEST"
+genesis_sha256    = "REQUIRED_CANONICAL_READBACK"
+binary_sha256     = "REQUIRED_CANONICAL_READBACK"

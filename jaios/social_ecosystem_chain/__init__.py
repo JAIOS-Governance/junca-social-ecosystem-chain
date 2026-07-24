@@ -53,6 +53,8 @@ from .event_indexer import (
     IndexedBlock,
 )
 from .health import (
+    DashboardStatus,
+    HealthProbeResult,
     ChainEndpointHealth,
     ChainHealthError,
     ChainHealthProbe,
@@ -161,6 +163,8 @@ __all__ = [
     "IndexedBlock",
     "ChainEndpointHealth",
     "ChainHealthError",
+    "DashboardStatus",
+    "HealthProbeResult",
     "ChainHealthProbe",
     "ChainHealthReport",
     "ChainHealthStatus",

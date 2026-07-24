@@ -1,0 +1,23 @@
+{
+  "schema_version": "junca-chain-benchmark-plan/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "suites": [
+    {"id": "load", "status": "SCAFFOLDED", "procedure": "Run declared workload profiles with immutable generator, node, network, and sampling metadata.", "evidence_schema": "junca-benchmark-evidence/v1"},
+    {"id": "soak", "status": "SCAFFOLDED", "procedure": "Run sustained declared workload and record resource, error, finality, and availability series.", "evidence_schema": "junca-benchmark-evidence/v1"},
+    {"id": "chaos", "status": "SCAFFOLDED", "procedure": "Inject declared non-production validator, network, disk, and service faults and measure recovery.", "evidence_schema": "junca-benchmark-evidence/v1"},
+    {"id": "state_growth", "status": "SCAFFOLDED", "procedure": "Measure canonical state, index, snapshot, and restore growth against a declared workload.", "evidence_schema": "junca-benchmark-evidence/v1"}
+  ],
+  "metrics": [
+    {"id": "throughput", "target": null, "verified_result": null, "status": "UNVERIFIED", "unit": "accepted_transactions_per_second"},
+    {"id": "finality", "target": null, "verified_result": null, "status": "UNVERIFIED", "unit": "milliseconds"},
+    {"id": "latency", "target": null, "verified_result": null, "status": "UNVERIFIED", "unit": "milliseconds_distribution"},
+    {"id": "state_growth", "target": null, "verified_result": null, "status": "UNVERIFIED", "unit": "bytes_per_workload_unit"},
+    {"id": "availability", "target": null, "verified_result": null, "status": "UNVERIFIED", "unit": "ratio_over_declared_window"}
+  ],
+  "capacity_report_required_fields": ["workload_digest", "binary_digest", "genesis_digest", "network_config_digest", "environment", "samples", "result", "evidence"],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

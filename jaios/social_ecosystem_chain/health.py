@@ -13,26 +13,25 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+class ChainHealthError(RuntimeError):
+    """Raised when chain configuration or RPC evidence is invalid."""
+
+
 class DashboardStatus(str, Enum):
-    """Chain-local dashboard compatibility status."""
+    """Chain-local dashboard status for the standalone canonical repository."""
 
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
-    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
 class HealthProbeResult:
-    """Chain-local health probe result without business-runtime coupling."""
+    """Redacted health result exposed to dashboard integrations."""
 
     status: DashboardStatus
     summary: str
     metrics: Mapping[str, Any]
-
-
-class ChainHealthError(RuntimeError):
-    """Raised when chain configuration or RPC evidence is invalid."""
 
 
 class ChainHealthStatus(str, Enum):
@@ -265,7 +264,7 @@ def json_rpc_request(
         headers={
             "accept": "application/json",
             "content-type": "application/json",
-            "user-agent": "JUNCA-Social-Ecosystem-Chain-Ops/1.0",
+            "user-agent": "JUNCA-Global-Chain-Ops/1.0",
         },
         method="POST",
     )

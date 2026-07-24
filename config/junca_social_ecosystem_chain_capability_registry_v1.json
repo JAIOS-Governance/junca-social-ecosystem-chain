@@ -1,0 +1,24 @@
+{
+  "schema_version": "junca-capability-registry/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "capabilities": [
+    {"id": "one_core", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["formal architecture mapping"], "evidence_requirements": ["contract validation digest"]},
+    {"id": "trust_stack", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["requirement-control-evidence-report mapping"], "evidence_requirements": ["complete layer validation"]},
+    {"id": "protocol_kernel", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["determinism and migration boundaries"], "evidence_requirements": ["config and migration conformance"]},
+    {"id": "execution", "status": "UNVERIFIED", "claim_allowed": false, "controls": ["versioned execution profile interface"], "evidence_requirements": ["independent EVM conformance result"]},
+    {"id": "developer_experience", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["versioned compatibility contracts"], "evidence_requirements": ["SDK and RPC compatibility tests"]},
+    {"id": "enterprise_adoption", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["role and tenant boundaries"], "evidence_requirements": ["permission and isolation negative tests"]},
+    {"id": "scalability", "status": "UNVERIFIED", "claim_allowed": false, "controls": ["benchmark and capacity schemas"], "evidence_requirements": ["signed load, soak, chaos, and state-growth reports"]},
+    {"id": "security", "status": "UNVERIFIED", "claim_allowed": false, "controls": ["security gate registry"], "evidence_requirements": ["independent security review and remediation evidence"]},
+    {"id": "interoperability", "status": "BLOCKED", "claim_allowed": false, "controls": ["paused capability routes"], "evidence_requirements": ["address binding, custody, finality, replay, limits, and review evidence"]},
+    {"id": "ai_native_operations", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["institutional operation routing"], "evidence_requirements": ["policy evaluation and audit evidence"]},
+    {"id": "global_operations", "status": "UNVERIFIED", "claim_allowed": false, "controls": ["SLO, DR, residency, and compliance schemas"], "evidence_requirements": ["live multi-region and recovery evidence"]},
+    {"id": "ecosystem_selection", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["common comparison schema"], "evidence_requirements": ["official primary-source evidence per verified cell"]},
+    {"id": "roadmap", "status": "IMPLEMENTED", "claim_allowed": true, "controls": ["ordered exit criteria"], "evidence_requirements": ["gate-by-gate completion evidence"]}
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

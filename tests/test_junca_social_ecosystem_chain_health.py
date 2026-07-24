@@ -11,10 +11,10 @@ from jaios.social_ecosystem_chain import (
     ChainHealthError,
     ChainHealthProbe,
     ChainHealthStatus,
+    DashboardStatus,
     load_network_specs,
     make_dashboard_probe,
 )
-from jaios.social_ecosystem_chain.health import DashboardStatus
 
 
 NOW = datetime(2026, 7, 23, 8, 0, tzinfo=timezone.utc)
