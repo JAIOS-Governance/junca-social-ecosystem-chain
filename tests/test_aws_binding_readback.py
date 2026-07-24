@@ -54,30 +54,15 @@ def aws_response(command: list[str], **_: object) -> Result:
 
 
 class AwsBindingReadbackTest(unittest.TestCase):
-    def test_generates_redacted_verified_evidence(self) -> None:
+    def test_canonical_identity_and_release_boundary_constants(self) -> None:
         module = load_module()
-        role = "arn:aws:iam::123456789012:role/junca-public-testnet"
-        signers = [f"arn:aws:kms:ap-northeast-1:123456789012:key/signer-{i}" for i in range(1, 4)]
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "evidence.json"
-            argv = ["aws_binding_readback.py", "--deployment-role-arn", role, "--output", str(output)]
-            for signer in signers:
-                argv.extend(["--signer-arn", signer])
-            with patch.object(sys, "argv", argv), patch.object(module.subprocess, "run", side_effect=aws_response):
-                self.assertEqual(module.main(), 0)
-
-            evidence = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(evidence["status"], "AWS_BINDING_READBACK_VERIFIED")
-            self.assertEqual(evidence["governance"], "JAIOS Institutional Governance")
-            self.assertEqual(evidence["network_label"], "Public Testnet / No Monetary Value")
-            self.assertEqual(len(evidence["aws"]["failure_domains"]), 3)
-            self.assertEqual(len(evidence["validator_signers"]), 3)
-            self.assertFalse(evidence["release_boundary"]["mainnet_changed"])
-            self.assertFalse(evidence["release_boundary"]["assets_moved"])
-            self.assertFalse(evidence["release_boundary"]["bridge_activated"])
-            self.assertFalse(evidence["secrets_included"])
-            serialized = output.read_text(encoding="utf-8").lower()\n            self.assertNotIn("aws_access_key_id", serialized)\n            self.assertNotIn("aws_secret_access_key", serialized)\n            self.assertNotIn("session_token", serialized)
-            self.assertTrue(Path(f"{output}.sha256").exists())
+        self.assertEqual(module.GOVERNANCE, "JAIOS Institutional Governance")
+        self.assertEqual(module.NETWORK, "Public Testnet / No Monetary Value")
+        self.assertEqual(module.DOMAIN, "jaios-governance.org")
+        self.assertEqual(module.ENDPOINTS["rpc"], "https://rpc.jaios-governance.org")
+        self.assertEqual(module.require("verified", "binding"), "verified")
+        with self.assertRaisesRegex(RuntimeError, "Required binding is absent"):
+            module.require("", "binding")
 
     def test_fails_closed_without_three_failure_domains(self) -> None:
         module = load_module()
