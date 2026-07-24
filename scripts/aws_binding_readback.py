@@ -67,6 +67,12 @@ def main() -> int:
         if z.get("Name", "").rstrip(".") == DOMAIN and not z.get("Config", {}).get("PrivateZone")
     ]
     hosted_zone = require(candidates[0] if candidates else None, "public Route53 hosted zone")
+    hosted_zone_id = require(hosted_zone.get("Id", "").split("/")[-1], "hosted zone ID")
+    hosted_zone_readback = aws_json(["route53", "get-hosted-zone", "--id", hosted_zone_id])
+    name_servers = require(
+        hosted_zone_readback.get("DelegationSet", {}).get("NameServers", []),
+        "Route53 delegation name servers",
+    )
 
     role_arn = require(args.deployment_role_arn, "deployment role ARN")
     role_name = role_arn.rsplit("/", 1)[-1]
@@ -113,8 +119,8 @@ def main() -> int:
         },
         "dns": {
             "domain": DOMAIN,
-            "hosted_zone_id": hosted_zone.get("Id", "").split("/")[-1],
-            "name_servers": hosted_zone.get("DelegationSet", {}).get("NameServers", []),
+            "hosted_zone_id": hosted_zone_id,
+            "name_servers": sorted(name_servers),
             "planned_endpoints": ENDPOINTS,
         },
         "validator_signers": signers,
