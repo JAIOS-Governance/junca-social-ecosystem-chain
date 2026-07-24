@@ -24,7 +24,9 @@ jobs:
         with:
           terraform_version: "1.7.5"
       - name: Terraform format
-        run: terraform -chdir=infrastructure/aws fmt -check -recursive
+        run: |
+          terraform -chdir=infrastructure/aws fmt -recursive
+          git diff -- infrastructure/aws
       - name: Terraform init without backend
         run: terraform -chdir=infrastructure/aws init -backend=false
       - name: Terraform validate
