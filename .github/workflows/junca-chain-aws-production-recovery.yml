@@ -1,5 +1,5 @@
 name: JUNCA Chain AWS Production Recovery
-# OIDC repository configuration normalized before this run.
+# OIDC repository template is pinned to repo plus environment context.
 
 on:
   push:
@@ -22,25 +22,26 @@ jobs:
       actions: write
       contents: read
     steps:
-      - name: Restore AWS-compatible repository OIDC subject
+      - name: Configure AWS-compatible repository OIDC subject
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
           curl --silent --show-error --fail-with-body --location \
             --request PUT \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub" \
-            --data '{"use_default":true,"use_immutable_subject":false}'
+            "$endpoint" \
+            --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
           state="$(curl --silent --show-error --fail --location \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub")"
-          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is True and s.get("use_immutable_subject") is False, s'
+            "$endpoint")"
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False, s'
 
   deploy-exact-source:
     needs: normalize-github-oidc
