@@ -17,6 +17,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile readback controller
         run: python -m py_compile scripts/aws_binding_readback.py
+      - name: Verify canonical identity and release boundary
+        id: success_path
+        run: python -m unittest tests.test_aws_binding_readback.AwsBindingReadbackTest.test_canonical_identity_and_release_boundary_constants -v
+      - name: Verify failure-domain fail-closed path
+        id: failure_domains
+        run: python -m unittest tests.test_aws_binding_readback.AwsBindingReadbackTest.test_fails_closed_without_three_failure_domains -v
+      - name: Verify signer-isolation fail-closed path
+        id: signer_isolation
+        run: python -m unittest tests.test_aws_binding_readback.AwsBindingReadbackTest.test_fails_closed_for_duplicate_signers -v
       - name: Assert institutional and release boundaries
         run: |
           grep -F 'JAIOS Institutional Governance' scripts/aws_binding_readback.py
