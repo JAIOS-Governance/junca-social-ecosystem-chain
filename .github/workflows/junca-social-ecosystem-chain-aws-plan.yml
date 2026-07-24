@@ -6,7 +6,9 @@ on:
       - "infrastructure/aws/**"
       - "scripts/junca_social_ecosystem_chain_aws_preflight.py"
       - "tests/test_junca_social_ecosystem_chain_aws_infrastructure.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_oidc_bootstrap.py"
       - ".github/workflows/junca-social-ecosystem-chain-aws-plan.yml"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
   workflow_dispatch:
 
 permissions:
@@ -37,6 +39,7 @@ jobs:
           grep -q '"state": "BLOCKED_FAIL_CLOSED"' artifacts/junca-aws-preflight.json
           grep -q '"apply_authorized": false' artifacts/junca-aws-preflight.json
           python -m unittest tests.test_junca_social_ecosystem_chain_aws_infrastructure -v
+          python -m unittest tests.test_junca_social_ecosystem_chain_aws_oidc_bootstrap -v
       - name: Upload AWS plan evidence
         uses: actions/upload-artifact@v4
         with:
