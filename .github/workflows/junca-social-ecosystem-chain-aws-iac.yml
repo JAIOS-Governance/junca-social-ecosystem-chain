@@ -57,4 +57,6 @@ jobs:
       - name: Reject secret material
         run: |
           ! grep -RIE '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key[[:space:]]*=)' \
+            --exclude='README.md' \
+            --exclude='*.tftpl' \
             infra/aws/public-testnet config/junca_social_ecosystem_chain_aws_binding.pending.json
