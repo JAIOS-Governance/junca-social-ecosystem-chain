@@ -1,0 +1,98 @@
+name: JUNCA Chain AWS Production Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-chain-aws-production-recovery.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-chain-docs-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-exact-source:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 30
+    env:
+      EXACT_SHA: 3248cee42e114e83a4d2d27f7e5fb438fc24e2e0
+      AWS_REGION: us-east-1
+      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      BUCKET_NAME: junca-chain-docs-595710543956
+      DISTRIBUTION_ID: E22CXYZGWNTOAJ
+      PUBLIC_URL: https://docs.jaios-governance.org
+    steps:
+      - name: Checkout exact production source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          fetch-depth: 1
+      - name: Verify exact source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build and verify eight-route artifact
+        working-directory: docs/technical-reference
+        run: npm test
+      - name: Configure publication-only AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-chain-recovery-${{ github.run_id }}
+      - name: Verify AWS identity and publication resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "595710543956"
+          test "$(aws s3api get-bucket-versioning --bucket "$BUCKET_NAME" --query Status --output text)" = "Enabled"
+          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.Status --output text)" = "Deployed"
+          certificate_arn="$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DistributionConfig.ViewerCertificate.ACMCertificateArn --output text)"
+          test "$(aws acm describe-certificate --certificate-arn "$certificate_arn" --query Certificate.Status --output text)" = "ISSUED"
+      - name: Publish immutable assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 sync docs/technical-reference/dist/ "s3://$BUCKET_NAME/" --delete --exclude "*.html" --exclude "robots.txt" --exclude "sitemap.xml" --cache-control "public,max-age=31536000,immutable"
+          aws s3 sync docs/technical-reference/dist/ "s3://$BUCKET_NAME/" --exclude "*" --include "*.html" --include "robots.txt" --include "sitemap.xml" --cache-control "public,max-age=0,must-revalidate"
+      - name: Verify deployed manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://$BUCKET_NAME/release-manifest.json" /tmp/release-manifest.json
+          cmp docs/technical-reference/dist/release-manifest.json /tmp/release-manifest.json
+      - name: Invalidate CloudFront
+        id: invalidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
+      - name: Verify eight public routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for route in "" protocol assets interoperability implementation governance evidence glossary; do
+            out="$route"; test -n "$out" || out=home
+            code="$(curl --silent --show-error --location --retry 5 --retry-delay 10 --output "/tmp/$out.html" --write-out "%{http_code}" "$PUBLIC_URL/$route")"
+            test "$code" = "200"
+          done
+          grep -F "Public Testnet" /tmp/home.html
+          grep -F "JAIOS Institutional Governance" /tmp/home.html
+          {
+            echo "### JUNCA Chain AWS production recovery"
+            echo "- Source SHA: $EXACT_SHA"
+            echo "- AWS account: 595710543956"
+            echo "- Distribution: $DISTRIBUTION_ID"
+            echo "- Invalidation: ${{ steps.invalidate.outputs.invalidation_id }}"
+            echo "- Public URL: $PUBLIC_URL"
+            echo "- Eight-route QA: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
