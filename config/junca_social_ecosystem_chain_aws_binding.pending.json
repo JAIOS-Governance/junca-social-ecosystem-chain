@@ -13,7 +13,13 @@
     "PENDING_AZ_2",
     "PENDING_AZ_3"
   ],
-  "domain_name": "PENDING_DOMAIN_READBACK",
+  "domain": {
+    "name": "jaios-governance.org",
+    "registrar": "XServer",
+    "acquisition_state": "VERIFIED",
+    "route53_delegation_state": "PENDING"
+  },
+  "domain_name": "jaios-governance.org",
   "route53_hosted_zone_id": "PENDING_READBACK",
   "state_backend": {
     "s3_bucket": "PENDING_READBACK",
@@ -27,9 +33,9 @@
     "PENDING_VALIDATOR_03_KMS_OR_HSM"
   ],
   "public_endpoints": {
-    "rpc": "PENDING_DNS",
-    "explorer": "PENDING_DNS",
-    "health": "PENDING_DNS"
+    "rpc": "rpc.jaios-governance.org",
+    "explorer": "explorer.jaios-governance.org",
+    "health": "health.jaios-governance.org"
   },
   "mainnet_changed": false,
   "assets_moved": false,
