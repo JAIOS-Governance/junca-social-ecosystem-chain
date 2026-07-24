@@ -114,9 +114,41 @@ if [[ "${MODE}" == "readback" || "${MODE}" == "prepare-zone" ]]; then
   exit 0
 fi
 
-command -v dig >/dev/null
 public_ns_file="${EVIDENCE_DIR}/${timestamp}-public-nameservers.txt"
-dig +short NS "${ZONE_NAME}" | sed 's/\.$//' | sort -u | tee "${public_ns_file}"
+if command -v dig >/dev/null; then
+  dig +short NS "${ZONE_NAME}" |
+    sed 's/\.$//' | sort -u | tee "${public_ns_file}"
+elif command -v curl >/dev/null && command -v python3 >/dev/null; then
+  curl --fail --silent --show-error \
+    --get \
+    --header 'accept: application/dns-json' \
+    --data-urlencode "name=${ZONE_NAME}" \
+    --data-urlencode 'type=NS' \
+    https://cloudflare-dns.com/dns-query |
+    python3 -c '
+import json
+import sys
+
+response = json.load(sys.stdin)
+answers = response.get("Answer", [])
+nameservers = sorted({
+    answer["data"].rstrip(".")
+    for answer in answers
+    if answer.get("type") == 2 and answer.get("data")
+})
+for nameserver in nameservers:
+    print(nameserver)
+' | tee "${public_ns_file}"
+else
+  echo "DNS_READBACK_UNAVAILABLE: install dig or provide curl and python3." >&2
+  exit 5
+fi
+
+if [[ ! -s "${public_ns_file}" ]]; then
+  echo "DNS_DELEGATION_PENDING: no public NS answer is available yet." >&2
+  exit 4
+fi
+
 sed 's/\.$//' "${ns_file}" | sort -u >"${EVIDENCE_DIR}/${timestamp}-route53-nameservers.sorted"
 if ! diff -u \
   "${EVIDENCE_DIR}/${timestamp}-route53-nameservers.sorted" \
