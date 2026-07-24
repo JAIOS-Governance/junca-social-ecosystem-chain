@@ -1,0 +1,30 @@
+name: JUNCA Social Ecosystem Chain Public Testnet Release Gate
+
+on:
+  pull_request:
+    paths:
+      - scripts/public_testnet_release_gate.py
+      - tests/test_public_testnet_release_gate.py
+      - .github/workflows/junca-social-ecosystem-chain-public-testnet-release-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile release decision controller
+        run: python -m py_compile scripts/public_testnet_release_gate.py
+      - name: Run acceptance and negative tests
+        run: python -m unittest tests.test_public_testnet_release_gate -v
+      - name: Verify institutional identity and release boundary
+        run: |
+          grep -F 'JAIOS Institutional Governance' scripts/public_testnet_release_gate.py
+          grep -F 'Public Testnet / No Monetary Value' scripts/public_testnet_release_gate.py
+          grep -F '"mainnet_changed": False' scripts/public_testnet_release_gate.py
+          grep -F '"assets_moved": False' scripts/public_testnet_release_gate.py
+          grep -F '"bridge_activated": False' scripts/public_testnet_release_gate.py
+          grep -F '"bridge_route": "PAUSED"' scripts/public_testnet_release_gate.py
