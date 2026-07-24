@@ -16,6 +16,16 @@ Parameters:
     Type: String
     Default: JAIOS-Governance/junca-social-ecosystem-chain
     AllowedPattern: "^JAIOS-Governance/junca-social-ecosystem-chain$"
+  RepositoryOwnerId:
+    Type: String
+    Default: "308604370"
+    AllowedPattern: "^308604370$"
+    Description: Immutable GitHub organization ID read back from the production OIDC token.
+  RepositoryId:
+    Type: String
+    Default: "1310568313"
+    AllowedPattern: "^1310568313$"
+    Description: Immutable GitHub repository ID read back from the production OIDC token.
   EnvironmentName:
     Type: String
     Default: junca-chain-docs-production
@@ -246,7 +256,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${Repository}:environment:${EnvironmentName}
+                token.actions.githubusercontent.com:sub: !Sub repo:JAIOS-Governance@${RepositoryOwnerId}/junca-social-ecosystem-chain@${RepositoryId}:environment:${EnvironmentName}
       Policies:
         - PolicyName: PublishExactTechnicalReferenceArtifact
           PolicyDocument:
