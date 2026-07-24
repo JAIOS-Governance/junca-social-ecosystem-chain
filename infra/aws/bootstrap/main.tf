@@ -1,0 +1,261 @@
+terraform {
+  required_version = ">= 1.7.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.60"
+    }
+  }
+}
+
+provider "aws" {
+  region              = var.aws_region
+  allowed_account_ids = [var.aws_account_id]
+
+  default_tags {
+    tags = {
+      Project     = "JUNCA Social Ecosystem Chain"
+      Governance  = "JAIOS Institutional Governance"
+      Network     = "Public Testnet"
+      MonetaryUse = "None"
+      ManagedBy   = "TerraformBootstrap"
+    }
+  }
+}
+
+data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
+
+resource "terraform_data" "account_gate" {
+  lifecycle {
+    precondition {
+      condition     = data.aws_caller_identity.current.account_id == var.aws_account_id
+      error_message = "Authenticated AWS account does not match the approved account binding."
+    }
+  }
+}
+
+resource "aws_kms_key" "terraform_state" {
+  description             = "JUNCA Social Ecosystem Chain public testnet Terraform state"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "terraform_state" {
+  name          = "alias/junca-social-ecosystem-chain-testnet-state"
+  target_key_id = aws_kms_key.terraform_state.key_id
+}
+
+resource "aws_s3_bucket" "terraform_state" {
+  bucket = var.state_bucket_name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "terraform_state" {
+  bucket = aws_s3_bucket.terraform_state.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state" {
+  bucket = aws_s3_bucket.terraform_state.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.terraform_state.arn
+      sse_algorithm     = "aws:kms"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "terraform_state" {
+  bucket                  = aws_s3_bucket.terraform_state.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "terraform_state" {
+  bucket = aws_s3_bucket.terraform_state.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_policy" "terraform_state_tls" {
+  bucket = aws_s3_bucket.terraform_state.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.terraform_state.arn,
+        "${aws_s3_bucket.terraform_state.arn}/*"
+      ]
+      Condition = {
+        Bool = { "aws:SecureTransport" = "false" }
+      }
+    }]
+  })
+}
+
+resource "aws_dynamodb_table" "terraform_lock" {
+  name         = var.lock_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "LockID"
+
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.terraform_state.arn
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_iam_openid_connect_provider" "github" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [var.github_oidc_thumbprint]
+}
+
+resource "aws_iam_role" "deployment" {
+  name                 = "JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"
+  max_session_duration = 3600
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "GitHubRepositoryOIDC"
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.github.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        }
+        StringLike = {
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:JAIOS-Governance/junca-social-ecosystem-chain:ref:refs/heads/main",
+            "repo:JAIOS-Governance/junca-social-ecosystem-chain:environment:public-testnet"
+          ]
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "deployment_state" {
+  name = "CanonicalTerraformState"
+  role = aws_iam_role.deployment.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ListStateBucket"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.terraform_state.arn
+      },
+      {
+        Sid      = "UseStateObjects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject"]
+        Resource = "${aws_s3_bucket.terraform_state.arn}/public-testnet/*"
+      },
+      {
+        Sid      = "UseStateLock"
+        Effect   = "Allow"
+        Action   = ["dynamodb:DescribeTable", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+        Resource = aws_dynamodb_table.terraform_lock.arn
+      },
+      {
+        Sid      = "UseStateEncryption"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+        Resource = aws_kms_key.terraform_state.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "deployment_infrastructure" {
+  name = "PublicTestnetInfrastructure"
+  role = aws_iam_role.deployment.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "ManageTaggedPublicTestnetInfrastructure"
+      Effect = "Allow"
+      Action = [
+        "ec2:*",
+        "elasticloadbalancing:*",
+        "route53:ChangeResourceRecordSets",
+        "route53:GetChange",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "acm:DescribeCertificate",
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:PassRole",
+        "logs:*",
+        "cloudwatch:*"
+      ]
+      Resource = "*"
+      Condition = {
+        StringEqualsIfExists = {
+          "aws:ResourceTag/Project" = "JUNCA Social Ecosystem Chain"
+        }
+      }
+    }]
+  })
+}
