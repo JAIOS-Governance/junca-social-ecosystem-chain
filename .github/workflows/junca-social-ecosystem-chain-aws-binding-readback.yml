@@ -55,9 +55,14 @@ jobs:
           AWS_VALIDATOR_01_SIGNER_ARN: ${{ vars.AWS_VALIDATOR_01_SIGNER_ARN }}
           AWS_VALIDATOR_02_SIGNER_ARN: ${{ vars.AWS_VALIDATOR_02_SIGNER_ARN }}
           AWS_VALIDATOR_03_SIGNER_ARN: ${{ vars.AWS_VALIDATOR_03_SIGNER_ARN }}
+          JUNCA_CHAIN_ID: ${{ vars.JUNCA_CHAIN_ID }}
+          JUNCA_GENESIS_HASH: ${{ vars.JUNCA_GENESIS_HASH }}
         run: |
           python scripts/aws_binding_readback.py \
             --region "${{ vars.AWS_REGION || 'ap-northeast-1' }}" \
+            --chain-id "$JUNCA_CHAIN_ID" \
+            --genesis-hash "$JUNCA_GENESIS_HASH" \
+            --source-commit "$GITHUB_SHA" \
             --output aws-binding-readback.json
       - name: Upload immutable readback evidence
         uses: actions/upload-artifact@v4
