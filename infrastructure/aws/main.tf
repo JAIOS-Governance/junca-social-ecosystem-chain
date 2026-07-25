@@ -327,7 +327,7 @@ resource "aws_ecs_service" "rpc" {
   name            = "junca-readonly-rpc"
   cluster         = aws_ecs_cluster.public[0].id
   task_definition = aws_ecs_task_definition.rpc[0].arn
-  desired_count   = 2
+  desired_count   = var.rpc_desired_count
   launch_type     = "FARGATE"
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -387,7 +387,7 @@ resource "aws_ecs_service" "explorer" {
   name            = "junca-finalized-explorer"
   cluster         = aws_ecs_cluster.public[0].id
   task_definition = aws_ecs_task_definition.explorer[0].arn
-  desired_count   = 2
+  desired_count   = var.explorer_desired_count
   launch_type     = "FARGATE"
   network_configuration {
     subnets          = var.private_subnet_ids
