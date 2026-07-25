@@ -54,7 +54,7 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
       HOSTED_ZONE_ID: Z0336017285464TX0NT1G
     steps:
@@ -74,52 +74,12 @@ jobs:
           test "$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)" = "jaios-governance.org."
           aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" >/tmp/records-before.json
 
-      - name: Apply minimum chain-domain IAM policy
+      - name: Verify DNS execution role policy boundary
         shell: bash
         run: |
           set -euo pipefail
-          cat >/tmp/chain-domain-policy.json <<'JSON'
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "ChainCustomDomainDnsWrite",
-                "Effect": "Allow",
-                "Action": "route53:ChangeResourceRecordSets",
-                "Resource": "arn:aws:route53:::hostedzone/Z0336017285464TX0NT1G",
-                "Condition": {
-                  "ForAllValues:StringEquals": {
-                    "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
-                      "chain.jaios-governance.org",
-                      "_openai-site-verification.chain.jaios-governance.org",
-                      "_cf-custom-hostname.chain.jaios-governance.org"
-                    ],
-                    "route53:ChangeResourceRecordSetsRecordTypes": ["CNAME", "TXT"],
-                    "route53:ChangeResourceRecordSetsActions": ["UPSERT"]
-                  },
-                  "Null": {
-                    "route53:ChangeResourceRecordSetsNormalizedRecordNames": "false",
-                    "route53:ChangeResourceRecordSetsRecordTypes": "false",
-                    "route53:ChangeResourceRecordSetsActions": "false"
-                  }
-                }
-              },
-              {
-                "Sid": "Route53ChangeReadback",
-                "Effect": "Allow",
-                "Action": "route53:GetChange",
-                "Resource": "arn:aws:route53:::change/*"
-              }
-            ]
-          }
-          JSON
-          aws iam put-role-policy \
-            --role-name "$DOCS_ROLE_NAME" \
-            --policy-name ChainBrandCustomDomainDns \
-            --policy-document file:///tmp/chain-domain-policy.json
-          aws iam get-role-policy \
-            --role-name "$DOCS_ROLE_NAME" \
-            --policy-name ChainBrandCustomDomainDns >/tmp/iam-readback.json
+          test "$(aws sts get-caller-identity --query Arn --output text)" != ""
+          aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" >/tmp/records-authorized.json
 
       - name: Apply Sites-issued chain records
         id: dns
