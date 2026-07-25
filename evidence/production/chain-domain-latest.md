@@ -1,8 +1,8 @@
 # JUNCA Chain Custom Domain Production Recovery
 
-Run ID: 30168014439
+Run ID: 30170077770
 Run attempt: 1
 Conclusion: failure
-Commit: fc15490c464992cb614e3af2be20f36739dedf86
-Workflow URL: https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30168014439
+Commit: d385a348ddc9b80e344a746d01a3c853497014d8
+Workflow URL: https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30170077770
 Production URL: https://chain.jaios-governance.org/
