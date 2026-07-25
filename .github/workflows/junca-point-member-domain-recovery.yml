@@ -1,0 +1,107 @@
+name: JUNCA POINT MEMBER Custom Domain Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-point-member-domain-recovery.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-point-member-domain-recovery
+  cancel-in-progress: false
+
+jobs:
+  publish-domain:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      DOMAIN_NAME: member.jaios-governance.org
+    steps:
+      - name: Configure verified AWS OIDC identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-member-domain-${{ github.run_id }}
+
+      - name: Verify production identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "595710543956"
+          test "$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)" = "jaios-governance.org."
+
+      - name: Apply Sites-issued DNS records
+        shell: bash
+        run: |
+          set -euo pipefail
+          change_batch="$(mktemp)"
+          cat > "$change_batch" <<'JSON'
+          {
+            "Comment": "JUNCA POINT MEMBER Sites custom-domain validation",
+            "Changes": [
+              {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "member.jaios-governance.org.",
+                  "Type": "CNAME",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "custom-domains.chatgpt.site."}]
+                }
+              },
+              {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "_openai-site-verification.member.jaios-governance.org.",
+                  "Type": "TXT",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "\"openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE\""}]
+                }
+              },
+              {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "_cf-custom-hostname.member.jaios-governance.org.",
+                  "Type": "TXT",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "\"5747a89e-d114-42d8-b33b-b4eaae61c958\""}]
+                }
+              }
+            ]
+          }
+          JSON
+          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "file://$change_batch" --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          echo "change_id=$change_id" >> "$GITHUB_ENV"
+
+      - name: Read back exact DNS records
+        shell: bash
+        run: |
+          set -euo pipefail
+          records="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']" --output json)"
+          RECORDS="$records" python3 - <<'PY'
+          import json, os
+          records = json.loads(os.environ["RECORDS"])
+          by_name = {r["Name"]: r for r in records}
+          assert by_name["member.jaios-governance.org."]["ResourceRecords"][0]["Value"] == "custom-domains.chatgpt.site."
+          assert "openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE" in by_name["_openai-site-verification.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          assert "5747a89e-d114-42d8-b33b-b4eaae61c958" in by_name["_cf-custom-hostname.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          PY
+          {
+            echo "### JUNCA POINT MEMBER domain recovery"
+            echo "- AWS Account: 595710543956"
+            echo "- Hosted Zone: Z0336017285464TX0NT1G"
+            echo "- Domain: https://member.jaios-governance.org"
+            echo "- Route 53 change: $change_id"
+            echo "- DNS Readback: PASS"
+            echo "- Access boundary: JUNCA POINT MEMBER limited"
+            echo "- Operator: JAIOS Institutional Governance"
+          } >> "$GITHUB_STEP_SUMMARY"
