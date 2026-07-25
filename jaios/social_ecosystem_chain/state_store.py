@@ -202,11 +202,7 @@ class PersistentStateStore:
         ).fetchone()
         if row is None:
             raise StateStoreError("unknown block height")
-        raw = json.loads(row["accounts_json"])
-        return {
-            address: AccountState(balance=value["balance"], nonce=value["nonce"])
-            for address, value in raw.items()
-        }
+        return _decode_accounts_json(row["accounts_json"])
 
     def rollback_to(self, height: int) -> None:
         if height != self.head_height:
@@ -219,6 +215,10 @@ class PersistentStateStore:
         ).fetchone()
         if row is None:
             raise StateStoreError("unknown checkpoint height")
+        accounts = _decode_accounts_json(row["accounts_json"])
+        if compute_state_root(accounts) != row["state_root"]:
+            raise StateStoreError("stored state_root integrity failure")
+        _validate_stored_block_identity(row)
         body: dict[str, object] = {
             "schema_version": "junca-state-checkpoint/v1",
             "chain_id": self.chain_id,
@@ -230,7 +230,7 @@ class PersistentStateStore:
             "gas_used": row["gas_used"],
             "finalized": bool(row["finalized"]),
             "certificate_hash": row["certificate_hash"],
-            "accounts": json.loads(row["accounts_json"]),
+            "accounts": json.loads(_accounts_json(accounts)),
         }
         body["checkpoint_digest"] = _checkpoint_digest(body)
         return body
@@ -328,6 +328,9 @@ class PersistentStateStore:
         if checkpoint["schema_version"] != "junca-state-checkpoint/v1":
             raise StateStoreError("checkpoint schema is unsupported")
         supplied_digest = checkpoint["checkpoint_digest"]
+        _hash(supplied_digest, "checkpoint_digest")
+        if supplied_digest != supplied_digest.lower():
+            raise StateStoreError("checkpoint_digest is not canonical")
         body = {key: value for key, value in checkpoint.items() if key != "checkpoint_digest"}
         if supplied_digest != _checkpoint_digest(body):
             raise StateStoreError("checkpoint digest mismatch")
@@ -347,28 +350,39 @@ class PersistentStateStore:
             raise StateStoreError("checkpoint base_fee_per_gas is invalid")
         if isinstance(gas_used, bool) or not isinstance(gas_used, int) or gas_used < 0:
             raise StateStoreError("checkpoint gas_used is invalid")
+        if checkpoint["finalized"] is not True:
+            raise StateStoreError("checkpoint is not finalized")
         raw_accounts = checkpoint["accounts"]
         if not isinstance(raw_accounts, dict):
             raise StateStoreError("checkpoint accounts are invalid")
         try:
-            accounts = {
-                address: AccountState(balance=value["balance"], nonce=value["nonce"])
-                for address, value in raw_accounts.items()
-            }
+            accounts = _decode_accounts(raw_accounts)
         except (KeyError, TypeError, ValueError) as exc:
             raise StateStoreError("checkpoint accounts are invalid") from exc
         normalized = _normalize_accounts(accounts)
+        if raw_accounts != json.loads(_accounts_json(normalized)):
+            raise StateStoreError("checkpoint accounts are not canonical")
         if checkpoint["state_root"] != compute_state_root(normalized):
             raise StateStoreError("checkpoint state_root integrity failure")
         _hash(checkpoint["block_hash"], "checkpoint block_hash")
         _hash(checkpoint["parent_hash"], "checkpoint parent_hash")
+        _hash(checkpoint["state_root"], "checkpoint state_root")
+        for field in ("block_hash", "parent_hash", "state_root"):
+            if checkpoint[field] != checkpoint[field].lower():
+                raise StateStoreError(f"checkpoint {field} is not canonical")
         certificate_hash = checkpoint["certificate_hash"]
-        if height > 0 and (
-            checkpoint["finalized"] is not True or not checkpoint["certificate_hash"]
-        ):
+        zero_hash = "0x" + ("0" * 64)
+        if height == 0:
+            if checkpoint["parent_hash"] != zero_hash:
+                raise StateStoreError("genesis checkpoint parent_hash is invalid")
+            if certificate_hash is not None:
+                raise StateStoreError("genesis checkpoint cannot contain a certificate")
+        elif not certificate_hash:
             raise StateStoreError("checkpoint lacks finality evidence")
         if certificate_hash is not None:
             _hash(certificate_hash, "checkpoint certificate_hash")
+            if certificate_hash != certificate_hash.lower():
+                raise StateStoreError("checkpoint certificate_hash is not canonical")
         return {
             "schema_version": "junca-state-checkpoint-verification/v1",
             "chain_id": checkpoint["chain_id"],
@@ -400,9 +414,7 @@ class PersistentStateStore:
             expected_height = base_height + offset
             if row["height"] != expected_height:
                 raise StateStoreError("block heights are not contiguous")
-            _hash(row["block_hash"], "stored block_hash")
-            _hash(row["parent_hash"], "stored parent_hash")
-            _hash(row["state_root"], "stored state_root")
+            _validate_stored_block_identity(row)
             if row["parent_hash"] != previous_hash:
                 raise StateStoreError("stored parent_hash chain is invalid")
             if (
@@ -415,20 +427,12 @@ class PersistentStateStore:
             ):
                 raise StateStoreError("stored execution values are invalid")
             try:
-                raw_accounts = json.loads(row["accounts_json"])
-                if not isinstance(raw_accounts, dict):
-                    raise TypeError
-                accounts = {
-                    address: AccountState(
-                        balance=value["balance"],
-                        nonce=value["nonce"],
-                    )
-                    for address, value in raw_accounts.items()
-                }
-                normalized = _normalize_accounts(accounts)
+                normalized = _decode_accounts_json(row["accounts_json"])
                 receipts = json.loads(row["receipts_json"])
                 if not isinstance(receipts, list):
                     raise TypeError
+            except StateStoreError:
+                raise
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 raise StateStoreError("stored state payload is invalid") from exc
             if _accounts_json(normalized) != row["accounts_json"]:
@@ -518,6 +522,55 @@ def _accounts_json(accounts: Mapping[str, AccountState]) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _decode_accounts(raw_accounts: Mapping[object, object]) -> dict[str, AccountState]:
+    accounts: dict[str, AccountState] = {}
+    for address, value in raw_accounts.items():
+        if not isinstance(address, str) or not isinstance(value, dict):
+            raise StateStoreError("account snapshot is invalid")
+        if set(value) != {"balance", "nonce"}:
+            raise StateStoreError("account snapshot fields are invalid")
+        try:
+            accounts[address] = AccountState(
+                balance=value["balance"],
+                nonce=value["nonce"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StateStoreError("account snapshot is invalid") from exc
+    return _normalize_accounts(accounts)
+
+
+def _decode_accounts_json(payload: str) -> dict[str, AccountState]:
+    try:
+        raw = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise StateStoreError("stored account snapshot is invalid") from exc
+    if not isinstance(raw, dict):
+        raise StateStoreError("stored account snapshot is invalid")
+    accounts = _decode_accounts(raw)
+    if _accounts_json(accounts) != payload:
+        raise StateStoreError("stored account snapshot is not canonical")
+    return accounts
+
+
+def _validate_stored_block_identity(row: sqlite3.Row) -> None:
+    for field in ("block_hash", "parent_hash", "state_root"):
+        value = row[field]
+        _hash(value, f"stored {field}")
+        if value != value.lower():
+            raise StateStoreError(f"stored {field} is not canonical")
+    if row["height"] == 0:
+        if row["parent_hash"] != "0x" + ("0" * 64):
+            raise StateStoreError("stored genesis parent_hash is invalid")
+        if row["certificate_hash"] is not None:
+            raise StateStoreError("stored genesis cannot contain a certificate")
+    elif not row["finalized"] or not row["certificate_hash"]:
+        raise StateStoreError("non-genesis block lacks finality evidence")
+    if row["certificate_hash"] is not None:
+        _hash(row["certificate_hash"], "stored certificate_hash")
+        if row["certificate_hash"] != row["certificate_hash"].lower():
+            raise StateStoreError("stored certificate_hash is not canonical")
 
 
 def _checkpoint_digest(body: Mapping[str, object]) -> str:
