@@ -52,7 +52,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      EXACT_SHA: 0fed511ba3477c234db89945489f6015a3f8110a
+      EXACT_SHA: 643e2b7e4078f9b9ffb5a411d1622226b25f3bb2
       AWS_REGION: us-east-1
       AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       BUCKET_NAME: junca-chain-docs-595710543956
