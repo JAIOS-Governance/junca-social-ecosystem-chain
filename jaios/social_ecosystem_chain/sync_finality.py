@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from typing import Callable, Mapping
 
 from .finality import FinalityCertificate, FinalityVote, Validator
@@ -30,6 +31,7 @@ class ValidatorSet:
             or self.activation_height < 0
             or not isinstance(self.validators, tuple)
             or len(self.validators) < 3
+            or len(self.validators) > 10_000
             or any(not isinstance(item, Validator) for item in self.validators)
         ):
             raise SyncFinalityError("validator set identity is invalid")
@@ -72,6 +74,8 @@ class ValidatorSetSchedule:
         self._sets = [initial]
 
     def register(self, item: ValidatorSet) -> None:
+        if not isinstance(item, ValidatorSet):
+            raise SyncFinalityError("validator set type is invalid")
         previous = self._sets[-1]
         if item.epoch != previous.epoch + 1:
             raise SyncFinalityError("validator set epoch must be contiguous")
@@ -80,7 +84,7 @@ class ValidatorSetSchedule:
         self._sets.append(item)
 
     def at_height(self, height: int) -> ValidatorSet:
-        if height < 0:
+        if isinstance(height, bool) or not isinstance(height, int) or height < 0:
             raise SyncFinalityError("finality height must be non-negative")
         active = self._sets[0]
         for item in self._sets[1:]:
@@ -158,10 +162,21 @@ class CertifiedFinalityVerifier:
         active = self.schedule.at_height(proof.height)
         if proof.validator_set_hash.lower() != active.set_hash:
             raise SyncFinalityError("finality proof uses the wrong validator set")
+        if len(proof.votes) > len(active.validators):
+            raise SyncFinalityError("finality proof contains too many votes")
         by_id = {item.validator_id: item for item in active.validators}
         seen: set[str] = set()
         accepted: list[FinalityVote] = []
         for vote in proof.votes:
+            if (
+                not isinstance(vote, FinalityVote)
+                or not isinstance(vote.validator_id, str)
+                or not isinstance(vote.signature, bytes)
+                or not vote.signature
+                or len(vote.signature) > 4096
+            ):
+                raise SyncFinalityError("finality vote boundary is invalid")
+            _hash(vote.block_hash, "vote block_hash")
             if vote.validator_id in seen:
                 raise SyncFinalityError("finality proof contains a duplicate validator")
             seen.add(vote.validator_id)
@@ -174,7 +189,13 @@ class CertifiedFinalityVerifier:
                 or vote.block_hash.lower() != proof.block_hash.lower()
             ):
                 raise SyncFinalityError("finality vote does not bind the proof")
-            if not vote.signature or not self.vote_verifier(vote):
+            try:
+                verified = self.vote_verifier(vote)
+            except Exception as exc:
+                raise SyncFinalityError(
+                    "finality vote signature verification failed"
+                ) from exc
+            if verified is not True:
                 raise SyncFinalityError("finality vote signature verification failed")
             accepted.append(vote)
         signed_power = sum(by_id[item.validator_id].voting_power for item in accepted)
@@ -237,8 +258,17 @@ def proof_from_payload(payload: Mapping[str, object]) -> FinalityProof:
     for raw in raw_votes:
         if not isinstance(raw, Mapping) or set(raw) != vote_fields:
             raise SyncFinalityError("finality vote fields are invalid")
+        encoded_signature = raw["signature"]
+        if (
+            not isinstance(encoded_signature, str)
+            or len(encoded_signature) < 2
+            or len(encoded_signature) > 8192
+            or len(encoded_signature) % 2
+            or re.fullmatch(r"[0-9a-f]+", encoded_signature) is None
+        ):
+            raise SyncFinalityError("finality vote signature encoding is invalid")
         try:
-            signature = bytes.fromhex(raw["signature"])
+            signature = bytes.fromhex(encoded_signature)
         except (TypeError, ValueError) as exc:
             raise SyncFinalityError("finality vote signature encoding is invalid") from exc
         values = dict(raw)
