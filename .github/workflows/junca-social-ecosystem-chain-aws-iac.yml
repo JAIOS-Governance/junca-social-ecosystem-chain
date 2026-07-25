@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "infra/aws/**"
+      - "infrastructure/aws/**"
       - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
       - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
   workflow_dispatch:
@@ -19,7 +20,7 @@ jobs:
       matrix:
         module:
           - infra/aws/bootstrap
-          - infra/aws/public-testnet
+          - infrastructure/aws
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +39,7 @@ jobs:
         run: terraform -chdir=${{ matrix.module }} validate -no-color
 
       - name: Validate fail-closed AWS binding
-        if: matrix.module == 'infra/aws/public-testnet'
+        if: matrix.module == 'infrastructure/aws'
         run: |
           python - <<'PY'
           import json
