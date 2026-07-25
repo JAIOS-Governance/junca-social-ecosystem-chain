@@ -2,6 +2,6 @@
   "status": "BLOCKED",
   "aws_auth_outcome": "success",
   "execution_outcome": "failure",
-  "workflow_run": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30165032651",
-  "error": "\naws: [ERROR]: An error occurred (AccessDenied) when calling the UpdateStack operation: User: arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-domain-final-30165032651 is not authorized to perform: cloudformation:UpdateStack on resource: arn:aws:cloudformation:us-east-1:595710543956:stack/junca-chain-docs-publication/0b05dfd0-876f-11f1-963c-0e97a2fa656f because no identity-based policy allows the cloudformation:UpdateStack action\n"
+  "workflow_run": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30165114514",
+  "error": "\naws: [ERROR]: An error occurred (AccessDenied) when calling the ChangeResourceRecordSets operation: User: arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-domain-final-30165114514 is not authorized to perform: route53:ChangeResourceRecordSets on resource: arn:aws:route53:::hostedzone/Z0336017285464TX0NT1G because no identity-based policy allows the route53:ChangeResourceRecordSets action\n"
 }
