@@ -87,9 +87,21 @@ VoteVerifier = Callable[[FinalityVote], bool]
 
 
 class FinalityStateMachine:
-    def __init__(self, *, chain_id: int, validators: Iterable[Validator]) -> None:
+    def __init__(
+        self,
+        *,
+        chain_id: int,
+        validators: Iterable[Validator],
+        initial_finalized_height: int = -1,
+    ) -> None:
         if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
             raise FinalityError("chain_id must be a positive integer")
+        if (
+            isinstance(initial_finalized_height, bool)
+            or not isinstance(initial_finalized_height, int)
+            or initial_finalized_height < -1
+        ):
+            raise FinalityError("initial_finalized_height must be at least -1")
         items = tuple(validators)
         if len(items) < 3:
             raise FinalityError("at least three validators are required")
@@ -99,6 +111,7 @@ class FinalityStateMachine:
         self.chain_id = chain_id
         self.validators = dict(sorted(by_id.items()))
         self.total_power = sum(item.voting_power for item in items)
+        self._checkpoint_height = initial_finalized_height
         self._votes: dict[tuple[int, int, str], FinalityVote] = {}
         self._finalized: dict[int, FinalityCertificate] = {}
         self._equivocations: set[tuple[int, int, str]] = set()
@@ -109,7 +122,7 @@ class FinalityStateMachine:
 
     @property
     def latest_finalized_height(self) -> int:
-        return max(self._finalized, default=-1)
+        return max(self._finalized, default=self._checkpoint_height)
 
     @property
     def equivocations(self) -> tuple[tuple[int, int, str], ...]:
