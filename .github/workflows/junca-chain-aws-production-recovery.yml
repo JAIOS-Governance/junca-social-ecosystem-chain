@@ -1,5 +1,6 @@
 name: JUNCA Chain AWS Production Recovery
 # OIDC repository template is pinned to repo plus environment context.
+# Recovery execution: 2026-07-25T08:15:00Z
 
 on:
   push:
