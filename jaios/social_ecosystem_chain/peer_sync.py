@@ -35,9 +35,23 @@ class PeerAdvertisement:
     protocol_version: int = 1
 
     def __post_init__(self) -> None:
-        if not self.peer_id:
+        if (
+            not isinstance(self.peer_id, str)
+            or not self.peer_id
+            or len(self.peer_id) > 128
+        ):
             raise PeerSyncError("peer_id is required")
-        if self.chain_id <= 0 or self.finalized_height < 0 or self.protocol_version != 1:
+        if (
+            isinstance(self.chain_id, bool)
+            or not isinstance(self.chain_id, int)
+            or self.chain_id <= 0
+            or isinstance(self.finalized_height, bool)
+            or not isinstance(self.finalized_height, int)
+            or self.finalized_height < 0
+            or isinstance(self.protocol_version, bool)
+            or not isinstance(self.protocol_version, int)
+            or self.protocol_version != 1
+        ):
             raise PeerSyncError("peer advertisement contains invalid protocol values")
         _hash(self.genesis_hash, "genesis_hash")
         _hash(self.finalized_hash, "finalized_hash")
@@ -57,7 +71,7 @@ class PeerRegistry:
     """Identity-bound peer registry with deterministic sync-source selection."""
 
     def __init__(self, *, chain_id: int, genesis_hash: str) -> None:
-        if chain_id <= 0:
+        if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
             raise PeerSyncError("chain_id must be positive")
         _hash(genesis_hash, "genesis_hash")
         self.chain_id = chain_id
@@ -73,6 +87,14 @@ class PeerRegistry:
         fault_score = 0 if current is None else current.fault_score
         if current is not None and advertisement.finalized_height < current.advertisement.finalized_height:
             raise PeerSyncError("peer finalized height regressed")
+        if (
+            current is not None
+            and advertisement.finalized_height
+            == current.advertisement.finalized_height
+            and advertisement.finalized_hash.lower()
+            != current.advertisement.finalized_hash.lower()
+        ):
+            raise PeerSyncError("peer advertised conflicting finalized hash")
         record = PeerRecord(advertisement=advertisement, fault_score=fault_score)
         self._peers[advertisement.peer_id] = record
         return record
@@ -123,10 +145,16 @@ class RecoveryJournal:
     """Durable single-flight import journal with fsync and atomic replacement."""
 
     def __init__(self, path: str | Path, *, chain_id: int) -> None:
+        if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
+            raise PeerSyncError("journal chain_id must be positive")
         self.path = Path(path)
         self.chain_id = chain_id
 
     def begin(self, *, peer_id: str, proposal: ExecutedProposal) -> None:
+        if not isinstance(peer_id, str) or not peer_id or len(peer_id) > 128:
+            raise PeerSyncError("journal peer_id is invalid")
+        if not isinstance(proposal, ExecutedProposal):
+            raise PeerSyncError("journal proposal is invalid")
         if self.read() is not None:
             raise PeerSyncError("an import recovery record is already active")
         self._write(
@@ -179,6 +207,19 @@ class RecoveryJournal:
         record["record_digest"] = supplied
         if supplied != expected or record["chain_id"] != self.chain_id:
             raise PeerSyncError("recovery journal integrity failure")
+        if (
+            record["schema_version"] != "junca-block-import-journal/v1"
+            or record["status"] not in {"PREPARED", "COMMITTED"}
+            or not isinstance(record["peer_id"], str)
+            or not record["peer_id"]
+            or len(record["peer_id"]) > 128
+            or isinstance(record["height"], bool)
+            or not isinstance(record["height"], int)
+            or record["height"] < 1
+        ):
+            raise PeerSyncError("recovery journal values are invalid")
+        for field in ("parent_hash", "block_hash", "state_root", "record_digest"):
+            _hash(record[field], f"journal {field}")
         return record
 
     def recover(self, store: PersistentStateStore) -> RecoveryAction:
@@ -199,7 +240,12 @@ class RecoveryJournal:
         body["record_digest"] = _digest(body)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        data = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        data = json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
         with temporary.open("wb") as handle:
             handle.write(data)
             handle.flush()
@@ -239,11 +285,23 @@ class SynchronizedBlockImporter:
             raise PeerSyncError("block source is not the selected synchronization peer")
         if selected.advertisement.finalized_height < proposal.height:
             raise PeerSyncError("peer did not advertise the imported finalized height")
+        if (
+            selected.advertisement.finalized_height == proposal.height
+            and selected.advertisement.finalized_hash.lower() != proposal.block_hash
+        ):
+            self.registry.record_fault(peer_id)
+            raise PeerSyncError("proposal does not match peer finalized advertisement")
         self.journal.begin(peer_id=peer_id, proposal=proposal)
         self.fault_injector("after_journal_prepare")
         try:
             stored = self.pipeline.commit_finalized(proposal, certificate)
         except (NodePipelineError, ValueError):
+            head = self.pipeline.store.head()
+            if (
+                head.height + 1 == proposal.height
+                and head.block_hash == proposal.parent_hash
+            ):
+                self.journal.clear()
             self.registry.record_fault(peer_id)
             raise
         self.fault_injector("after_state_commit")
@@ -254,9 +312,18 @@ class SynchronizedBlockImporter:
 
 
 def _digest(body: dict[str, object]) -> str:
+    try:
+        canonical = json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise PeerSyncError("recovery journal is not canonically serializable") from exc
     return "0x" + hashlib.sha256(
         b"JUNCA_BLOCK_IMPORT_JOURNAL_V1\x00"
-        + json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + canonical
     ).hexdigest()
 
 
