@@ -140,20 +140,6 @@ jobs:
             --query Certificate.Status --output text)"
           test "${certificate_status}" = "ISSUED"
 
-          hosted_zone_id="$(aws route53 list-hosted-zones-by-name \
-            --dns-name jaios-governance.org \
-            --query "HostedZones[?Name=='jaios-governance.org.'] | [0].Id" \
-            --output text)"
-          hosted_zone_id="${hosted_zone_id#/hostedzone/}"
-          test -n "${hosted_zone_id}" && test "${hosted_zone_id}" != "None"
-          for record_type in A AAAA; do
-            alias_dns_name="$(aws route53 list-resource-record-sets \
-              --hosted-zone-id "${hosted_zone_id}" \
-              --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.' && Type=='${record_type}'].AliasTarget.DNSName | [0]" \
-              --output text)"
-            test -n "${alias_dns_name}" && test "${alias_dns_name}" != "None"
-          done
-
           printf 'bucket=%s\n' "${bucket}" >> "$GITHUB_OUTPUT"
           printf 'distribution_id=%s\n' "${distribution_id}" >> "$GITHUB_OUTPUT"
           {
@@ -166,7 +152,6 @@ jobs:
             echo "- Bucket: \`${bucket}\` / versioning \`${bucket_versioning}\`"
             echo "- Distribution: \`${distribution_id}\` / \`${distribution_status}\`"
             echo "- Certificate: \`${certificate_status}\`"
-            echo "- Route 53 A/AAAA: \`PRESENT\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Synchronize exact artifact to private S3
         shell: bash
@@ -212,6 +197,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          getent ahostsv4 docs.jaios-governance.org | grep -q .
+          getent ahostsv6 docs.jaios-governance.org | grep -q .
           for route in "" protocol assets interoperability implementation governance evidence glossary; do
             url="https://docs.jaios-governance.org/${route}"
             code="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
@@ -224,5 +211,6 @@ jobs:
             echo "- Invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
             echo "- Invalidation status: \`${{ steps.invalidate.outputs.status }}\`"
             echo "- Public URL: https://docs.jaios-governance.org"
+            echo "- DNS A/AAAA and TLS readback: PASS"
             echo "- Eight-route HTTP readback: PASS"
           } >> "$GITHUB_STEP_SUMMARY"
