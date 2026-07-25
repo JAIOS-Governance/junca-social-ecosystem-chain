@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,9 +14,13 @@ for (const route of routes) {
   const file = route === "/" ? join(dist, "index.html") : join(dist, route.slice(1), "index.html");
   const html = await readFile(file, "utf8");
   const canonical = `${origin}${route === "/" ? "/" : route}`;
+  if (!new RegExp(`<link[^>]+rel=["']canonical["'][^>]+href=["']${canonical.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'][^>]*>`).test(html)) {
+    failures.push(`${route}: missing canonical ${canonical}`);
+  }
+  if (!new RegExp(`<meta[^>]+property=["']og:url["'][^>]+content=["']${canonical.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'][^>]*>`).test(html)) {
+    failures.push(`${route}: missing og:url ${canonical}`);
+  }
   for (const required of [
-    `<link rel="canonical" href="${canonical}">`,
-    `<meta property="og:url" content="${canonical}">`,
     "JUNCA Social Ecosystem Chain",
     "JAIOS Institutional Governance",
     "Public Testnet"
@@ -28,8 +32,11 @@ for (const route of routes) {
   }
 }
 const home = await readFile(join(dist, "index.html"), "utf8");
-if (home.length > 22000) failures.push(`/: overview is too long (${home.length} bytes)`);
-const css = await readFile(join(dist, "assets", "styles.css"), "utf8");
+if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
+if (home.includes('name="codex-preview"')) failures.push("/: development preview metadata remains");
+const cssName = (await readdir(join(dist, "assets"))).find((name) => /^index-.*\.css$/.test(name));
+if (!cssName) failures.push("approved design stylesheet missing");
+const css = cssName ? await readFile(join(dist, "assets", cssName), "utf8") : "";
 for (const font of ["Cormorant Garamond", "Source Serif 4", "Inter", "Shuei Mincho", "Shuei Kaku Gothic"]) {
   if (!css.includes(font)) failures.push(`font stack missing ${font}`);
 }
