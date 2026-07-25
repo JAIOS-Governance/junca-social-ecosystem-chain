@@ -284,7 +284,7 @@ Resources:
                   - route53:GetHostedZone
                   - route53:ListResourceRecordSets
                 Resource: "*"
-              - Sid: MemberCustomDomainDnsWrite
+              - Sid: SitesCustomDomainsDnsWrite
                 Effect: Allow
                 Action: route53:ChangeResourceRecordSets
                 Resource: !Sub arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}
@@ -294,6 +294,9 @@ Resources:
                       - member.jaios-governance.org
                       - _openai-site-verification.member.jaios-governance.org
                       - _cf-custom-hostname.member.jaios-governance.org
+                      - chain.jaios-governance.org
+                      - _openai-site-verification.chain.jaios-governance.org
+                      - _cf-custom-hostname.chain.jaios-governance.org
                     route53:ChangeResourceRecordSetsRecordTypes:
                       - CNAME
                       - TXT
