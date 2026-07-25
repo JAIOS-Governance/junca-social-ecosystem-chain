@@ -85,6 +85,22 @@ class ConsensusSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(ConsensusSyncError, "quarantined"):
             self.choice.observe(claim("peer-a", 1))
 
+    def test_validator_power_resolver_tracks_epoch_height(self) -> None:
+        choice = FinalizedForkChoice(
+            chain_id=CHAIN_ID,
+            genesis_hash=GENESIS,
+            expected_total_power=3,
+            power_resolver=lambda height: 3 if height < 10 else 6,
+        )
+        choice.observe(claim("peer-a", 9))
+        advanced = replace(
+            claim("peer-b", 10, "4"),
+            parent_hash="0x" + ("2" * 64),
+            signed_power=5,
+            total_power=6,
+        )
+        self.assertEqual(choice.observe(advanced).height, 10)
+
     def test_below_strict_quorum_claim_is_rejected(self) -> None:
         with self.assertRaisesRegex(ConsensusSyncError, "quorum"):
             FinalizedClaim(
