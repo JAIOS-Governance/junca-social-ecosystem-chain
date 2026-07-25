@@ -216,7 +216,11 @@ class PersistentStatePipelineTests(unittest.TestCase):
             chain_id=CHAIN_ID,
         )
         try:
-            head = restored.restore_checkpoint(checkpoint)
+            head = restored.restore_checkpoint(
+                checkpoint,
+                trusted_checkpoint_digest=checkpoint["checkpoint_digest"],
+                trusted_block_hash=checkpoint["block_hash"],
+            )
             self.assertEqual(head.height, 1)
             self.assertEqual(restored.accounts_at(), self.store.accounts_at())
             integrity = restored.integrity_check()
@@ -259,7 +263,11 @@ class PersistentStatePipelineTests(unittest.TestCase):
     def test_checkpoint_restore_fails_closed(self) -> None:
         checkpoint = self.store.export_checkpoint()
         with self.assertRaisesRegex(StateStoreError, "empty"):
-            self.store.restore_checkpoint(checkpoint)
+            self.store.restore_checkpoint(
+                checkpoint,
+                trusted_checkpoint_digest=checkpoint["checkpoint_digest"],
+                trusted_block_hash=checkpoint["block_hash"],
+            )
 
         wrong_chain = PersistentStateStore(
             Path(self.directory.name, "wrong-chain.sqlite"),
@@ -267,7 +275,11 @@ class PersistentStatePipelineTests(unittest.TestCase):
         )
         try:
             with self.assertRaisesRegex(StateStoreError, "chain_id mismatch"):
-                wrong_chain.restore_checkpoint(checkpoint)
+                wrong_chain.restore_checkpoint(
+                    checkpoint,
+                    trusted_checkpoint_digest=checkpoint["checkpoint_digest"],
+                    trusted_block_hash=checkpoint["block_hash"],
+                )
             self.assertEqual(wrong_chain.head_height, -1)
         finally:
             wrong_chain.close()
@@ -280,10 +292,65 @@ class PersistentStatePipelineTests(unittest.TestCase):
         )
         try:
             with self.assertRaisesRegex(StateStoreError, "digest mismatch"):
-                empty.restore_checkpoint(tampered)
+                empty.restore_checkpoint(
+                    tampered,
+                    trusted_checkpoint_digest=checkpoint["checkpoint_digest"],
+                    trusted_block_hash=checkpoint["block_hash"],
+                )
             self.assertEqual(empty.head_height, -1)
         finally:
             empty.close()
+
+    def test_checkpoint_restore_requires_matching_trusted_anchors(self) -> None:
+        checkpoint = self.store.export_checkpoint()
+        wrong_digest = "0x" + ("f" * 64)
+        wrong_hash = "0x" + ("e" * 64)
+
+        digest_store = PersistentStateStore(
+            Path(self.directory.name, "wrong-digest.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            with self.assertRaisesRegex(StateStoreError, "trusted digest"):
+                digest_store.restore_checkpoint(
+                    checkpoint,
+                    trusted_checkpoint_digest=wrong_digest,
+                    trusted_block_hash=checkpoint["block_hash"],
+                )
+            self.assertEqual(digest_store.head_height, -1)
+        finally:
+            digest_store.close()
+
+        hash_store = PersistentStateStore(
+            Path(self.directory.name, "wrong-hash.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            with self.assertRaisesRegex(StateStoreError, "trusted block hash"):
+                hash_store.restore_checkpoint(
+                    checkpoint,
+                    trusted_checkpoint_digest=checkpoint["checkpoint_digest"],
+                    trusted_block_hash=wrong_hash,
+                )
+            self.assertEqual(hash_store.head_height, -1)
+        finally:
+            hash_store.close()
+
+    def test_integrity_check_rejects_metadata_and_noncanonical_payloads(self) -> None:
+        self.store.connection.execute(
+            "UPDATE metadata SET value='1' WHERE key='base_height'"
+        )
+        with self.assertRaisesRegex(StateStoreError, "base_height metadata"):
+            self.store.integrity_check()
+        self.store.connection.execute(
+            "UPDATE metadata SET value='0' WHERE key='base_height'"
+        )
+        self.store.connection.execute(
+            "UPDATE blocks SET accounts_json=? WHERE height=0",
+            ('{"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"nonce":0,"balance":1000000000}}',),
+        )
+        with self.assertRaisesRegex(StateStoreError, "not canonical"):
+            self.store.integrity_check()
 
     def test_database_chain_id_rebinding_is_rejected(self) -> None:
         path = Path(self.directory.name, "bound.sqlite")
