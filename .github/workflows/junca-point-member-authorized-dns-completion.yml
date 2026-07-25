@@ -1,0 +1,135 @@
+name: JUNCA POINT MEMBER Authorized DNS Completion
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-point-member-authorized-dns-completion.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-point-member-authorized-dns-completion
+  cancel-in-progress: false
+
+jobs:
+  complete-domain:
+    runs-on: ubuntu-latest
+    environment: public-testnet
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+    steps:
+      - name: Select an existing canonical OIDC role
+        id: identity
+        shell: bash
+        env:
+          OIDC_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          OIDC_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: |
+          set -euo pipefail
+          oidc_token="$(curl --fail --silent --show-error             -H "Authorization: Bearer $OIDC_REQUEST_TOKEN"             "$OIDC_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')"
+          test -n "$oidc_token"
+          selected_role=""
+          for role in             "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment"             "arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"; do
+            if credentials="$(aws sts assume-role-with-web-identity               --role-arn "$role"               --role-session-name "junca-member-domain-${GITHUB_RUN_ID}"               --web-identity-token "$oidc_token"               --duration-seconds 900               --output json 2>/tmp/assume-role.err)"; then
+              selected_role="$role"
+              access_key="$(jq -r '.Credentials.AccessKeyId' <<<"$credentials")"
+              secret_key="$(jq -r '.Credentials.SecretAccessKey' <<<"$credentials")"
+              session_token="$(jq -r '.Credentials.SessionToken' <<<"$credentials")"
+              echo "::add-mask::$access_key"
+              echo "::add-mask::$secret_key"
+              echo "::add-mask::$session_token"
+              {
+                echo "AWS_ACCESS_KEY_ID=$access_key"
+                echo "AWS_SECRET_ACCESS_KEY=$secret_key"
+                echo "AWS_SESSION_TOKEN=$session_token"
+              } >>"$GITHUB_ENV"
+              break
+            fi
+          done
+          if [[ -z "$selected_role" ]]; then
+            cat /tmp/assume-role.err >&2
+            exit 1
+          fi
+          echo "selected_role=$selected_role" >>"$GITHUB_OUTPUT"
+
+      - name: Verify exact AWS and Route 53 boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "595710543956"
+          test "$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)" = "jaios-governance.org."
+
+      - name: Apply Sites-issued member records
+        id: dns
+        shell: bash
+        run: |
+          set -euo pipefail
+          change_batch="$(mktemp)"
+          cat >"$change_batch" <<'JSON'
+          {
+            "Comment": "Authorized JUNCA POINT MEMBER Sites custom-domain completion",
+            "Changes": [
+              {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "member.jaios-governance.org.",
+                  "Type": "CNAME",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "custom-domains.chatgpt.site."}]
+                }
+              },
+              {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "_openai-site-verification.member.jaios-governance.org.",
+                  "Type": "TXT",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "\"openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE\""}]
+                }
+              },
+              {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                  "Name": "_cf-custom-hostname.member.jaios-governance.org.",
+                  "Type": "TXT",
+                  "TTL": 300,
+                  "ResourceRecords": [{"Value": "\"5747a89e-d114-42d8-b33b-b4eaae61c958\""}]
+                }
+              }
+            ]
+          }
+          JSON
+          change_id="$(aws route53 change-resource-record-sets             --hosted-zone-id "$HOSTED_ZONE_ID"             --change-batch "file://$change_batch"             --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = "INSYNC"
+          echo "change_id=$change_id" >>"$GITHUB_OUTPUT"
+
+      - name: Read back exact DNS records
+        shell: bash
+        run: |
+          set -euo pipefail
+          records="$(aws route53 list-resource-record-sets             --hosted-zone-id "$HOSTED_ZONE_ID"             --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']"             --output json)"
+          RECORDS="$records" python3 - <<'PY'
+          import json
+          import os
+
+          records = json.loads(os.environ["RECORDS"])
+          by_name = {record["Name"]: record for record in records}
+          assert by_name["member.jaios-governance.org."]["ResourceRecords"][0]["Value"] == "custom-domains.chatgpt.site."
+          assert "openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE" in by_name["_openai-site-verification.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          assert "5747a89e-d114-42d8-b33b-b4eaae61c958" in by_name["_cf-custom-hostname.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          PY
+          {
+            echo "### JUNCA POINT MEMBER domain completion"
+            echo "- Operator: JAIOS Institutional Governance"
+            echo "- Domain: https://member.jaios-governance.org"
+            echo "- Route 53: INSYNC"
+            echo "- DNS Readback: PASS"
+            echo "- Access boundary: Custom / member-limited"
+            echo "- Version preserved: 26"
+          } >>"$GITHUB_STEP_SUMMARY"
