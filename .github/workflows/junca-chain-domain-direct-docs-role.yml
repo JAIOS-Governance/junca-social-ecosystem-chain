@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - recovery/chain-domain-direct-docs-role
     paths:
       - .github/workflows/junca-chain-domain-direct-docs-role.yml
