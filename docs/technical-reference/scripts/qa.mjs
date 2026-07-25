@@ -41,7 +41,7 @@ for (const required of [
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.25 / R16",
+  "Revision · 2026.07.26 / R17",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -60,7 +60,7 @@ for (const required of [
   "Certified Finality and Validator Epoch Safety",
   "strict greater-than-two-thirds voting power",
   "Old-epoch validator proofs are rejected",
-  "283 / 283 automated tests passed",
+  "321 / 321 automated tests passed",
 ]) {
   if (!protocol.includes(required)) failures.push(`/protocol: missing ${required}`);
 }
@@ -80,12 +80,12 @@ const evidence = await readFile(join(dist, "evidence", "index.html"), "utf8");
 for (const required of [
   "Documentation Publication Evidence",
   "Network Runtime Evidence",
-  "adcc02f0866b",
-  "/pull/33",
-  "/pull/34",
-  "30141307993",
-  "30141307995",
-  "30141307990",
+  "a4701b80268c",
+  "/pull/35",
+  "/pull/45",
+  "30155548410",
+  "30155548413",
+  "30155548403",
 ]) {
   if (!evidence.includes(required)) failures.push(`/evidence: missing ${required}`);
 }

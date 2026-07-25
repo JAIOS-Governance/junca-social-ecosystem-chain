@@ -1,0 +1,63 @@
+{
+  "schema": "jaios-technical-reference-daily-audit/v1",
+  "audit_date_jst": "2026-07-26",
+  "canonical_url": "https://docs.jaios-governance.org/",
+  "canonical_source": "docs/technical-reference",
+  "governance": "JAIOS Institutional Governance",
+  "constitution": {
+    "document_id": "1D_uQWXWfRKdrjQjHybTV9bgpBvknauRc0ZkOSe0jBE8",
+    "revision_id": "38",
+    "modified_time": "2026-07-25T13:00:03.795Z"
+  },
+  "repository": {
+    "main_before_revision": "83e3effeb4b71c461c2cd8689aa3d806c6bf0adc",
+    "previous_technical_source": "adcc02f0866b383aa586bfd26755b9c7687bdb68",
+    "controlled_revision_source": "a4701b80268cce96e4e05d44d6b0f56f853dc58b",
+    "merged_pull_requests": [
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45
+    ]
+  },
+  "verified_change": {
+    "previous_release": "2026.07.25-R16",
+    "target_release": "2026.07.26-R17",
+    "previous_test_count": 283,
+    "current_test_count": 321,
+    "local_test_result": "321/321 PASS",
+    "scope": [
+      "live runtime evidence binding",
+      "trusted checkpoint restore and persisted-state validation",
+      "mempool restart persistence",
+      "canonical event-index recovery",
+      "peer finality import recovery",
+      "authenticated wire limits",
+      "finality vote and synchronized-proof hardening",
+      "canonical low-cost public-testnet IaC"
+    ]
+  },
+  "runtime_boundary": {
+    "public_testnet_label": "Public Testnet / No Monetary Value",
+    "runtime_status": "UNVERIFIED",
+    "validator_acceptance": "PENDING",
+    "public_rpc": "PENDING",
+    "explorer": "PENDING",
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "aws_public_testnet_apply_executed": false
+  },
+  "rollback_point": {
+    "repository_commit": "83e3effeb4b71c461c2cd8689aa3d806c6bf0adc",
+    "technical_release": "2026.07.25-R16",
+    "technical_source": "adcc02f0866b383aa586bfd26755b9c7687bdb68"
+  }
+}

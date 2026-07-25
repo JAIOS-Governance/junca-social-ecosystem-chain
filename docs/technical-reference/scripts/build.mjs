@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
-const release = "2026.07.25";
-const revision = "R16";
-const chainSource = "adcc02f0866b383aa586bfd26755b9c7687bdb68";
+const release = "2026.07.26";
+const revision = "R17";
+const chainSource = "a4701b80268cce96e4e05d44d6b0f56f853dc58b";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 
 await rm(dist, { recursive: true, force: true });
