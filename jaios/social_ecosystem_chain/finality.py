@@ -18,10 +18,15 @@ class Validator:
     voting_power: int
 
     def __post_init__(self) -> None:
-        if not self.validator_id or (
+        if (
+            not isinstance(self.validator_id, str)
+            or not self.validator_id
+            or len(self.validator_id.encode("utf-8")) > 128
+            or (
             isinstance(self.voting_power, bool)
             or not isinstance(self.voting_power, int)
             or self.voting_power <= 0
+            )
         ):
             raise FinalityError("validator identity and voting power are required")
 
@@ -135,6 +140,11 @@ class FinalityStateMachine:
         verifier: VoteVerifier,
     ) -> FinalityCertificate | None:
         self._validate_vote(vote, verifier)
+        finalized = self._finalized.get(vote.height)
+        if finalized is not None:
+            if finalized.block_hash == vote.block_hash.lower():
+                return finalized
+            raise FinalityError("conflicting vote for finalized height")
         identity = (vote.height, vote.round, vote.validator_id)
         previous = self._votes.get(identity)
         if previous is not None:
@@ -142,9 +152,6 @@ class FinalityStateMachine:
                 return self._certificate_if_finalized(vote.height, vote.block_hash)
             self._equivocations.add(identity)
             raise FinalityError("validator equivocation detected")
-        finalized = self._finalized.get(vote.height)
-        if finalized is not None and finalized.block_hash != vote.block_hash.lower():
-            raise FinalityError("conflicting vote for finalized height")
         self._votes[identity] = vote
 
         matching = [
@@ -193,12 +200,24 @@ class FinalityStateMachine:
         _validate_block_hash(vote.block_hash)
         if vote.validator_id not in self.validators:
             raise FinalityError("vote is from an unknown validator")
-        if not vote.signature:
-            raise FinalityError("vote signature is required")
-        if not callable(verifier) or not verifier(vote):
+        if (
+            not isinstance(vote.signature, bytes)
+            or not vote.signature
+            or len(vote.signature) > 4096
+        ):
+            raise FinalityError("vote signature must be 1 to 4096 bytes")
+        if not callable(verifier):
+            raise FinalityError("vote signature verification failed")
+        try:
+            verified = verifier(vote)
+        except Exception as exc:
+            raise FinalityError("vote signature verification failed") from exc
+        if verified is not True:
             raise FinalityError("vote signature verification failed")
         if vote.height < self.latest_finalized_height:
             raise FinalityError("vote height is below finalized head")
+        if vote.height > self.latest_finalized_height + 1:
+            raise FinalityError("vote height is not the next contiguous height")
 
     def _build_certificate(
         self,
