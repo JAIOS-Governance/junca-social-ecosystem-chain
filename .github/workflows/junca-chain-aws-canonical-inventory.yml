@@ -1,0 +1,58 @@
+name: JUNCA Chain AWS Canonical Inventory
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-chain-aws-canonical-inventory.yml"
+      - "scripts/junca_aws_canonical_inventory.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-chain-aws-canonical-inventory
+  cancel-in-progress: false
+
+jobs:
+  canonical-inventory:
+    runs-on: ubuntu-latest
+    environment: public-testnet
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate readback controller
+        run: |
+          python -m py_compile scripts/junca_aws_canonical_inventory.py
+          python -m unittest tests.test_junca_social_ecosystem_chain_aws_canonical_inventory -v
+      - name: Configure canonical AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-canonical-inventory-${{ github.run_id }}
+      - name: Read canonical non-secret AWS inventory
+        run: |
+          python scripts/junca_aws_canonical_inventory.py \
+            --region "$AWS_REGION" \
+            --output artifacts/junca-aws-canonical-inventory.json
+          test "$(jq -r .account_id artifacts/junca-aws-canonical-inventory.json)" = "595710543956"
+          test "$(jq -r .deployment_performed artifacts/junca-aws-canonical-inventory.json)" = "false"
+          test "$(jq -r .mainnet_changed artifacts/junca-aws-canonical-inventory.json)" = "false"
+          test "$(jq -r .assets_moved artifacts/junca-aws-canonical-inventory.json)" = "false"
+          test "$(jq -r .bridge_activated artifacts/junca-aws-canonical-inventory.json)" = "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-aws-canonical-inventory-${{ github.run_id }}
+          path: artifacts/junca-aws-canonical-inventory.json
+          if-no-files-found: error
+          retention-days: 90
