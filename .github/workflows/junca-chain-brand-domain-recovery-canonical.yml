@@ -45,6 +45,7 @@ jobs:
   recover-chain-domain:
     needs: set-default-oidc-subject
     runs-on: ubuntu-latest
+    environment: public-testnet
     timeout-minutes: 15
     env:
       AWS_REGION: us-east-1
