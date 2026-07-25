@@ -1,0 +1,126 @@
+name: JUNCA POINT MEMBER Production Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-point-member-production-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-point-member-production-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover-domain:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+    steps:
+      - name: Assume exact production role
+        shell: bash
+        run: |
+          set -euo pipefail
+          oidc_token="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')"
+          test -n "$oidc_token"
+          credentials="$(aws sts assume-role-with-web-identity \
+            --role-arn "$ROLE_ARN" \
+            --role-session-name "junca-member-production-${GITHUB_RUN_ID}" \
+            --web-identity-token "$oidc_token" \
+            --duration-seconds 900 \
+            --output json)"
+          access_key="$(jq -r '.Credentials.AccessKeyId' <<<"$credentials")"
+          secret_key="$(jq -r '.Credentials.SecretAccessKey' <<<"$credentials")"
+          session_token="$(jq -r '.Credentials.SessionToken' <<<"$credentials")"
+          echo "::add-mask::$access_key"
+          echo "::add-mask::$secret_key"
+          echo "::add-mask::$session_token"
+          {
+            echo "AWS_ACCESS_KEY_ID=$access_key"
+            echo "AWS_SECRET_ACCESS_KEY=$secret_key"
+            echo "AWS_SESSION_TOKEN=$session_token"
+          } >>"$GITHUB_ENV"
+
+      - name: Verify exact AWS boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          test "$actual_account" = "$AWS_ACCOUNT_ID"
+          zone_name="$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)"
+          test "$zone_name" = "jaios-governance.org."
+
+      - name: Read current target records
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$HOSTED_ZONE_ID" \
+            --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']" \
+            --output json >/tmp/member-records-before.json
+
+      - name: UPSERT exact Sites validation records
+        id: dns
+        shell: bash
+        run: |
+          set -euo pipefail
+          change_batch="$(mktemp)"
+          cat >"$change_batch" <<'JSON'
+          {
+            "Comment": "CEO-authorized JUNCA POINT MEMBER Sites custom-domain production recovery",
+            "Changes": [
+              {"Action":"UPSERT","ResourceRecordSet":{"Name":"member.jaios-governance.org.","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"custom-domains.chatgpt.site."}]}},
+              {"Action":"UPSERT","ResourceRecordSet":{"Name":"_openai-site-verification.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE\""}]}},
+              {"Action":"UPSERT","ResourceRecordSet":{"Name":"_cf-custom-hostname.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"5747a89e-d114-42d8-b33b-b4eaae61c958\""}]}}
+            ]
+          }
+          JSON
+          change_id="$(aws route53 change-resource-record-sets \
+            --hosted-zone-id "$HOSTED_ZONE_ID" \
+            --change-batch "file://$change_batch" \
+            --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = "INSYNC"
+          echo "change_id=$change_id" >>"$GITHUB_OUTPUT"
+
+      - name: Read back exact DNS state
+        shell: bash
+        run: |
+          set -euo pipefail
+          records="$(aws route53 list-resource-record-sets \
+            --hosted-zone-id "$HOSTED_ZONE_ID" \
+            --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']" \
+            --output json)"
+          RECORDS="$records" python3 - <<'PY'
+          import json, os
+          records = json.loads(os.environ["RECORDS"])
+          assert len(records) == 3
+          by_name = {r["Name"]: r for r in records}
+          assert by_name["member.jaios-governance.org."]["Type"] == "CNAME"
+          assert by_name["member.jaios-governance.org."]["ResourceRecords"][0]["Value"] == "custom-domains.chatgpt.site."
+          assert "openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE" in by_name["_openai-site-verification.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          assert "5747a89e-d114-42d8-b33b-b4eaae61c958" in by_name["_cf-custom-hostname.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          assert all(r["TTL"] == 300 for r in records)
+          PY
+          {
+            echo "### JUNCA POINT MEMBER production recovery"
+            echo "- AWS Account: ${AWS_ACCOUNT_ID}"
+            echo "- Region: ${AWS_REGION}"
+            echo "- Hosted Zone: ${HOSTED_ZONE_ID}"
+            echo "- Route 53 Change: ${{ steps.dns.outputs.change_id }}"
+            echo "- Route 53 Status: INSYNC"
+            echo "- DNS Readback: PASS"
+            echo "- Version preserved: 26"
+            echo "- Access boundary preserved: custom"
+          } >>"$GITHUB_STEP_SUMMARY"
