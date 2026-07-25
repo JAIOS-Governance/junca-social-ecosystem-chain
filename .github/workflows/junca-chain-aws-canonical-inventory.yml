@@ -1,6 +1,11 @@
 name: JUNCA Chain AWS Canonical Inventory
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-chain-aws-canonical-inventory.yml"
+      - "scripts/junca_aws_canonical_inventory.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
   push:
     branches: [main]
     paths:
