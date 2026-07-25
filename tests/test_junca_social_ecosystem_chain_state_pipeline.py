@@ -205,6 +205,63 @@ class PersistentStatePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(StateStoreError, "digest mismatch"):
             self.store.verify_checkpoint(tampered)
 
+    def test_checkpoint_rejects_noncanonical_identity_and_account_schema(self) -> None:
+        checkpoint = self.store.export_checkpoint()
+
+        uppercase_hash = dict(checkpoint)
+        uppercase_hash["block_hash"] = "0x" + ("AB" * 32)
+        uppercase_hash["checkpoint_digest"] = self._checkpoint_digest(uppercase_hash)
+        with self.assertRaisesRegex(StateStoreError, "block_hash is not canonical"):
+            self.store.verify_checkpoint(uppercase_hash)
+
+        extra_account_field = dict(checkpoint)
+        extra_account_field["accounts"] = {
+            ALICE: {
+                "balance": 1_000_000_000,
+                "nonce": 0,
+                "memo": "not-consensus-state",
+            }
+        }
+        extra_account_field["checkpoint_digest"] = self._checkpoint_digest(
+            extra_account_field
+        )
+        with self.assertRaisesRegex(StateStoreError, "accounts are invalid"):
+            self.store.verify_checkpoint(extra_account_field)
+
+        not_finalized = dict(checkpoint)
+        not_finalized["finalized"] = False
+        not_finalized["checkpoint_digest"] = self._checkpoint_digest(not_finalized)
+        with self.assertRaisesRegex(StateStoreError, "not finalized"):
+            self.store.verify_checkpoint(not_finalized)
+
+    def test_genesis_checkpoint_rejects_certificate_and_wrong_parent(self) -> None:
+        checkpoint = self.store.export_checkpoint()
+
+        certificate = dict(checkpoint)
+        certificate["certificate_hash"] = "0x" + ("2" * 64)
+        certificate["checkpoint_digest"] = self._checkpoint_digest(certificate)
+        with self.assertRaisesRegex(StateStoreError, "cannot contain a certificate"):
+            self.store.verify_checkpoint(certificate)
+
+        parent = dict(checkpoint)
+        parent["parent_hash"] = "0x" + ("3" * 64)
+        parent["checkpoint_digest"] = self._checkpoint_digest(parent)
+        with self.assertRaisesRegex(StateStoreError, "genesis checkpoint parent_hash"):
+            self.store.verify_checkpoint(parent)
+
+    def test_read_and_export_fail_closed_on_corrupt_snapshot(self) -> None:
+        self.store.connection.execute(
+            "UPDATE blocks SET accounts_json=? WHERE height=0",
+            (
+                '{"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":'
+                '{"balance":1000000000,"memo":"ignored","nonce":0}}',
+            ),
+        )
+        with self.assertRaisesRegex(StateStoreError, "snapshot fields"):
+            self.store.accounts_at()
+        with self.assertRaisesRegex(StateStoreError, "snapshot fields"):
+            self.store.export_checkpoint()
+
     def test_finalized_checkpoint_restores_and_extends_on_restart(self) -> None:
         self.admit(self.transaction())
         first = self.pipeline.execute_candidate()
@@ -358,6 +415,17 @@ class PersistentStatePipelineTests(unittest.TestCase):
         first.close()
         with self.assertRaisesRegex(StateStoreError, "different chain_id"):
             PersistentStateStore(path, chain_id=1)
+
+    @staticmethod
+    def _checkpoint_digest(checkpoint: dict[str, object]) -> str:
+        from jaios.social_ecosystem_chain.state_store import _checkpoint_digest
+
+        body = {
+            key: value
+            for key, value in checkpoint.items()
+            if key != "checkpoint_digest"
+        }
+        return _checkpoint_digest(body)
 
 
 if __name__ == "__main__":
