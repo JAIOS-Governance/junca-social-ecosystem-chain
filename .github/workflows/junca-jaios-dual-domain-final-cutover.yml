@@ -11,7 +11,26 @@ permissions:
   contents: read
 
 jobs:
+  set-canonical-oidc-subject:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Set canonical GitHub OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          curl --silent --show-error --fail-with-body --location             --request PUT             --header "Accept: application/vnd.github+json"             --header "Authorization: Bearer $GH_TOKEN"             --header "X-GitHub-Api-Version: 2026-03-10"             "$endpoint"             --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
+          state="$(curl --silent --show-error --fail --location             --header "Accept: application/vnd.github+json"             --header "Authorization: Bearer $GH_TOKEN"             --header "X-GitHub-Api-Version: 2026-03-10"             "$endpoint")"
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False, s'
+
   cutover:
+    needs: set-canonical-oidc-subject
     runs-on: ubuntu-latest
     environment: public-testnet
     timeout-minutes: 15
