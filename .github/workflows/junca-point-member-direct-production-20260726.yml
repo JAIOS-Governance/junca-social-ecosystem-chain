@@ -1,0 +1,59 @@
+name: JUNCA POINT MEMBER Direct Production 20260726
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/junca-point-member-direct-production-20260726.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure verified production identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: member-direct-production-${{ github.run_id }}
+          disable-retry: true
+      - name: Verify exact production boundary
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          test "$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)" = "jaios-governance.org."
+      - name: Reconcile canonical production stack and member DNS policy
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy --region "$AWS_REGION" --stack-name junca-chain-docs-publication --template-file infra/aws/docs-publication/main.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides DomainName=docs.jaios-governance.org HostedZoneId="$HOSTED_ZONE_ID" Repository=JAIOS-Governance/junca-social-ecosystem-chain RepositoryOwnerId=308604370 RepositoryId=1310568313 EnvironmentName=junca-chain-docs-production ExistingGitHubOidcProviderArn=arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com
+      - name: Publish Sites-issued member records
+        id: dns
+        run: |
+          set -euo pipefail
+          cat >/tmp/change.json <<'JSON'
+          {"Comment":"JUNCA POINT MEMBER production custom domain","Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"member.jaios-governance.org.","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"custom-domains.chatgpt.site."}]}},{"Action":"UPSERT","ResourceRecordSet":{"Name":"_openai-site-verification.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE\""}]}},{"Action":"UPSERT","ResourceRecordSet":{"Name":"_cf-custom-hostname.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"5747a89e-d114-42d8-b33b-b4eaae61c958\""}]}}]}
+          JSON
+          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch file:///tmp/change.json --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = INSYNC
+          echo "change_id=$change_id" >>"$GITHUB_OUTPUT"
+      - name: Production DNS readback
+        run: |
+          set -euo pipefail
+          records="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']" --output json)"
+          RECORDS="$records" python3 -c 'import json,os; r={x["Name"]:x for x in json.loads(os.environ["RECORDS"])}; assert r["member.jaios-governance.org."]["ResourceRecords"][0]["Value"]=="custom-domains.chatgpt.site."; assert "openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE" in r["_openai-site-verification.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]; assert "5747a89e-d114-42d8-b33b-b4eaae61c958" in r["_cf-custom-hostname.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]'
+          { echo "### JUNCA POINT MEMBER production"; echo "- URL: https://member.jaios-governance.org/"; echo "- Route 53 Change: ${{ steps.dns.outputs.change_id }}"; echo "- DNS Status: INSYNC"; echo "- DNS Readback: PASS"; } >>"$GITHUB_STEP_SUMMARY"
