@@ -123,6 +123,12 @@ from .readiness import (
     ChainReadinessError,
     load_readiness,
 )
+from .validator_runtime import (
+    FinalizedProposal,
+    LiveValidatorRuntime,
+    ValidatorRuntimeError,
+    ValidatorSignerBinding,
+)
 
 __all__ = [
     "AssetIssuanceError",
@@ -210,4 +216,8 @@ __all__ = [
     "LegacyGenesisFingerprint",
     "LegacySourceFingerprint",
     "fingerprint_legacy_source",
+    "FinalizedProposal",
+    "LiveValidatorRuntime",
+    "ValidatorRuntimeError",
+    "ValidatorSignerBinding",
 ]
