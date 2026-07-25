@@ -19,7 +19,6 @@ jobs:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       HOSTED_ZONE_ID: Z0336017285464TX0NT1G
-      STACK_NAME: junca-chain-docs-publication
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +31,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: chain-domain-final-${{ github.run_id }}
 
-      - name: Execute recovery and write readback
+      - name: UPSERT exact Sites records and write readback
         id: execute
         if: steps.aws_auth.outcome == 'success'
         continue-on-error: true
@@ -43,33 +42,15 @@ jobs:
           zone="$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)"
           test "$account" = "$AWS_ACCOUNT_ID"
           test "$zone" = "jaios-governance.org."
-
-          set +e
-          stack_output="$(aws cloudformation update-stack \
-            --region "$AWS_REGION" \
-            --stack-name "$STACK_NAME" \
-            --template-body file://infra/aws/docs-publication/main.yaml \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameters \
-              ParameterKey=DomainName,ParameterValue=docs.jaios-governance.org \
-              ParameterKey=HostedZoneId,ParameterValue="$HOSTED_ZONE_ID" \
-              ParameterKey=Repository,ParameterValue=JAIOS-Governance/junca-social-ecosystem-chain \
-              ParameterKey=RepositoryOwnerId,ParameterValue=308604370 \
-              ParameterKey=RepositoryId,ParameterValue=1310568313 \
-              ParameterKey=EnvironmentName,ParameterValue=junca-chain-docs-production \
-              ParameterKey=ExistingGitHubOidcProviderArn,ParameterValue=arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com 2>&1)"
-          stack_rc=$?
-          set -e
-          if [ "$stack_rc" -ne 0 ] && ! grep -q "No updates are to be performed" <<<"$stack_output"; then
-            printf '%s\n' "$stack_output" > /tmp/recovery_error.txt
-            exit "$stack_rc"
-          fi
-          if [ "$stack_rc" -eq 0 ]; then aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"; fi
-
           cat >/tmp/change.json <<'JSON'
           {"Comment":"Bind chain.jaios-governance.org to Sites","Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"chain.jaios-governance.org.","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"custom-domains.chatgpt.site."}]}},{"Action":"UPSERT","ResourceRecordSet":{"Name":"_openai-site-verification.chain.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"openai-site-verification=5kMAXWPTYm6FQ3E_bVHIUdoo4AvNv3hNwXpkUBCP9LM\""}]}},{"Action":"UPSERT","ResourceRecordSet":{"Name":"_cf-custom-hostname.chain.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"0ff4e945-6380-45d2-a7fc-79e43e99da79\""}]}}]}
           JSON
-          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch file:///tmp/change.json --query ChangeInfo.Id --output text)"
+          set +e
+          change_output="$(aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch file:///tmp/change.json --query ChangeInfo.Id --output text 2>&1)"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then printf '%s\n' "$change_output" > /tmp/recovery_error.txt; exit "$rc"; fi
+          change_id="$change_output"
           aws route53 wait resource-record-sets-changed --id "$change_id"
           test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = INSYNC
           records="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='chain.jaios-governance.org.' || Name=='_openai-site-verification.chain.jaios-governance.org.' || Name=='_cf-custom-hostname.chain.jaios-governance.org.' || Name=='docs.jaios-governance.org.' || Name=='explorer.jaios-governance.org.']" --output json)"
@@ -101,10 +82,8 @@ jobs:
             python3 - <<'PY'
           import json, os
           payload={'status':'BLOCKED','aws_auth_outcome':os.environ.get('AUTH_OUTCOME'),'execution_outcome':os.environ.get('EXEC_OUTCOME'),'workflow_run':'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'}
-          try:
-              payload['error']=open('/tmp/recovery_error.txt').read()[:4000]
-          except FileNotFoundError:
-              payload['error']='AWS OIDC authentication or pre-execution failure'
+          try: payload['error']=open('/tmp/recovery_error.txt').read()[:4000]
+          except FileNotFoundError: payload['error']='AWS OIDC authentication or pre-execution failure'
           open('evidence/chain-domain-production-readback.json','w').write(json.dumps(payload,indent=2))
           PY
           fi
