@@ -1,6 +1,7 @@
 name: JUNCA Chain Brand Domain Recovery via Canonical OIDC
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -91,6 +92,11 @@ jobs:
                     ],
                     "route53:ChangeResourceRecordSetsRecordTypes": ["CNAME", "TXT"],
                     "route53:ChangeResourceRecordSetsActions": ["UPSERT"]
+                  },
+                  "Null": {
+                    "route53:ChangeResourceRecordSetsNormalizedRecordNames": "false",
+                    "route53:ChangeResourceRecordSetsRecordTypes": "false",
+                    "route53:ChangeResourceRecordSetsActions": "false"
                   }
                 }
               },
