@@ -1,6 +1,12 @@
 name: JUNCA Chain Docs Production
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/technical-reference/**"
+      - "infra/aws/docs-publication/**"
+      - ".github/workflows/junca-chain-docs-production.yml"
   pull_request:
     paths:
       - "docs/technical-reference/**"
@@ -45,7 +51,7 @@ jobs:
           retention-days: 90
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    if: (github.event_name == 'workflow_dispatch' && inputs.deploy) || github.event_name == 'push'
     needs: quality
     runs-on: ubuntu-latest
     environment: junca-chain-docs-production
