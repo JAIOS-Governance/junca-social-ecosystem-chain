@@ -78,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
-          if [ ! -f evidence/chain-domain-production-readback.json ]; then
+          if [ "$AUTH_OUTCOME" != success ] || [ "$EXEC_OUTCOME" != success ]; then
             python3 - <<'PY'
           import json, os
           payload={'status':'BLOCKED','aws_auth_outcome':os.environ.get('AUTH_OUTCOME'),'execution_outcome':os.environ.get('EXEC_OUTCOME'),'workflow_run':'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'}
