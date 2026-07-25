@@ -64,6 +64,7 @@ jobs:
           role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-chain-domain-recovery-${{ github.run_id }}
+          disable-retry: true
 
       - name: Verify exact AWS boundary
         shell: bash
