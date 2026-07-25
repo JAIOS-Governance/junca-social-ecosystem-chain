@@ -8,6 +8,7 @@ on:
       - recovery/chain-domain-direct-docs-role
     paths:
       - .github/workflows/junca-chain-domain-direct-docs-role.yml
+      - .github/recovery-triggers/chain-domain-production.txt
 
 permissions:
   id-token: write
