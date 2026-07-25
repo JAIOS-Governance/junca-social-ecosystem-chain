@@ -78,6 +78,54 @@ variable "validator_instance_type" {
   nullable    = false
 }
 
+variable "validator_volume_size_gib" {
+  description = "Per-validator encrypted gp3 volume size."
+  type        = number
+  default     = 50
+  validation {
+    condition     = var.validator_volume_size_gib >= 30 && var.validator_volume_size_gib <= 200
+    error_message = "validator_volume_size_gib must remain between 30 and 200 GiB."
+  }
+}
+
+variable "rpc_cpu" {
+  type    = number
+  default = 256
+}
+
+variable "rpc_memory" {
+  type    = number
+  default = 512
+}
+
+variable "rpc_desired_count" {
+  type    = number
+  default = 1
+  validation {
+    condition     = var.rpc_desired_count >= 1 && var.rpc_desired_count <= 2
+    error_message = "rpc_desired_count must be 1 or 2."
+  }
+}
+
+variable "explorer_cpu" {
+  type    = number
+  default = 256
+}
+
+variable "explorer_memory" {
+  type    = number
+  default = 512
+}
+
+variable "explorer_desired_count" {
+  type    = number
+  default = 1
+  validation {
+    condition     = var.explorer_desired_count >= 1 && var.explorer_desired_count <= 2
+    error_message = "explorer_desired_count must be 1 or 2."
+  }
+}
+
 variable "validator_signer_kms_key_arns" {
   description = "Three KMS/HSM external-signer resource ARNs. Resource references only; no key material."
   type        = list(string)
