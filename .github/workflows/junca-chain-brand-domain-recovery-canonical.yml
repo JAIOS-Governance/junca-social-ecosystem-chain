@@ -17,6 +17,7 @@ concurrency:
 jobs:
   recover-chain-domain:
     runs-on: ubuntu-latest
+    environment: public-testnet
     timeout-minutes: 15
     env:
       AWS_REGION: us-east-1
