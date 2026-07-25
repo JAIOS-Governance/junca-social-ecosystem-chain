@@ -26,9 +26,6 @@ jobs:
       - name: Select an existing canonical OIDC role
         id: identity
         shell: bash
-        env:
-          OIDC_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          OIDC_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
           set -euo pipefail
           oidc_token="$(curl --fail --silent --show-error             -H "Authorization: Bearer $OIDC_REQUEST_TOKEN"             "$OIDC_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')"
