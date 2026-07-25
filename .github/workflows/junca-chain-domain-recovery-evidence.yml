@@ -1,0 +1,44 @@
+name: JUNCA Chain Domain Recovery Evidence
+
+on:
+  workflow_run:
+    workflows:
+      - JUNCA Chain Domain Direct Recovery via Docs Role
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Persist latest recovery result
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          {
+            echo '# JUNCA Chain Custom Domain Production Recovery'
+            echo
+            echo "Run ID: $RUN_ID"
+            echo "Run attempt: $RUN_ATTEMPT"
+            echo "Conclusion: $RUN_CONCLUSION"
+            echo "Commit: $HEAD_SHA"
+            echo "Workflow URL: $RUN_URL"
+            echo "Production URL: https://chain.jaios-governance.org/"
+          } > evidence/production/chain-domain-latest.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/production/chain-domain-latest.md
+          git diff --cached --quiet && exit 0
+          git commit -m "Record chain domain recovery run $RUN_ID"
+          git push
