@@ -20,7 +20,8 @@ class AwsInfrastructureTests(unittest.TestCase):
         self.assertIn('check "three_failure_domains"', self.main)
 
     def test_public_boundary_is_read_only_replicated_tls_and_rate_limited(self) -> None:
-        self.assertIn("desired_count   = 2", self.main)
+        self.assertIn("desired_count   = var.rpc_desired_count", self.main)
+        self.assertIn("desired_count   = var.explorer_desired_count", self.main)
         self.assertIn('"READ_ONLY", value = "true"', self.main)
         self.assertIn("eth_sendRawTransaction", self.main)
         self.assertIn('resource "aws_acm_certificate"', self.main)
