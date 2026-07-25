@@ -62,8 +62,8 @@ resource "aws_security_group" "validator" {
 }
 
 resource "aws_iam_role" "validator" {
-  count = local.create
-  name  = "junca-public-testnet-validator"
+  for_each = local.validators
+  name     = "junca-public-testnet-${each.key}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -75,22 +75,22 @@ resource "aws_iam_role" "validator" {
 }
 
 resource "aws_iam_role_policy" "validator_signer" {
-  count = local.create
-  role  = aws_iam_role.validator[0].id
+  for_each = local.validators
+  role     = aws_iam_role.validator[each.key].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
       Action   = ["kms:GetPublicKey", "kms:Sign", "kms:DescribeKey"]
-      Resource = var.validator_signer_kms_key_arns
+      Resource = var.validator_signer_kms_key_arns[each.value]
     }]
   })
 }
 
 resource "aws_iam_instance_profile" "validator" {
-  count = local.create
-  name  = "junca-public-testnet-validator"
-  role  = aws_iam_role.validator[0].name
+  for_each = local.validators
+  name     = "junca-public-testnet-${each.key}"
+  role     = aws_iam_role.validator[each.key].name
 }
 
 resource "aws_instance" "validator" {
@@ -99,7 +99,7 @@ resource "aws_instance" "validator" {
   instance_type               = var.validator_instance_type
   subnet_id                   = var.private_subnet_ids[each.value]
   vpc_security_group_ids      = [aws_security_group.validator[0].id]
-  iam_instance_profile        = aws_iam_instance_profile.validator[0].name
+  iam_instance_profile        = aws_iam_instance_profile.validator[each.key].name
   associate_public_ip_address = false
   monitoring                  = true
 
@@ -110,7 +110,7 @@ resource "aws_instance" "validator" {
 
   root_block_device {
     encrypted   = true
-    volume_size = 200
+    volume_size = var.validator_volume_size_gib
     volume_type = "gp3"
     tags = {
       Backup = "junca-public-testnet"
@@ -285,8 +285,8 @@ resource "aws_ecs_task_definition" "rpc" {
   family                   = "junca-readonly-rpc"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = var.rpc_cpu
+  memory                   = var.rpc_memory
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   container_definitions = jsonencode([{
     name         = "readonly-rpc"
@@ -327,7 +327,7 @@ resource "aws_ecs_service" "rpc" {
   name            = "junca-readonly-rpc"
   cluster         = aws_ecs_cluster.public[0].id
   task_definition = aws_ecs_task_definition.rpc[0].arn
-  desired_count   = 2
+  desired_count   = var.rpc_desired_count
   launch_type     = "FARGATE"
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -347,8 +347,8 @@ resource "aws_ecs_task_definition" "explorer" {
   family                   = "junca-finalized-explorer"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = var.explorer_cpu
+  memory                   = var.explorer_memory
   execution_role_arn       = aws_iam_role.ecs_execution[0].arn
   container_definitions = jsonencode([{
     name         = "finalized-explorer"
@@ -387,7 +387,7 @@ resource "aws_ecs_service" "explorer" {
   name            = "junca-finalized-explorer"
   cluster         = aws_ecs_cluster.public[0].id
   task_definition = aws_ecs_task_definition.explorer[0].arn
-  desired_count   = 2
+  desired_count   = var.explorer_desired_count
   launch_type     = "FARGATE"
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -535,6 +535,22 @@ resource "aws_route53_record" "public" {
   zone_id = var.route53_zone_id
   name    = each.value
   type    = "A"
+  alias {
+    name                   = aws_lb.public[0].dns_name
+    zone_id                = aws_lb.public[0].zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "public_ipv6" {
+  for_each = var.deployment_enabled ? toset([
+    "rpc.testnet.${var.root_domain}",
+    "explorer.testnet.${var.root_domain}",
+    "health.testnet.${var.root_domain}"
+  ]) : toset([])
+  zone_id = var.route53_zone_id
+  name    = each.value
+  type    = "AAAA"
   alias {
     name                   = aws_lb.public[0].dns_name
     zone_id                = aws_lb.public[0].zone_id
