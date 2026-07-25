@@ -205,6 +205,86 @@ class PersistentStatePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(StateStoreError, "digest mismatch"):
             self.store.verify_checkpoint(tampered)
 
+    def test_finalized_checkpoint_restores_and_extends_on_restart(self) -> None:
+        self.admit(self.transaction())
+        first = self.pipeline.execute_candidate()
+        self.pipeline.commit_finalized(first, self.certificate(first))
+        checkpoint = self.store.export_checkpoint()
+
+        restored = PersistentStateStore(
+            Path(self.directory.name, "restored.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            head = restored.restore_checkpoint(checkpoint)
+            self.assertEqual(head.height, 1)
+            self.assertEqual(restored.accounts_at(), self.store.accounts_at())
+            integrity = restored.integrity_check()
+            self.assertEqual(integrity["base_height"], 1)
+            self.assertEqual(integrity["head_height"], 1)
+
+            pipeline = NodeExecutionPipeline(
+                config=self.config,
+                pool=TransactionPool(self.config),
+                store=restored,
+                signature_verifier=self.verify,
+            )
+            proposal = pipeline.execute_candidate()
+            self.assertEqual(proposal.height, 2)
+            machine = FinalityStateMachine(
+                chain_id=CHAIN_ID,
+                validators=self.validators,
+                initial_finalized_height=1,
+            )
+            certificate = None
+            for validator in self.validators:
+                certificate = machine.add_vote(
+                    FinalityVote(
+                        chain_id=CHAIN_ID,
+                        height=proposal.height,
+                        round=0,
+                        block_hash=proposal.block_hash,
+                        validator_id=validator.validator_id,
+                        signature=validator.validator_id.encode(),
+                    ),
+                    verifier=self.verify,
+                )
+            assert certificate is not None
+            committed = pipeline.commit_finalized(proposal, certificate)
+            self.assertEqual(committed.height, 2)
+            self.assertEqual(restored.integrity_check()["head_height"], 2)
+        finally:
+            restored.close()
+
+    def test_checkpoint_restore_fails_closed(self) -> None:
+        checkpoint = self.store.export_checkpoint()
+        with self.assertRaisesRegex(StateStoreError, "empty"):
+            self.store.restore_checkpoint(checkpoint)
+
+        wrong_chain = PersistentStateStore(
+            Path(self.directory.name, "wrong-chain.sqlite"),
+            chain_id=1,
+        )
+        try:
+            with self.assertRaisesRegex(StateStoreError, "chain_id mismatch"):
+                wrong_chain.restore_checkpoint(checkpoint)
+            self.assertEqual(wrong_chain.head_height, -1)
+        finally:
+            wrong_chain.close()
+
+        tampered = dict(checkpoint)
+        tampered["accounts"] = {}
+        empty = PersistentStateStore(
+            Path(self.directory.name, "tampered.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            with self.assertRaisesRegex(StateStoreError, "digest mismatch"):
+                empty.restore_checkpoint(tampered)
+            self.assertEqual(empty.head_height, -1)
+        finally:
+            empty.close()
+
     def test_database_chain_id_rebinding_is_rejected(self) -> None:
         path = Path(self.directory.name, "bound.sqlite")
         first = PersistentStateStore(path, chain_id=CHAIN_ID)

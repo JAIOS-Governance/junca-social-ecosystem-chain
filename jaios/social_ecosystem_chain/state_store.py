@@ -101,6 +101,9 @@ class PersistentStateStore:
                     "[]",
                 ),
             )
+            self.connection.execute(
+                "INSERT OR REPLACE INTO metadata(key,value) VALUES('base_height','0')"
+            )
             self.connection.execute("COMMIT")
         except Exception:
             self.connection.execute("ROLLBACK")
@@ -232,6 +235,64 @@ class PersistentStateStore:
         body["checkpoint_digest"] = _checkpoint_digest(body)
         return body
 
+    def restore_checkpoint(self, checkpoint: Mapping[str, object]) -> StoredBlock:
+        """Restore an empty store from one verified finalized checkpoint.
+
+        Historical blocks are intentionally not reconstructed.  The restored
+        checkpoint becomes the local base height and new finalized blocks may
+        extend it normally.
+        """
+        if self.head_height >= 0:
+            raise StateStoreError("checkpoint restore requires an empty state store")
+        evidence = self.verify_checkpoint(checkpoint)
+        if evidence["chain_id"] != self.chain_id:
+            raise StateStoreError("checkpoint chain_id mismatch")
+        height = int(checkpoint["height"])
+        if height == 0:
+            expected_parent = "0x" + ("0" * 64)
+            if checkpoint["parent_hash"] != expected_parent:
+                raise StateStoreError("genesis checkpoint parent_hash is invalid")
+        accounts = {
+            address: AccountState(balance=value["balance"], nonce=value["nonce"])
+            for address, value in checkpoint["accounts"].items()
+        }
+        normalized = _normalize_accounts(accounts)
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            locked = self.connection.execute(
+                "SELECT COUNT(*) AS count FROM blocks"
+            ).fetchone()
+            if locked is None or locked["count"] != 0:
+                raise StateStoreError("state store changed during checkpoint restore")
+            self.connection.execute(
+                """
+                INSERT INTO blocks(
+                  height,block_hash,parent_hash,state_root,base_fee_per_gas,
+                  gas_used,finalized,certificate_hash,accounts_json,receipts_json
+                ) VALUES(?,?,?,?,?,?,1,?,?,?)
+                """,
+                (
+                    height,
+                    checkpoint["block_hash"],
+                    checkpoint["parent_hash"],
+                    checkpoint["state_root"],
+                    checkpoint["base_fee_per_gas"],
+                    checkpoint["gas_used"],
+                    checkpoint["certificate_hash"],
+                    _accounts_json(normalized),
+                    "[]",
+                ),
+            )
+            self.connection.execute(
+                "INSERT OR REPLACE INTO metadata(key,value) VALUES('base_height',?)",
+                (str(height),),
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.head()
+
     @staticmethod
     def verify_checkpoint(checkpoint: Mapping[str, object]) -> dict[str, object]:
         required = {
@@ -256,6 +317,22 @@ class PersistentStateStore:
         body = {key: value for key, value in checkpoint.items() if key != "checkpoint_digest"}
         if supplied_digest != _checkpoint_digest(body):
             raise StateStoreError("checkpoint digest mismatch")
+        chain_id = checkpoint["chain_id"]
+        height = checkpoint["height"]
+        base_fee = checkpoint["base_fee_per_gas"]
+        gas_used = checkpoint["gas_used"]
+        if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
+            raise StateStoreError("checkpoint chain_id is invalid")
+        if isinstance(height, bool) or not isinstance(height, int) or height < 0:
+            raise StateStoreError("checkpoint height is invalid")
+        if (
+            isinstance(base_fee, bool)
+            or not isinstance(base_fee, int)
+            or base_fee <= 0
+        ):
+            raise StateStoreError("checkpoint base_fee_per_gas is invalid")
+        if isinstance(gas_used, bool) or not isinstance(gas_used, int) or gas_used < 0:
+            raise StateStoreError("checkpoint gas_used is invalid")
         raw_accounts = checkpoint["accounts"]
         if not isinstance(raw_accounts, dict):
             raise StateStoreError("checkpoint accounts are invalid")
@@ -271,10 +348,13 @@ class PersistentStateStore:
             raise StateStoreError("checkpoint state_root integrity failure")
         _hash(checkpoint["block_hash"], "checkpoint block_hash")
         _hash(checkpoint["parent_hash"], "checkpoint parent_hash")
-        if checkpoint["height"] > 0 and (
+        certificate_hash = checkpoint["certificate_hash"]
+        if height > 0 and (
             checkpoint["finalized"] is not True or not checkpoint["certificate_hash"]
         ):
             raise StateStoreError("checkpoint lacks finality evidence")
+        if certificate_hash is not None:
+            _hash(certificate_hash, "checkpoint certificate_hash")
         return {
             "schema_version": "junca-state-checkpoint-verification/v1",
             "chain_id": checkpoint["chain_id"],
@@ -290,8 +370,11 @@ class PersistentStateStore:
         rows = self.connection.execute("SELECT * FROM blocks ORDER BY height").fetchall()
         if not rows:
             raise StateStoreError("state store is not initialized")
-        previous_hash = "0x" + ("0" * 64)
-        for expected_height, row in enumerate(rows):
+        base_height = int(rows[0]["height"])
+        previous_hash = rows[0]["parent_hash"]
+        _hash(previous_hash, "base parent_hash")
+        for offset, row in enumerate(rows):
+            expected_height = base_height + offset
             if row["height"] != expected_height:
                 raise StateStoreError("block heights are not contiguous")
             if row["parent_hash"] != previous_hash:
@@ -310,6 +393,7 @@ class PersistentStateStore:
         return {
             "schema_version": "junca-persistent-state-integrity/v1",
             "chain_id": self.chain_id,
+            "base_height": base_height,
             "head_height": rows[-1]["height"],
             "head_hash": rows[-1]["block_hash"],
             "state_root": rows[-1]["state_root"],
