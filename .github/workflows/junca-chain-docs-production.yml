@@ -77,7 +77,7 @@ jobs:
             https://sts.us-east-1.amazonaws.com/
       - name: Require configured publication role
         env:
-          AWS_DOCS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+          AWS_DOCS_DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
         run: |
           test -n "$AWS_DOCS_DEPLOYMENT_ROLE_ARN"
           case "$AWS_DOCS_DEPLOYMENT_ROLE_ARN" in
@@ -87,13 +87,13 @@ jobs:
       - name: Configure publication-only AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
           aws-region: us-east-1
           role-session-name: junca-chain-docs-${{ github.run_id }}
       - name: Read back AWS identity and resources
         id: resources
         env:
-          AWS_DOCS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DOCS_DEPLOYMENT_ROLE_ARN }}
+          AWS_DOCS_DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
         shell: bash
         run: |
           set -euo pipefail
