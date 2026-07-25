@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 const origin = "https://docs.jaios-governance.org";
-const release = "2026.07";
+const release = "2026.07.25";
+const chainSource = "effe17badf6628b6ad5160062ca583501fe72b31";
 
 const routes = [
   {
@@ -28,7 +29,7 @@ const routes = [
           <div><dt>Official chain</dt><dd>JUNCA Social Ecosystem Chain</dd></div>
           <div><dt>Governance</dt><dd>JAIOS Institutional Governance</dd></div>
           <div><dt>Network label</dt><dd>Public Testnet / No Monetary Value</dd></div>
-          <div><dt>Publication</dt><dd>Architecture and operating model</dd></div>
+          <div><dt>Source reference</dt><dd><code>${chainSource.slice(0, 12)}</code> · verified implementation</dd></div>
         </dl>
       </section>
       <section aria-labelledby="reference-map">
@@ -54,8 +55,8 @@ const routes = [
         <p class="section-label">Publication boundary / 公開境界</p>
         <h2 id="boundary-title">Architecture is documented. Runtime claims remain evidence-gated.</h2>
         <div class="boundary-columns">
-          <div><h3>Defined</h3><p>Target architecture, control model, implementation requirements and release evidence.</p></div>
-          <div><h3>Not implied</h3><p>Mainnet launch, monetary value, activated bridges, deployed external routes or asset movement.</p></div>
+          <div><h3>Implemented in source</h3><p>Authenticated validator sessions, finalized fork choice, certified block-range synchronization, snapshot integrity and faulty-peer quarantine.</p></div>
+          <div><h3>Not implied</h3><p>Public validator runtime acceptance, mainnet launch, monetary value, activated bridges, deployed external routes or asset movement.</p></div>
         </div>
       </section>`
   },
@@ -64,23 +65,27 @@ const routes = [
     title: "Protocol Architecture",
     ja: "プロトコル・アーキテクチャ",
     eyebrow: "Layer 01 · protocol",
-    summary: "The protocol is defined as an evidence-gated public testnet architecture with explicit separation between target design, configuration and verified runtime state.",
-    summaryJa: "対象設計、設定値、検証済み実行状態を分離し、証跡ゲート型Public Testnetとしてプロトコルを定義します。",
+    summary: "The current source implements authenticated validator synchronization and certificate-bound finality while keeping public runtime claims behind an exact-environment acceptance gate.",
+    summaryJa: "現行Sourceは認証済みValidator同期とCertificateに拘束されたFinalityを実装し、公開Runtimeの表明は同一環境の受入ゲート後に限定します。",
     body: `
-      ${diagram("Protocol control plane", [
-        ["Application boundary", "DApp and partner integrations"],
-        ["Execution boundary", "Transactions and contract execution"],
-        ["Consensus boundary", "Candidate validator topology"],
-        ["Evidence boundary", "Health, release and rollback records"]
+      ${diagram("Validator synchronization trust path", [
+        ["Authenticate", "Signed peer session and exact chain identity"],
+        ["Observe", "Finalized status with monotonic sequence"],
+        ["Certify", "Epoch-bound validator votes and strict quorum"],
+        ["Synchronize", "Certified block range or verified snapshot"],
+        ["Contain", "Protocol faults and peer quarantine"]
       ])}
       ${table("Protocol state model", ["Domain", "Defined architecture", "Publication state"], [
         ["Network", "Public testnet architecture", status("Evidence gated")],
-        ["Consensus", "PoSV candidate model", status("Runtime verification required")],
+        ["Validator sync", "Authenticated peer sessions and exact schemas", status("Implemented · source verified")],
+        ["Finality", "Certificate reconstruction, quorum and epoch-bound validator sets", status("Implemented · source verified")],
+        ["Catch-up", "Finality-anchored block ranges and snapshot integrity", status("Implemented · source verified")],
+        ["Fault isolation", "Replay rejection, protocol-fault accounting and quarantine", status("Implemented · source verified")],
         ["Chain identity", "Canonical identity registry", status("Public registration pending")],
         ["RPC / Explorer", "Interface and acceptance requirements", status("Endpoint deployment pending")],
         ["Mainnet", "Separate future release domain", status("Not launched")]
       ])}
-      ${callout("Design principle", "Configuration is not operational evidence. A value becomes a public runtime claim only after exact-environment readback.", "設定値は稼働証跡ではありません。公開上の稼働状態は同一環境のReadback完了後にのみ確定します。")}`
+      ${callout("Current source boundary", `Implementation status is bound to source ${chainSource}. Public validator operation remains unverified until endpoint, advancing-head and multi-node acceptance evidence are read back.`, "実装状況は現行Sourceへ固定されています。公開Validator稼働は、Endpoint、Advancing Head、Multi-node受入証跡のReadback完了まで未検証です。")}`
   },
   {
     path: "/assets",
@@ -193,8 +198,9 @@ const routes = [
         ["Readback", "DNS, TLS and rendered QA"]
       ])}
       ${table("Acceptance register", ["Gate", "Pass condition", "State before evidence"], [
-        ["Source", "Exact commit exists on main", status("Unverified")],
-        ["Quality", "Build, lint, metadata, font and rendered tests pass", status("Unverified")],
+        ["Source", `Exact chain source ${chainSource.slice(0, 12)} exists on main`, status("Verified")],
+        ["Chain implementation", "Authenticated sync and certified finality tests pass", status("Verified in source")],
+        ["Publication quality", "Build, metadata, font and rendered-route tests pass", status("Verified before deployment")],
         ["Infrastructure", "Caller identity, OIDC role and resource IDs read back", status("Unverified")],
         ["Delivery", "Artifact matches S3 and invalidation is completed", status("Unverified")],
         ["Public endpoint", "DNS, TLS, eight routes and responsive QA pass", status("Unverified")]
@@ -347,6 +353,7 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   canonical_origin: origin,
   network_label: "Public Testnet / No Monetary Value",
   governance: "JAIOS Institutional Governance",
+  chain_source_commit: chainSource,
   routes: routes.map(({ path }) => path),
   files: manifestFiles
 }, null, 2)}\n`, "utf8");
