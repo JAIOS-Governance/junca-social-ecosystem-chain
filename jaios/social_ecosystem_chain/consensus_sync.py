@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 
 class ConsensusSyncError(ValueError):
@@ -53,6 +53,7 @@ class FinalizedForkChoice:
         genesis_hash: str,
         expected_total_power: int,
         quarantine_threshold: int = 3,
+        power_resolver: Callable[[int], int] | None = None,
     ) -> None:
         if chain_id <= 0 or expected_total_power <= 0 or quarantine_threshold <= 0:
             raise ConsensusSyncError("fork-choice policy values must be positive")
@@ -60,6 +61,7 @@ class FinalizedForkChoice:
         self.chain_id = chain_id
         self.genesis_hash = genesis_hash.lower()
         self.expected_total_power = expected_total_power
+        self._power_resolver = power_resolver or (lambda _: expected_total_power)
         self.quarantine_threshold = quarantine_threshold
         self._claims: dict[str, FinalizedClaim] = {}
         self._canonical: dict[int, FinalizedClaim] = {}
@@ -85,7 +87,14 @@ class FinalizedForkChoice:
             return self._fault(claim.peer_id, "claim chain_id mismatch")
         if claim.genesis_hash.lower() != self.genesis_hash:
             return self._fault(claim.peer_id, "claim genesis mismatch")
-        if claim.total_power != self.expected_total_power:
+        expected_power = self._power_resolver(claim.height)
+        if (
+            isinstance(expected_power, bool)
+            or not isinstance(expected_power, int)
+            or expected_power <= 0
+        ):
+            raise ConsensusSyncError("validator power resolver returned an invalid value")
+        if claim.total_power != expected_power:
             return self._fault(claim.peer_id, "claim validator power mismatch")
         if self.discipline(claim.peer_id).quarantined:
             raise ConsensusSyncError("peer is quarantined")
