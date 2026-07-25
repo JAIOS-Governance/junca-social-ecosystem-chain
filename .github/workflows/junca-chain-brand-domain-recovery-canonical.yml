@@ -153,7 +153,6 @@ jobs:
             echo "- Explorer record created: false"
           } >> "$GITHUB_STEP_SUMMARY"
 
-
   restore-canonical-oidc-subject:
     if: always()
     needs: [set-default-oidc-subject, recover-chain-domain]
@@ -183,3 +182,5 @@ jobs:
             --header "X-GitHub-Api-Version: 2026-03-10" \
             "$endpoint")"
           STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False, s'
+
+# CEO-approved final Route 53 cutover trigger: 2026-07-26
