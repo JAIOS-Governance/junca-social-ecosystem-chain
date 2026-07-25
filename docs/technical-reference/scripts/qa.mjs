@@ -41,7 +41,7 @@ for (const required of [
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.26 / R17",
+  "Revision · 2026.07.26 / R18",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -99,6 +99,11 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 await readFile(join(dist, "release-manifest.json"), "utf8");
+await readFile(join(dist, "manifest.webmanifest"), "utf8");
+await readFile(join(dist, "icon-192.png"));
+await readFile(join(dist, "icon-512.png"));
+await readFile(join(dist, "icon-maskable-512.png"));
+await readFile(join(dist, "apple-touch-icon.png"));
 const infrastructure = await readFile(join(repositoryRoot, "infra", "aws", "docs-publication", "main.yaml"), "utf8");
 const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "junca-chain-docs-production.yml"), "utf8");
 for (const required of [

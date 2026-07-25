@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="4" fill="#0b2a4b"/>
-  <path d="M18 15v25c0 7 5 11 13 11 9 0 15-5 15-15V15h-8v21c0 5-2 7-6 7s-6-2-6-7V15z" fill="#f4f1e9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="JUNCA Social Ecosystem Chain technical reference mark">
+  <rect width="512" height="512" rx="116" fill="#0B2A4B"/>
+  <rect x="18" y="18" width="476" height="476" rx="100" fill="none" stroke="#D5C49E" stroke-width="8"/>
+  <path d="M322 96h78v244c0 102-57 156-157 156-83 0-139-43-151-119l78-20c8 43 32 65 70 65 55 0 82-28 82-86V96Z" fill="#D5C49E"/>
 </svg>
