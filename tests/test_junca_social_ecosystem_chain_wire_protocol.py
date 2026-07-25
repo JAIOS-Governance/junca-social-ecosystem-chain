@@ -92,6 +92,45 @@ class WireProtocolTests(unittest.TestCase):
                 local=self.a, remote=duplicate, signer=signer(KEY_A), verifier=verifier
             )
 
+    def test_self_connection_and_non_integer_identity_are_rejected(self) -> None:
+        same_identity = Handshake(
+            self.a.node_id,
+            CHAIN_ID,
+            GENESIS,
+            "0x" + ("c" * 64),
+        )
+        with self.assertRaisesRegex(WireProtocolError, "node_id must be distinct"):
+            AuthenticatedPeerSession(
+                local=self.a,
+                remote=same_identity,
+                signer=signer(KEY_A),
+                verifier=verifier,
+            )
+        with self.assertRaisesRegex(WireProtocolError, "protocol identity"):
+            Handshake("node-c", True, GENESIS, "0x" + ("c" * 64))
+        with self.assertRaisesRegex(WireProtocolError, "protocol identity"):
+            Handshake(
+                "node-c",
+                CHAIN_ID,
+                GENESIS,
+                "0x" + ("c" * 64),
+                protocol_version=True,
+            )
+
+    def test_handshake_rejects_control_characters_and_noncanonical_hashes(self) -> None:
+        with self.assertRaisesRegex(WireProtocolError, "node_id"):
+            Handshake(" node-c", CHAIN_ID, GENESIS, "0x" + ("c" * 64))
+        with self.assertRaisesRegex(WireProtocolError, "lowercase"):
+            Handshake("node-c", CHAIN_ID, "0x" + ("AB" * 32), "0x" + ("c" * 64))
+        with self.assertRaisesRegex(WireProtocolError, "capabilities"):
+            Handshake(
+                "node-c",
+                CHAIN_ID,
+                GENESIS,
+                "0x" + ("c" * 64),
+                capabilities=("BLOCK RANGE",),
+            )
+
     def test_noncanonical_and_length_mismatch_frames_are_rejected(self) -> None:
         noncanonical = b'{"z":1, "a":2}'
         with self.assertRaisesRegex(WireProtocolError, "canonical"):
@@ -152,6 +191,20 @@ class WireProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(WireProtocolError, "non-contiguous"):
             validate_block_range([block], requested_start=1)
 
+    def test_block_range_rejects_boolean_start_and_noncanonical_hash(self) -> None:
+        block = {
+            "height": 1,
+            "block_hash": "0x" + ("AB" * 32),
+            "parent_hash": GENESIS,
+            "state_root": "0x" + ("3" * 64),
+            "certificate_hash": "0x" + ("4" * 64),
+        }
+        with self.assertRaisesRegex(WireProtocolError, "lowercase"):
+            validate_block_range([block], requested_start=1)
+        block["block_hash"] = "0x" + ("2" * 64)
+        with self.assertRaisesRegex(WireProtocolError, "size"):
+            validate_block_range([block], requested_start=True)
+
     def test_snapshot_chunks_are_verified(self) -> None:
         chunks = [b"accounts-a", b"accounts-b"]
         hashes = tuple("0x" + hashlib.sha256(chunk).hexdigest() for chunk in chunks)
@@ -166,6 +219,8 @@ class WireProtocolTests(unittest.TestCase):
         self.assertEqual(manifest.verify_chunks(chunks), "VERIFIED")
         with self.assertRaisesRegex(WireProtocolError, "digest"):
             manifest.verify_chunks([b"tampered", chunks[1]])
+        with self.assertRaisesRegex(WireProtocolError, "encoding"):
+            manifest.verify_chunks(["accounts-a", chunks[1]])
 
     def test_handshake_capabilities_must_be_canonical(self) -> None:
         with self.assertRaisesRegex(WireProtocolError, "canonically"):
@@ -177,9 +232,52 @@ class WireProtocolTests(unittest.TestCase):
                 capabilities=("SNAPSHOT_V1", "BLOCK_RANGE_V1"),
             )
 
+    def test_wire_boundary_validates_every_message_schema(self) -> None:
+        with self.assertRaisesRegex(WireProtocolError, "STATUS payload fields"):
+            self.session_a.send(MessageType.STATUS, {"height": 1})
+        with self.assertRaisesRegex(WireProtocolError, "GET_SNAPSHOT height"):
+            self.session_a.send(MessageType.GET_SNAPSHOT, {"height": True})
+        with self.assertRaisesRegex(WireProtocolError, "SNAPSHOT_MANIFEST"):
+            self.session_a.send(
+                MessageType.SNAPSHOT_MANIFEST,
+                {
+                    "chain_id": CHAIN_ID,
+                    "height": 1,
+                    "block_hash": "0x" + ("2" * 64),
+                    "state_root": "0x" + ("3" * 64),
+                    "checkpoint_digest": "0x" + ("4" * 64),
+                    "chunk_hashes": "not-a-list",
+                },
+            )
+        with self.assertRaisesRegex(WireProtocolError, "HELLO payload fields"):
+            payload = self.a.payload()
+            payload["unexpected"] = True
+            self.session_a.send(MessageType.HELLO, payload)
+
+    def test_signature_encoding_and_size_are_bounded(self) -> None:
+        oversized = AuthenticatedPeerSession(
+            local=self.a,
+            remote=self.b,
+            signer=lambda _: b"x" * 513,
+            verifier=verifier,
+        )
+        with self.assertRaisesRegex(WireProtocolError, "invalid signature"):
+            oversized.send(MessageType.PING, {"nonce": "0x" + ("2" * 64)})
+
+        frame = encode_frame(
+            {
+                "message_type": "PING",
+                "sequence": 0,
+                "payload": {"nonce": "0x" + ("2" * 64)},
+                "signature": "AA",
+            }
+        )
+        with self.assertRaisesRegex(WireProtocolError, "encoding"):
+            self.session_b.receive(frame)
+
     def test_nan_payload_is_rejected(self) -> None:
         with self.assertRaisesRegex(WireProtocolError, "serializable"):
-            self.session_a.send(MessageType.STATUS, {"height": float("nan")})
+            encode_frame({"value": float("nan")})
 
 
 if __name__ == "__main__":
