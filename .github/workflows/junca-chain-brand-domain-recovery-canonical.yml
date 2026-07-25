@@ -12,12 +12,11 @@ permissions:
 
 concurrency:
   group: junca-chain-brand-domain-recovery-canonical
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   recover-chain-domain:
     runs-on: ubuntu-latest
-    environment: public-testnet
     timeout-minutes: 15
     env:
       AWS_REGION: us-east-1
