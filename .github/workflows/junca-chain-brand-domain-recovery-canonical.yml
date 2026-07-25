@@ -46,6 +46,9 @@ jobs:
   recover-chain-domain:
     needs: set-default-oidc-subject
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     environment: public-testnet
     timeout-minutes: 15
     env:
