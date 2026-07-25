@@ -88,10 +88,46 @@ class FinalityStateMachineTests(unittest.TestCase):
             self.add(vote("validator-4", BLOCK_B))
 
     def test_finality_height_must_be_contiguous(self) -> None:
-        for validator in ("validator-1", "validator-2"):
-            self.add(vote(validator, height=2))
         with self.assertRaisesRegex(FinalityError, "contiguous"):
-            self.add(vote("validator-3", height=2))
+            self.add(vote("validator-1", height=2))
+
+    def test_future_height_rejection_does_not_poison_later_finality(self) -> None:
+        with self.assertRaisesRegex(FinalityError, "contiguous"):
+            self.add(vote("validator-1", height=1))
+        for validator in ("validator-1", "validator-2", "validator-3"):
+            certificate = self.add(vote(validator, height=0))
+        self.assertIsNotNone(certificate)
+        for validator in ("validator-1", "validator-2", "validator-3"):
+            certificate = self.add(vote(validator, height=1))
+        self.assertIsNotNone(certificate)
+        self.assertEqual(self.machine.latest_finalized_height, 1)
+
+    def test_same_block_vote_after_finality_returns_canonical_certificate(self) -> None:
+        certificate = None
+        for validator in ("validator-1", "validator-2", "validator-3"):
+            certificate = self.add(vote(validator))
+        assert certificate is not None
+        replay = self.add(vote("validator-4", round=99))
+        self.assertEqual(replay, certificate)
+
+    def test_signature_boundary_is_strict_and_verifier_exceptions_fail_closed(self) -> None:
+        invalid_type = FinalityVote(
+            chain_id=CHAIN_ID,
+            height=0,
+            round=0,
+            block_hash=BLOCK_A,
+            validator_id="validator-1",
+            signature="not-bytes",  # type: ignore[arg-type]
+        )
+        with self.assertRaisesRegex(FinalityError, "1 to 4096 bytes"):
+            self.add(invalid_type)
+        with self.assertRaisesRegex(FinalityError, "verification failed"):
+            self.machine.add_vote(
+                vote("validator-1"),
+                verifier=lambda _: (_ for _ in ()).throw(RuntimeError("signer unavailable")),
+            )
+        with self.assertRaisesRegex(FinalityError, "verification failed"):
+            self.machine.add_vote(vote("validator-1"), verifier=lambda _: 1)
 
     def test_weighted_power_requires_actual_quorum(self) -> None:
         validators = (
