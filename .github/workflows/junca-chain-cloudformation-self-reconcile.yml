@@ -1,0 +1,82 @@
+name: JUNCA Chain CloudFormation Self Reconcile
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/recovery-triggers/chain-cloudformation-self-reconcile.txt
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      STACK_NAME: junca-chain-docs-publication
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure production role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-cfn-reconcile-${{ github.run_id }}
+          disable-retry: true
+      - name: Read back and reconcile canonical stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" > /tmp/stack-before.json
+          mapfile -t PARAMS < <(jq -r '.Stacks[0].Parameters[] | "ParameterKey=\(.ParameterKey),UsePreviousValue=true"' /tmp/stack-before.json)
+          aws cloudformation update-stack \
+            --stack-name "$STACK_NAME" \
+            --template-body file://infra/aws/docs-publication/main.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameters "${PARAMS[@]}" \
+            --region "$AWS_REGION" > /tmp/update.json 2>/tmp/update.err || {
+              if grep -q 'No updates are to be performed' /tmp/update.err; then
+                echo 'No stack changes required.'
+              else
+                cat /tmp/update.err
+                exit 1
+              fi
+            }
+          if [ -s /tmp/update.json ]; then
+            aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          fi
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" > /tmp/stack-after.json
+          aws iam list-role-policies --role-name JuncaChainDocsProductionDeployment > /tmp/inline-policies.json
+          aws iam list-attached-role-policies --role-name JuncaChainDocsProductionDeployment > /tmp/attached-policies.json
+          {
+            echo '# JUNCA Chain CloudFormation Self Reconcile'
+            echo
+            echo "Run ID: $GITHUB_RUN_ID"
+            echo "Commit: $GITHUB_SHA"
+            echo "Stack status: $(jq -r '.Stacks[0].StackStatus' /tmp/stack-after.json)"
+            echo 'Inline policies:'
+            jq -r '.PolicyNames[]?' /tmp/inline-policies.json | sed 's/^/- /'
+            echo 'Attached policies:'
+            jq -r '.AttachedPolicies[]? | "- \(.PolicyName)"' /tmp/attached-policies.json
+          } > evidence/production/chain-cloudformation-self-reconcile-latest.md
+      - name: Commit evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name juncaGlobal
+          git config user.email 298956223+juncaGlobal@users.noreply.github.com
+          git add evidence/production/chain-cloudformation-self-reconcile-latest.md || true
+          git diff --cached --quiet || git commit -m 'Record chain CloudFormation self reconcile result'
+          git push
