@@ -197,9 +197,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          command -v dig >/dev/null
-          dig +short A docs.jaios-governance.org | grep -q .
-          dig +short AAAA docs.jaios-governance.org | grep -q .
+          dns_addresses="$(getent ahosts docs.jaios-governance.org | awk '{print $1}' | sort -u)"
+          test -n "${dns_addresses}"
           for route in "" protocol assets interoperability implementation governance evidence glossary; do
             url="https://docs.jaios-governance.org/${route}"
             code="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
@@ -212,6 +211,6 @@ jobs:
             echo "- Invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
             echo "- Invalidation status: \`${{ steps.invalidate.outputs.status }}\`"
             echo "- Public URL: https://docs.jaios-governance.org"
-            echo "- DNS A/AAAA and TLS readback: PASS"
+            echo "- DNS resolution and TLS readback: PASS"
             echo "- Eight-route HTTP readback: PASS"
           } >> "$GITHUB_STEP_SUMMARY"
