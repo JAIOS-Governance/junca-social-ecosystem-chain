@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.25";
-const chainSource = "effe17badf6628b6ad5160062ca583501fe72b31";
+const revision = "R16";
+const chainSource = "adcc02f0866b383aa586bfd26755b9c7687bdb68";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 
 await rm(dist, { recursive: true, force: true });
@@ -31,31 +32,28 @@ async function register(path) {
 for (const route of routes) {
   await register(route === "/" ? "index.html" : `${route.slice(1)}/index.html`);
 }
-for (const path of [
-  "404.html",
-  "robots.txt",
-  "sitemap.xml",
-  "favicon.svg",
-  "assets/framework-CXnKph_e.js",
-  "assets/index-1XiXncph.css",
-  "assets/index-CQAqIo7E.js",
-  "assets/layout-segment-context-DBXXpv6J.js",
-  "assets/reference-CAhzOOHN.js",
-  "assets/rolldown-runtime-S-ySWqyJ.js",
-]) {
-  await register(path);
+async function registerTree(directory, prefix = "") {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const relative = join(prefix, entry.name);
+    if (entry.isDirectory()) await registerTree(join(directory, entry.name), relative);
+    else if (!files.some((file) => file.path === relative)) await register(relative);
+  }
 }
+await registerTree(dist);
 
 await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   schema: "junca-chain-docs-release/v2",
   release,
+  revision,
   design_source: "Sites Version 15",
   chain_source_commit: chainSource,
   canonical_origin: "https://docs.jaios-governance.org",
-  network_label: "Public Testnet / No Monetary Value",
+  network_label: "Public Testnet / Runtime Deployment in Progress / No Monetary Value",
+  runtime_status: "UNVERIFIED",
+  public_endpoint_status: "PENDING",
   governance: "JAIOS Institutional Governance",
   routes,
   files,
 }, null, 2)}\n`, "utf8");
 
-console.log(`Built ${routes.length} canonical routes from the approved Version 15 design snapshot`);
+console.log(`Built ${routes.length} canonical routes from the approved Version 15 design system, revision ${revision}`);

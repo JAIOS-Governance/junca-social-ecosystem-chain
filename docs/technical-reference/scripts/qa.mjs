@@ -23,7 +23,8 @@ for (const route of routes) {
   for (const required of [
     "JUNCA Social Ecosystem Chain",
     "JAIOS Institutional Governance",
-    "Public Testnet"
+    "Public Testnet",
+    "Runtime Deployment in Progress"
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
   }
@@ -33,7 +34,17 @@ for (const route of routes) {
 }
 const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
-if (home.includes('name="codex-preview"')) failures.push("/: development preview metadata remains");
+if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
+for (const required of [
+  "Chain Core",
+  "Implemented / CI Verified",
+  "AWS Runtime",
+  "Pending Live Acceptance",
+  "Assets Moved",
+  "Revision · 2026.07.25 / R16",
+]) {
+  if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
+}
 const cssName = (await readdir(join(dist, "assets"))).find((name) => /^index-.*\.css$/.test(name));
 if (!cssName) failures.push("approved design stylesheet missing");
 const css = cssName ? await readFile(join(dist, "assets", cssName), "utf8") : "";
@@ -41,6 +52,45 @@ for (const font of ["Cormorant Garamond", "Source Serif 4", "Inter", "Shuei Minc
   if (!css.includes(font)) failures.push(`font stack missing ${font}`);
 }
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
+for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
+  if (!css.includes(required)) failures.push(`approved design stylesheet missing ${required}`);
+}
+const protocol = await readFile(join(dist, "protocol", "index.html"), "utf8");
+for (const required of [
+  "Certified Finality and Validator Epoch Safety",
+  "strict greater-than-two-thirds voting power",
+  "Old-epoch validator proofs are rejected",
+  "283 / 283 automated tests passed",
+]) {
+  if (!protocol.includes(required)) failures.push(`/protocol: missing ${required}`);
+}
+const implementation = await readFile(join(dist, "implementation", "index.html"), "utf8");
+for (const required of [
+  "Public Testnet Network Configuration",
+  "Pending Runtime Binding",
+  "Getting Started",
+  "Smart Contract Deployment",
+  "Token Standard",
+  "NFT Standard",
+  "Partner Release Checklist",
+]) {
+  if (!implementation.includes(required)) failures.push(`/implementation: missing ${required}`);
+}
+const evidence = await readFile(join(dist, "evidence", "index.html"), "utf8");
+for (const required of [
+  "Documentation Publication Evidence",
+  "Network Runtime Evidence",
+  "adcc02f0866b",
+  "/pull/33",
+  "/pull/34",
+  "30141307993",
+  "30141307995",
+  "30141307990",
+]) {
+  if (!evidence.includes(required)) failures.push(`/evidence: missing ${required}`);
+}
+const og = await readFile(join(dist, "og-reference.png"));
+if (og.length < 10000) failures.push("1200x630 PNG social preview is missing or invalid");
 const sitemap = await readFile(join(dist, "sitemap.xml"), "utf8");
 for (const route of routes) {
   const url = `${origin}${route === "/" ? "/" : route}`;
