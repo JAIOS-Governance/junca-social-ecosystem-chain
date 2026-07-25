@@ -15,24 +15,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  set-canonical-oidc:
+  set-standard-oidc:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: write
       contents: read
     steps:
-      - name: Set canonical GitHub OIDC subject
+      - name: Set AWS-compatible standard GitHub OIDC subject
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location --request PUT --header "Accept: application/vnd.github+json" --header "Authorization: Bearer $GH_TOKEN" --header "X-GitHub-Api-Version: 2026-03-10" "$endpoint" --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
+          curl --silent --show-error --fail-with-body --location --request PUT --header "Accept: application/vnd.github+json" --header "Authorization: Bearer $GH_TOKEN" --header "X-GitHub-Api-Version: 2026-03-10" "$endpoint" --data '{"use_default":true}'
 
   publish-member-domain:
-    needs: set-canonical-oidc
+    needs: set-standard-oidc
     runs-on: ubuntu-latest
     environment: public-testnet
     timeout-minutes: 20
@@ -127,3 +127,21 @@ jobs:
             echo "- DNS Readback: PASS"
             echo "- Existing Sites project and restricted access preserved"
           } >>"$GITHUB_STEP_SUMMARY"
+
+  restore-canonical-oidc:
+    if: always()
+    needs: [set-standard-oidc, publish-member-domain]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Restore canonical repository context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          curl --silent --show-error --fail-with-body --location --request PUT --header "Accept: application/vnd.github+json" --header "Authorization: Bearer $GH_TOKEN" --header "X-GitHub-Api-Version: 2026-03-10" "$endpoint" --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
