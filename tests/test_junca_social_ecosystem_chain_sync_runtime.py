@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import unittest
 
 from jaios.social_ecosystem_chain.consensus_sync import build_snapshot_descriptor
+from jaios.social_ecosystem_chain.finality import FinalityVote, Validator
+from jaios.social_ecosystem_chain.sync_finality import (
+    CertifiedFinalityVerifier,
+    FinalityProof,
+    ValidatorSet,
+    ValidatorSetSchedule,
+    proof_to_payload,
+)
 from jaios.social_ecosystem_chain.sync_runtime import (
     SyncRuntimeError,
     ValidatorSyncRuntime,
@@ -63,22 +72,79 @@ def status_payload(height: int = 10):
     }
 
 
+VALIDATOR_SET = ValidatorSet(
+    0,
+    0,
+    (
+        Validator("v1", 3),
+        Validator("v2", 3),
+        Validator("v3", 2),
+        Validator("v4", 2),
+    ),
+)
+
+
+def finality_proof(height: int) -> FinalityProof:
+    block_hash = hx(f"block-{height}")
+    votes = tuple(
+        FinalityVote(
+            chain_id=22012024,
+            height=height,
+            round=0,
+            block_hash=block_hash,
+            validator_id=validator,
+            signature=f"{validator}:{height}".encode(),
+        )
+        for validator in ("v1", "v2", "v3")
+    )
+    body = {
+        "block_hash": block_hash,
+        "chain_id": 22012024,
+        "height": height,
+        "round": 0,
+        "signed_power": 8,
+        "total_power": 10,
+        "validator_ids": ["v1", "v2", "v3"],
+        "vote_hashes": [item.vote_hash for item in votes],
+    }
+    certificate_hash = "0x" + hashlib.sha256(
+        b"JUNCA_FINALITY_CERTIFICATE_V1\x00"
+        + json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return FinalityProof(
+        chain_id=22012024,
+        height=height,
+        round=0,
+        block_hash=block_hash,
+        validator_set_hash=VALIDATOR_SET.set_hash,
+        votes=votes,
+        certificate_hash=certificate_hash,
+    )
+
+
 def block(height: int):
+    proof = finality_proof(height)
     return {
         "height": height,
         "block_hash": hx(f"block-{height}"),
         "parent_hash": hx(f"block-{height - 1}"),
         "state_root": hx(f"state-{height}"),
-        "certificate_hash": hx(f"cert-{height}"),
+        "certificate_hash": proof.certificate_hash,
     }
 
 
 class SyncRuntimeTests(unittest.TestCase):
     def runtime(self, threshold: int = 2048):
+        finality_verifier = CertifiedFinalityVerifier(
+            chain_id=22012024,
+            schedule=ValidatorSetSchedule(VALIDATOR_SET),
+            vote_verifier=lambda item: bool(item.signature),
+        )
         runtime = ValidatorSyncRuntime(
             chain_id=22012024,
             genesis_hash=hx("genesis"),
             expected_total_power=10,
+            finality_verifier=finality_verifier,
             snapshot_threshold=threshold,
         )
         inbound, outbound = sessions()
@@ -133,7 +199,13 @@ class SyncRuntimeTests(unittest.TestCase):
         self.assertEqual(plan.mode, "BLOCK_RANGE")
         frame = outbound.send(
             MessageType.BLOCK_RANGE,
-            {"blocks": [block(9), block(10)]},
+            {
+                "blocks": [block(9), block(10)],
+                "finality_proofs": [
+                    proof_to_payload(finality_proof(9)),
+                    proof_to_payload(finality_proof(10)),
+                ],
+            },
         )
         result = runtime.receive_block_range(
             peer_id="peer-a",
@@ -149,7 +221,13 @@ class SyncRuntimeTests(unittest.TestCase):
         runtime.plan(peer_id="peer-a", local_height=8, target_height=10)
         frame = outbound.send(
             MessageType.BLOCK_RANGE,
-            {"blocks": [block(9), block(10)]},
+            {
+                "blocks": [block(9), block(10)],
+                "finality_proofs": [
+                    proof_to_payload(finality_proof(9)),
+                    proof_to_payload(finality_proof(10)),
+                ],
+            },
         )
         with self.assertRaisesRegex(SyncRuntimeError, "anchored"):
             runtime.receive_block_range(
@@ -164,7 +242,13 @@ class SyncRuntimeTests(unittest.TestCase):
         runtime.plan(peer_id="peer-a", local_height=9, target_height=10)
         bad = block(10)
         bad["state_root"] = hx("wrong-state")
-        frame = outbound.send(MessageType.BLOCK_RANGE, {"blocks": [bad]})
+        frame = outbound.send(
+            MessageType.BLOCK_RANGE,
+            {
+                "blocks": [bad],
+                "finality_proofs": [proof_to_payload(finality_proof(10))],
+            },
+        )
         with self.assertRaisesRegex(SyncRuntimeError, "finality mismatch"):
             runtime.receive_block_range(
                 peer_id="peer-a",
