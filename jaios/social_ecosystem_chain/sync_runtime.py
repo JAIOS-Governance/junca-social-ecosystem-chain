@@ -19,6 +19,11 @@ from .wire_protocol import (
     WireProtocolError,
     validate_block_range,
 )
+from .sync_finality import (
+    CertifiedFinalityVerifier,
+    SyncFinalityError,
+    proof_from_payload,
+)
 
 
 class SyncRuntimeError(ValueError):
@@ -54,14 +59,25 @@ class ValidatorSyncRuntime:
         chain_id: int,
         genesis_hash: str,
         expected_total_power: int,
+        finality_verifier: CertifiedFinalityVerifier,
         snapshot_threshold: int = 2048,
         quarantine_threshold: int = 3,
     ) -> None:
+        if not isinstance(finality_verifier, CertifiedFinalityVerifier):
+            raise SyncRuntimeError("certified finality verifier is required")
+        if finality_verifier.chain_id != chain_id:
+            raise SyncRuntimeError("finality verifier chain_id mismatch")
+        if finality_verifier.schedule.at_height(0).total_power != expected_total_power:
+            raise SyncRuntimeError("initial validator power mismatch")
+        self.finality_verifier = finality_verifier
         self.fork_choice = FinalizedForkChoice(
             chain_id=chain_id,
             genesis_hash=genesis_hash,
             expected_total_power=expected_total_power,
             quarantine_threshold=quarantine_threshold,
+            power_resolver=lambda height: finality_verifier.schedule.at_height(
+                height
+            ).total_power,
         )
         self.snapshot = SnapshotCatchup(
             chain_id=chain_id,
@@ -161,12 +177,31 @@ class ValidatorSyncRuntime:
             envelope = session.receive(frame)
             if envelope.message_type is not MessageType.BLOCK_RANGE:
                 raise SyncRuntimeError("expected authenticated BLOCK_RANGE frame")
-            if set(envelope.payload) != {"blocks"}:
+            if set(envelope.payload) != {"blocks", "finality_proofs"}:
                 raise SyncRuntimeError("BLOCK_RANGE fields are invalid")
             blocks = envelope.payload["blocks"]
-            if not isinstance(blocks, list):
-                raise SyncRuntimeError("BLOCK_RANGE blocks must be a list")
+            raw_proofs = envelope.payload["finality_proofs"]
+            if (
+                not isinstance(blocks, list)
+                or not isinstance(raw_proofs, list)
+                or len(blocks) != len(raw_proofs)
+            ):
+                raise SyncRuntimeError("BLOCK_RANGE proof count is invalid")
             validate_block_range(blocks, requested_start=plan.local_height + 1)
+            certificates = [
+                self.finality_verifier.verify(proof_from_payload(item))
+                for item in raw_proofs
+            ]
+            for block, certificate in zip(blocks, certificates, strict=True):
+                if (
+                    certificate.height != block["height"]
+                    or certificate.block_hash != block["block_hash"].lower()
+                    or certificate.certificate_hash
+                    != block["certificate_hash"].lower()
+                ):
+                    raise SyncRuntimeError(
+                        "BLOCK_RANGE certificate does not bind the block"
+                    )
             first = blocks[0]
             last = blocks[-1]
             if first["parent_hash"].lower() != local_hash.lower():
@@ -192,7 +227,7 @@ class ValidatorSyncRuntime:
                 terminal_hash=last["block_hash"].lower(),
                 terminal_state_root=last["state_root"].lower(),
             )
-        except (WireProtocolError, SyncRuntimeError) as exc:
+        except (WireProtocolError, SyncFinalityError, SyncRuntimeError) as exc:
             self.fork_choice.record_protocol_fault(peer_id)
             raise SyncRuntimeError(str(exc)) from exc
 
