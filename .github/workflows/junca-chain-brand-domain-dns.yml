@@ -1,6 +1,7 @@
 name: JUNCA Chain Brand Domain DNS
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
