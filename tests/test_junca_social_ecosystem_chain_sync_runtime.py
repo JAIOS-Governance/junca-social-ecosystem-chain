@@ -22,6 +22,7 @@ from jaios.social_ecosystem_chain.wire_protocol import (
     AuthenticatedPeerSession,
     Handshake,
     MessageType,
+    WireProtocolError,
 )
 
 
@@ -170,12 +171,11 @@ class SyncRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.fork_choice.discipline("peer-a").faults, 1)
 
     def test_status_payload_has_exact_schema(self):
-        runtime, outbound = self.runtime()
+        _, outbound = self.runtime()
         payload = status_payload()
         payload["untrusted"] = True
-        frame = outbound.send(MessageType.STATUS, payload)
-        with self.assertRaisesRegex(SyncRuntimeError, "STATUS fields"):
-            runtime.receive_status("peer-a", frame)
+        with self.assertRaisesRegex(WireProtocolError, "STATUS payload fields"):
+            outbound.send(MessageType.STATUS, payload)
 
     def test_fork_choice_rejection_counts_one_fault(self):
         runtime, outbound = self.runtime()
