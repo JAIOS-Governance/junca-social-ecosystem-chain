@@ -108,3 +108,5 @@ jobs:
             --query "ResourceRecordSets[?Name=='chain.jaios-governance.org.' || Name=='_openai-site-verification.chain.jaios-governance.org.' || Name=='_cf-custom-hostname.chain.jaios-governance.org.' || Name=='docs.jaios-governance.org.' || Name=='explorer.jaios-governance.org.']" \
             --output json
           test "$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "length(ResourceRecordSets[?Name=='explorer.jaios-governance.org.'])" --output text)" = "0"
+
+# Triggered by Production Recovery Cell after canonical OIDC subject verification.
