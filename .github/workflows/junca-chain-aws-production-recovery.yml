@@ -56,7 +56,6 @@ jobs:
       AWS_REGION: us-east-1
       AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       BUCKET_NAME: junca-chain-docs-595710543956
-      DISTRIBUTION_ID: E22CXYZGWNTOAJ
       PUBLIC_URL: https://docs.jaios-governance.org
     steps:
       - name: Checkout exact production source
@@ -87,13 +86,20 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-chain-recovery-${{ github.run_id }}
       - name: Verify AWS identity and publication resources
+        id: resources
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "595710543956"
           test "$(aws s3api get-bucket-versioning --bucket "$BUCKET_NAME" --query Status --output text)" = "Enabled"
-          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.Status --output text)" = "Deployed"
-          certificate_arn="$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DistributionConfig.ViewerCertificate.ACMCertificateArn --output text)"
+          distribution_id="$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" \
+            --output text)"
+          test -n "$distribution_id" && test "$distribution_id" != "None"
+          echo "Resolved CloudFront distribution: $distribution_id"
+          echo "distribution_id=$distribution_id" >> "$GITHUB_OUTPUT"
+          test "$(aws cloudfront get-distribution --id "$distribution_id" --query Distribution.Status --output text)" = "Deployed"
+          certificate_arn="$(aws cloudfront get-distribution --id "$distribution_id" --query Distribution.DistributionConfig.ViewerCertificate.ACMCertificateArn --output text)"
           test "$(aws acm describe-certificate --certificate-arn "$certificate_arn" --query Certificate.Status --output text)" = "ISSUED"
       - name: Publish immutable assets
         shell: bash
@@ -112,8 +118,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" --query Invalidation.Id --output text)"
-          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          distribution_id="${{ steps.resources.outputs.distribution_id }}"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$distribution_id" --paths "/*" --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$distribution_id" --id "$invalidation_id"
           echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
       - name: Verify eight public routes
         shell: bash
@@ -130,7 +137,7 @@ jobs:
             echo "### JUNCA Chain AWS production recovery"
             echo "- Source SHA: $EXACT_SHA"
             echo "- AWS account: 595710543956"
-            echo "- Distribution: $DISTRIBUTION_ID"
+            echo "- Distribution: ${{ steps.resources.outputs.distribution_id }}"
             echo "- Invalidation: ${{ steps.invalidate.outputs.invalidation_id }}"
             echo "- Public URL: $PUBLIC_URL"
             echo "- Eight-route QA: PASS"
