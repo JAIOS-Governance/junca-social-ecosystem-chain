@@ -235,18 +235,32 @@ class PersistentStateStore:
         body["checkpoint_digest"] = _checkpoint_digest(body)
         return body
 
-    def restore_checkpoint(self, checkpoint: Mapping[str, object]) -> StoredBlock:
+    def restore_checkpoint(
+        self,
+        checkpoint: Mapping[str, object],
+        *,
+        trusted_checkpoint_digest: str,
+        trusted_block_hash: str,
+    ) -> StoredBlock:
         """Restore an empty store from one verified finalized checkpoint.
 
         Historical blocks are intentionally not reconstructed.  The restored
         checkpoint becomes the local base height and new finalized blocks may
-        extend it normally.
+        extend it normally.  A locally recomputable digest is only an integrity
+        check, not proof of canonical finality, so restore also requires two
+        independently obtained trusted anchors.
         """
         if self.head_height >= 0:
             raise StateStoreError("checkpoint restore requires an empty state store")
         evidence = self.verify_checkpoint(checkpoint)
         if evidence["chain_id"] != self.chain_id:
             raise StateStoreError("checkpoint chain_id mismatch")
+        _hash(trusted_checkpoint_digest, "trusted checkpoint_digest")
+        _hash(trusted_block_hash, "trusted block_hash")
+        if checkpoint["checkpoint_digest"] != trusted_checkpoint_digest.lower():
+            raise StateStoreError("checkpoint does not match trusted digest")
+        if checkpoint["block_hash"] != trusted_block_hash.lower():
+            raise StateStoreError("checkpoint does not match trusted block hash")
         height = int(checkpoint["height"])
         if height == 0:
             expected_parent = "0x" + ("0" * 64)
@@ -371,24 +385,72 @@ class PersistentStateStore:
         if not rows:
             raise StateStoreError("state store is not initialized")
         base_height = int(rows[0]["height"])
+        metadata_base = self.connection.execute(
+            "SELECT value FROM metadata WHERE key='base_height'"
+        ).fetchone()
+        if (
+            metadata_base is None
+            or not metadata_base["value"].isdigit()
+            or int(metadata_base["value"]) != base_height
+        ):
+            raise StateStoreError("stored base_height metadata is invalid")
         previous_hash = rows[0]["parent_hash"]
         _hash(previous_hash, "base parent_hash")
         for offset, row in enumerate(rows):
             expected_height = base_height + offset
             if row["height"] != expected_height:
                 raise StateStoreError("block heights are not contiguous")
+            _hash(row["block_hash"], "stored block_hash")
+            _hash(row["parent_hash"], "stored parent_hash")
+            _hash(row["state_root"], "stored state_root")
             if row["parent_hash"] != previous_hash:
                 raise StateStoreError("stored parent_hash chain is invalid")
-            accounts = {
-                address: AccountState(balance=value["balance"], nonce=value["nonce"])
-                for address, value in json.loads(row["accounts_json"]).items()
-            }
-            if compute_state_root(accounts) != row["state_root"]:
+            if (
+                isinstance(row["base_fee_per_gas"], bool)
+                or not isinstance(row["base_fee_per_gas"], int)
+                or row["base_fee_per_gas"] <= 0
+                or isinstance(row["gas_used"], bool)
+                or not isinstance(row["gas_used"], int)
+                or row["gas_used"] < 0
+            ):
+                raise StateStoreError("stored execution values are invalid")
+            try:
+                raw_accounts = json.loads(row["accounts_json"])
+                if not isinstance(raw_accounts, dict):
+                    raise TypeError
+                accounts = {
+                    address: AccountState(
+                        balance=value["balance"],
+                        nonce=value["nonce"],
+                    )
+                    for address, value in raw_accounts.items()
+                }
+                normalized = _normalize_accounts(accounts)
+                receipts = json.loads(row["receipts_json"])
+                if not isinstance(receipts, list):
+                    raise TypeError
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                raise StateStoreError("stored state payload is invalid") from exc
+            if _accounts_json(normalized) != row["accounts_json"]:
+                raise StateStoreError("stored account snapshot is not canonical")
+            if (
+                json.dumps(
+                    receipts,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                != row["receipts_json"]
+            ):
+                raise StateStoreError("stored receipts are not canonical")
+            if compute_state_root(normalized) != row["state_root"]:
                 raise StateStoreError("stored state_root integrity failure")
             if row["height"] > 0 and (
                 not row["finalized"] or not row["certificate_hash"]
             ):
                 raise StateStoreError("non-genesis block lacks finality evidence")
+            if row["certificate_hash"] is not None:
+                _hash(row["certificate_hash"], "stored certificate_hash")
             previous_hash = row["block_hash"]
         return {
             "schema_version": "junca-persistent-state-integrity/v1",
@@ -454,13 +516,22 @@ def _accounts_json(accounts: Mapping[str, AccountState]) -> str:
         },
         sort_keys=True,
         separators=(",", ":"),
+        allow_nan=False,
     )
 
 
 def _checkpoint_digest(body: Mapping[str, object]) -> str:
+    try:
+        canonical = json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise StateStoreError("checkpoint is not canonically serializable") from exc
     return "0x" + hashlib.sha256(
-        b"JUNCA_STATE_CHECKPOINT_V1\x00"
-        + json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        b"JUNCA_STATE_CHECKPOINT_V1\x00" + canonical
     ).hexdigest()
 
 
