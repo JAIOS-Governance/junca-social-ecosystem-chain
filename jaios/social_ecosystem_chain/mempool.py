@@ -190,6 +190,83 @@ class TransactionPool:
         ).hexdigest()
         return BlockCandidate(tuple(selected), limit, gas_used, digest)
 
+    def export_snapshot(self) -> dict[str, object]:
+        """Export a deterministic, chain-bound restart snapshot."""
+        transactions = [
+            _transaction_record(transaction)
+            for _, transaction in sorted(self._transactions.items())
+        ]
+        body: dict[str, object] = {
+            "schema_version": "junca-mempool-snapshot/v1",
+            "chain_id": self._config.chain_id,
+            "policy": {
+                "max_transactions": self._policy.max_transactions,
+                "max_per_sender": self._policy.max_per_sender,
+                "max_nonce_gap": self._policy.max_nonce_gap,
+                "replacement_bump_percent": self._policy.replacement_bump_percent,
+            },
+            "transactions": transactions,
+        }
+        body["snapshot_digest"] = _snapshot_digest(body)
+        return body
+
+    def restore_snapshot(
+        self,
+        snapshot: Mapping[str, object],
+        *,
+        accounts: Mapping[str, AccountState],
+        current_base_fee: int,
+        signature_verifier: SignatureVerifier,
+    ) -> tuple[str, ...]:
+        """Atomically restore pending transactions through normal admission gates."""
+        if self._transactions:
+            raise MempoolError("snapshot restore requires an empty mempool")
+        if not isinstance(snapshot, Mapping):
+            raise MempoolError("mempool snapshot must be a mapping")
+        required = {
+            "schema_version",
+            "chain_id",
+            "policy",
+            "transactions",
+            "snapshot_digest",
+        }
+        if set(snapshot) != required:
+            raise MempoolError("mempool snapshot fields are invalid")
+        if snapshot["schema_version"] != "junca-mempool-snapshot/v1":
+            raise MempoolError("mempool snapshot schema is unsupported")
+        if snapshot["chain_id"] != self._config.chain_id:
+            raise MempoolError("mempool snapshot chain_id mismatch")
+        body = {key: value for key, value in snapshot.items() if key != "snapshot_digest"}
+        if snapshot["snapshot_digest"] != _snapshot_digest(body):
+            raise MempoolError("mempool snapshot digest mismatch")
+        expected_policy = {
+            "max_transactions": self._policy.max_transactions,
+            "max_per_sender": self._policy.max_per_sender,
+            "max_nonce_gap": self._policy.max_nonce_gap,
+            "replacement_bump_percent": self._policy.replacement_bump_percent,
+        }
+        if snapshot["policy"] != expected_policy:
+            raise MempoolError("mempool snapshot policy mismatch")
+        records = snapshot["transactions"]
+        if not isinstance(records, list):
+            raise MempoolError("mempool snapshot transactions must be a list")
+        normalized_accounts = {address.lower(): account for address, account in accounts.items()}
+        restored = TransactionPool(self._config, self._policy)
+        hashes: list[str] = []
+        for record in records:
+            transaction = _transaction_from_record(record)
+            account = normalized_accounts.get(transaction.sender.lower(), AccountState(balance=0))
+            restored.admit(
+                transaction,
+                account=account,
+                current_base_fee=current_base_fee,
+                signature_verifier=signature_verifier,
+            )
+            hashes.append(transaction.transaction_hash)
+        self._transactions = restored._transactions
+        self._hashes = restored._hashes
+        return tuple(hashes)
+
 
 def _validate_admission_boundary(
     config: ProtocolConfig,
@@ -245,3 +322,65 @@ def _validator_reward_per_gas(transaction: TransactionEnvelope, base_fee: int) -
         transaction.max_priority_fee_per_gas,
         transaction.max_fee_per_gas - base_fee,
     )
+
+
+def _transaction_record(transaction: TransactionEnvelope) -> dict[str, object]:
+    return {
+        "chain_id": transaction.chain_id,
+        "sender": transaction.sender.lower(),
+        "recipient": transaction.recipient.lower(),
+        "nonce": transaction.nonce,
+        "value": transaction.value,
+        "gas_limit": transaction.gas_limit,
+        "max_fee_per_gas": transaction.max_fee_per_gas,
+        "max_priority_fee_per_gas": transaction.max_priority_fee_per_gas,
+        "data": transaction.data.hex(),
+        "signature": transaction.signature.hex(),
+        "transaction_hash": transaction.transaction_hash,
+    }
+
+
+def _transaction_from_record(record: object) -> TransactionEnvelope:
+    fields = {
+        "chain_id",
+        "sender",
+        "recipient",
+        "nonce",
+        "value",
+        "gas_limit",
+        "max_fee_per_gas",
+        "max_priority_fee_per_gas",
+        "data",
+        "signature",
+        "transaction_hash",
+    }
+    if not isinstance(record, Mapping) or set(record) != fields:
+        raise MempoolError("mempool snapshot transaction fields are invalid")
+    try:
+        data = bytes.fromhex(record["data"])
+        signature = bytes.fromhex(record["signature"])
+        transaction = TransactionEnvelope(
+            chain_id=record["chain_id"],
+            sender=record["sender"],
+            recipient=record["recipient"],
+            nonce=record["nonce"],
+            value=record["value"],
+            gas_limit=record["gas_limit"],
+            max_fee_per_gas=record["max_fee_per_gas"],
+            max_priority_fee_per_gas=record["max_priority_fee_per_gas"],
+            data=data,
+            signature=signature,
+        )
+    except (TypeError, ValueError) as error:
+        raise MempoolError("mempool snapshot transaction encoding is invalid") from error
+    if record["transaction_hash"] != transaction.transaction_hash:
+        raise MempoolError("mempool snapshot transaction hash mismatch")
+    return transaction
+
+
+def _snapshot_digest(body: Mapping[str, object]) -> str:
+    try:
+        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise MempoolError("mempool snapshot is not canonical JSON") from error
+    return "0x" + hashlib.sha256(b"JUNCA_MEMPOOL_SNAPSHOT_V1\x00" + payload).hexdigest()

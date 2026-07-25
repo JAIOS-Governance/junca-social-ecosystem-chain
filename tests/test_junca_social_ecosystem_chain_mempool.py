@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import unittest
 
 from jaios.social_ecosystem_chain.mempool import MempoolError, MempoolPolicy, TransactionPool
@@ -164,6 +165,103 @@ class TransactionPoolTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(MempoolError, "gas limit"):
             constrained.build_candidate(self.accounts, current_base_fee=1_000, gas_limit=64_000)
+
+    def test_snapshot_round_trip_preserves_deterministic_candidate(self) -> None:
+        self.admit(tx(ALICE, nonce=0, tip=100))
+        self.admit(tx(CAROL, nonce=0, tip=500, data=b"restart-safe"))
+        expected = self.pool.build_candidate(self.accounts, current_base_fee=1_000)
+        snapshot = self.pool.export_snapshot()
+
+        restored = TransactionPool(self.config, self.pool._policy)
+        hashes = restored.restore_snapshot(
+            snapshot,
+            accounts=self.accounts,
+            current_base_fee=1_000,
+            signature_verifier=self.verify,
+        )
+
+        self.assertEqual(len(restored), 2)
+        self.assertEqual(hashes, tuple(item["transaction_hash"] for item in snapshot["transactions"]))
+        actual = restored.build_candidate(self.accounts, current_base_fee=1_000)
+        self.assertEqual(actual.candidate_digest, expected.candidate_digest)
+        self.assertEqual(actual.transactions, expected.transactions)
+
+    def test_snapshot_restore_is_atomic_and_fail_closed(self) -> None:
+        self.admit(tx(ALICE, nonce=0))
+        snapshot = self.pool.export_snapshot()
+
+        tampered = deepcopy(snapshot)
+        tampered["transactions"][0]["value"] = 999
+        restored = TransactionPool(self.config, self.pool._policy)
+        with self.assertRaisesRegex(MempoolError, "digest mismatch"):
+            restored.restore_snapshot(
+                tampered,
+                accounts=self.accounts,
+                current_base_fee=1_000,
+                signature_verifier=self.verify,
+            )
+        self.assertEqual(len(restored), 0)
+
+        invalid_signature = deepcopy(snapshot)
+        with self.assertRaisesRegex(MempoolError, "signature"):
+            restored.restore_snapshot(
+                invalid_signature,
+                accounts=self.accounts,
+                current_base_fee=1_000,
+                signature_verifier=lambda transaction: False,
+            )
+        self.assertEqual(len(restored), 0)
+
+    def test_snapshot_rejects_chain_policy_hash_and_nonempty_pool_mismatch(self) -> None:
+        self.admit(tx(ALICE, nonce=0))
+        snapshot = self.pool.export_snapshot()
+
+        wrong_chain = deepcopy(snapshot)
+        wrong_chain["chain_id"] = 1
+        wrong_chain["snapshot_digest"] = snapshot["snapshot_digest"]
+        empty = TransactionPool(self.config, self.pool._policy)
+        with self.assertRaisesRegex(MempoolError, "chain_id mismatch"):
+            empty.restore_snapshot(
+                wrong_chain,
+                accounts=self.accounts,
+                current_base_fee=1_000,
+                signature_verifier=self.verify,
+            )
+
+        different_policy = TransactionPool(self.config)
+        with self.assertRaisesRegex(MempoolError, "policy mismatch"):
+            different_policy.restore_snapshot(
+                snapshot,
+                accounts=self.accounts,
+                current_base_fee=1_000,
+                signature_verifier=self.verify,
+            )
+
+        with self.assertRaisesRegex(MempoolError, "empty mempool"):
+            self.pool.restore_snapshot(
+                snapshot,
+                accounts=self.accounts,
+                current_base_fee=1_000,
+                signature_verifier=self.verify,
+            )
+
+        wrong_hash = deepcopy(snapshot)
+        wrong_hash["transactions"][0]["transaction_hash"] = "0x" + ("0" * 64)
+        wrong_hash["snapshot_digest"] = self._digest_snapshot(wrong_hash)
+        with self.assertRaisesRegex(MempoolError, "transaction hash mismatch"):
+            empty.restore_snapshot(
+                wrong_hash,
+                accounts=self.accounts,
+                current_base_fee=1_000,
+                signature_verifier=self.verify,
+            )
+
+    @staticmethod
+    def _digest_snapshot(snapshot: dict[str, object]) -> str:
+        from jaios.social_ecosystem_chain.mempool import _snapshot_digest
+
+        body = {key: value for key, value in snapshot.items() if key != "snapshot_digest"}
+        return _snapshot_digest(body)
 
 
 if __name__ == "__main__":
