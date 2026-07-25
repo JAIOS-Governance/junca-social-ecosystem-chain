@@ -1,5 +1,5 @@
 JUNCA Social Ecosystem Chain custom domain production recovery trigger
 Requested by CEO: 2026-07-26
 Target: https://chain.jaios-governance.org/
-Evidence capture enabled: 2026-07-26T03:40:00+09:00
-IAM policy grant confirmed via AWS CloudShell
+Evidence capture enabled: 2026-07-26T00:00:00Z
+Retry: 2026-07-26T03:41:00+09:00
