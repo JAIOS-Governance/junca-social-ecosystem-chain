@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          oidc_token="$(curl --fail --silent --show-error             -H "Authorization: Bearer $OIDC_REQUEST_TOKEN"             "$OIDC_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')"
+          oidc_token="$(curl --fail --silent --show-error             -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')"
           test -n "$oidc_token"
           selected_role=""
           for role in             "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment"             "arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"; do
