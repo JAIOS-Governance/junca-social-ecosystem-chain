@@ -15,13 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  normalize-default-oidc:
+  normalize-canonical-oidc:
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
     steps:
-      - name: Set AWS-compatible default OIDC subject
+      - name: Set canonical repository and context OIDC subject
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -33,15 +33,15 @@ jobs:
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" --data '{"use_default":true}'
+            "$endpoint" --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
           state="$(curl --silent --show-error --fail --location \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "X-GitHub-Api-Version: 2026-03-10" "$endpoint")"
-          STATE="$state" python3 -c 'import json,os; assert json.loads(os.environ["STATE"]).get("use_default") is True'
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False'
 
   repair-minimum-iam:
-    needs: normalize-default-oidc
+    needs: normalize-canonical-oidc
     runs-on: ubuntu-latest
     environment: public-testnet
     permissions:
