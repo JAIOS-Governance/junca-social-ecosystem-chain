@@ -1,3 +1,4 @@
 JUNCA Social Ecosystem Chain custom domain production recovery trigger
 Requested by CEO: 2026-07-26
 Target: https://chain.jaios-governance.org/
+Evidence capture enabled: 2026-07-26T00:00:00Z
