@@ -197,12 +197,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dns_addresses="$(getent ahosts docs.jaios-governance.org | awk '{print $1}' | sort -u)"
-          test -n "${dns_addresses}"
           for route in "" protocol assets interoperability implementation governance evidence glossary; do
             url="https://docs.jaios-governance.org/${route}"
-            code="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
-              --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
+            readback="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
+              --output "/tmp/${route:-home}.html" --write-out '%{remote_ip}|%{ssl_verify_result}|%{http_code}' "${url}")"
+            IFS='|' read -r remote_ip ssl_verify_result code <<<"${readback}"
+            test -n "${remote_ip}"
+            test "${ssl_verify_result}" = "0"
             test "${code}" = "200"
           done
           grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/">' /tmp/home.html
