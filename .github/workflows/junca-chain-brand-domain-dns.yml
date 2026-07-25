@@ -15,30 +15,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  repair-minimum-iam:
+  upsert-brand-domain:
     runs-on: ubuntu-latest
-    environment: public-testnet
+    environment: junca-chain-docs-production
     permissions:
       contents: read
       id-token: write
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
-      DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
+      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
     steps:
-      - name: Configure AWS bootstrap identity
+      - name: Configure publication AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-chain-domain-iam-${{ github.run_id }}
-      - name: Verify account and apply minimum DNS policy
+          role-session-name: junca-chain-brand-domain-${{ github.run_id }}
+      - name: Apply minimum self-scoped DNS policy
         shell: bash
         run: |
           set -euo pipefail
-          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           cat >/tmp/chain-domain-policy.json <<'JSON'
           {
             "Version": "2012-10-17",
@@ -74,28 +73,8 @@ jobs:
             ]
           }
           JSON
-          aws iam put-role-policy             --role-name "$DOCS_ROLE_NAME"             --policy-name ChainBrandCustomDomainDns             --policy-document file:///tmp/chain-domain-policy.json
-          aws iam get-role-policy             --role-name "$DOCS_ROLE_NAME"             --policy-name ChainBrandCustomDomainDns >/tmp/iam-readback.json
-
-  upsert-brand-domain:
-    needs: repair-minimum-iam
-    runs-on: ubuntu-latest
-    environment: junca-chain-docs-production
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      AWS_REGION: us-east-1
-      AWS_ACCOUNT_ID: "595710543956"
-      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
-      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
-    steps:
-      - name: Configure publication AWS identity
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-chain-brand-domain-${{ github.run_id }}
+          aws iam put-role-policy --role-name "$DOCS_ROLE_NAME" --policy-name ChainBrandCustomDomainDns --policy-document file:///tmp/chain-domain-policy.json
+          aws iam get-role-policy --role-name "$DOCS_ROLE_NAME" --policy-name ChainBrandCustomDomainDns >/tmp/iam-readback.json
       - name: Verify exact AWS boundary
         shell: bash
         run: |
