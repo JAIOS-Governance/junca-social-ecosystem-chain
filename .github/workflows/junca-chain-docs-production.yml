@@ -207,7 +207,9 @@ jobs:
             curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
               --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
           done
-          grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/">' /tmp/home.html
+          grep -F 'rel="canonical" href="https://docs.jaios-governance.org/"' /tmp/home.html
+          grep -F 'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest"' /tmp/home.html
+          grep -F 'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png"' /tmp/home.html
           grep -F 'Public Testnet' /tmp/home.html
           {
             echo "- Invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
