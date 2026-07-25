@@ -35,7 +35,7 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
       DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
       HOSTED_ZONE_ID: Z0336017285464TX0NT1G
     steps:
