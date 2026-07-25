@@ -1,0 +1,83 @@
+name: JUNCA POINT MEMBER Domain Finalize 20260726
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-point-member-domain-finalize-20260726.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-point-member-domain-finalize
+  cancel-in-progress: false
+
+jobs:
+  publish-domain:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+    steps:
+      - name: Configure verified AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-member-domain-${{ github.run_id }}
+
+      - name: Verify production boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          test "$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)" = "jaios-governance.org."
+
+      - name: Apply Sites-issued DNS records
+        id: dns
+        shell: bash
+        run: |
+          set -euo pipefail
+          change_batch="$(mktemp)"
+          cat >"$change_batch" <<'JSON'
+          {
+            "Comment": "CEO-authorized JUNCA POINT MEMBER Sites custom-domain final publication",
+            "Changes": [
+              {"Action":"UPSERT","ResourceRecordSet":{"Name":"member.jaios-governance.org.","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"custom-domains.chatgpt.site."}]}},
+              {"Action":"UPSERT","ResourceRecordSet":{"Name":"_openai-site-verification.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE\""}]}},
+              {"Action":"UPSERT","ResourceRecordSet":{"Name":"_cf-custom-hostname.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"5747a89e-d114-42d8-b33b-b4eaae61c958\""}]}}
+            ]
+          }
+          JSON
+          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "file://$change_batch" --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = "INSYNC"
+          echo "change_id=$change_id" >>"$GITHUB_OUTPUT"
+
+      - name: Verify exact DNS state
+        shell: bash
+        run: |
+          set -euo pipefail
+          records="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']" --output json)"
+          RECORDS="$records" python3 - <<'PY'
+          import json, os
+          rows = {r["Name"]: r for r in json.loads(os.environ["RECORDS"])}
+          assert rows["member.jaios-governance.org."]["ResourceRecords"][0]["Value"] == "custom-domains.chatgpt.site."
+          assert "openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE" in rows["_openai-site-verification.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          assert "5747a89e-d114-42d8-b33b-b4eaae61c958" in rows["_cf-custom-hostname.member.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          PY
+          {
+            echo "### JUNCA POINT MEMBER custom domain publication"
+            echo "- URL: https://member.jaios-governance.org/"
+            echo "- Route 53 Change: ${{ steps.dns.outputs.change_id }}"
+            echo "- Route 53 Status: INSYNC"
+            echo "- DNS Readback: PASS"
+            echo "- Existing Sites project and restricted access preserved"
+          } >>"$GITHUB_STEP_SUMMARY"
