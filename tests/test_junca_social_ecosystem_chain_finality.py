@@ -106,6 +106,29 @@ class FinalityStateMachineTests(unittest.TestCase):
         assert certificate is not None
         self.assertEqual(certificate.signed_power, 7)
 
+    def test_checkpoint_height_allows_restart_at_next_finalized_block(self) -> None:
+        machine = FinalityStateMachine(
+            chain_id=CHAIN_ID,
+            validators=self.validators,
+            initial_finalized_height=7,
+        )
+        certificate = None
+        for validator in ("validator-1", "validator-2", "validator-3"):
+            certificate = machine.add_vote(
+                vote(validator, height=8),
+                verifier=self.verify,
+            )
+        self.assertIsNotNone(certificate)
+        self.assertEqual(machine.latest_finalized_height, 8)
+
+    def test_checkpoint_height_validation_fails_closed(self) -> None:
+        with self.assertRaisesRegex(FinalityError, "initial_finalized_height"):
+            FinalityStateMachine(
+                chain_id=CHAIN_ID,
+                validators=self.validators,
+                initial_finalized_height=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
