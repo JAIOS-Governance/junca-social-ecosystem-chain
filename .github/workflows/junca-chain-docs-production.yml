@@ -197,8 +197,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          getent ahostsv4 docs.jaios-governance.org | grep -q .
-          getent ahostsv6 docs.jaios-governance.org | grep -q .
+          command -v dig >/dev/null
+          dig +short A docs.jaios-governance.org | grep -q .
+          dig +short AAAA docs.jaios-governance.org | grep -q .
           for route in "" protocol assets interoperability implementation governance evidence glossary; do
             url="https://docs.jaios-governance.org/${route}"
             code="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
