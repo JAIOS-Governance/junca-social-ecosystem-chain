@@ -46,9 +46,23 @@ class BridgeEventIndexer:
               FOREIGN KEY(network, block_number) REFERENCES blocks(network, number)
                 ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS indexer_config(
+              network TEXT PRIMARY KEY, confirmations INTEGER NOT NULL
+            );
             """
         )
         self.connection.execute("PRAGMA foreign_keys=ON")
+        existing = self.connection.execute(
+            "SELECT confirmations FROM indexer_config WHERE network=?",
+            (self.network,),
+        ).fetchone()
+        if existing is not None and existing["confirmations"] != self.confirmations:
+            self.connection.close()
+            raise EventIndexerError("confirmation policy does not match persisted index")
+        self.connection.execute(
+            "INSERT OR IGNORE INTO indexer_config(network,confirmations) VALUES(?,?)",
+            (self.network, self.confirmations),
+        )
         self.connection.commit()
 
     def close(self) -> None:
@@ -67,40 +81,40 @@ class BridgeEventIndexer:
         self._validate_hash(parent_hash)
         if number < 0 or observed_head < number:
             raise EventIndexerError("invalid block height")
-        previous = self.connection.execute(
-            "SELECT * FROM blocks WHERE network=? AND number=?",
-            (self.network, number - 1),
-        ).fetchone()
-        if number > 0 and previous is not None and previous["block_hash"] != parent_hash:
-            if previous["finalized"]:
-                raise EventIndexerError("reorg crosses finalized checkpoint")
-            self._rollback_from(number - 1)
-        existing = self.connection.execute(
-            "SELECT block_hash FROM blocks WHERE network=? AND number=?",
-            (self.network, number),
-        ).fetchone()
-        if existing is not None:
-            if existing["block_hash"] == block_hash:
-                return self.get_block(number)
-            current = self.get_block(number)
-            if current.finalized:
-                raise EventIndexerError("cannot replace finalized block")
-            self._rollback_from(number)
-
+        if number == 0 and parent_hash.lower().removeprefix("0x") != "0" * 64:
+            raise EventIndexerError("genesis parent hash is invalid")
+        validated_events = self._validated_events(events)
         finalized_through = observed_head - self.confirmations
         with self.connection:
+            previous = self.connection.execute(
+                "SELECT * FROM blocks WHERE network=? AND number=?",
+                (self.network, number - 1),
+            ).fetchone()
+            if number > 0 and previous is None:
+                raise EventIndexerError("block ingestion must be contiguous")
+            if number > 0 and previous["block_hash"] != parent_hash:
+                if previous["finalized"]:
+                    raise EventIndexerError("reorg crosses finalized checkpoint")
+                raise EventIndexerError("replacement ancestor must be ingested first")
+            existing = self.connection.execute(
+                "SELECT block_hash,finalized FROM blocks WHERE network=? AND number=?",
+                (self.network, number),
+            ).fetchone()
+            if existing is not None:
+                if existing["block_hash"] == block_hash:
+                    self.connection.execute(
+                        "UPDATE blocks SET finalized=1 WHERE network=? AND number<=?",
+                        (self.network, finalized_through),
+                    )
+                    return self.get_block(number)
+                if existing["finalized"]:
+                    raise EventIndexerError("cannot replace finalized block")
+                self._rollback_from(number)
             self.connection.execute(
                 "INSERT INTO blocks(network,number,block_hash,parent_hash,finalized) VALUES(?,?,?,?,?)",
                 (self.network, number, block_hash, parent_hash, int(number <= finalized_through)),
             )
-            for event in events:
-                transaction_hash = str(event.get("transaction_hash", ""))
-                self._validate_hash(transaction_hash)
-                log_index = event.get("log_index")
-                event_name = str(event.get("event_name", ""))
-                if not isinstance(log_index, int) or log_index < 0 or not event_name:
-                    raise EventIndexerError("invalid event identity")
-                payload = json.dumps(event.get("payload", {}), sort_keys=True, separators=(",", ":"))
+            for transaction_hash, log_index, event_name, payload in validated_events:
                 self.connection.execute(
                     """
                     INSERT INTO events(network,transaction_hash,log_index,block_number,event_name,payload)
@@ -156,10 +170,45 @@ class BridgeEventIndexer:
         ).fetchone()
         if finalized:
             raise EventIndexerError("reorg crosses finalized checkpoint")
-        with self.connection:
-            self.connection.execute(
-                "DELETE FROM blocks WHERE network=? AND number>=?", (self.network, number)
-            )
+        self.connection.execute(
+            "DELETE FROM blocks WHERE network=? AND number>=?", (self.network, number)
+        )
+
+    def _validated_events(
+        self,
+        events: Sequence[Mapping[str, Any]],
+    ) -> tuple[tuple[str, int, str, str], ...]:
+        validated: list[tuple[str, int, str, str]] = []
+        identities: set[tuple[str, int]] = set()
+        for event in events:
+            if not isinstance(event, Mapping):
+                raise EventIndexerError("event must be a mapping")
+            transaction_hash = str(event.get("transaction_hash", ""))
+            self._validate_hash(transaction_hash)
+            log_index = event.get("log_index")
+            event_name = str(event.get("event_name", ""))
+            if (
+                isinstance(log_index, bool)
+                or not isinstance(log_index, int)
+                or log_index < 0
+                or not event_name
+            ):
+                raise EventIndexerError("invalid event identity")
+            identity = (transaction_hash.lower(), log_index)
+            if identity in identities:
+                raise EventIndexerError("duplicate event identity in block")
+            identities.add(identity)
+            try:
+                payload = json.dumps(
+                    event.get("payload", {}),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+            except (TypeError, ValueError) as error:
+                raise EventIndexerError("event payload is not canonical JSON") from error
+            validated.append((transaction_hash.lower(), log_index, event_name, payload))
+        return tuple(validated)
 
     @staticmethod
     def _validate_hash(value: str) -> None:
