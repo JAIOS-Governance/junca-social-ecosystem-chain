@@ -1,0 +1,3 @@
+Trigger JUNCA Chain CloudFormation self reconcile
+Requested by CEO: 2026-07-26
+Target stack: junca-chain-docs-publication
