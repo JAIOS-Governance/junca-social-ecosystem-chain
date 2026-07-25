@@ -15,29 +15,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  upsert-brand-domain:
+  normalize-default-oidc:
     runs-on: ubuntu-latest
-    environment: junca-chain-docs-production
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Set AWS-compatible default OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          curl --silent --show-error --fail-with-body --location \
+            --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint" --data '{"use_default":true}'
+          state="$(curl --silent --show-error --fail --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" "$endpoint")"
+          STATE="$state" python3 -c 'import json,os; assert json.loads(os.environ["STATE"]).get("use_default") is True'
+
+  repair-minimum-iam:
+    needs: normalize-default-oidc
+    runs-on: ubuntu-latest
+    environment: public-testnet
     permissions:
       contents: read
       id-token: write
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
-      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
       DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
     steps:
-      - name: Configure publication AWS identity
+      - name: Configure exact AWS bootstrap identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-chain-brand-domain-${{ github.run_id }}
-      - name: Apply minimum self-scoped DNS policy
+          role-session-name: junca-chain-domain-iam-${{ github.run_id }}
+      - name: Verify identity and apply minimum DNS policy
         shell: bash
         run: |
           set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           cat >/tmp/chain-domain-policy.json <<'JSON'
           {
             "Version": "2012-10-17",
@@ -75,6 +101,54 @@ jobs:
           JSON
           aws iam put-role-policy --role-name "$DOCS_ROLE_NAME" --policy-name ChainBrandCustomDomainDns --policy-document file:///tmp/chain-domain-policy.json
           aws iam get-role-policy --role-name "$DOCS_ROLE_NAME" --policy-name ChainBrandCustomDomainDns >/tmp/iam-readback.json
+
+  restore-canonical-oidc:
+    if: always()
+    needs: repair-minimum-iam
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Restore canonical repo and context OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          curl --silent --show-error --fail-with-body --location \
+            --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint" --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
+          state="$(curl --silent --show-error --fail --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" "$endpoint")"
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False'
+
+  upsert-brand-domain:
+    needs: [repair-minimum-iam, restore-canonical-oidc]
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
+    steps:
+      - name: Configure publication AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-chain-brand-domain-${{ github.run_id }}
       - name: Verify exact AWS boundary
         shell: bash
         run: |
