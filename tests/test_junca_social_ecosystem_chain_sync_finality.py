@@ -113,6 +113,48 @@ class SyncFinalityTests(unittest.TestCase):
         with self.assertRaisesRegex(SyncFinalityError, "signature"):
             rejecting.verify(self.proof())
 
+    def test_verifier_exceptions_and_non_boolean_success_fail_closed(self):
+        raising = CertifiedFinalityVerifier(
+            chain_id=CHAIN_ID,
+            schedule=self.schedule,
+            vote_verifier=lambda _: (_ for _ in ()).throw(
+                RuntimeError("kms unavailable")
+            ),
+        )
+        with self.assertRaisesRegex(SyncFinalityError, "signature verification"):
+            raising.verify(self.proof())
+        non_boolean = CertifiedFinalityVerifier(
+            chain_id=CHAIN_ID,
+            schedule=self.schedule,
+            vote_verifier=lambda _: 1,
+        )
+        with self.assertRaisesRegex(SyncFinalityError, "signature verification"):
+            non_boolean.verify(self.proof())
+
+    def test_vote_boundary_rejects_wrong_type_and_oversized_signature(self):
+        proof = self.proof()
+        wrong_type = FinalityProof(
+            **{**proof.__dict__, "votes": ("not-a-vote",) + proof.votes[1:]}
+        )
+        with self.assertRaisesRegex(SyncFinalityError, "boundary"):
+            self.verifier.verify(wrong_type)
+        oversized = FinalityVote(
+            **{**proof.votes[0].__dict__, "signature": b"x" * 4097}
+        )
+        malformed = FinalityProof(
+            **{**proof.__dict__, "votes": (oversized,) + proof.votes[1:]}
+        )
+        with self.assertRaisesRegex(SyncFinalityError, "boundary"):
+            self.verifier.verify(malformed)
+
+    def test_proof_vote_count_is_bounded_by_active_validator_set(self):
+        proof = self.proof()
+        oversized = FinalityProof(
+            **{**proof.__dict__, "votes": proof.votes + (proof.votes[0],) * 2}
+        )
+        with self.assertRaisesRegex(SyncFinalityError, "too many"):
+            self.verifier.verify(oversized)
+
     def test_vote_must_bind_height_round_chain_and_block(self):
         proof = self.proof()
         bad = FinalityVote(
@@ -173,6 +215,17 @@ class SyncFinalityTests(unittest.TestCase):
         payload["votes"][0]["signature"] = "not-hex"
         with self.assertRaisesRegex(SyncFinalityError, "encoding"):
             proof_from_payload(payload)
+        for invalid in ("AA", "00 11", "0" * 8194, ""):
+            payload = proof_to_payload(proof)
+            payload["votes"][0]["signature"] = invalid
+            with self.assertRaisesRegex(SyncFinalityError, "encoding"):
+                proof_from_payload(payload)
+
+    def test_schedule_height_and_registration_types_fail_closed(self):
+        with self.assertRaisesRegex(SyncFinalityError, "non-negative"):
+            self.schedule.at_height(True)
+        with self.assertRaisesRegex(SyncFinalityError, "type"):
+            self.schedule.register("not-a-validator-set")  # type: ignore[arg-type]
 
     def test_evidence_preserves_release_boundaries(self):
         evidence = self.schedule.evidence()
