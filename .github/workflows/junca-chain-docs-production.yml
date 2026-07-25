@@ -199,12 +199,13 @@ jobs:
           set -euo pipefail
           for route in "" protocol assets interoperability implementation governance evidence glossary; do
             url="https://docs.jaios-governance.org/${route}"
-            readback="$(curl --silent --show-error --location --retry 5 --retry-delay 10 \
-              --output "/tmp/${route:-home}.html" --write-out '%{remote_ip}|%{ssl_verify_result}|%{http_code}' "${url}")"
-            IFS='|' read -r remote_ip ssl_verify_result code <<<"${readback}"
-            test -n "${remote_ip}"
-            test "${ssl_verify_result}" = "0"
+            code="$(curl --fail-with-body --silent --show-error --location --retry 5 --retry-delay 10 \
+              --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
             test "${code}" = "200"
+          done
+          for asset in favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest; do
+            curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
+              --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
           done
           grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/">' /tmp/home.html
           grep -F 'Public Testnet' /tmp/home.html
