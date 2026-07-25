@@ -16,17 +16,48 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: junca-chain-aws-canonical-inventory
+  group: junca-chain-repository-oidc-subject
   cancel-in-progress: false
 
 jobs:
+  set-default-oidc-subject:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Set standard GitHub OIDC subject for bootstrap role
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          curl --silent --show-error --fail-with-body --location \
+            --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint" \
+            --data '{"use_default":true}'
+          state="$(curl --silent --show-error --fail --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint")"
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is True, s'
+
   canonical-inventory:
+    needs: set-default-oidc-subject
     runs-on: ubuntu-latest
     environment: public-testnet
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     env:
       AWS_REGION: us-east-1
       AWS_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
@@ -61,3 +92,33 @@ jobs:
           path: artifacts/junca-aws-canonical-inventory.json
           if-no-files-found: error
           retention-days: 90
+
+  restore-canonical-oidc-subject:
+    if: always()
+    needs: [set-default-oidc-subject, canonical-inventory]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Restore canonical GitHub OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          curl --silent --show-error --fail-with-body --location \
+            --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint" \
+            --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
+          state="$(curl --silent --show-error --fail --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "$endpoint")"
+          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False, s'
