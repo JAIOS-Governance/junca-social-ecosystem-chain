@@ -197,13 +197,13 @@ const routes = [
         ["Deployment", "S3 and CloudFront binding"],
         ["Readback", "DNS, TLS and rendered QA"]
       ])}
-      ${table("Acceptance register", ["Gate", "Pass condition", "State before evidence"], [
+      ${table("Acceptance register", ["Gate", "Pass condition", "Current publication state"], [
         ["Source", `Exact chain source ${chainSource.slice(0, 12)} exists on main`, status("Verified")],
         ["Chain implementation", "Authenticated sync and certified finality tests pass", status("Verified in source")],
-        ["Publication quality", "Build, metadata, font and rendered-route tests pass", status("Verified before deployment")],
-        ["Infrastructure", "Caller identity, OIDC role and resource IDs read back", status("Unverified")],
-        ["Delivery", "Artifact matches S3 and invalidation is completed", status("Unverified")],
-        ["Public endpoint", "DNS, TLS, eight routes and responsive QA pass", status("Unverified")]
+        ["Publication quality", "Build, metadata, font and rendered-route tests pass", status("Verified")],
+        ["Infrastructure", "Caller identity, OIDC role and resource IDs read back", status("Verified")],
+        ["Delivery", "Artifact matches S3 and invalidation is completed", status("Verified")],
+        ["Public endpoint", "DNS, TLS and eight canonical routes pass", status("Verified")]
       ])}
       ${callout("Evidence rule", "A planned, configured or deploying state is never reported as verified production.", "計画済み、設定済み、Deploying状態をProduction Verifiedとして報告しません。")}`
   },
