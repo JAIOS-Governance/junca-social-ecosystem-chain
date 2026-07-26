@@ -13,6 +13,7 @@ on:
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
       - "tests/test_junca_validator_artifacts.py"
+      - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
   pull_request:
     paths:
@@ -25,6 +26,7 @@ on:
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
       - "tests/test_junca_validator_artifacts.py"
+      - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
   workflow_dispatch:
 
