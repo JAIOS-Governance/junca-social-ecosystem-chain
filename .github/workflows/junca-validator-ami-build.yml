@@ -188,13 +188,23 @@ jobs:
             -e "s|__GENESIS_SHA256__|${GENESIS_SHA256}|g" \
             .github/image-builder/validator-component.yml \
             > build/validator-component.yml
+          provenance_tags="$(jq -cn \
+            --arg network "$NETWORK" \
+            --arg governance "$GOVERNANCE" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "$NODE_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            '{
+              Network: $network,
+              Governance: $governance,
+              SourceCommit: $source_commit,
+              NodeArtifactSHA256: $node_sha256,
+              GenesisSHA256: $genesis_sha256
+            }')"
           component_arn="$(aws imagebuilder create-component \
             --name "$component_name" --semantic-version 1.0.0 \
             --platform Linux --data file://build/validator-component.yml \
-            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
-            SourceCommit="${SOURCE_COMMIT}" \
-            NodeArtifactSHA256="${NODE_SHA256}" \
-            GenesisSHA256="${GENESIS_SHA256}" \
+            --tags "$provenance_tags" \
             --query componentBuildVersionArn --output text)"
 
           parent_image="$(aws ssm get-parameter \
@@ -206,27 +216,50 @@ jobs:
             --components componentArn="$component_arn" \
             --block-device-mappings \
             'deviceName=/dev/xvda,ebs={deleteOnTermination=true,volumeSize=16,volumeType=gp3,encrypted=true}' \
-            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
-            SourceCommit="${SOURCE_COMMIT}" \
+            --tags "$provenance_tags" \
             --query imageRecipeArn --output text)"
           infra_arn="$(aws imagebuilder create-infrastructure-configuration \
             --name "$infra_name" \
             --instance-profile-name "$IMAGE_BUILDER_INSTANCE_PROFILE" \
             --instance-types t3.small \
             --terminate-instance-on-failure \
-            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            --tags "$provenance_tags" \
             --query infrastructureConfigurationArn --output text)"
+          distributions="$(jq -cn \
+            --arg region "$AWS_REGION" \
+            --arg notice "$NOTICE" \
+            --arg network "$NETWORK" \
+            --arg governance "$GOVERNANCE" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "$NODE_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            '[{
+              region: $region,
+              amiDistributionConfiguration: {
+                name: "junca-validator-public-testnet-{{imagebuilder:buildDate}}",
+                description: $notice,
+                amiTags: {
+                  Network: $network,
+                  Governance: $governance,
+                  SourceCommit: $source_commit,
+                  NodeArtifactSHA256: $node_sha256,
+                  GenesisSHA256: $genesis_sha256,
+                  MainnetChanged: "false",
+                  AssetsMoved: "false",
+                  BridgeActivated: "false"
+                }
+              }
+            }]')"
           distribution_arn="$(aws imagebuilder create-distribution-configuration \
             --name "$distribution_name" \
-            --distributions "region=${AWS_REGION},amiDistributionConfiguration={name=junca-validator-public-testnet-{{imagebuilder:buildDate}},description='${NOTICE}',amiTags={Network='${NETWORK}',Governance='${GOVERNANCE}',SourceCommit='${SOURCE_COMMIT}',NodeArtifactSHA256='${NODE_SHA256}',GenesisSHA256='${GENESIS_SHA256}',MainnetChanged=false,AssetsMoved=false,BridgeActivated=false}}" \
-            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            --distributions "$distributions" \
+            --tags "$provenance_tags" \
             --query distributionConfigurationArn --output text)"
           image_arn="$(aws imagebuilder create-image \
             --image-recipe-arn "$recipe_arn" \
             --infrastructure-configuration-arn "$infra_arn" \
             --distribution-configuration-arn "$distribution_arn" \
-            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
-            SourceCommit="${SOURCE_COMMIT}" \
+            --tags "$provenance_tags" \
             --query imageBuildVersionArn --output text)"
           aws imagebuilder wait image-build-completed --image-build-version-arn "$image_arn"
           image_json="$(aws imagebuilder get-image --image-build-version-arn "$image_arn")"
