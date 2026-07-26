@@ -299,6 +299,87 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                 chain_id=CHAIN_ID + 1,
             )
 
+    def test_signing_journal_rejects_height_and_round_rollback(self) -> None:
+        signer = lambda: b"s" * 64
+        self.journal.get_or_sign(
+            validator_id="validator-1",
+            height=8,
+            round=3,
+            block_hash="0x" + ("8" * 64),
+            signing_payload=b"height-8-round-3",
+            signer=signer,
+        )
+        for height, round in ((7, 9), (8, 2)):
+            with self.subTest(height=height, round=round):
+                with self.assertRaisesRegex(
+                    ConsensusSigningJournalError, "below.*watermark"
+                ):
+                    self.journal.get_or_sign(
+                        validator_id="validator-1",
+                        height=height,
+                        round=round,
+                        block_hash="0x" + ("7" * 64),
+                        signing_payload=f"{height}:{round}".encode(),
+                        signer=signer,
+                    )
+
+        same_height_new_round = self.journal.get_or_sign(
+            validator_id="validator-1",
+            height=8,
+            round=4,
+            block_hash="0x" + ("8" * 64),
+            signing_payload=b"height-8-round-4",
+            signer=signer,
+        )
+        next_height = self.journal.get_or_sign(
+            validator_id="validator-1",
+            height=9,
+            round=0,
+            block_hash="0x" + ("9" * 64),
+            signing_payload=b"height-9-round-0",
+            signer=signer,
+        )
+        self.assertEqual(same_height_new_round, b"s" * 64)
+        self.assertEqual(next_height, b"s" * 64)
+        evidence = self.journal.evidence()
+        self.assertTrue(evidence["rollback_signing_protected"])
+        self.assertEqual(evidence["watermark_validator_count"], 1)
+        self.assertEqual(evidence["watermark_latest_height"], 9)
+
+    def test_schema_v1_journal_backfills_watermark_on_restart(self) -> None:
+        legacy_path = Path(self.directory.name, "legacy-signing.sqlite")
+        legacy = ConsensusSigningJournal(legacy_path, chain_id=CHAIN_ID)
+        legacy.get_or_sign(
+            validator_id="validator-1",
+            height=12,
+            round=5,
+            block_hash="0x" + ("c" * 64),
+            signing_payload=b"legacy-vote",
+            signer=lambda: b"l" * 64,
+        )
+        legacy.connection.execute("DELETE FROM validator_watermarks")
+        legacy.close()
+
+        restarted = ConsensusSigningJournal(legacy_path, chain_id=CHAIN_ID)
+        try:
+            with self.assertRaisesRegex(
+                ConsensusSigningJournalError, "below.*watermark"
+            ):
+                restarted.get_or_sign(
+                    validator_id="validator-1",
+                    height=11,
+                    round=0,
+                    block_hash="0x" + ("b" * 64),
+                    signing_payload=b"rollback",
+                    signer=lambda: b"x" * 64,
+                )
+            evidence = restarted.evidence()
+            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v2")
+            self.assertEqual(evidence["watermark_latest_height"], 12)
+            self.assertEqual(evidence["startup_integrity_check"], "PASS")
+        finally:
+            restarted.close()
+
 
 if __name__ == "__main__":
     unittest.main()
