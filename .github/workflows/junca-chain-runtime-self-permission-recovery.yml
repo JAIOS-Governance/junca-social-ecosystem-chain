@@ -56,6 +56,36 @@ jobs:
           result="UNAVAILABLE"
           selected_role=""
           error_summary=""
+          verification="UNVERIFIED"
+
+          # Fast path for an administrator-attached exact grant.
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          if aws sts assume-role-with-web-identity \
+            --role-arn "$TARGET_ROLE_ARN" \
+            --role-session-name "junca-self-readback-existing-${GITHUB_RUN_ID}" \
+            --web-identity-token "$(cat /tmp/junca-oidc-token)" \
+            --duration-seconds 900 \
+            > /tmp/existing-assume.json 2> /tmp/existing-assume.stderr; then
+            export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+            AWS_ACCESS_KEY_ID="$(jq -er .Credentials.AccessKeyId /tmp/existing-assume.json)"
+            AWS_SECRET_ACCESS_KEY="$(jq -er .Credentials.SecretAccessKey /tmp/existing-assume.json)"
+            AWS_SESSION_TOKEN="$(jq -er .Credentials.SessionToken /tmp/existing-assume.json)"
+            if aws iam simulate-principal-policy \
+              --policy-source-arn "$TARGET_ROLE_ARN" \
+              --action-names iam:SimulatePrincipalPolicy \
+              --resource-arns "$TARGET_ROLE_ARN" \
+              > artifacts/self-permission-simulation.json \
+              2> artifacts/self-permission-simulation.stderr; then
+              decision="$(jq -r '.EvaluationResults[0].EvalDecision' artifacts/self-permission-simulation.json)"
+              if [[ "$decision" == "allowed" ]]; then
+                selected_role="$TARGET_ROLE_ARN"
+                result="PRESENT"
+                verification="PASS"
+              fi
+            fi
+          else
+            error_summary+="existing target-role assumption failed; "
+          fi
 
           cat > /tmp/self-readback-policy.json <<JSON
           {
@@ -69,10 +99,11 @@ jobs:
           }
           JSON
 
-          for bootstrap_role in \
-            "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment" \
-            "arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"
-          do
+          if [[ "$verification" != "PASS" ]]; then
+            for bootstrap_role in \
+              "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment" \
+              "arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"
+            do
             unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
             if ! aws sts assume-role-with-web-identity \
               --role-arn "$bootstrap_role" \
@@ -105,9 +136,9 @@ jobs:
               break
             fi
             error_summary+="put policy via ${bootstrap_role}: $(tr '\n' ' ' < /tmp/put-policy.stderr | cut -c1-240); "
-          done
+            done
+          fi
 
-          verification="UNVERIFIED"
           if [[ "$result" == "APPLIED" ]]; then
             unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
             if aws sts assume-role-with-web-identity \

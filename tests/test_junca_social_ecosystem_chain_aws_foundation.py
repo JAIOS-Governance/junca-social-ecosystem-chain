@@ -166,12 +166,23 @@ class AwsFoundationTests(unittest.TestCase):
             "JUNCA Chain Runtime Self Permission Recovery",
             "Download exact triggering recovery evidence",
             "recovery_result == \"APPLIED\"",
+            "recovery_result == \"PRESENT\"",
             "verification == \"PASS\"",
             "needs.recovery-evidence.result == 'success'",
             "RECOVERY_RUN_ID",
             "AUTO_RESUME",
         ):
             self.assertIn(required, self.execution_workflow)
+
+    def test_recovery_accepts_exact_existing_permission_without_mutation(self) -> None:
+        for required in (
+            "Fast path for an administrator-attached exact grant",
+            'result="PRESENT"',
+            'verification="PASS"',
+            'if [[ "$verification" != "PASS" ]]',
+            "iam:SimulatePrincipalPolicy",
+        ):
+            self.assertIn(required, self.self_permission_recovery)
 
     def test_auto_resume_requires_permission_pass_before_bootstrap_plan(self) -> None:
         for required in (

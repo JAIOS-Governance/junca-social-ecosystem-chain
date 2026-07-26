@@ -80,7 +80,8 @@ jobs:
             .target_role_arn ==
               "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment" and
             .granted_action == "iam:SimulatePrincipalPolicy" and
-            .recovery_result == "APPLIED" and
+            (.recovery_result == "APPLIED" or
+             .recovery_result == "PRESENT") and
             .verification == "PASS" and
             .broad_iam_grant == false and
             .docs_runtime_role_used == false and
