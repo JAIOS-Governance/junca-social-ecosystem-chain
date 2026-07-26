@@ -232,6 +232,18 @@ class AwsFoundationTests(unittest.TestCase):
             self.assertIn(required, self.execution_workflow)
         self.assertNotIn("Reject unimplemented foundation apply", self.execution_workflow)
 
+    def test_auto_release_preserves_completed_bootstrap_when_runtime_inputs_are_pending(self) -> None:
+        for required in (
+            "Resolve validator foundation input readiness",
+            "foundation-input-readiness.json",
+            'foundation_state: $state',
+            'steps.foundation_inputs.outputs.ready == \'true\'',
+            'REQUESTED_PHASE" != "auto-release"',
+            "foundation_apply_executed: false",
+            "public_services_enabled: false",
+        ):
+            self.assertIn(required, self.execution_workflow)
+
     def test_bootstrap_plan_rejects_delete_or_replace_actions(self) -> None:
         self.assertIn(
             'select(index("delete"))', self.execution_workflow

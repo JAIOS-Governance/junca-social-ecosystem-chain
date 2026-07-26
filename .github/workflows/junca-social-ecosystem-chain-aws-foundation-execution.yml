@@ -495,13 +495,70 @@ jobs:
             (.validator_signer_arns.value | length) == 3
           ' artifacts/bootstrap-outputs.json
 
+      - name: Resolve validator foundation input readiness
+        id: foundation_inputs
+        if: >-
+          (env.REQUESTED_PHASE == 'foundation-plan' ||
+           env.REQUESTED_PHASE == 'foundation-apply' ||
+           env.REQUESTED_PHASE == 'auto-release')
+        env:
+          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
+          DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
+          ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
+          CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
+          NODE_AMI_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_AMI_ID }}
+          NODE_ARTIFACT_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_SHA256 }}
+          GENESIS_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_GENESIS_SHA256 }}
+          SOURCE_COMMIT: ${{ vars.JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT }}
+          ALERT_TOPIC_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN }}
+          AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            STATE_BUCKET_NAME DOMAIN_NAME ROUTE53_ZONE_ID CERTIFICATE_ARN \
+            NODE_AMI_ID NODE_ARTIFACT_SHA256 GENESIS_SHA256 SOURCE_COMMIT \
+            ALERT_TOPIC_ARN AVAILABILITY_ZONES_JSON; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          ready=false
+          if (( ${#missing[@]} == 0 )); then
+            ready=true
+          fi
+          printf 'ready=%s\n' "$ready" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${missing[@]:-}" |
+            jq -Rsc 'split("\n") | map(select(length > 0))' > artifacts/foundation-missing-inputs.json
+          jq -n \
+            --arg state "$([[ "$ready" == "true" ]] && echo READY || echo PENDING_INPUTS)" \
+            --arg requested_phase "$REQUESTED_PHASE" \
+            --argjson missing_inputs "$(cat artifacts/foundation-missing-inputs.json)" \
+            '{
+              schema_version: "1.0",
+              chain_name: "JUNCA Social Ecosystem Chain",
+              governance: "JAIOS Institutional Governance",
+              notice: "Public Testnet / No Monetary Value",
+              requested_phase: $requested_phase,
+              foundation_state: $state,
+              missing_inputs: $missing_inputs,
+              foundation_apply_executed: false,
+              public_services_enabled: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/foundation-input-readiness.json
+          if [[ "$ready" != "true" && "$REQUESTED_PHASE" != "auto-release" ]]; then
+            echo "Validator foundation inputs are incomplete" >&2
+            exit 2
+          fi
+
 
       - name: Apply guarded validator foundation
         if: >-
           (env.REQUESTED_PHASE == 'foundation-apply' || env.REQUESTED_PHASE == 'auto-release') &&
-          steps.authorization.outputs.authorized == 'true'
+          steps.authorization.outputs.authorized == 'true' &&
+          steps.foundation_inputs.outputs.ready == 'true'
         env:
-          STATE_BUCKET_NAME: ${{ vars.JUNCA_TERRAFORM_STATE_BUCKET }}
+          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
           DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
           ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
           CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
