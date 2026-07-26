@@ -148,21 +148,50 @@ jobs:
 
           actions_json='[
             "s3:CreateBucket",
+            "s3:GetBucketLocation",
+            "s3:GetBucketPolicy",
+            "s3:GetBucketPublicAccessBlock",
+            "s3:GetBucketVersioning",
+            "s3:GetEncryptionConfiguration",
+            "s3:GetBucketOwnershipControls",
+            "s3:ListBucket",
             "s3:PutBucketVersioning",
             "s3:PutEncryptionConfiguration",
             "s3:PutBucketPublicAccessBlock",
+            "s3:PutBucketOwnershipControls",
+            "s3:PutBucketPolicy",
+            "s3:GetObject",
+            "s3:PutObject",
             "dynamodb:CreateTable",
+            "dynamodb:DescribeContinuousBackups",
+            "dynamodb:DescribeTable",
+            "dynamodb:DescribeTimeToLive",
+            "dynamodb:ListTagsOfResource",
+            "dynamodb:TagResource",
             "dynamodb:UpdateContinuousBackups",
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:DeleteItem",
             "kms:CreateKey",
             "kms:CreateAlias",
-            "ec2:CreateVpc",
-            "ec2:CreateSubnet",
-            "ec2:CreateVpcEndpoint",
-            "ec2:CreateSecurityGroup",
-            "ec2:RunInstances",
-            "iam:CreateRole",
-            "iam:CreateInstanceProfile",
-            "iam:PassRole"
+            "kms:DescribeKey",
+            "kms:EnableKeyRotation",
+            "kms:GetKeyPolicy",
+            "kms:GetKeyRotationStatus",
+            "kms:ListResourceTags",
+            "kms:TagResource",
+            "kms:Decrypt",
+            "kms:Encrypt",
+            "kms:GenerateDataKey",
+            "iam:GetRole",
+            "iam:TagRole",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:GetRolePolicy",
+            "iam:PutRolePolicy",
+            "iam:GetOpenIDConnectProvider",
+            "iam:AddClientIDToOpenIDConnectProvider",
+            "iam:UpdateOpenIDConnectProviderThumbprint",
+            "iam:TagOpenIDConnectProvider"
           ]'
           mapfile -t required_actions < <(jq -r '.[]' <<<"$actions_json")
 
@@ -272,6 +301,8 @@ jobs:
       - name: Produce guarded bootstrap plan
         if: contains(fromJSON('["bootstrap-plan","bootstrap-apply","auto-release"]'), env.REQUESTED_PHASE)
         env:
+          AWS_MAX_ATTEMPTS: "3"
+          AWS_RETRY_MODE: standard
           STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
           GITHUB_OIDC_THUMBPRINT: ${{ inputs.github_oidc_thumbprint || vars.JUNCA_GITHUB_OIDC_THUMBPRINT || '6938fd4d98bab03faadb97b34396831e3780aea1' }}
         run: |
@@ -287,7 +318,9 @@ jobs:
           terraform -chdir=infra/aws/bootstrap init -reconfigure -input=false
 
           # Import canonical resources that predate Terraform ownership.
-          if aws iam get-role --role-name JuncaChainPublicTestnetDeployment >/dev/null 2>&1; then
+          aws iam get-role --role-name JuncaChainPublicTestnetDeployment >/dev/null
+          if ! terraform -chdir=infra/aws/bootstrap state show \
+              aws_iam_role.deployment >/dev/null 2>&1; then
             terraform -chdir=infra/aws/bootstrap import \
               -var="aws_account_id=$AWS_ACCOUNT_ID" \
               -var="aws_region=$AWS_REGION" \
@@ -296,8 +329,10 @@ jobs:
               aws_iam_role.deployment JuncaChainPublicTestnetDeployment
           fi
           oidc_arn="arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
-          if aws iam get-open-id-connect-provider \
-              --open-id-connect-provider-arn "$oidc_arn" >/dev/null 2>&1; then
+          aws iam get-open-id-connect-provider \
+            --open-id-connect-provider-arn "$oidc_arn" >/dev/null
+          if ! terraform -chdir=infra/aws/bootstrap state show \
+              aws_iam_openid_connect_provider.github >/dev/null 2>&1; then
             terraform -chdir=infra/aws/bootstrap import \
               -var="aws_account_id=$AWS_ACCOUNT_ID" \
               -var="aws_region=$AWS_REGION" \
@@ -344,6 +379,8 @@ jobs:
           (env.REQUESTED_PHASE == 'bootstrap-apply' || env.REQUESTED_PHASE == 'auto-release') &&
           steps.authorization.outputs.authorized == 'true'
         env:
+          AWS_MAX_ATTEMPTS: "3"
+          AWS_RETRY_MODE: standard
           STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
         run: |
           set -euo pipefail
