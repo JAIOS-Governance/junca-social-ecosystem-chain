@@ -28,9 +28,39 @@ class SearchSurfaceAuditTest(unittest.TestCase):
                 200,
                 "text/html",
                 (
-                    '<html><head><link rel="canonical" '
-                    f'href="{AUDIT.BRAND_ORIGIN}/"></head></html>'
+                    "<html><head>"
+                    f"<title>{AUDIT.EXPECTED_TITLE}</title>"
+                    '<meta name="robots" content="index, follow">'
+                    f'<meta name="description" content="{AUDIT.OFFICIAL_NAME} public testnet">'
+                    f'<meta property="og:title" content="{AUDIT.OFFICIAL_NAME}">'
+                    '<meta property="og:description" '
+                    'content="Public Testnet / No Monetary Value.">'
+                    f'<meta property="og:url" content="{AUDIT.BRAND_ORIGIN}">'
+                    f'<meta property="og:image" content="{AUDIT.EXPECTED_SOCIAL_IMAGE}">'
+                    '<meta name="twitter:card" content="summary_large_image">'
+                    f'<meta name="twitter:title" content="{AUDIT.OFFICIAL_NAME}">'
+                    '<meta name="twitter:description" '
+                    'content="Public Testnet / No Monetary Value.">'
+                    f'<meta name="twitter:image" content="{AUDIT.EXPECTED_SOCIAL_IMAGE}">'
+                    '<link rel="canonical" '
+                    f'href="{AUDIT.BRAND_ORIGIN}/">'
+                    '<script type="application/ld+json">'
+                    "{"
+                    f'"name":"{AUDIT.OFFICIAL_NAME}",'
+                    f'"url":"{AUDIT.BRAND_ORIGIN}/",'
+                    f'"publisher":{{"name":"{AUDIT.OPERATOR_NAME}"}}'
+                    "}"
+                    "</script>"
+                    "</head><body>"
+                    f'<a href="{AUDIT.DOCS_ORIGIN}/">Technical reference</a>'
+                    "</body></html>"
                 ),
+            ),
+            AUDIT.EXPECTED_SOCIAL_IMAGE: AUDIT.Response(
+                AUDIT.EXPECTED_SOCIAL_IMAGE,
+                200,
+                "image/png",
+                "",
             ),
             f"{AUDIT.BRAND_ORIGIN}/robots.txt": AUDIT.Response(
                 f"{AUDIT.BRAND_ORIGIN}/robots.txt",
@@ -101,6 +131,46 @@ class SearchSurfaceAuditTest(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertTrue(
             any("brand_sitemap_origin" in failure for failure in result["failures"])
+        )
+
+    def test_social_metadata_drift_fails_closed(self) -> None:
+        root_url = f"{AUDIT.BRAND_ORIGIN}/"
+        root = self.responses[root_url]
+        self.responses[root_url] = AUDIT.Response(
+            root.url,
+            root.status,
+            root.content_type,
+            root.body.replace(
+                'content="summary_large_image"',
+                'content="summary"',
+            ),
+        )
+
+        result = AUDIT.audit(self.fetch)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertTrue(
+            any("brand_social_metadata" in failure for failure in result["failures"])
+        )
+
+    def test_legacy_current_name_fails_closed(self) -> None:
+        root_url = f"{AUDIT.BRAND_ORIGIN}/"
+        root = self.responses[root_url]
+        self.responses[root_url] = AUDIT.Response(
+            root.url,
+            root.status,
+            root.content_type,
+            root.body.replace(
+                "</body>",
+                f"<p>{AUDIT.LEGACY_NAME}</p></body>",
+            ),
+        )
+
+        result = AUDIT.audit(self.fetch)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertTrue(
+            any("brand_legacy_name_absent" in failure for failure in result["failures"])
         )
 
 
