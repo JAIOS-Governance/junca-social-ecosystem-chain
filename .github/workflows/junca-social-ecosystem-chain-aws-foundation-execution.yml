@@ -258,19 +258,19 @@ jobs:
           echo "authorized=$authorized" >> "$GITHUB_OUTPUT"
 
       - uses: hashicorp/setup-terraform@v3
-        if: contains(fromJSON('["bootstrap-plan","foundation-plan"]'), env.REQUESTED_PHASE)
+        if: contains(fromJSON('["bootstrap-plan","foundation-plan","bootstrap-apply","foundation-apply"]'), env.REQUESTED_PHASE)
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
 
       - name: Require permission PASS before any plan
-        if: contains(fromJSON('["bootstrap-plan","foundation-plan"]'), env.REQUESTED_PHASE)
+        if: contains(fromJSON('["bootstrap-plan","foundation-plan","bootstrap-apply","foundation-apply"]'), env.REQUESTED_PHASE)
         run: |
           set -euo pipefail
           test "${{ steps.permissions.outputs.permission_gate }}" = "PASS"
 
-      - name: Produce bootstrap plan
-        if: env.REQUESTED_PHASE == 'bootstrap-plan'
+      - name: Produce guarded bootstrap plan
+        if: contains(fromJSON('["bootstrap-plan","bootstrap-apply"]'), env.REQUESTED_PHASE)
         env:
           STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET }}
           GITHUB_OIDC_THUMBPRINT: ${{ inputs.github_oidc_thumbprint || vars.JUNCA_GITHUB_OIDC_THUMBPRINT }}
@@ -280,6 +280,27 @@ jobs:
           [[ "$STATE_BUCKET_NAME" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]
           [[ "$GITHUB_OIDC_THUMBPRINT" =~ ^[0-9a-f]{40}$ ]]
           terraform -chdir=infra/aws/bootstrap init -backend=false -input=false
+
+          # Import canonical resources that predate Terraform ownership.
+          if aws iam get-role --role-name JuncaChainPublicTestnetDeployment >/dev/null 2>&1; then
+            terraform -chdir=infra/aws/bootstrap import \
+              -var="aws_account_id=$AWS_ACCOUNT_ID" \
+              -var="aws_region=$AWS_REGION" \
+              -var="state_bucket_name=$STATE_BUCKET_NAME" \
+              -var="github_oidc_thumbprint=$GITHUB_OIDC_THUMBPRINT" \
+              aws_iam_role.deployment JuncaChainPublicTestnetDeployment
+          fi
+          oidc_arn="arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
+          if aws iam get-open-id-connect-provider \
+              --open-id-connect-provider-arn "$oidc_arn" >/dev/null 2>&1; then
+            terraform -chdir=infra/aws/bootstrap import \
+              -var="aws_account_id=$AWS_ACCOUNT_ID" \
+              -var="aws_region=$AWS_REGION" \
+              -var="state_bucket_name=$STATE_BUCKET_NAME" \
+              -var="github_oidc_thumbprint=$GITHUB_OIDC_THUMBPRINT" \
+              aws_iam_openid_connect_provider.github "$oidc_arn"
+          fi
+
           terraform -chdir=infra/aws/bootstrap plan -input=false -lock=false \
             -var="aws_account_id=$AWS_ACCOUNT_ID" \
             -var="aws_region=$AWS_REGION" \
@@ -289,6 +310,9 @@ jobs:
           terraform -chdir=infra/aws/bootstrap show -json \
             "$GITHUB_WORKSPACE/artifacts/bootstrap.tfplan" \
             > artifacts/bootstrap-plan.json
+          jq -e '[.resource_changes[]?.change.actions | select(index("delete"))] | length == 0' \
+            artifacts/bootstrap-plan.json
+          cp infra/aws/bootstrap/terraform.tfstate artifacts/bootstrap-preapply.tfstate
 
       - name: Require immutable runtime inputs before foundation plan
         if: env.REQUESTED_PHASE == 'foundation-plan'
@@ -300,10 +324,38 @@ jobs:
               .state] | all(. == "PASS")
           ' config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json
 
-      - name: Fail closed before any apply
-        if: steps.authorization.outputs.apply_requested == 'true'
+      - name: Apply bootstrap and migrate durable state
+        if: >-
+          env.REQUESTED_PHASE == 'bootstrap-apply' &&
+          steps.authorization.outputs.authorized == 'true'
+        env:
+          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET }}
         run: |
-          echo "Apply is intentionally unavailable while apply_authorized=false."
+          set -euo pipefail
+          terraform -chdir=infra/aws/bootstrap apply -input=false -auto-approve \
+            "$GITHUB_WORKSPACE/artifacts/bootstrap.tfplan"
+          terraform -chdir=infra/aws/bootstrap output -json \
+            > artifacts/bootstrap-outputs.json
+          state_kms_key_arn="$(jq -er .state_kms_key_arn.value artifacts/bootstrap-outputs.json)"
+          lock_table="$(jq -er .lock_table.value artifacts/bootstrap-outputs.json)"
+          terraform -chdir=infra/aws/bootstrap init -input=false \
+            -migrate-state -force-copy \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/bootstrap.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$lock_table" \
+            -backend-config="encrypt=true" \
+            -backend-config="kms_key_id=$state_kms_key_arn"
+          jq -e '
+            .aws_account_id.value == "595710543956" and
+            .aws_region.value == "us-east-1" and
+            (.validator_signer_arns.value | length) == 3
+          ' artifacts/bootstrap-outputs.json
+
+      - name: Reject unimplemented foundation apply
+        if: env.REQUESTED_PHASE == 'foundation-apply'
+        run: |
+          echo "Foundation apply remains fail-closed until bootstrap outputs are read back."
           exit 1
 
       - uses: actions/upload-artifact@v4
