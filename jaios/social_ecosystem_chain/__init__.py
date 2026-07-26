@@ -42,6 +42,10 @@ from .branding import (
     ChainBrandError,
     load_brand_contract,
 )
+from .consensus_signing_journal import (
+    ConsensusSigningJournal,
+    ConsensusSigningJournalError,
+)
 from .deployment_preflight import (
     DeploymentPreflight,
     DeploymentPreflightError,
@@ -167,6 +171,8 @@ __all__ = [
     "ChainBrand",
     "ChainBrandError",
     "load_brand_contract",
+    "ConsensusSigningJournal",
+    "ConsensusSigningJournalError",
     "DeploymentPreflight",
     "DeploymentPreflightError",
     "load_deployment_preflight",

@@ -11,6 +11,10 @@ from dataclasses import dataclass
 import hashlib
 from typing import Callable, Mapping
 
+from .consensus_signing_journal import (
+    ConsensusSigningJournal,
+    ConsensusSigningJournalError,
+)
 from .finality import FinalityCertificate, FinalityStateMachine, FinalityVote
 from .node_pipeline import ExecutedProposal, NodeExecutionPipeline
 from .state_store import StoredBlock
@@ -80,6 +84,7 @@ class LiveValidatorRuntime:
         signer_bindings: Mapping[str, ValidatorSignerBinding],
         signer: ConsensusSigner,
         signature_verifier: ConsensusSignatureVerifier,
+        signing_journal: ConsensusSigningJournal,
     ) -> None:
         if not callable(signer) or not callable(signature_verifier):
             raise ValidatorRuntimeError("signer and signature verifier are required")
@@ -90,6 +95,14 @@ class LiveValidatorRuntime:
         self.schedule = schedule
         self.signer = signer
         self.signature_verifier = signature_verifier
+        if (
+            not isinstance(signing_journal, ConsensusSigningJournal)
+            or signing_journal.chain_id != pipeline.config.chain_id
+        ):
+            raise ValidatorRuntimeError(
+                "chain-bound consensus signing journal is required"
+            )
+        self.signing_journal = signing_journal
         self.bindings = self._validate_bindings(initial, signer_bindings)
         self._proposal: ExecutedProposal | None = None
         self._machine: FinalityStateMachine | None = None
@@ -150,9 +163,20 @@ class LiveValidatorRuntime:
             validator_id=validator_id,
             signature=b"",
         )
-        signature = self.signer(binding.key_resource, unsigned.signing_payload)
-        if not isinstance(signature, bytes) or len(signature) not in {64, 65}:
-            raise ValidatorRuntimeError("signer returned an invalid consensus signature")
+        try:
+            signature = self.signing_journal.get_or_sign(
+                validator_id=validator_id,
+                height=unsigned.height,
+                round=unsigned.round,
+                block_hash=unsigned.block_hash,
+                signing_payload=unsigned.signing_payload,
+                signer=lambda: self.signer(
+                    binding.key_resource,
+                    unsigned.signing_payload,
+                ),
+            )
+        except ConsensusSigningJournalError as exc:
+            raise ValidatorRuntimeError(str(exc)) from exc
         return FinalityVote(
             chain_id=unsigned.chain_id,
             height=unsigned.height,
@@ -241,6 +265,7 @@ class LiveValidatorRuntime:
                 for item in active.validators
             ],
             "private_key_material_accepted": False,
+            "signing_journal": self.signing_journal.evidence(),
             "governance": "JAIOS Institutional Governance",
             "network": "Public Testnet / No Monetary Value",
             "mainnet_changed": False,
