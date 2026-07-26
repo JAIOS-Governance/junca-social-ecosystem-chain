@@ -43,3 +43,35 @@ the expected account and region, uploads 90-day redacted evidence, and keeps
 `deployment_enabled=false`.
 
 Actual Terraform apply remains a separate release gate.
+
+## Missing-role recovery
+
+If IAM readback shows that neither approved Public Testnet role exists, do not
+modify `JuncaChainDocsProductionDeployment` and do not create a role by copying
+its permissions.
+
+Deploy the IAM-only recovery template:
+
+`infrastructure/aws/bootstrap/public-testnet-inventory-role.yaml`
+
+Use stack name:
+
+`junca-chain-public-testnet-inventory-role`
+
+The template uses the existing GitHub OIDC provider and creates only:
+
+- `JuncaChainPublicTestnetDeployment`;
+- its exact immutable repository/environment trust;
+- the minimum read-only permissions required by the canonical inventory.
+
+It does not permit Terraform apply and creates no S3, DynamoDB, KMS, EC2, ECS,
+load balancer, Route 53, ACM, WAF, validator, RPC, explorer, bridge, mainnet, or
+asset resource.
+
+After the stack reaches `CREATE_COMPLETE`, rerun:
+
+https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/workflows/junca-chain-aws-canonical-inventory.yml
+
+Only after successful inventory readback may the deployment role be extended
+through a separately reviewed change set. Do not add infrastructure-write
+permissions during missing-role recovery.
