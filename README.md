@@ -9,6 +9,17 @@ Canonical protocol source for **JUNCA Social Ecosystem Chain**.
 | Repository role | Protocol, node, network specification, interoperability and release evidence |
 | Corporate ownership | None represented |
 
+## Official public surfaces
+
+- Brand and governance: https://chain.jaios-governance.org/
+- Technical documentation: https://docs.jaios-governance.org/
+- Canonical repository: https://github.com/JAIOS-Governance/junca-social-ecosystem-chain
+- Governed messaging and distribution: [`marketing/README.md`](marketing/README.md)
+
+Use these surfaces for current public information. The legacy name **JUNCA Global
+Chain** may appear only in clearly labelled historical context; it is not the
+current public name.
+
 This repository is governed as an institutional protocol boundary. JUNCA
 companies may contribute to and use the network, but no company, executive or
 individual is represented as the owner or sole controller of the chain.
