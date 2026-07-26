@@ -1,6 +1,11 @@
 name: JUNCA Chain Runtime Self Permission Recovery
 
 on:
+  workflow_run:
+    workflows:
+      - JUNCA Public Testnet OIDC Trust Recovery
+    types:
+      - completed
   workflow_dispatch:
   push:
     branches: [main]
@@ -13,6 +18,9 @@ permissions:
 
 jobs:
   recover:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 10
