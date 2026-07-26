@@ -9,7 +9,7 @@ material is never accepted; only a KMS/HSM resource identifier may be bound.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -341,6 +341,9 @@ class PublicTestnetConsensus:
             "last_certificate_hash": (
                 None if last is None else last.certificate.certificate_hash
             ),
+            "last_certificate": (
+                None if last is None else last.certificate.as_evidence()
+            ),
             "signer_bindings": [
                 {
                     "validator_id": validator_id,
@@ -442,28 +445,35 @@ class NodeState:
     consensus: PublicTestnetConsensus | None = None
     kms: AwsKmsSecp256k1Adapter | None = None
     peer_transport: PrivateVpcPeerTransport | None = None
+    consensus_lock: threading.RLock = field(
+        default_factory=threading.RLock, repr=False
+    )
 
     def evidence(self) -> dict[str, Any]:
-        head = self.store.head()
-        evidence = {
-            "status": "healthy",
-            "network": NETWORK_LABEL,
-            "chain_id": self.chain_id,
-            "validator_id": self.validator_id,
-            "head_height": head.height,
-            "head_hash": head.block_hash,
-            "genesis_hash": self.genesis_hash,
-            "signer_resource_digest": hashlib.sha256(
-                self.signer_resource.encode()
-            ).hexdigest(),
-            "private_key_material_accepted": False,
-            "mainnet_changed": False,
-            "assets_moved": False,
-            "bridge_activated": False,
-        }
-        if self.consensus is not None:
-            evidence["consensus"] = self.consensus.evidence()
-        return evidence
+        # Return one atomic view of the durable head and in-memory certificate.
+        # Without the shared lock, a health read could observe the old head and
+        # the new certificate while the peer receiver commits finality.
+        with self.consensus_lock:
+            head = self.store.head()
+            evidence = {
+                "status": "healthy",
+                "network": NETWORK_LABEL,
+                "chain_id": self.chain_id,
+                "validator_id": self.validator_id,
+                "head_height": head.height,
+                "head_hash": head.block_hash,
+                "genesis_hash": self.genesis_hash,
+                "signer_resource_digest": hashlib.sha256(
+                    self.signer_resource.encode()
+                ).hexdigest(),
+                "private_key_material_accepted": False,
+                "mainnet_changed": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+            }
+            if self.consensus is not None:
+                evidence["consensus"] = self.consensus.evidence()
+            return evidence
 
     def rpc(self, method: str, params: Any) -> Any:
         if not isinstance(params, list):
@@ -495,14 +505,16 @@ class NodeState:
                 raise ValidatorNodeError("consensus runtime is not configured")
             if params not in ([], [0]):
                 raise ValidatorNodeError("junca_propose accepts only round zero")
-            return self.consensus.propose(round=0).as_evidence()
+            with self.consensus_lock:
+                return self.consensus.propose(round=0).as_evidence()
         if method == "junca_submitVote":
             if self.consensus is None:
                 raise ValidatorNodeError("consensus runtime is not configured")
             if len(params) != 1 or not isinstance(params[0], dict):
                 raise ValidatorNodeError("junca_submitVote requires one vote object")
             packet = _authenticated_vote(params[0])
-            result = self.consensus.submit(packet)
+            with self.consensus_lock:
+                result = self.consensus.submit(packet)
             return {
                 "status": "FINALIZED" if result is not None else "VOTE_ACCEPTED",
                 "height": packet.height,
@@ -519,36 +531,43 @@ class NodeState:
                 or params != []
             ):
                 raise ValidatorNodeError("network consensus runtime is not configured")
-            proposal = self.consensus.runtime.pending_proposal
-            if proposal is None:
-                proposal = self.consensus.propose()
-            unsigned = FinalityVote(
-                chain_id=self.chain_id,
-                height=proposal.height,
-                round=self.consensus.runtime.current_round,
-                block_hash=proposal.block_hash,
-                validator_id=self.validator_id,
-                signature=b"",
-            )
-            signature = self.kms.sign(self.signer_resource, unsigned.signing_payload)
-            pending = AuthenticatedVote(
-                chain_id=unsigned.chain_id,
-                height=unsigned.height,
-                round=unsigned.round,
-                block_hash=unsigned.block_hash,
-                validator_id=unsigned.validator_id,
-                signature=signature,
-                peer_signature=b"pending",
-            )
-            packet = AuthenticatedVote(
-                **{
-                    **pending.__dict__,
-                    "peer_signature": self.kms.sign(
-                        self.signer_resource, pending.peer_signing_payload
-                    ),
-                }
-            )
-            self.peer_transport.broadcast(packet)
+            # Peer receiver threads and the local JSON-RPC thread share one
+            # proposal/finality machine.  Keep proposal selection, KMS signing,
+            # and local delivery atomic so concurrent SSM broadcasts cannot
+            # create competing local proposals or mutate the machine mid-vote.
+            with self.consensus_lock:
+                proposal = self.consensus.runtime.pending_proposal
+                if proposal is None:
+                    proposal = self.consensus.propose()
+                unsigned = FinalityVote(
+                    chain_id=self.chain_id,
+                    height=proposal.height,
+                    round=self.consensus.runtime.current_round,
+                    block_hash=proposal.block_hash,
+                    validator_id=self.validator_id,
+                    signature=b"",
+                )
+                signature = self.kms.sign(
+                    self.signer_resource, unsigned.signing_payload
+                )
+                pending = AuthenticatedVote(
+                    chain_id=unsigned.chain_id,
+                    height=unsigned.height,
+                    round=unsigned.round,
+                    block_hash=unsigned.block_hash,
+                    validator_id=unsigned.validator_id,
+                    signature=signature,
+                    peer_signature=b"pending",
+                )
+                packet = AuthenticatedVote(
+                    **{
+                        **pending.__dict__,
+                        "peer_signature": self.kms.sign(
+                            self.signer_resource, pending.peer_signing_payload
+                        ),
+                    }
+                )
+                self.peer_transport.broadcast(packet)
             return {"status": "BROADCAST", "height": proposal.height}
         raise ValidatorNodeError("method is not allowlisted")
 
@@ -668,6 +687,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.validator_signer or args.peer:
         resources = _parse_assignments(args.validator_signer, "validator signer")
         endpoints = _parse_peer_endpoints(args.peer)
+        expected_validators = set(genesis["validator_ids"])
+        if set(resources) != expected_validators or set(endpoints) != expected_validators:
+            raise ValidatorNodeError(
+                "network bindings must exactly match the genesis validator set"
+            )
+        if resources.get(args.validator_id) != args.signer_resource:
+            raise ValidatorNodeError(
+                "local signer must match the assigned genesis validator binding"
+            )
         kms = AwsKmsSecp256k1Adapter()
         consensus = PublicTestnetConsensus(
             store=state.store,
@@ -682,9 +710,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         def receive(packet: AuthenticatedVote) -> None:
-            if consensus.runtime.pending_proposal is None:
-                consensus.propose(round=packet.round)
-            consensus.submit(packet)
+            with state.consensus_lock:
+                if consensus.runtime.pending_proposal is None:
+                    consensus.propose(round=packet.round)
+                consensus.submit(packet)
 
         transport = PrivateVpcPeerTransport(
             validator_id=args.validator_id,
