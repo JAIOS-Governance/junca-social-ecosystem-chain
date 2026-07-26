@@ -11,6 +11,7 @@ on:
     paths:
       - ".github/workflows/junca-social-ecosystem-chain-aws-foundation-execution.yml"
       - "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
+      - "config/junca_public_testnet_foundation_bootstrap_policy.json"
       - "infra/aws/bootstrap/**"
       - "infra/aws/public-testnet/**"
   workflow_dispatch:
@@ -133,7 +134,7 @@ jobs:
           role-session-name: junca-foundation-${{ github.run_id }}
 
       - name: Reconcile exact bootstrap policy for authorized auto-release
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'workflow_run' || github.event_name == 'push'
         run: |
           set -euo pipefail
           aws iam put-role-policy \
@@ -372,6 +373,22 @@ jobs:
           if ! terraform -chdir=infra/aws/bootstrap state show \
               aws_iam_role.deployment >/dev/null 2>&1; then
             tf_import aws_iam_role.deployment JuncaChainPublicTestnetDeployment
+          fi
+          if aws iam get-role --role-name JuncaChainPublicTestnetImageBuilder \
+              >/dev/null 2>&1 &&
+              ! terraform -chdir=infra/aws/bootstrap state show \
+                aws_iam_role.validator_image_builder >/dev/null 2>&1; then
+            tf_import aws_iam_role.validator_image_builder \
+              JuncaChainPublicTestnetImageBuilder
+          fi
+          if aws iam get-instance-profile \
+              --instance-profile-name JuncaChainPublicTestnetImageBuilder \
+              >/dev/null 2>&1 &&
+              ! terraform -chdir=infra/aws/bootstrap state show \
+                aws_iam_instance_profile.validator_image_builder \
+                >/dev/null 2>&1; then
+            tf_import aws_iam_instance_profile.validator_image_builder \
+              JuncaChainPublicTestnetImageBuilder
           fi
           oidc_arn="arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
           aws iam get-open-id-connect-provider \
