@@ -218,3 +218,22 @@ jobs:
           if [[ "${{ steps.recovery.outputs.verification }}" != "PASS" ]]; then
             echo "::warning::Exact self-readback policy was not verified; AWS foundation remains fail-closed."
           fi
+
+      - name: Publish non-secret recovery summary
+        if: always()
+        run: |
+          set -euo pipefail
+          evidence=artifacts/runtime-self-permission-recovery.json
+          {
+            echo "## JUNCA Public Testnet IAM Recovery"
+            echo
+            echo "- Account: $(jq -r .account_id "$evidence")"
+            echo "- Region: $(jq -r .region "$evidence")"
+            echo "- Result: $(jq -r .recovery_result "$evidence")"
+            echo "- Verification: $(jq -r .verification "$evidence")"
+            echo "- Broad IAM grant: $(jq -r .broad_iam_grant "$evidence")"
+            echo "- Docs runtime role used: $(jq -r .docs_runtime_role_used "$evidence")"
+            echo "- Mainnet changed: $(jq -r .mainnet_changed "$evidence")"
+            echo "- Assets moved: $(jq -r .assets_moved "$evidence")"
+            echo "- Bridge activated: $(jq -r .bridge_activated "$evidence")"
+          } >> "$GITHUB_STEP_SUMMARY"
