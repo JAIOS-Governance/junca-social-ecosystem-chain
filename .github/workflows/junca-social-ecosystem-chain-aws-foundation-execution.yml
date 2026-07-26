@@ -146,68 +146,86 @@ jobs:
             *) echo "Unexpected deployment identity" >&2; exit 1 ;;
           esac
 
-          actions_json='[
-            "s3:CreateBucket",
-            "s3:GetBucketLocation",
-            "s3:GetBucketPolicy",
-            "s3:GetBucketPublicAccessBlock",
-            "s3:GetBucketVersioning",
-            "s3:GetEncryptionConfiguration",
-            "s3:GetBucketOwnershipControls",
-            "s3:ListBucket",
-            "s3:PutBucketVersioning",
-            "s3:PutEncryptionConfiguration",
-            "s3:PutBucketPublicAccessBlock",
-            "s3:PutBucketOwnershipControls",
-            "s3:PutBucketPolicy",
-            "s3:GetObject",
-            "s3:PutObject",
-            "dynamodb:CreateTable",
-            "dynamodb:DescribeContinuousBackups",
-            "dynamodb:DescribeTable",
-            "dynamodb:DescribeTimeToLive",
-            "dynamodb:ListTagsOfResource",
-            "dynamodb:TagResource",
-            "dynamodb:UpdateContinuousBackups",
-            "dynamodb:GetItem",
-            "dynamodb:PutItem",
-            "dynamodb:DeleteItem",
-            "kms:CreateKey",
-            "kms:CreateAlias",
-            "kms:DescribeKey",
-            "kms:EnableKeyRotation",
-            "kms:GetKeyPolicy",
-            "kms:GetKeyRotationStatus",
-            "kms:ListResourceTags",
-            "kms:TagResource",
-            "kms:Decrypt",
-            "kms:Encrypt",
-            "kms:GenerateDataKey",
-            "iam:GetRole",
-            "iam:TagRole",
-            "iam:UpdateAssumeRolePolicy",
-            "iam:GetRolePolicy",
-            "iam:PutRolePolicy",
-            "iam:GetOpenIDConnectProvider",
-            "iam:AddClientIDToOpenIDConnectProvider",
-            "iam:UpdateOpenIDConnectProviderThumbprint",
-            "iam:TagOpenIDConnectProvider"
+          simulation_groups='[
+            {
+              "resource": "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1",
+              "actions": [
+                "s3:CreateBucket", "s3:GetBucketLocation", "s3:GetBucketPolicy",
+                "s3:GetBucketPublicAccessBlock", "s3:GetBucketVersioning",
+                "s3:GetEncryptionConfiguration", "s3:GetBucketOwnershipControls",
+                "s3:ListBucket", "s3:PutBucketVersioning",
+                "s3:PutEncryptionConfiguration", "s3:PutBucketPublicAccessBlock",
+                "s3:PutBucketOwnershipControls", "s3:PutBucketPolicy"
+              ]
+            },
+            {
+              "resource": "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1/public-testnet/bootstrap.tfstate",
+              "actions": ["s3:GetObject", "s3:PutObject"]
+            },
+            {
+              "resource": "arn:aws:dynamodb:us-east-1:595710543956:table/junca-social-ecosystem-chain-testnet-lock",
+              "actions": [
+                "dynamodb:CreateTable", "dynamodb:DescribeContinuousBackups",
+                "dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive",
+                "dynamodb:ListTagsOfResource", "dynamodb:TagResource",
+                "dynamodb:UpdateContinuousBackups", "dynamodb:GetItem",
+                "dynamodb:PutItem", "dynamodb:DeleteItem"
+              ]
+            },
+            {
+              "resource": "*",
+              "actions": [
+                "kms:CreateKey", "kms:CreateAlias", "kms:DescribeKey",
+                "kms:EnableKeyRotation", "kms:GetKeyPolicy",
+                "kms:GetKeyRotationStatus", "kms:ListResourceTags",
+                "kms:TagResource", "kms:Decrypt", "kms:Encrypt",
+                "kms:GenerateDataKey"
+              ]
+            },
+            {
+              "resource": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+              "actions": [
+                "iam:GetRole", "iam:TagRole", "iam:UpdateAssumeRolePolicy",
+                "iam:GetRolePolicy", "iam:PutRolePolicy"
+              ]
+            },
+            {
+              "resource": "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com",
+              "actions": [
+                "iam:GetOpenIDConnectProvider",
+                "iam:AddClientIDToOpenIDConnectProvider",
+                "iam:UpdateOpenIDConnectProviderThumbprint",
+                "iam:TagOpenIDConnectProvider"
+              ]
+            }
           ]'
-          mapfile -t required_actions < <(jq -r '.[]' <<<"$actions_json")
+          actions_json="$(jq -c '[.[].actions[]]' <<<"$simulation_groups")"
 
-          simulation_state="UNAVAILABLE"
+          simulation_state="AVAILABLE"
           simulation_error=""
           simulation_json='[]'
-          if raw="$(aws iam simulate-principal-policy \
-              --policy-source-arn "$DEPLOYMENT_ROLE_ARN" \
-              --action-names "${required_actions[@]}" \
-              --output json 2>artifacts/permission-simulation.stderr)"; then
-            simulation_state="AVAILABLE"
-            simulation_json="$(jq '[.EvaluationResults[] | {
-              action: .EvalActionName,
-              decision: .EvalDecision
-            }]' <<<"$raw")"
-          else
+          : > artifacts/permission-simulation.stderr
+          while IFS= read -r group; do
+            resource="$(jq -r '.resource' <<<"$group")"
+            mapfile -t group_actions < <(jq -r '.actions[]' <<<"$group")
+            if raw="$(aws iam simulate-principal-policy \
+                --policy-source-arn "$DEPLOYMENT_ROLE_ARN" \
+                --action-names "${group_actions[@]}" \
+                --resource-arns "$resource" \
+                --output json 2>>artifacts/permission-simulation.stderr)"; then
+              group_results="$(jq --arg resource "$resource" \
+                '[.EvaluationResults[] | {
+                  action: .EvalActionName,
+                  resource: $resource,
+                  decision: .EvalDecision
+                }]' <<<"$raw")"
+              simulation_json="$(jq -c --argjson results "$group_results" \
+                '. + $results' <<<"$simulation_json")"
+            else
+              simulation_state="UNAVAILABLE"
+            fi
+          done < <(jq -c '.[]' <<<"$simulation_groups")
+          if [[ "$simulation_state" == "UNAVAILABLE" ]]; then
             simulation_error="$(tr '\n' ' ' < artifacts/permission-simulation.stderr | cut -c1-500)"
           fi
 
@@ -220,6 +238,12 @@ jobs:
           else
             permission_gate="UNVERIFIED"
           fi
+          denied_actions="$(jq -r '
+            [.[] | select(.decision != "allowed") | "\(.action) @ \(.resource)"]
+            | if length == 0 then "none" else join("\n") end
+          ' <<<"$simulation_json")"
+          printf 'permission_gate=%s\nDenied bootstrap permissions:\n%s\n' \
+            "$permission_gate" "$denied_actions"
 
           jq -n \
             --arg account_id "$actual_account" \
