@@ -6,6 +6,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+# Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
