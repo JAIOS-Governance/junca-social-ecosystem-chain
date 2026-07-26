@@ -210,6 +210,14 @@ class PublicTestnetConsensusTests(unittest.TestCase):
         evidence = self.consensus.evidence()
         self.assertEqual(evidence["head_height"], 2)
         self.assertIsNotNone(evidence["last_certificate_hash"])
+        self.assertEqual(
+            evidence["last_certificate"]["certificate_hash"],
+            evidence["last_certificate_hash"],
+        )
+        self.assertEqual(
+            evidence["last_certificate"]["validator_ids"],
+            ["validator-1", "validator-2", "validator-3"],
+        )
         self.assertNotIn("arn:aws:kms:", str(evidence))
         self.assertEqual(
             self.node.rpc("junca_health", [])["consensus"]["head_height"], 2
