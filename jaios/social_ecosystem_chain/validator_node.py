@@ -478,7 +478,8 @@ class NodeState:
     def rpc(self, method: str, params: Any) -> Any:
         if not isinstance(params, list):
             raise ValidatorNodeError("params must be a list")
-        head = self.store.head()
+        with self.consensus_lock:
+            head = self.store.head()
         if method == "eth_chainId":
             return hex(self.chain_id)
         if method == "eth_blockNumber":
