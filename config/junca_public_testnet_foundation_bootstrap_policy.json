@@ -93,7 +93,9 @@
         "iam:TagRole",
         "iam:UntagRole",
         "iam:UpdateAssumeRolePolicy",
-        "iam:UpdateOpenIDConnectProviderThumbprint"
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription"
       ],
       "Resource": [
         "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
