@@ -70,6 +70,16 @@ variable "node_ami_id" {
   }
 }
 
+variable "source_commit" {
+  description = "Exact 40-character source commit embedded in the approved immutable node AMI."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.source_commit))
+    error_message = "source_commit must be an exact lowercase 40-character Git commit SHA."
+  }
+}
+
 variable "node_artifact_sha256" {
   description = "Expected SHA-256 digest of the audited node artifact."
   type        = string
