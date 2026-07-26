@@ -161,6 +161,7 @@ jobs:
             "s3://${{ steps.resources.outputs.bucket }}/" \
             --delete \
             --exclude "*.html" \
+            --exclude "*.webmanifest" \
             --exclude "robots.txt" \
             --exclude "sitemap.xml" \
             --cache-control "public,max-age=31536000,immutable"
@@ -168,6 +169,7 @@ jobs:
             "s3://${{ steps.resources.outputs.bucket }}/" \
             --exclude "*" \
             --include "*.html" \
+            --include "*.webmanifest" \
             --include "robots.txt" \
             --include "sitemap.xml" \
             --cache-control "public,max-age=0,must-revalidate"
@@ -203,13 +205,22 @@ jobs:
               --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
             test "${code}" = "200"
           done
-          for asset in favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest; do
+          for asset in junca-symbol-r20.svg junca-symbol-r20-192.png junca-symbol-r20-512.png junca-symbol-r20-maskable-512.png junca-symbol-r20-apple-touch.png junca-symbol-r20.webmanifest; do
             curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
               --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
+            cmp "docs/technical-reference/dist/${asset}" "/tmp/${asset//\//-}"
           done
           grep -F 'rel="canonical" href="https://docs.jaios-governance.org/"' /tmp/home.html
-          grep -F 'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest"' /tmp/home.html
-          grep -F 'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png"' /tmp/home.html
+          grep -F 'rel="manifest" href="https://docs.jaios-governance.org/junca-symbol-r20.webmanifest"' /tmp/home.html
+          grep -F 'rel="apple-touch-icon" href="https://docs.jaios-governance.org/junca-symbol-r20-apple-touch.png"' /tmp/home.html
+          manifest_headers="$(curl --fail --silent --show-error --head \
+            "https://docs.jaios-governance.org/junca-symbol-r20.webmanifest")"
+          grep -i '^content-type: application/manifest+json' <<< "${manifest_headers}"
+          grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${manifest_headers}"
+          icon_headers="$(curl --fail --silent --show-error --head \
+            "https://docs.jaios-governance.org/junca-symbol-r20-192.png")"
+          grep -i '^content-type: image/png' <<< "${icon_headers}"
+          grep -i '^cache-control: public,max-age=31536000,immutable' <<< "${icon_headers}"
           grep -F 'Public Testnet' /tmp/home.html
           {
             echo "- Invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
