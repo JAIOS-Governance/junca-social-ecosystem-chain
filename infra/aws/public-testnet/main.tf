@@ -31,6 +31,25 @@ data "aws_route53_zone" "canonical" {
   private_zone = false
 }
 
+data "aws_ami" "approved_node" {
+  owners = ["self"]
+
+  filter {
+    name   = "image-id"
+    values = [var.node_ami_id]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
+
+data "aws_kms_key" "validator_signer" {
+  count  = 3
+  key_id = var.validator_signer_arns[count.index]
+}
+
 resource "terraform_data" "canonical_binding_gate" {
   lifecycle {
     precondition {
@@ -52,6 +71,19 @@ resource "terraform_data" "canonical_binding_gate" {
     precondition {
       condition     = alltrue([for az in var.availability_zones : startswith(az, var.aws_region)])
       error_message = "All validator availability zones must belong to the canonical AWS region."
+    }
+    precondition {
+      condition     = data.aws_ami.approved_node.id == var.node_ami_id
+      error_message = "The approved immutable node AMI must exist in the canonical account and be available."
+    }
+    precondition {
+      condition = alltrue([
+        for signer in data.aws_kms_key.validator_signer :
+        signer.key_usage == "SIGN_VERIFY" &&
+        signer.customer_master_key_spec == "ECC_SECG_P256K1" &&
+        signer.enabled
+      ])
+      error_message = "All three validator signers must be enabled SIGN_VERIFY ECC_SECG_P256K1 keys."
     }
   }
 }
