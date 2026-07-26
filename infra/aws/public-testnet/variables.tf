@@ -91,9 +91,33 @@ variable "node_artifact_sha256" {
 }
 
 variable "enable_public_services" {
-  description = "Enable RPC, Explorer, public ALB and DNS only after validator quorum acceptance."
+  description = "Enable RPC, Explorer, public ALB and DNS only after validator quorum and runtime acceptance."
   type        = bool
   default     = false
+}
+
+variable "quorum_acceptance_sha256" {
+  description = "SHA-256 digest of the three-validator quorum acceptance evidence. Required only when public services are enabled."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.quorum_acceptance_sha256 == null || can(regex("^[0-9a-f]{64}$", var.quorum_acceptance_sha256))
+    error_message = "quorum_acceptance_sha256 must be null or a lowercase SHA-256 digest."
+  }
+}
+
+variable "runtime_acceptance_sha256" {
+  description = "SHA-256 digest of the runtime acceptance evidence. Required only when public services are enabled."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.runtime_acceptance_sha256 == null || can(regex("^[0-9a-f]{64}$", var.runtime_acceptance_sha256))
+    error_message = "runtime_acceptance_sha256 must be null or a lowercase SHA-256 digest."
+  }
 }
 
 variable "validator_instance_type" {
