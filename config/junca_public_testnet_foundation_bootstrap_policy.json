@@ -1,0 +1,91 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BootstrapStateStorage",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetBucketOwnershipControls",
+        "s3:ListBucket",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1",
+        "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1/*"
+      ]
+    },
+    {
+      "Sid": "BootstrapStateLock",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:TagResource",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:595710543956:table/junca-social-ecosystem-chain-testnet-lock"
+    },
+    {
+      "Sid": "BootstrapEncryptionAndValidatorSigners",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateAlias",
+        "kms:CreateKey",
+        "kms:DescribeKey",
+        "kms:EnableKeyRotation",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListResourceTags",
+        "kms:TagResource",
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ImportAndManageCanonicalDeploymentIdentity",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:CreateOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:TagOpenIDConnectProvider"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+        "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
+      ]
+    },
+    {
+      "Sid": "VerifyCanonicalDeploymentPermissions",
+      "Effect": "Allow",
+      "Action": "iam:SimulatePrincipalPolicy",
+      "Resource": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment"
+    }
+  ]
+}
