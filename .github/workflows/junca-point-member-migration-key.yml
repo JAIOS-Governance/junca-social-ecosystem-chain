@@ -100,3 +100,5 @@ jobs:
             echo "- Public key: $PUBLIC_KEY_PATH"
             echo "- Private key export: impossible by AWS KMS design"
           } >> "$GITHUB_STEP_SUMMARY"
+
+# Migration key provisioning is idempotent; this marker intentionally triggers the workflow.
