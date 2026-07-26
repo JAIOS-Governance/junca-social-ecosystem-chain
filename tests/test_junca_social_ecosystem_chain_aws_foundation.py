@@ -21,6 +21,13 @@ class AwsFoundationTests(unittest.TestCase):
         cls.runtime_variables = (
             ROOT / "infra/aws/public-testnet/variables.tf"
         ).read_text(encoding="utf-8")
+        cls.runtime_outputs = (
+            ROOT / "infra/aws/public-testnet/outputs.tf"
+        ).read_text(encoding="utf-8")
+        cls.validator_user_data = (
+            ROOT
+            / "infra/aws/public-testnet/templates/validator-user-data.sh.tftpl"
+        ).read_text(encoding="utf-8")
         cls.workflow = (
             ROOT
             / ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
@@ -89,6 +96,29 @@ class AwsFoundationTests(unittest.TestCase):
             'can(regex("^ami-[0-9a-f]{8,17}$", var.node_ami_id))',
             self.runtime_variables,
         )
+
+    def test_runtime_reads_back_ami_and_signer_properties(self) -> None:
+        for required in (
+            'data "aws_ami" "approved_node"',
+            'owners = ["self"]',
+            'data "aws_kms_key" "validator_signer"',
+            'signer.key_usage == "SIGN_VERIFY"',
+            'signer.customer_master_key_spec == "ECC_SECG_P256K1"',
+            "signer.enabled",
+        ):
+            self.assertIn(required, self.runtime)
+        for required in (
+            'output "private_subnet_ids"',
+            'output "validator_signer_readback"',
+            'output "approved_node_ami_readback"',
+        ):
+            self.assertIn(required, self.runtime_outputs)
+
+    def test_validator_binary_path_matches_runtime_contract(self) -> None:
+        self.assertIn(
+            "/usr/local/bin/junca-chain-node", self.validator_user_data
+        )
+        self.assertNotIn("/usr/local/bin/junca\n", self.validator_user_data)
 
     def test_ci_validates_bootstrap_runtime_and_legacy_modules(self) -> None:
         for module in (
