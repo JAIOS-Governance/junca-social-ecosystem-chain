@@ -68,7 +68,9 @@ jobs:
             "set -euo pipefail",
             "grep -q '^AWS_REGION=' /etc/junca/runtime.env || printf '\''AWS_REGION=us-east-1\\nAWS_DEFAULT_REGION=us-east-1\\n'\'' >> /etc/junca/runtime.env",
             "systemctl daemon-reload",
-            "systemctl restart junca-validator.service",
+            "timeout 20s systemctl stop junca-validator.service || systemctl kill --kill-who=all --signal=KILL junca-validator.service || true",
+            "systemctl reset-failed junca-validator.service || true",
+            "systemctl start --no-block junca-validator.service",
             "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health && exit 0; sleep 2; done; journalctl -u junca-validator.service --no-pager -n 100; exit 1"
           ]}' > artifacts/ssm-recovery.json
           command_id="$(aws ssm send-command \
