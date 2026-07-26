@@ -12,13 +12,35 @@ permissions:
   id-token: write
 
 jobs:
-  provision:
+  prepare:
     runs-on: ubuntu-latest
-    environment: junca-chain-docs-production
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Set AWS-compatible default OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub" \
+            --data '{"use_default":true}'
+
+  provision:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: public-testnet
     timeout-minutes: 10
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
+      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       KEY_ALIAS: alias/junca-point-member-migration
       PUBLIC_KEY_PATH: infra/aws/member-portal/migration-public-key.pem
@@ -27,12 +49,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure canonical AWS identity
+      - name: Configure approved bootstrap identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-member-key-${{ github.run_id }}
+          role-session-name: junca-member-policy-${{ github.run_id }}
 
       - name: Verify AWS account
         shell: bash
@@ -96,14 +118,20 @@ jobs:
                   "acm:ListCertificates",
                   "acm:RequestCertificate",
                   "cloudformation:CreateStack",
+                  "cloudformation:CreateChangeSet",
+                  "cloudformation:DeleteChangeSet",
                   "cloudformation:DescribeStackEvents",
+                  "cloudformation:DescribeChangeSet",
                   "cloudformation:DescribeStacks",
+                  "cloudformation:ExecuteChangeSet",
+                  "cloudformation:GetTemplate",
                   "cloudformation:UpdateStack",
                   "cloudfront:CreateDistribution",
                   "cloudfront:GetDistribution",
                   "cloudfront:GetDistributionConfig",
                   "cloudfront:TagResource",
                   "cloudfront:UpdateDistribution",
+                  "cloudwatch:PutMetricAlarm",
                   "dynamodb:CreateTable",
                   "dynamodb:DescribeTable",
                   "dynamodb:TagResource",
@@ -152,6 +180,19 @@ jobs:
             --role-name JuncaChainDocsProductionDeployment \
             --policy-name JuncaPointMemberMigrationDeployment \
             --policy-document file://member-migration-policy.json
+
+      - name: Configure canonical member deployment identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-member-key-${{ github.run_id }}
+
+      - name: Verify canonical deployment identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
 
       - name: Create or read migration encryption key
         shell: bash
@@ -213,5 +254,29 @@ jobs:
             echo "- Public key: $PUBLIC_KEY_PATH"
             echo "- Private key export: impossible by AWS KMS design"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  restore:
+    if: always()
+    needs:
+      - prepare
+      - provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Restore canonical repository OIDC subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --request PUT \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub" \
+            --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
 
 # Migration key provisioning is idempotent; this marker intentionally triggers the workflow.
