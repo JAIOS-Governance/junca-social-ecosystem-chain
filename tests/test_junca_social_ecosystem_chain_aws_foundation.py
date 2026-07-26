@@ -160,6 +160,30 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.execution_workflow)
 
+    def test_recovery_completion_auto_resumes_with_verified_artifact(self) -> None:
+        for required in (
+            "workflow_run:",
+            "JUNCA Chain Runtime Self Permission Recovery",
+            "Download exact triggering recovery evidence",
+            "recovery_result == \"APPLIED\"",
+            "verification == \"PASS\"",
+            "needs.recovery-evidence.result == 'success'",
+            "RECOVERY_RUN_ID",
+            "AUTO_RESUME",
+        ):
+            self.assertIn(required, self.execution_workflow)
+
+    def test_auto_resume_requires_permission_pass_before_bootstrap_plan(self) -> None:
+        for required in (
+            "github.event_name == 'workflow_run' && 'bootstrap-plan'",
+            "Require permission PASS before any plan",
+            'test "${{ steps.permissions.outputs.permission_gate }}" = "PASS"',
+            "JUNCA_TERRAFORM_STATE_BUCKET",
+            "JUNCA_GITHUB_OIDC_THUMBPRINT",
+        ):
+            self.assertIn(required, self.execution_workflow)
+        self.assertNotIn("terraform apply", self.execution_workflow)
+
     def test_runtime_role_can_simulate_only_its_own_policy(self) -> None:
         for required in (
             'resource "aws_iam_role_policy" "deployment_self_permission_readback"',
