@@ -314,15 +314,20 @@ jobs:
             artifacts/bootstrap-plan.json
           cp infra/aws/bootstrap/terraform.tfstate artifacts/bootstrap-preapply.tfstate
 
-      - name: Require immutable runtime inputs before foundation plan
+      - name: Produce guarded validator foundation plan
         if: env.REQUESTED_PHASE == 'foundation-plan'
-        run: |
-          set -euo pipefail
-          jq -e '
-            [.gates[] | select(.gate == "state_backend" or
-              .gate == "validator_signers" or .gate == "immutable_runtime") |
-              .state] | all(. == "PASS")
-          ' config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json
+        env:
+          STATE_BUCKET_NAME: ${{ vars.JUNCA_TERRAFORM_STATE_BUCKET }}
+          DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
+          ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
+          CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
+          NODE_AMI_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_AMI_ID }}
+          NODE_ARTIFACT_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_SHA256 }}
+          GENESIS_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_GENESIS_SHA256 }}
+          SOURCE_COMMIT: ${{ vars.JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT }}
+          ALERT_TOPIC_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN }}
+          AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
+        run: bash scripts/junca_public_testnet_foundation.sh foundation-plan
 
       - name: Apply bootstrap and migrate durable state
         if: >-
@@ -352,11 +357,23 @@ jobs:
             (.validator_signer_arns.value | length) == 3
           ' artifacts/bootstrap-outputs.json
 
-      - name: Reject unimplemented foundation apply
-        if: env.REQUESTED_PHASE == 'foundation-apply'
-        run: |
-          echo "Foundation apply remains fail-closed until bootstrap outputs are read back."
-          exit 1
+
+      - name: Apply guarded validator foundation
+        if: >-
+          env.REQUESTED_PHASE == 'foundation-apply' &&
+          steps.authorization.outputs.authorized == 'true'
+        env:
+          STATE_BUCKET_NAME: ${{ vars.JUNCA_TERRAFORM_STATE_BUCKET }}
+          DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
+          ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
+          CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
+          NODE_AMI_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_AMI_ID }}
+          NODE_ARTIFACT_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_SHA256 }}
+          GENESIS_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_GENESIS_SHA256 }}
+          SOURCE_COMMIT: ${{ vars.JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT }}
+          ALERT_TOPIC_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN }}
+          AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
+        run: bash scripts/junca_public_testnet_foundation.sh foundation-apply
 
       - uses: actions/upload-artifact@v4
         if: always()
