@@ -66,12 +66,16 @@
       "Effect": "Allow",
       "Action": [
         "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies",
         "iam:TagRole",
         "iam:UpdateAssumeRolePolicy",
         "iam:GetRolePolicy",
         "iam:PutRolePolicy",
         "iam:CreateOpenIDConnectProvider",
         "iam:GetOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviderTags",
         "iam:AddClientIDToOpenIDConnectProvider",
         "iam:UpdateOpenIDConnectProviderThumbprint",
         "iam:TagOpenIDConnectProvider"
