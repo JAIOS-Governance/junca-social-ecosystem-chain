@@ -184,7 +184,8 @@ jobs:
             {
               "resource": "*",
               "actions": [
-                "kms:CreateKey", "kms:CreateAlias", "kms:DescribeKey",
+                "kms:CreateKey", "kms:CreateAlias", "kms:CreateGrant",
+                "kms:DescribeKey", "kms:ListAliases",
                 "kms:EnableKeyRotation", "kms:GetKeyPolicy",
                 "kms:GetKeyRotationStatus", "kms:ListResourceTags",
                 "kms:TagResource", "kms:Decrypt", "kms:Encrypt",
@@ -354,28 +355,79 @@ jobs:
           terraform -chdir=infra/aws/bootstrap init -reconfigure -input=false
 
           # Import canonical resources that predate Terraform ownership.
-          aws iam get-role --role-name JuncaChainPublicTestnetDeployment >/dev/null
-          if ! terraform -chdir=infra/aws/bootstrap state show \
-              aws_iam_role.deployment >/dev/null 2>&1; then
+          tf_import() {
+            local address="$1"
+            local resource_id="$2"
             terraform -chdir=infra/aws/bootstrap import \
               -var="aws_account_id=$AWS_ACCOUNT_ID" \
               -var="aws_region=$AWS_REGION" \
               -var="state_bucket_name=$STATE_BUCKET_NAME" \
               -var="github_oidc_thumbprint=$GITHUB_OIDC_THUMBPRINT" \
-              aws_iam_role.deployment JuncaChainPublicTestnetDeployment
+              "$address" "$resource_id"
+          }
+
+          aws iam get-role --role-name JuncaChainPublicTestnetDeployment >/dev/null
+          if ! terraform -chdir=infra/aws/bootstrap state show \
+              aws_iam_role.deployment >/dev/null 2>&1; then
+            tf_import aws_iam_role.deployment JuncaChainPublicTestnetDeployment
           fi
           oidc_arn="arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
           aws iam get-open-id-connect-provider \
             --open-id-connect-provider-arn "$oidc_arn" >/dev/null
           if ! terraform -chdir=infra/aws/bootstrap state show \
               aws_iam_openid_connect_provider.github >/dev/null 2>&1; then
-            terraform -chdir=infra/aws/bootstrap import \
-              -var="aws_account_id=$AWS_ACCOUNT_ID" \
-              -var="aws_region=$AWS_REGION" \
-              -var="state_bucket_name=$STATE_BUCKET_NAME" \
-              -var="github_oidc_thumbprint=$GITHUB_OIDC_THUMBPRINT" \
-              aws_iam_openid_connect_provider.github "$oidc_arn"
+            tf_import aws_iam_openid_connect_provider.github "$oidc_arn"
           fi
+
+          if aws s3api head-bucket --bucket "$STATE_BUCKET_NAME" 2>/dev/null &&
+              ! terraform -chdir=infra/aws/bootstrap state show \
+                aws_s3_bucket.terraform_state >/dev/null 2>&1; then
+            tf_import aws_s3_bucket.terraform_state "$STATE_BUCKET_NAME"
+          fi
+
+          if aws dynamodb describe-table \
+              --table-name junca-social-ecosystem-chain-testnet-lock \
+              >/dev/null 2>&1 &&
+              ! terraform -chdir=infra/aws/bootstrap state show \
+                aws_dynamodb_table.terraform_lock >/dev/null 2>&1; then
+            tf_import aws_dynamodb_table.terraform_lock \
+              junca-social-ecosystem-chain-testnet-lock
+          fi
+
+          state_alias=alias/junca-social-ecosystem-chain-testnet-state
+          state_key_id="$(aws kms list-aliases \
+            --query "Aliases[?AliasName=='$state_alias'].TargetKeyId | [0]" \
+            --output text)"
+          if [[ "$state_key_id" != "None" ]]; then
+            if ! terraform -chdir=infra/aws/bootstrap state show \
+                aws_kms_key.terraform_state >/dev/null 2>&1; then
+              tf_import aws_kms_key.terraform_state "$state_key_id"
+            fi
+            if ! terraform -chdir=infra/aws/bootstrap state show \
+                aws_kms_alias.terraform_state >/dev/null 2>&1; then
+              tf_import aws_kms_alias.terraform_state "$state_alias"
+            fi
+          fi
+
+          for index in 0 1 2; do
+            number="$(printf '%02d' "$((index + 1))")"
+            signer_alias="alias/junca-social-ecosystem-chain-testnet-validator-$number"
+            signer_key_id="$(aws kms list-aliases \
+              --query "Aliases[?AliasName=='$signer_alias'].TargetKeyId | [0]" \
+              --output text)"
+            if [[ "$signer_key_id" != "None" ]]; then
+              key_address="aws_kms_key.validator_signer[$index]"
+              alias_address="aws_kms_alias.validator_signer[$index]"
+              if ! terraform -chdir=infra/aws/bootstrap state show \
+                  "$key_address" >/dev/null 2>&1; then
+                tf_import "$key_address" "$signer_key_id"
+              fi
+              if ! terraform -chdir=infra/aws/bootstrap state show \
+                  "$alias_address" >/dev/null 2>&1; then
+                tf_import "$alias_address" "$signer_alias"
+              fi
+            fi
+          done
 
           terraform -chdir=infra/aws/bootstrap plan -input=false -lock=false \
             -var="aws_account_id=$AWS_ACCOUNT_ID" \
