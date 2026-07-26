@@ -39,11 +39,6 @@ variable "route53_zone_id" {
   type        = string
 }
 
-variable "certificate_arn" {
-  description = "ACM certificate ARN covering rpc, explorer and health subdomains."
-  type        = string
-}
-
 variable "deployment_principal_arn" {
   description = "OIDC deployment role ARN approved for this repository."
   type        = string
@@ -148,9 +143,4 @@ variable "genesis_sha256" {
     condition     = can(regex("^[0-9a-f]{64}$", var.genesis_sha256))
     error_message = "genesis_sha256 must be a lowercase SHA-256 digest."
   }
-}
-
-variable "alert_topic_arn" {
-  description = "Existing SNS topic ARN for institutional operations alerts."
-  type        = string
 }
