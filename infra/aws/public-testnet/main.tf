@@ -127,6 +127,16 @@ resource "terraform_data" "canonical_binding_gate" {
       error_message = "The approved AMI must be a self-owned available x86_64 EBS/HVM image whose immutable provenance tags exactly match the source commit, node artifact and genesis."
     }
     precondition {
+      condition = (
+        !var.enable_public_services ||
+        (
+          var.quorum_acceptance_sha256 != null &&
+          var.runtime_acceptance_sha256 != null
+        )
+      )
+      error_message = "Public RPC, Explorer, ALB and DNS remain fail-closed until both quorum and runtime acceptance evidence digests are supplied."
+    }
+    precondition {
       condition = alltrue([
         for signer in data.aws_kms_key.validator_signer :
         signer.key_usage == "SIGN_VERIFY" &&
