@@ -106,7 +106,7 @@ jobs:
       AWS_REGION: us-east-1
       DEPLOYMENT_ROLE_NAME: JuncaChainPublicTestnetDeployment
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
-      REQUESTED_PHASE: ${{ github.event_name == 'workflow_run' && 'auto-release' || inputs.phase || 'permission-readback' }}
+      REQUESTED_PHASE: ${{ (github.event_name == 'workflow_run' || github.event_name == 'push') && 'auto-release' || inputs.phase || 'permission-readback' }}
       AUTO_RESUME: ${{ github.event_name == 'workflow_run' }}
       RECOVERY_RUN_ID: ${{ github.event.workflow_run.id || '' }}
     steps:
@@ -304,7 +304,7 @@ jobs:
       - name: Validate apply authorization
         id: authorization
         env:
-          APPLY_CONFIRMATION: ${{ github.event_name == 'workflow_run' && 'PUBLIC-TESTNET-FOUNDATION-APPLY' || inputs.apply_confirmation }}
+          APPLY_CONFIRMATION: ${{ (github.event_name == 'workflow_run' || github.event_name == 'push') && 'PUBLIC-TESTNET-FOUNDATION-APPLY' || inputs.apply_confirmation }}
           APPROVED_CHANGE_REFERENCE: ${{ github.event_name == 'workflow_run' && format('https://github.com/{0}/actions/runs/{1}', github.repository, github.event.workflow_run.id) || inputs.approved_change_reference }}
         run: |
           set -euo pipefail
@@ -455,12 +455,10 @@ jobs:
           STATE_BUCKET_NAME: ${{ vars.JUNCA_TERRAFORM_STATE_BUCKET }}
           DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
           ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
-          CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
           NODE_AMI_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_AMI_ID }}
           NODE_ARTIFACT_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_SHA256 }}
           GENESIS_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_GENESIS_SHA256 }}
           SOURCE_COMMIT: ${{ vars.JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT }}
-          ALERT_TOPIC_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN }}
           AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
         run: bash scripts/junca_public_testnet_foundation.sh foundation-plan
 
@@ -505,20 +503,18 @@ jobs:
           STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
           DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
           ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
-          CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
           NODE_AMI_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_AMI_ID }}
           NODE_ARTIFACT_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_SHA256 }}
           GENESIS_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_GENESIS_SHA256 }}
           SOURCE_COMMIT: ${{ vars.JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT }}
-          ALERT_TOPIC_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN }}
           AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
         run: |
           set -euo pipefail
           missing=()
           for name in \
-            STATE_BUCKET_NAME DOMAIN_NAME ROUTE53_ZONE_ID CERTIFICATE_ARN \
+            STATE_BUCKET_NAME DOMAIN_NAME ROUTE53_ZONE_ID \
             NODE_AMI_ID NODE_ARTIFACT_SHA256 GENESIS_SHA256 SOURCE_COMMIT \
-            ALERT_TOPIC_ARN AVAILABILITY_ZONES_JSON; do
+            AVAILABILITY_ZONES_JSON; do
             [[ -n "${!name:-}" ]] || missing+=("$name")
           done
           ready=false
@@ -561,12 +557,10 @@ jobs:
           STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
           DOMAIN_NAME: ${{ vars.JUNCA_PUBLIC_TESTNET_DOMAIN }}
           ROUTE53_ZONE_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_ROUTE53_ZONE_ID }}
-          CERTIFICATE_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN }}
           NODE_AMI_ID: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_AMI_ID }}
           NODE_ARTIFACT_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_NODE_SHA256 }}
           GENESIS_SHA256: ${{ vars.JUNCA_PUBLIC_TESTNET_GENESIS_SHA256 }}
           SOURCE_COMMIT: ${{ vars.JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT }}
-          ALERT_TOPIC_ARN: ${{ vars.JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN }}
           AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
         run: bash scripts/junca_public_testnet_foundation.sh foundation-apply
 
