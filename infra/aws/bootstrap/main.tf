@@ -436,6 +436,17 @@ resource "aws_iam_role_policy" "deployment_ami_build" {
         Resource = aws_iam_instance_profile.validator_image_builder.arn
       },
       {
+        Sid      = "CreateImageBuilderServiceRole"
+        Effect   = "Allow"
+        Action   = "iam:CreateServiceLinkedRole"
+        Resource = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+        Condition = {
+          StringEquals = {
+            "iam:AWSServiceName" = "imagebuilder.amazonaws.com"
+          }
+        }
+      },
+      {
         Sid      = "PassExactImageBuilderRole"
         Effect   = "Allow"
         Action   = "iam:PassRole"
