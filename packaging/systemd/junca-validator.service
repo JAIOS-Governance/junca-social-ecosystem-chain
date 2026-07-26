@@ -1,0 +1,27 @@
+[Unit]
+Description=JUNCA Social Ecosystem Chain Public Testnet Validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=junca
+Group=junca
+EnvironmentFile=/etc/junca/runtime.env
+ExecStart=/usr/local/bin/junca-chain-node --genesis /etc/junca/genesis.json --data-dir /var/lib/junca --validator-id ${VALIDATOR_ID} --signer-resource ${SIGNER_RESOURCE_ARN} --http.addr 127.0.0.1 --http.port 8545 --mine
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/junca /var/log/junca
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
