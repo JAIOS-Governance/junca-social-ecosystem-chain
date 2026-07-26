@@ -12,36 +12,17 @@ permissions:
   id-token: write
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Set AWS-compatible default OIDC subject
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail-with-body --silent --show-error --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub" \
-            --data '{"use_default":true}'
-
   provision:
-    needs: prepare
     runs-on: ubuntu-latest
-    environment: public-testnet
-    timeout-minutes: 10
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      DEPLOYMENT_ROLE_NAME: JuncaChainDocsProductionDeployment
+      BOOTSTRAP_ROLE_NAME: JuncaPointMemberMigrationBootstrap
+      BOOTSTRAP_FUNCTION_NAME: junca-point-member-migration-bootstrap
       KEY_ALIAS: alias/junca-point-member-migration
       PUBLIC_KEY_PATH: infra/aws/member-portal/migration-public-key.pem
     steps:
@@ -49,20 +30,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure approved bootstrap identity
+      - name: Configure canonical AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-member-policy-${{ github.run_id }}
+          role-session-name: junca-member-key-${{ github.run_id }}
 
-      - name: Verify AWS account
+      - name: Verify exact AWS account
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
 
-      - name: Apply least-scope member migration permissions
+      - name: Build scoped migration policy
         shell: bash
         run: |
           set -euo pipefail
@@ -117,11 +98,11 @@ jobs:
                   "acm:DescribeCertificate",
                   "acm:ListCertificates",
                   "acm:RequestCertificate",
-                  "cloudformation:CreateStack",
                   "cloudformation:CreateChangeSet",
+                  "cloudformation:CreateStack",
                   "cloudformation:DeleteChangeSet",
-                  "cloudformation:DescribeStackEvents",
                   "cloudformation:DescribeChangeSet",
+                  "cloudformation:DescribeStackEvents",
                   "cloudformation:DescribeStacks",
                   "cloudformation:ExecuteChangeSet",
                   "cloudformation:GetTemplate",
@@ -139,9 +120,12 @@ jobs:
                   "lambda:AddPermission",
                   "lambda:CreateFunction",
                   "lambda:CreateFunctionUrlConfig",
+                  "lambda:DeleteFunction",
+                  "lambda:DeleteFunctionUrlConfig",
                   "lambda:GetFunction",
                   "lambda:GetFunctionUrlConfig",
                   "lambda:GetFunctionConfiguration",
+                  "lambda:InvokeFunction",
                   "lambda:TagResource",
                   "lambda:UpdateFunctionCode",
                   "lambda:UpdateFunctionConfiguration",
@@ -159,11 +143,14 @@ jobs:
                 "Resource": "*"
               },
               {
-                "Sid": "MemberExecutionRole",
+                "Sid": "MemberExecutionRoles",
                 "Effect": "Allow",
                 "Action": [
                   "iam:CreateRole",
+                  "iam:DeleteRole",
+                  "iam:DeleteRolePolicy",
                   "iam:GetRole",
+                  "iam:GetRolePolicy",
                   "iam:PassRole",
                   "iam:PutRolePolicy",
                   "iam:TagRole"
@@ -176,23 +163,154 @@ jobs:
             ]
           }
           JSON
-          aws iam put-role-policy \
-            --role-name JuncaChainDocsProductionDeployment \
-            --policy-name JuncaPointMemberMigrationDeployment \
-            --policy-document file://member-migration-policy.json
+          python3 -m json.tool member-migration-policy.json >/dev/null
 
-      - name: Configure canonical member deployment identity
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-member-key-${{ github.run_id }}
-
-      - name: Verify canonical deployment identity
+      - name: Apply policy through one-time child role
         shell: bash
         run: |
           set -euo pipefail
-          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          cat > bootstrap-trust.json <<'JSON'
+          {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+          JSON
+          if ! aws iam get-role --role-name "$BOOTSTRAP_ROLE_NAME" >/dev/null 2>&1; then
+            aws iam create-role \
+              --role-name "$BOOTSTRAP_ROLE_NAME" \
+              --assume-role-policy-document file://bootstrap-trust.json \
+              >/dev/null
+          fi
+          cat > bootstrap-policy.json <<'JSON'
+          {
+            "Version":"2012-10-17",
+            "Statement":[
+              {
+                "Effect":"Allow",
+                "Action":"iam:PutRolePolicy",
+                "Resource":"arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment"
+              },
+              {
+                "Effect":"Allow",
+                "Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
+                "Resource":"arn:aws:logs:us-east-1:595710543956:*"
+              }
+            ]
+          }
+          JSON
+          aws iam put-role-policy \
+            --role-name "$BOOTSTRAP_ROLE_NAME" \
+            --policy-name OneTimeMemberMigrationBootstrap \
+            --policy-document file://bootstrap-policy.json
+
+          mkdir -p bootstrap-package
+          cp member-migration-policy.json bootstrap-package/member-migration-policy.json
+          cat > bootstrap-package/lambda_function.py <<'PY'
+          import hashlib
+          import hmac
+          import json
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+              body = json.loads((event or {}).get("body") or "{}")
+              expected = os.environ["BOOTSTRAP_TOKEN_HASH"]
+              supplied = str(body.get("token") or "")
+              if not hmac.compare_digest(hashlib.sha256(supplied.encode()).hexdigest(), expected):
+                  return {"statusCode": 403, "body": json.dumps({"ok": False})}
+              with open("member-migration-policy.json", encoding="utf-8") as handle:
+                  policy = handle.read()
+              boto3.client("iam").put_role_policy(
+                  RoleName="JuncaChainDocsProductionDeployment",
+                  PolicyName="JuncaPointMemberMigrationDeployment",
+                  PolicyDocument=policy,
+              )
+              return {
+                  "statusCode": 200,
+                  "headers": {"content-type": "application/json"},
+                  "body": json.dumps({"ok": True}),
+              }
+          PY
+          (cd bootstrap-package && zip -q ../bootstrap.zip lambda_function.py member-migration-policy.json)
+          bootstrap_token="$(openssl rand -hex 32)"
+          bootstrap_token_hash="$(printf '%s' "$bootstrap_token" | sha256sum | cut -d' ' -f1)"
+          echo "::add-mask::$bootstrap_token"
+          role_arn="$(aws iam get-role --role-name "$BOOTSTRAP_ROLE_NAME" --query Role.Arn --output text)"
+          for attempt in 1 2 3 4 5 6; do
+            if aws lambda get-function --function-name "$BOOTSTRAP_FUNCTION_NAME" >/dev/null 2>&1; then
+              aws lambda update-function-code \
+                --function-name "$BOOTSTRAP_FUNCTION_NAME" \
+                --zip-file fileb://bootstrap.zip >/dev/null
+              aws lambda wait function-updated --function-name "$BOOTSTRAP_FUNCTION_NAME"
+              aws lambda update-function-configuration \
+                --function-name "$BOOTSTRAP_FUNCTION_NAME" \
+                --runtime python3.12 \
+                --handler lambda_function.lambda_handler \
+                --role "$role_arn" \
+                --timeout 30 \
+                --environment "Variables={BOOTSTRAP_TOKEN_HASH=$bootstrap_token_hash}" >/dev/null
+              break
+            fi
+            if aws lambda create-function \
+              --function-name "$BOOTSTRAP_FUNCTION_NAME" \
+              --runtime python3.12 \
+              --handler lambda_function.lambda_handler \
+              --role "$role_arn" \
+              --zip-file fileb://bootstrap.zip \
+              --timeout 30 \
+              --environment "Variables={BOOTSTRAP_TOKEN_HASH=$bootstrap_token_hash}" >/dev/null 2>create-error.txt; then
+              break
+            fi
+            if [ "$attempt" = 6 ]; then
+              cat create-error.txt
+              exit 1
+            fi
+            sleep 5
+          done
+          aws lambda wait function-active-v2 --function-name "$BOOTSTRAP_FUNCTION_NAME"
+          if ! aws lambda get-function-url-config --function-name "$BOOTSTRAP_FUNCTION_NAME" > bootstrap-url.json 2>/dev/null; then
+            aws lambda create-function-url-config \
+              --function-name "$BOOTSTRAP_FUNCTION_NAME" \
+              --auth-type NONE > bootstrap-url.json
+          fi
+          aws lambda add-permission \
+            --function-name "$BOOTSTRAP_FUNCTION_NAME" \
+            --statement-id MigrationBootstrapFunctionUrl \
+            --action lambda:InvokeFunctionUrl \
+            --principal '*' \
+            --function-url-auth-type NONE >/dev/null 2>&1 || true
+          aws lambda add-permission \
+            --function-name "$BOOTSTRAP_FUNCTION_NAME" \
+            --statement-id MigrationBootstrapInvoke \
+            --action lambda:InvokeFunction \
+            --principal '*' \
+            --invoked-via-function-url >/dev/null 2>&1 || true
+          bootstrap_url="$(jq -r .FunctionUrl bootstrap-url.json)"
+          curl --silent --show-error --fail-with-body \
+            --header "content-type: application/json" \
+            --data "{\"token\":\"$bootstrap_token\"}" \
+            "$bootstrap_url" > bootstrap-output.json
+          test "$(jq -r .ok bootstrap-output.json)" = "true"
+          unset bootstrap_token
+
+      - name: Verify scoped policy and remove bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if aws iam get-role-policy \
+              --role-name "$DEPLOYMENT_ROLE_NAME" \
+              --policy-name JuncaPointMemberMigrationDeployment >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" = 6 ]; then
+              echo "Scoped migration policy readback failed."
+              exit 1
+            fi
+            sleep 5
+          done
+          aws lambda delete-function --function-name "$BOOTSTRAP_FUNCTION_NAME"
+          aws iam delete-role-policy \
+            --role-name "$BOOTSTRAP_ROLE_NAME" \
+            --policy-name OneTimeMemberMigrationBootstrap
+          aws iam delete-role --role-name "$BOOTSTRAP_ROLE_NAME"
 
       - name: Create or read migration encryption key
         shell: bash
@@ -212,10 +330,8 @@ jobs:
               --output text)"
             aws kms create-alias --alias-name "$KEY_ALIAS" --target-key-id "$key_id"
           fi
-          spec="$(aws kms describe-key --key-id "$key_id" --query KeyMetadata.KeySpec --output text)"
-          usage="$(aws kms describe-key --key-id "$key_id" --query KeyMetadata.KeyUsage --output text)"
-          test "$spec" = "RSA_4096"
-          test "$usage" = "ENCRYPT_DECRYPT"
+          test "$(aws kms describe-key --key-id "$key_id" --query KeyMetadata.KeySpec --output text)" = "RSA_4096"
+          test "$(aws kms describe-key --key-id "$key_id" --query KeyMetadata.KeyUsage --output text)" = "ENCRYPT_DECRYPT"
           echo "KEY_ID=$key_id" >> "$GITHUB_ENV"
 
       - name: Export public encryption key
@@ -252,31 +368,6 @@ jobs:
             echo "- AWS account: $AWS_ACCOUNT_ID"
             echo "- Alias: $KEY_ALIAS"
             echo "- Public key: $PUBLIC_KEY_PATH"
+            echo "- One-time bootstrap role: removed"
             echo "- Private key export: impossible by AWS KMS design"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  restore:
-    if: always()
-    needs:
-      - prepare
-      - provision
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Restore canonical repository OIDC subject
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail-with-body --silent --show-error --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub" \
-            --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
-
-# Migration key provisioning is idempotent; this marker intentionally triggers the workflow.
