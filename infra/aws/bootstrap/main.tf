@@ -273,7 +273,12 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         "route53:GetChange",
         "route53:GetHostedZone",
         "route53:ListResourceRecordSets",
+        "acm:AddTagsToCertificate",
+        "acm:DeleteCertificate",
         "acm:DescribeCertificate",
+        "acm:ListTagsForCertificate",
+        "acm:RequestCertificate",
+        "acm:RemoveTagsFromCertificate",
         "iam:CreateRole",
         "iam:DeleteRole",
         "iam:GetRole",
@@ -297,7 +302,14 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         "iam:RemoveRoleFromInstanceProfile",
         "iam:PassRole",
         "logs:*",
-        "cloudwatch:*"
+        "cloudwatch:*",
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:SetTopicAttributes",
+        "sns:TagResource",
+        "sns:UntagResource"
       ]
       Resource = "*"
       Condition = {
@@ -305,6 +317,155 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
           "aws:ResourceTag/Project" = "JUNCA Social Ecosystem Chain"
         }
       }
+    }]
+  })
+}
+
+resource "aws_iam_role" "validator_image_builder" {
+  name = "JuncaChainPublicTestnetImageBuilder"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "Ec2ImageBuilderAssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "validator_image_builder_managed" {
+  role       = aws_iam_role.validator_image_builder.name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/EC2InstanceProfileForImageBuilder"
+}
+
+resource "aws_iam_role_policy" "validator_image_builder_staging_read" {
+  name = "JuncaValidatorImmutableInputRead"
+  role = aws_iam_role.validator_image_builder.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ListExactEphemeralBuildBuckets"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::junca-validator-ami-build-${var.aws_account_id}-*"
+      },
+      {
+        Sid      = "ReadImmutableBuildInputs"
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::junca-validator-ami-build-${var.aws_account_id}-*/*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "validator_image_builder" {
+  name = "JuncaChainPublicTestnetImageBuilder"
+  role = aws_iam_role.validator_image_builder.name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy" "deployment_ami_build" {
+  name = "PublicTestnetImmutableAmiBuild"
+  role = aws_iam_role.deployment.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ManagePublicTestnetImageBuild"
+        Effect = "Allow"
+        Action = [
+          "imagebuilder:CreateComponent",
+          "imagebuilder:CreateDistributionConfiguration",
+          "imagebuilder:CreateImage",
+          "imagebuilder:CreateImageRecipe",
+          "imagebuilder:CreateInfrastructureConfiguration",
+          "imagebuilder:GetComponent",
+          "imagebuilder:GetDistributionConfiguration",
+          "imagebuilder:GetImage",
+          "imagebuilder:GetImageRecipe",
+          "imagebuilder:GetInfrastructureConfiguration",
+          "imagebuilder:ListImageBuildVersions",
+          "imagebuilder:TagResource"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid      = "ReadCanonicalBaseImageAndAmi"
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeImages", "ssm:GetParameter"]
+        Resource = "*"
+      },
+      {
+        Sid    = "ManageExactEphemeralBuildBuckets"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:DeleteBucket",
+          "s3:DeleteBucketPolicy",
+          "s3:GetBucketLocation",
+          "s3:ListBucket",
+          "s3:PutBucketPolicy",
+          "s3:PutBucketPublicAccessBlock"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::junca-validator-ami-build-${var.aws_account_id}-*"
+      },
+      {
+        Sid      = "ManageImmutableBuildInputs"
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"]
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::junca-validator-ami-build-${var.aws_account_id}-*/*"
+      },
+      {
+        Sid      = "ReadExactImageBuilderProfile"
+        Effect   = "Allow"
+        Action   = "iam:GetInstanceProfile"
+        Resource = aws_iam_instance_profile.validator_image_builder.arn
+      },
+      {
+        Sid      = "PassExactImageBuilderRole"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
+        Resource = aws_iam_role.validator_image_builder.arn
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = [
+              "imagebuilder.amazonaws.com",
+              "ec2.amazonaws.com"
+            ]
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "deployment_runtime_acceptance" {
+  name = "PublicTestnetRuntimeAcceptance"
+  role = aws_iam_role.deployment.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "RunValidatorAcceptanceViaSsm"
+      Effect = "Allow"
+      Action = [
+        "ssm:DescribeInstanceInformation",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:SendCommand"
+      ]
+      Resource = "*"
     }]
   })
 }
