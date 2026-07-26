@@ -47,8 +47,8 @@ jobs:
       - name: Configure AWS identity using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-1' }}
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Create redacted binding evidence
         env:
           AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
@@ -59,7 +59,7 @@ jobs:
           JUNCA_GENESIS_HASH: ${{ vars.JUNCA_GENESIS_HASH }}
         run: |
           python scripts/aws_binding_readback.py \
-            --region "${{ vars.AWS_REGION || 'ap-northeast-1' }}" \
+            --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
             --chain-id "$JUNCA_CHAIN_ID" \
             --genesis-hash "$JUNCA_GENESIS_HASH" \
             --source-commit "$GITHUB_SHA" \
