@@ -317,7 +317,12 @@ jobs:
             > artifacts/bootstrap-plan.json
           jq -e '[.resource_changes[]?.change.actions | select(index("delete"))] | length == 0' \
             artifacts/bootstrap-plan.json
-          cp infra/aws/bootstrap/terraform.tfstate artifacts/bootstrap-preapply.tfstate
+          if [[ -f infra/aws/bootstrap/terraform.tfstate ]]; then
+            cp infra/aws/bootstrap/terraform.tfstate artifacts/bootstrap-preapply.tfstate
+          else
+            printf '%s\n' '{"version":4,"terraform_version":"1.9.8","serial":0,"lineage":"","outputs":{},"resources":[],"check_results":null}' \
+              > artifacts/bootstrap-preapply.tfstate
+          fi
 
       - name: Produce guarded validator foundation plan
         if: env.REQUESTED_PHASE == 'foundation-plan'
