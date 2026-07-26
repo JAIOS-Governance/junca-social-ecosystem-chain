@@ -19,6 +19,7 @@
   --ui: "Inter";
   --jp-heading: "Shuei Mincho", "秀英明朝";
   --jp-body: "Shuei Kaku Gothic", "秀英角ゴシック";
+  --wordmark: "Optima LT Std Bold", "Optima LT Std", Optima, "URW Classico", serif;
 }
 
 * { box-sizing: border-box; }
@@ -52,7 +53,7 @@ code, pre { font-family: var(--ui); font-variant-numeric: tabular-nums; }
   backdrop-filter: blur(16px);
 }
 .wordmark { display: flex; align-items: baseline; gap: .8rem; }
-.wordmark span { font-family: var(--serif); font-size: 1.45rem; letter-spacing: .16em; }
+.wordmark span { font-family: var(--wordmark); font-size: 1.45rem; font-weight: 700; font-style: normal; font-synthesis: none; letter-spacing: .16em; }
 .wordmark small { color: #c4ccd7; font-family: var(--ui); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
 .site-header nav { display: flex; justify-content: center; gap: clamp(.8rem, 2vw, 2rem); font-family: var(--ui); font-size: .72rem; letter-spacing: .06em; }
 .site-header nav a { color: #dbe1e9; }
