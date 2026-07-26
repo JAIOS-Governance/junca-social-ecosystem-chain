@@ -1,0 +1,170 @@
+name: JUNCA Validator Foundation Release
+
+on:
+  workflow_run:
+    workflows: ["JUNCA Validator Immutable AMI Build"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-foundation-release
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-accept:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 45
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      DOMAIN_NAME: jaios-governance.org
+      ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+      AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: junca-validator-ami-build-${{ github.event.workflow_run.id }}
+          path: artifacts/ami
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-release-${{ github.run_id }}
+
+      - name: Bind verified immutable AMI inputs
+        run: |
+          set -euo pipefail
+          evidence=artifacts/ami/junca-validator-ami-build.json
+          jq -e '
+            .state == "AMI_VERIFIED" and
+            .network == "Public Testnet" and
+            .notice == "Public Testnet / No Monetary Value" and
+            .terraform_state_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' "$evidence"
+          {
+            echo "NODE_AMI_ID=$(jq -er .ami_id "$evidence")"
+            echo "NODE_ARTIFACT_SHA256=$(jq -er .node_artifact_sha256 "$evidence")"
+            echo "GENESIS_SHA256=$(jq -er .genesis_sha256 "$evidence")"
+            echo "SOURCE_COMMIT=$(jq -er .source_commit "$evidence")"
+          } >> "$GITHUB_ENV"
+
+      - name: Apply validators-only Terraform foundation
+        run: bash scripts/junca_public_testnet_foundation.sh foundation-apply
+
+      - name: Require three SSM-managed validators
+        run: |
+          set -euo pipefail
+          mapfile -t instances < <(jq -r '.validator_instance_ids.value[]' \
+            artifacts/foundation-outputs.json)
+          test "${#instances[@]}" = 3
+          for attempt in $(seq 1 60); do
+            online="$(aws ssm describe-instance-information \
+              --filters Key=InstanceIds,Values="$(IFS=,; echo "${instances[*]}")" \
+              --query 'length(InstanceInformationList[?PingStatus==`Online`])' \
+              --output text)"
+            [[ "$online" == "3" ]] && break
+            test "$attempt" -lt 60
+            sleep 10
+          done
+          printf '%s\n' "${instances[@]}" > artifacts/validator-instance-ids.txt
+
+      - name: Drive one real three-validator finalization
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          jq -n '{
+            commands: [
+              "set -euo pipefail",
+              "curl -fsS -H Content-Type:application/json --data '\''{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"junca_broadcastVote\",\"params\":[]}'\'' http://127.0.0.1:8545/"
+            ]
+          }' > artifacts/ssm-broadcast.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-broadcast.json \
+            --comment "JUNCA Public Testnet Runtime Acceptance" \
+            --query Command.CommandId --output text)"
+          for instance in "${instances[@]}"; do
+            aws ssm wait command-executed \
+              --command-id "$command_id" --instance-id "$instance"
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/broadcast-${instance}.json"
+            jq -e '.Status == "Success"' "artifacts/broadcast-${instance}.json"
+          done
+
+      - name: Read back identical finalized heads
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          jq -n '{
+            commands: [
+              "curl -fsS http://127.0.0.1:8545/health"
+            ]
+          }' > artifacts/ssm-health.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-health.json \
+            --comment "JUNCA Public Testnet Runtime Readback" \
+            --query Command.CommandId --output text)"
+          for instance in "${instances[@]}"; do
+            aws ssm wait command-executed \
+              --command-id "$command_id" --instance-id "$instance"
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/health-command-${instance}.json"
+            jq -er .StandardOutputContent \
+              "artifacts/health-command-${instance}.json" \
+              > "artifacts/health-${instance}.json"
+          done
+          jq -s -e '
+            length == 3 and
+            (map(.status) | unique) == ["healthy"] and
+            (map(.head_height) | min) >= 1 and
+            (map(.head_height) | unique | length) == 1 and
+            (map(.head_hash) | unique | length) == 1 and
+            (map(.consensus.last_certificate_hash) | unique | length) == 1 and
+            all(.consensus.required_vote_count == 3) and
+            all(.private_key_material_accepted == false) and
+            all(.mainnet_changed == false) and
+            all(.assets_moved == false) and
+            all(.bridge_activated == false)
+          ' artifacts/health-i-*.json
+          jq -s '{
+            schema_version: "junca-public-testnet-runtime-acceptance/v1",
+            result: "PASS",
+            validators: .,
+            mainnet_changed: false,
+            assets_moved: false,
+            bridge_activated: false
+          }' artifacts/health-i-*.json \
+            > artifacts/public-testnet-runtime-acceptance.json
+          sha256sum artifacts/public-testnet-runtime-acceptance.json \
+            > artifacts/public-testnet-runtime-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-foundation-release-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
