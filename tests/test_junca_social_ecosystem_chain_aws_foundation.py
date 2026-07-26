@@ -106,8 +106,11 @@ class AwsFoundationTests(unittest.TestCase):
             "arn:aws:iam::595710543956:role/"
             "JuncaChainPublicTestnetDeployment",
         )
-        self.assertFalse(self.gates["apply_authorized"])
-        self.assertEqual(self.gates["release_state"], "BLOCKED_FAIL_CLOSED")
+        self.assertTrue(self.gates["apply_authorized"])
+        self.assertEqual(
+            self.gates["release_state"],
+            "AUTHORIZED_FAIL_CLOSED_PENDING_PERMISSION_READBACK",
+        )
         self.assertFalse(self.gates["mainnet_changed"])
         self.assertFalse(self.gates["assets_moved"])
         self.assertFalse(self.gates["bridge_activated"])
@@ -136,17 +139,34 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.execution_workflow)
 
-    def test_execution_workflow_is_fail_closed_while_apply_is_unauthorized(self) -> None:
+    def test_execution_workflow_applies_only_after_exact_authorization(self) -> None:
+        for required in (
+            "config_authorized",
+            'test "$config_authorized" = "true"',
+            "PUBLIC-TESTNET-FOUNDATION-APPLY",
+            "approved_change_reference",
+            "steps.permissions.outputs.permission_gate",
+            "steps.authorization.outputs.authorized == 'true'",
+            "terraform -chdir=infra/aws/bootstrap apply",
+            "bootstrap-outputs.json",
+            "-migrate-state -force-copy",
+            "Reject unimplemented foundation apply",
+        ):
+            self.assertIn(required, self.execution_workflow)
+
+    def test_bootstrap_plan_rejects_delete_or_replace_actions(self) -> None:
         self.assertIn(
-            "config_authorized", self.execution_workflow
+            'select(index("delete"))', self.execution_workflow
         )
         self.assertIn(
-            'test "$config_authorized" = "true"', self.execution_workflow
+            "aws_iam_role.deployment JuncaChainPublicTestnetDeployment",
+            self.execution_workflow,
         )
         self.assertIn(
-            "Fail closed before any apply", self.execution_workflow
+            "aws_iam_openid_connect_provider.github",
+            self.execution_workflow,
         )
-        self.assertNotIn("terraform apply", self.execution_workflow)
+        self.assertIn('backend "s3" {}', self.bootstrap)
 
     def test_execution_workflow_preserves_non_monetary_boundary(self) -> None:
         for required in (
