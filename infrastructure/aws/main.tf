@@ -122,7 +122,9 @@ resource "aws_instance" "validator" {
     signer_key_arn = var.validator_signer_kms_key_arns[each.value]
     genesis_sha256 = var.genesis_sha256
     binary_sha256  = var.binary_sha256
+    runtime_contract = var.validator_runtime_contract
   })
+  user_data_replace_on_change = true
 
   tags = { Name = each.key }
 
