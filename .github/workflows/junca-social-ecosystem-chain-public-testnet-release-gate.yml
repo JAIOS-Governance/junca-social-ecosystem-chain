@@ -9,6 +9,15 @@ on:
       - tests/test_public_testnet_release_gate.py
       - tests/test_junca_validator_predeployment_acceptance.py
       - .github/workflows/junca-social-ecosystem-chain-public-testnet-release-gate.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/public_testnet_release_gate.py
+      - jaios/social_ecosystem_chain/predeployment_acceptance.py
+      - scripts/junca_validator_predeployment_acceptance.py
+      - tests/test_public_testnet_release_gate.py
+      - tests/test_junca_validator_predeployment_acceptance.py
+      - .github/workflows/junca-social-ecosystem-chain-public-testnet-release-gate.yml
   workflow_dispatch:
 
 permissions:
