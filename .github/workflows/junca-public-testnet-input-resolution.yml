@@ -77,12 +77,29 @@ jobs:
             --role-name "$DEPLOYMENT_ROLE_NAME" \
             --policy-name PublicTestnetInputReadback \
             --policy-document file:///tmp/input-readback-policy.json
+          for attempt in 1 2 3 4 5 6; do
+            if aws acm list-certificates --certificate-statuses ISSUED \
+                --max-items 1 >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Input readback policy did not become effective" >&2
+          exit 1
 
       - name: Resolve canonical non-secret inputs
         id: inputs
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          jq -n '{
+            schema_version: "1.0",
+            state: "READBACK_STARTED",
+            deployment_executed: false,
+            mainnet_changed: false,
+            assets_moved: false,
+            bridge_activated: false
+          }' > artifacts/public-testnet-input-resolution.json
 
           zones="$(aws route53 list-hosted-zones-by-name \
             --dns-name "$DOMAIN_NAME" --output json)"
