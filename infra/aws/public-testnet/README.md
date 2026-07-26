@@ -32,6 +32,12 @@ The AWS provider uses `allowed_account_ids`, and Terraform preconditions reject 
 5. Confirm the repository-scoped OIDC deployment role.
 6. Confirm three distinct KMS/CloudHSM signer resource ARNs without reading secret material.
 7. Supply an approved immutable AMI, genesis SHA-256 and node artifact SHA-256.
+   Produce the deployer-facing evidence with
+   `scripts/junca_validator_artifact_handoff.py`. The command verifies the
+   canonical account/region, exact three-validator genesis, three distinct KMS
+   signer resources, binary and genesis digests, and approved AMI identifier.
+   Its `READY_FOR_AWS_AMI_READBACK` state is a packaging state only; it does not
+   claim that an AMI or live validator has passed AWS readback.
 8. Run `terraform init -backend-config=...`, `terraform validate`, `terraform plan`.
 9. Apply validators 01, 02 and 03; verify quorum before enabling public endpoints.
 10. Run Runtime Acceptance v2 and non-production rollback acceptance.
