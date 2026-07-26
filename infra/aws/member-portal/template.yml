@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: JUNCA POINT MEMBER production portal on AWS
+
+Parameters:
+  ImageUri:
+    Type: String
+  OriginVerifySecret:
+    Type: String
+    NoEcho: true
+  DomainName:
+    Type: String
+    Default: member.jaios-governance.org
+  HostedZoneId:
+    Type: String
+    Default: Z0336017285464TX0NT1G
+
+Resources:
+  AuthTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: junca-point-member-auth
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+        - Key: DataClass
+          Value: MemberAuthentication
+
+  OtpSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: junca-point-member/otp-secret
+      Description: HMAC material for JUNCA POINT MEMBER OTP verification
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  SmtpPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: junca-point-member/smtp-password
+      Description: XServer SMTP password for desk@junca-global.group
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: JuncaPointMemberPortalExecution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: JuncaPointMemberRuntime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/junca-point-member-portal:*
+              - Effect: Allow
+                Action:
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt AuthTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref OtpSecret
+                  - !Ref SmtpPasswordSecret
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/junca-point-member-portal
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  PortalFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: FunctionLogGroup
+    Properties:
+      FunctionName: junca-point-member-portal
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 30
+      Role: !GetAtt FunctionRole.Arn
+      Environment:
+        Variables:
+          AUTH_TABLE_NAME: !Ref AuthTable
+          OTP_SECRET_SECRET_ARN: !Ref OtpSecret
+          SMTP_PASSWORD_SECRET_ARN: !Ref SmtpPasswordSecret
+          SMTP_HOST: sv13461.xserver.jp
+          SMTP_USER: desk@junca-global.group
+          SMTP_FROM: desk@junca-global.group
+          ORIGIN_VERIFY_SECRET: !Ref OriginVerifySecret
+          NEXT_TELEMETRY_DISABLED: "1"
+          NODE_ENV: production
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  PortalFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref PortalFunction
+      AuthType: NONE
+      InvokeMode: BUFFERED
+
+  PortalFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PortalFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  PortalFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PortalFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref DomainName
+        Comment: JUNCA POINT MEMBER production portal
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: member-lambda-url
+            DomainName: !Select
+              - 2
+              - !Split
+                - "/"
+                - !GetAtt PortalFunctionUrl.FunctionUrl
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginCustomHeaders:
+              - HeaderName: x-origin-verify
+                HeaderValue: !Ref OriginVerifySecret
+        DefaultCacheBehavior:
+          TargetOriginId: member-lambda-url
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 413fd37c-6c0b-4d74-b1d7-2d4af623a64d
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+      Tags:
+        - Key: Project
+          Value: JUNCA-POINT-MEMBER
+
+  FunctionErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: junca-point-member-function-errors
+      AlarmDescription: JUNCA POINT MEMBER Lambda errors detected
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PortalFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  FunctionThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: junca-point-member-function-throttles
+      AlarmDescription: JUNCA POINT MEMBER Lambda throttles detected
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PortalFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName
+  FunctionUrl:
+    Value: !GetAtt PortalFunctionUrl.FunctionUrl
+  OtpSecretArn:
+    Value: !Ref OtpSecret
+  SmtpPasswordSecretArn:
+    Value: !Ref SmtpPasswordSecret
+  AuthTableName:
+    Value: !Ref AuthTable
