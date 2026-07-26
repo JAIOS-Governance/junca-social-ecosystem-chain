@@ -17,8 +17,13 @@ class AwsOidcBootstrapTests(unittest.TestCase):
 
     def test_trust_is_repository_and_environment_scoped(self) -> None:
         self.assertIn(
-            "repo:${Repository}:environment:${EnvironmentName}", self.template
+            "repo:JAIOS-Governance@${RepositoryOwnerId}/"
+            "junca-social-ecosystem-chain@${RepositoryId}:"
+            "environment:${EnvironmentName}",
+            self.template,
         )
+        self.assertIn('Default: "308604370"', self.template)
+        self.assertIn('Default: "1310568313"', self.template)
         self.assertIn(
             "token.actions.githubusercontent.com:aud: sts.amazonaws.com",
             self.template,
