@@ -1,0 +1,42 @@
+{
+  "schema": "jaios-technical-reference-install-icon-recovery/v1",
+  "audit_date_jst": "2026-07-27",
+  "canonical_url": "https://docs.jaios-governance.org/",
+  "canonical_source": "docs/technical-reference",
+  "governance": "JAIOS Institutional Governance",
+  "constitution": {
+    "document_id": "1D_uQWXWfRKdrjQjHybTV9bgpBvknauRc0ZkOSe0jBE8",
+    "revision_id": "40",
+    "modified_time": "2026-07-26T08:55:23.366Z"
+  },
+  "report": {
+    "surface": "Android browser install prompt",
+    "observed": "generic four-tile fallback icon",
+    "root_cause": "stable manifest and icon URLs were published with a one-year immutable browser cache policy",
+    "production_asset_content": "official JUNCA symbol already present and digest-correct",
+    "corrective_action": [
+      "publish versioned manifest and icon URLs",
+      "serve web manifests with must-revalidate cache policy",
+      "retain versioned PNG and SVG assets as immutable",
+      "verify public headers and exact file equality in the AWS publication workflow"
+    ]
+  },
+  "target_release": "2026.07.27-R20",
+  "official_symbol": {
+    "drive_file_id": "1DiGrLHOWRcrVnt2BdijSFDy3U4mSvgBn",
+    "package_sha256": "3dc49cf3e5110207f4a1274e972d194943aaac8df657caa969cc4e326ecceba9",
+    "icon_192_sha256": "48db3873676c0b70969b47b067a51907d8b69bb2c6b231253bb83a767b7604f7",
+    "icon_512_sha256": "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5",
+    "apple_touch_sha256": "30aaf78297a8dd8077025eefc3d7b4bf613fd1ab955dd1d47858f9d797ecec88"
+  },
+  "runtime_boundary": {
+    "public_testnet_label": "Public Testnet / No Monetary Value",
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  },
+  "rollback_point": {
+    "repository_commit": "15945d207056c66877b4bc40a770ce91c5c88560",
+    "technical_release": "2026.07.27-R19"
+  }
+}

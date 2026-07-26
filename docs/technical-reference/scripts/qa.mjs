@@ -36,13 +36,21 @@ for (const route of routes) {
 const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
+for (const requiredInstallLink of [
+  'rel="icon" href="https://docs.jaios-governance.org/junca-symbol-r20.svg"',
+  'rel="icon" href="https://docs.jaios-governance.org/junca-symbol-r20-192.png"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/junca-symbol-r20-apple-touch.png"',
+  'rel="manifest" href="https://docs.jaios-governance.org/junca-symbol-r20.webmanifest"',
+]) {
+  if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
+}
 for (const required of [
   "Chain Core",
   "Implemented / CI Verified",
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.27 / R19",
+  "Revision · 2026.07.27 / R20",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -109,10 +117,26 @@ if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) fa
 await readFile(join(dist, "404.html"), "utf8");
 await readFile(join(dist, "release-manifest.json"), "utf8");
 await readFile(join(dist, "manifest.webmanifest"), "utf8");
+const installManifest = JSON.parse(await readFile(join(dist, "junca-symbol-r20.webmanifest"), "utf8"));
+if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
+for (const requiredIcon of [
+  "/junca-symbol-r20-192.png",
+  "/junca-symbol-r20-512.png",
+  "/junca-symbol-r20-maskable-512.png",
+]) {
+  if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
+    failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
+  }
+}
 await readFile(join(dist, "icon-192.png"));
 await readFile(join(dist, "icon-512.png"));
 await readFile(join(dist, "icon-maskable-512.png"));
 await readFile(join(dist, "apple-touch-icon.png"));
+await readFile(join(dist, "junca-symbol-r20-192.png"));
+await readFile(join(dist, "junca-symbol-r20-512.png"));
+await readFile(join(dist, "junca-symbol-r20-maskable-512.png"));
+await readFile(join(dist, "junca-symbol-r20-apple-touch.png"));
+await readFile(join(dist, "junca-symbol-r20.svg"));
 const favicon = await readFile(join(dist, "favicon.svg"), "utf8");
 if (!favicon.includes('data-symbol="JUNCA Official Symbol"')) failures.push("favicon does not declare the official symbol");
 if (!favicon.includes('data-rendering="non-distorting-resize"')) failures.push("favicon symbol rendering contract is missing");
@@ -129,6 +153,10 @@ const expectedSymbolDigests = new Map([
   ["icon-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
   ["icon-maskable-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
   ["apple-touch-icon.png", "30aaf78297a8dd8077025eefc3d7b4bf613fd1ab955dd1d47858f9d797ecec88"],
+  ["junca-symbol-r20-192.png", "48db3873676c0b70969b47b067a51907d8b69bb2c6b231253bb83a767b7604f7"],
+  ["junca-symbol-r20-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
+  ["junca-symbol-r20-maskable-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
+  ["junca-symbol-r20-apple-touch.png", "30aaf78297a8dd8077025eefc3d7b4bf613fd1ab955dd1d47858f9d797ecec88"],
 ]);
 for (const [name, expected] of expectedSymbolDigests) {
   const path = name === "official-junca-symbol.png"

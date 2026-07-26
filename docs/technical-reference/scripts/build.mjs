@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.27";
-const revision = "R19";
+const revision = "R20";
 const chainSource = "34d838b8a59cbaf73d14ed06d91584dfa157da6a";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 
