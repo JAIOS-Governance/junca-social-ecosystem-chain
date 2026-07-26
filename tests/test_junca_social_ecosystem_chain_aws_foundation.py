@@ -83,6 +83,23 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.runtime)
 
+    def test_public_services_are_disabled_until_validator_acceptance(self) -> None:
+        self.assertIn('variable "enable_public_services"', self.runtime_variables)
+        self.assertIn("default     = false", self.runtime_variables)
+        for required in (
+            "count = var.enable_public_services ? 1 : 0",
+            "count = var.enable_public_services ? 2 : 0",
+            "var.enable_public_services ? toset([",
+        ):
+            self.assertIn(required, self.runtime)
+        self.assertIn(
+            'value = var.enable_public_services ? "public-services" : "validators-only"',
+            self.runtime_outputs,
+        )
+        self.assertIn(
+            'value = try(aws_lb.public[0].arn, null)', self.runtime_outputs
+        )
+
     def test_runtime_requires_canonical_role_and_immutable_artifacts(self) -> None:
         for required in (
             "JuncaChainPublicTestnetDeployment",
