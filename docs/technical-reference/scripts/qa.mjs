@@ -51,6 +51,14 @@ const css = cssName ? await readFile(join(dist, "assets", cssName), "utf8") : ""
 for (const font of ["Cormorant Garamond", "Source Serif 4", "Inter", "Shuei Mincho", "Shuei Kaku Gothic"]) {
   if (!css.includes(font)) failures.push(`font stack missing ${font}`);
 }
+for (const required of [
+  '--wordmark:"Optima LT Std Bold","Optima LT Std"',
+  "font-family:var(--wordmark)",
+  "font-weight:700",
+  "font-synthesis:none",
+]) {
+  if (!css.includes(required)) failures.push(`formal wordmark typography missing ${required}`);
+}
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
 for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
   if (!css.includes(required)) failures.push(`approved design stylesheet missing ${required}`);
@@ -104,6 +112,9 @@ await readFile(join(dist, "icon-192.png"));
 await readFile(join(dist, "icon-512.png"));
 await readFile(join(dist, "icon-maskable-512.png"));
 await readFile(join(dist, "apple-touch-icon.png"));
+const favicon = await readFile(join(dist, "favicon.svg"), "utf8");
+if (!favicon.includes('data-typeface="Optima LT Std Bold"')) failures.push("favicon J does not declare the approved wordmark typeface");
+if (/<text[\s>]/.test(favicon)) failures.push("favicon J must ship as an outlined vector, not runtime text");
 const infrastructure = await readFile(join(repositoryRoot, "infra", "aws", "docs-publication", "main.yaml"), "utf8");
 const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "junca-chain-docs-production.yml"), "utf8");
 for (const required of [
