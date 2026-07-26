@@ -69,6 +69,24 @@ def accepted_evidence() -> tuple[dict, dict, dict]:
 
 
 class PublicTestnetReleaseGateTest(unittest.TestCase):
+    def test_rejects_predeployment_manifest_that_is_not_accepted(self):
+        binding, runtime, rollback = accepted_evidence()
+        predeployment = {
+            "decision": "PREDEPLOYMENT_REJECTED",
+            "accepted": False,
+            "live_runtime_verified": False,
+            "release_boundary": {
+                "mainnet_changed": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+                "bridge_route": "PAUSED",
+            },
+        }
+        decision = release_gate.evaluate(binding, runtime, rollback, predeployment)
+        self.assertFalse(decision["accepted"])
+        self.assertIn("predeployment.decision:not_accepted", decision["failures"])
+        self.assertIn("predeployment.accepted:not_true", decision["failures"])
+
     def test_accepts_only_complete_canonical_evidence(self) -> None:
         binding, runtime, rollback = accepted_evidence()
         decision = release_gate.evaluate(binding, runtime, rollback)
