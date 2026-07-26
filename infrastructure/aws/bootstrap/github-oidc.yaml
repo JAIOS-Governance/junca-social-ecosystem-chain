@@ -9,6 +9,14 @@ Parameters:
     Type: String
     Default: JAIOS-Governance/junca-social-ecosystem-chain
     AllowedPattern: "^JAIOS-Governance/junca-social-ecosystem-chain$"
+  RepositoryOwnerId:
+    Type: String
+    Default: "308604370"
+    AllowedPattern: "^308604370$"
+  RepositoryId:
+    Type: String
+    Default: "1310568313"
+    AllowedPattern: "^1310568313$"
   EnvironmentName:
     Type: String
     Default: public-testnet
@@ -94,7 +102,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${Repository}:environment:${EnvironmentName}
+                token.actions.githubusercontent.com:sub: !Sub repo:JAIOS-Governance@${RepositoryOwnerId}/junca-social-ecosystem-chain@${RepositoryId}:environment:${EnvironmentName}
       Policies:
         - PolicyName: JuncaChainPublicTestnetTerraform
           PolicyDocument:
