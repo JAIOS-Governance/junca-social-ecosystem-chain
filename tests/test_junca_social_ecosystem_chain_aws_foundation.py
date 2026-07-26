@@ -52,6 +52,11 @@ class AwsFoundationTests(unittest.TestCase):
                 / "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
             ).read_text(encoding="utf-8")
         )
+        cls.iam_authorization = json.loads(
+            (ROOT / "config/junca_public_testnet_aws_iam_authorization.json").read_text(
+                encoding="utf-8"
+            )
+        )
 
     def test_state_backend_is_private_retained_and_locked(self) -> None:
         for required in (
@@ -299,6 +304,30 @@ class AwsFoundationTests(unittest.TestCase):
             "Resource = aws_iam_role.deployment.arn",
         ):
             self.assertIn(required, self.bootstrap)
+
+    def test_ceo_iam_authorization_is_exact_and_triggers_recovery(self) -> None:
+        authorization = self.iam_authorization
+        self.assertEqual(
+            authorization["authorization_state"], "CEO_APPROVED_FOR_EXECUTION"
+        )
+        self.assertEqual(
+            authorization["grant"],
+            {
+                "effect": "Allow",
+                "action": "iam:SimulatePrincipalPolicy",
+                "resource": (
+                    "arn:aws:iam::595710543956:role/"
+                    "JuncaChainPublicTestnetDeployment"
+                ),
+            },
+        )
+        self.assertFalse(authorization["broad_iam_grant"])
+        self.assertFalse(authorization["docs_runtime_role_use_authorized"])
+        self.assertIn(
+            "config/junca_public_testnet_aws_iam_authorization.json",
+            self.self_permission_recovery,
+        )
+        self.assertIn("CEO_APPROVED_FOR_EXECUTION", self.self_permission_recovery)
 
     def test_self_permission_recovery_is_exact_and_fail_closed(self) -> None:
         for required in (

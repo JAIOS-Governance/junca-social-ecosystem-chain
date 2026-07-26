@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "authorized_at": "2026-07-26",
+  "authority": "JUNCA Holdings Founder / Chairman / CEO",
+  "operator": "JAIOS Institutional Governance",
+  "chain_name": "JUNCA Social Ecosystem Chain",
+  "notice": "Public Testnet / No Monetary Value",
+  "aws_account_id": "595710543956",
+  "aws_region": "us-east-1",
+  "target_role_arn": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "grant": {
+    "effect": "Allow",
+    "action": "iam:SimulatePrincipalPolicy",
+    "resource": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment"
+  },
+  "authorization_state": "CEO_APPROVED_FOR_EXECUTION",
+  "broad_iam_grant": false,
+  "docs_runtime_role_use_authorized": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "bridge_route": "PAUSED"
+}
