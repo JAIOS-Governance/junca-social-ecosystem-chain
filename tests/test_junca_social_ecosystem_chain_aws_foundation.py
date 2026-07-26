@@ -25,6 +25,11 @@ class AwsFoundationTests(unittest.TestCase):
             ROOT
             / ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
         ).read_text(encoding="utf-8")
+        cls.execution_workflow = (
+            ROOT
+            / ".github/workflows/"
+            "junca-social-ecosystem-chain-aws-foundation-execution.yml"
+        ).read_text(encoding="utf-8")
         cls.gates = json.loads(
             (
                 ROOT
@@ -113,6 +118,42 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertTrue(all(gate["state"] == "PENDING" for gate in self.gates["gates"]))
         self.assertNotIn("terraform apply", self.workflow)
+
+    def test_execution_workflow_reads_permissions_before_plan_or_apply(self) -> None:
+        for required in (
+            "iam simulate-principal-policy",
+            "permission_gate",
+            "bootstrap-plan",
+            "foundation-plan",
+            "bootstrap-apply",
+            "foundation-apply",
+            "PUBLIC-TESTNET-FOUNDATION-APPLY",
+        ):
+            self.assertIn(required, self.execution_workflow)
+
+    def test_execution_workflow_is_fail_closed_while_apply_is_unauthorized(self) -> None:
+        self.assertIn(
+            "config_authorized", self.execution_workflow
+        )
+        self.assertIn(
+            'test "$config_authorized" = "true"', self.execution_workflow
+        )
+        self.assertIn(
+            "Fail closed before any apply", self.execution_workflow
+        )
+        self.assertNotIn("terraform apply", self.execution_workflow)
+
+    def test_execution_workflow_preserves_non_monetary_boundary(self) -> None:
+        for required in (
+            "Public Testnet / No Monetary Value",
+            "mainnet_changed: false",
+            "assets_moved: false",
+            "bridge_activated: false",
+            "595710543956",
+            "us-east-1",
+            "JuncaChainPublicTestnetDeployment",
+        ):
+            self.assertIn(required, self.execution_workflow)
 
 
 if __name__ == "__main__":
