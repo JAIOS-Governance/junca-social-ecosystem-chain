@@ -80,7 +80,11 @@
       "Effect": "Allow",
       "Action": [
         "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:AddRoleToInstanceProfile",
+        "iam:AttachRolePolicy",
+        "iam:CreateInstanceProfile",
         "iam:CreateOpenIDConnectProvider",
+        "iam:CreateRole",
         "iam:GetOpenIDConnectProvider",
         "iam:GetRole",
         "iam:GetRolePolicy",
@@ -89,6 +93,7 @@
         "iam:ListOpenIDConnectProviderTags",
         "iam:ListRolePolicies",
         "iam:PutRolePolicy",
+        "iam:RemoveRoleFromInstanceProfile",
         "iam:TagOpenIDConnectProvider",
         "iam:TagRole",
         "iam:UntagRole",
@@ -99,6 +104,8 @@
       ],
       "Resource": [
         "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:instance-profile/JuncaChainPublicTestnetImageBuilder",
         "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
       ]
     },
