@@ -11,7 +11,7 @@ variable "aws_account_id" {
 variable "aws_region" {
   description = "AWS region dedicated to the public testnet."
   type        = string
-  default     = "ap-northeast-1"
+  default     = "us-east-1"
 }
 
 variable "availability_zones" {
