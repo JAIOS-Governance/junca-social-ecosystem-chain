@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/junca-chain-runtime-self-permission-recovery.yml
+      - config/junca_public_testnet_aws_iam_authorization.json
 
 permissions:
   contents: read
@@ -45,6 +46,25 @@ jobs:
             .assets_moved == false and
             .bridge_activated == false
           ' config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json
+          jq -e '
+            .authority == "JUNCA Holdings Founder / Chairman / CEO" and
+            .operator == "JAIOS Institutional Governance" and
+            .aws_account_id == "595710543956" and
+            .aws_region == "us-east-1" and
+            .target_role_arn ==
+              "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment" and
+            .grant.effect == "Allow" and
+            .grant.action == "iam:SimulatePrincipalPolicy" and
+            .grant.resource ==
+              "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment" and
+            .authorization_state == "CEO_APPROVED_FOR_EXECUTION" and
+            .broad_iam_grant == false and
+            .docs_runtime_role_use_authorized == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false and
+            .bridge_route == "PAUSED"
+          ' config/junca_public_testnet_aws_iam_authorization.json
 
       - name: Acquire repository OIDC token
         shell: bash
