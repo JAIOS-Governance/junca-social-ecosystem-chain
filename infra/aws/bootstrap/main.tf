@@ -51,6 +51,32 @@ resource "aws_kms_alias" "terraform_state" {
   target_key_id = aws_kms_key.terraform_state.key_id
 }
 
+resource "aws_kms_key" "validator_signer" {
+  count = 3
+
+  description              = "JUNCA Social Ecosystem Chain public testnet validator ${count.index + 1} signer"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_SECG_P256K1"
+  deletion_window_in_days  = 30
+  multi_region             = false
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = {
+    Purpose   = "ValidatorSigner"
+    Validator = format("%02d", count.index + 1)
+  }
+}
+
+resource "aws_kms_alias" "validator_signer" {
+  count = 3
+
+  name          = format("alias/junca-social-ecosystem-chain-testnet-validator-%02d", count.index + 1)
+  target_key_id = aws_kms_key.validator_signer[count.index].key_id
+}
+
 resource "aws_s3_bucket" "terraform_state" {
   bucket = var.state_bucket_name
 
