@@ -11,7 +11,9 @@ permissions:
   id-token: write
 
 concurrency:
-  group: junca-validator-foundation-release
+  # Shared with the manual/auto foundation workflow because both can acquire
+  # the canonical public-testnet Terraform state lock.
+  group: junca-public-testnet-aws-foundation
   cancel-in-progress: false
 
 jobs:
@@ -32,6 +34,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
 
       - uses: actions/download-artifact@v4
         with:
@@ -109,17 +116,27 @@ jobs:
               --command-id "$command_id" --instance-id "$instance" \
               > "artifacts/broadcast-${instance}.json"
             jq -e '.Status == "Success"' "artifacts/broadcast-${instance}.json"
+            jq -er .StandardOutputContent "artifacts/broadcast-${instance}.json" \
+              > "artifacts/broadcast-result-${instance}.json"
+            jq -e '
+              .error == null and
+              .result.status == "BROADCAST" and
+              (.result.height | type) == "number" and
+              .result.height >= 1
+            ' "artifacts/broadcast-result-${instance}.json"
           done
+          jq -s -e '
+            length == 3 and
+            (map(.result.height) | unique | length) == 1
+          ' artifacts/broadcast-result-i-*.json
 
       - name: Read back identical finalized heads
         run: |
           set -euo pipefail
           mapfile -t instances < artifacts/validator-instance-ids.txt
-          jq -n '{
-            commands: [
-              "curl -fsS http://127.0.0.1:8545/health"
-            ]
-          }' > artifacts/ssm-health.json
+          health_poll='for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health > /tmp/junca-health.json && jq -e '"'"'.head_height >= 1 and (.consensus.last_certificate_hash | type) == "string"'"'"' /tmp/junca-health.json >/dev/null && cat /tmp/junca-health.json && exit 0; sleep 2; done; exit 1'
+          jq -n --arg command "$health_poll" \
+            '{commands: [$command]}' > artifacts/ssm-health.json
           command_id="$(aws ssm send-command \
             --instance-ids "${instances[@]}" \
             --document-name AWS-RunShellScript \
@@ -132,6 +149,8 @@ jobs:
             aws ssm get-command-invocation \
               --command-id "$command_id" --instance-id "$instance" \
               > "artifacts/health-command-${instance}.json"
+            jq -e '.Status == "Success"' \
+              "artifacts/health-command-${instance}.json"
             jq -er .StandardOutputContent \
               "artifacts/health-command-${instance}.json" \
               > "artifacts/health-${instance}.json"
@@ -143,6 +162,24 @@ jobs:
             (map(.head_height) | unique | length) == 1 and
             (map(.head_hash) | unique | length) == 1 and
             (map(.consensus.last_certificate_hash) | unique | length) == 1 and
+            all(
+              (.consensus.last_certificate_hash | type) == "string" and
+              (.consensus.last_certificate_hash | test("^0x[0-9a-f]{64}$"))
+            ) and
+            (map(.consensus.last_certificate | tojson) | unique | length) == 1 and
+            all(
+              .consensus.last_certificate.finality_status == "FINALIZED" and
+              .consensus.last_certificate.height == .head_height and
+              .consensus.last_certificate.block_hash == .head_hash and
+              .consensus.last_certificate.signed_power == 3 and
+              .consensus.last_certificate.total_power == 3 and
+              .consensus.last_certificate.validator_ids ==
+                ["validator-01","validator-02","validator-03"] and
+              (.consensus.last_certificate.vote_hashes | length) == 3 and
+              (.consensus.last_certificate.vote_hashes | unique | length) == 3
+            ) and
+            all(.consensus.head_height == .head_height) and
+            all(.consensus.authenticated_vote_count == 3) and
             all(.consensus.required_vote_count == 3) and
             all(.private_key_material_accepted == false) and
             all(.mainnet_changed == false) and
