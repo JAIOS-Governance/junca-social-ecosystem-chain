@@ -305,7 +305,7 @@ jobs:
         id: authorization
         env:
           APPLY_CONFIRMATION: ${{ (github.event_name == 'workflow_run' || github.event_name == 'push') && 'PUBLIC-TESTNET-FOUNDATION-APPLY' || inputs.apply_confirmation }}
-          APPROVED_CHANGE_REFERENCE: ${{ github.event_name == 'workflow_run' && format('https://github.com/{0}/actions/runs/{1}', github.repository, github.event.workflow_run.id) || inputs.approved_change_reference }}
+          APPROVED_CHANGE_REFERENCE: ${{ github.event_name == 'workflow_run' && format('https://github.com/{0}/actions/runs/{1}', github.repository, github.event.workflow_run.id) || github.event_name == 'push' && format('https://github.com/{0}/commit/{1}', github.repository, github.sha) || inputs.approved_change_reference }}
         run: |
           set -euo pipefail
           config_authorized="$(jq -r '.apply_authorized' \
