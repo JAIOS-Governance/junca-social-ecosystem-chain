@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 0 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/junca_chain_search_surface_audit.py"
+      - "tests/test_junca_chain_search_surface_audit.py"
+      - ".github/workflows/junca-chain-search-surface-audit.yml"
   pull_request:
     paths:
       - "scripts/junca_chain_search_surface_audit.py"
