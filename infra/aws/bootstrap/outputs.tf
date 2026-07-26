@@ -27,6 +27,14 @@ output "validator_signer_arns" {
   value       = aws_kms_key.validator_signer[*].arn
 }
 
+output "validator_image_builder_profile" {
+  value = {
+    name     = aws_iam_instance_profile.validator_image_builder.name
+    arn      = aws_iam_instance_profile.validator_image_builder.arn
+    role_arn = aws_iam_role.validator_image_builder.arn
+  }
+}
+
 output "backend_configuration" {
   value = {
     bucket         = aws_s3_bucket.terraform_state.id
