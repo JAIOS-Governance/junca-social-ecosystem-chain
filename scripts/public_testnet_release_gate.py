@@ -44,8 +44,23 @@ def evaluate(
     binding: dict[str, Any],
     runtime: dict[str, Any],
     rollback: dict[str, Any],
+    predeployment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     failures: list[str] = []
+
+    if predeployment is not None:
+        if predeployment.get("decision") != "PREDEPLOYMENT_ACCEPTED":
+            failures.append("predeployment.decision:not_accepted")
+        if predeployment.get("accepted") is not True:
+            failures.append("predeployment.accepted:not_true")
+        if predeployment.get("live_runtime_verified") is not False:
+            failures.append("predeployment.live_runtime_verified:must_be_false")
+        pre_boundary = predeployment.get("release_boundary", {})
+        for field in ("mainnet_changed", "assets_moved", "bridge_activated"):
+            if pre_boundary.get(field) is not False:
+                failures.append(f"predeployment.release_boundary.{field}:not_false")
+        if pre_boundary.get("bridge_route") != "PAUSED":
+            failures.append("predeployment.release_boundary.bridge_route:not_paused")
 
     for source_name, source in (("binding", binding), ("runtime", runtime), ("rollback", rollback)):
         if source.get("official_chain_name") != CHAIN_NAME:
@@ -159,10 +174,16 @@ def main() -> int:
     parser.add_argument("--binding", required=True)
     parser.add_argument("--runtime", required=True)
     parser.add_argument("--rollback", required=True)
+    parser.add_argument("--predeployment", required=True)
     parser.add_argument("--output", default="public-testnet-release-decision.json")
     args = parser.parse_args()
 
-    decision = evaluate(read_json(args.binding), read_json(args.runtime), read_json(args.rollback))
+    decision = evaluate(
+        read_json(args.binding),
+        read_json(args.runtime),
+        read_json(args.rollback),
+        read_json(args.predeployment),
+    )
     output = Path(args.output)
     output.write_text(json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
