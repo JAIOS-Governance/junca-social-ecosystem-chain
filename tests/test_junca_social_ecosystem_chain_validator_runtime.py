@@ -140,8 +140,14 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
     def test_invalid_provider_signature_fails_closed(self) -> None:
         rejecting = self.build_runtime(signature_verifier=lambda *args: False)
         rejecting.propose()
-        with self.assertRaisesRegex(ValueError, "signature verification"):
-            rejecting.accept_vote(rejecting.sign_vote("validator-1"))
+        with self.assertRaisesRegex(
+            ValidatorRuntimeError, "signature verification failed"
+        ):
+            rejecting.sign_vote("validator-1")
+        self.assertEqual(
+            rejecting.signing_journal.evidence()["signature_count"],
+            0,
+        )
         malformed_journal = ConsensusSigningJournal(
             Path(self.directory.name, "malformed-signing.sqlite"),
             chain_id=CHAIN_ID,
@@ -270,6 +276,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                 block_hash=vote.block_hash,
                 signing_payload=vote.signing_payload,
                 signer=lambda: self.fail("provider must not be called for replay"),
+                signature_verifier=lambda value: value == vote.signature,
             )
             self.assertEqual(replay, vote.signature)
             with self.assertRaisesRegex(
@@ -282,6 +289,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     block_hash="0x" + ("f" * 64),
                     signing_payload=b"conflicting-payload",
                     signer=lambda: b"x" * 64,
+                    signature_verifier=lambda value: True,
                 )
         finally:
             restarted.close()
@@ -308,6 +316,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             block_hash="0x" + ("8" * 64),
             signing_payload=b"height-8-round-3",
             signer=signer,
+            signature_verifier=lambda value: value == b"s" * 64,
         )
         for height, round in ((7, 9), (8, 2)):
             with self.subTest(height=height, round=round):
@@ -321,6 +330,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                         block_hash="0x" + ("7" * 64),
                         signing_payload=f"{height}:{round}".encode(),
                         signer=signer,
+                        signature_verifier=lambda value: True,
                     )
 
         same_height_new_round = self.journal.get_or_sign(
@@ -330,6 +340,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             block_hash="0x" + ("8" * 64),
             signing_payload=b"height-8-round-4",
             signer=signer,
+            signature_verifier=lambda value: value == b"s" * 64,
         )
         next_height = self.journal.get_or_sign(
             validator_id="validator-1",
@@ -338,6 +349,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             block_hash="0x" + ("9" * 64),
             signing_payload=b"height-9-round-0",
             signer=signer,
+            signature_verifier=lambda value: value == b"s" * 64,
         )
         self.assertEqual(same_height_new_round, b"s" * 64)
         self.assertEqual(next_height, b"s" * 64)
@@ -356,6 +368,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             block_hash="0x" + ("c" * 64),
             signing_payload=b"legacy-vote",
             signer=lambda: b"l" * 64,
+            signature_verifier=lambda value: value == b"l" * 64,
         )
         legacy.connection.execute("DELETE FROM validator_watermarks")
         legacy.close()
@@ -372,13 +385,33 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     block_hash="0x" + ("b" * 64),
                     signing_payload=b"rollback",
                     signer=lambda: b"x" * 64,
+                    signature_verifier=lambda value: True,
                 )
             evidence = restarted.evidence()
-            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v2")
+            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v3")
             self.assertEqual(evidence["watermark_latest_height"], 12)
             self.assertEqual(evidence["startup_integrity_check"], "PASS")
         finally:
             restarted.close()
+
+    def test_corrupted_stored_signature_is_never_replayed(self) -> None:
+        self.runtime.propose()
+        vote = self.runtime.sign_vote("validator-1")
+        self.journal.connection.execute(
+            """
+            UPDATE consensus_signatures
+            SET signature=?
+            WHERE validator_id=? AND height=? AND round=?
+            """,
+            (b"c" * 64, vote.validator_id, vote.height, vote.round),
+        )
+        with self.assertRaisesRegex(
+            ValidatorRuntimeError, "signature verification failed"
+        ):
+            self.runtime.sign_vote("validator-1")
+        evidence = self.journal.evidence()
+        self.assertTrue(evidence["signature_verified_before_persist"])
+        self.assertTrue(evidence["stored_signature_verified_before_replay"])
 
 
 if __name__ == "__main__":

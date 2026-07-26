@@ -13,6 +13,7 @@ class ConsensusSigningJournalError(ValueError):
 
 
 VoteSigner = Callable[[], bytes]
+VoteSignatureVerifier = Callable[[bytes], bool]
 
 
 class ConsensusSigningJournal:
@@ -75,6 +76,7 @@ class ConsensusSigningJournal:
         block_hash: str,
         signing_payload: bytes,
         signer: VoteSigner,
+        signature_verifier: VoteSignatureVerifier,
     ) -> bytes:
         if not validator_id or any(char.isspace() for char in validator_id):
             raise ConsensusSigningJournalError("validator_id is invalid")
@@ -95,6 +97,8 @@ class ConsensusSigningJournal:
             raise ConsensusSigningJournalError("signing_payload must be non-empty bytes")
         if not callable(signer):
             raise ConsensusSigningJournalError("signer is required")
+        if not callable(signature_verifier):
+            raise ConsensusSigningJournalError("signature_verifier is required")
 
         payload_digest = hashlib.sha256(signing_payload).hexdigest()
         self.connection.execute("BEGIN IMMEDIATE")
@@ -116,6 +120,7 @@ class ConsensusSigningJournal:
                         "conflicting consensus vote would double-sign"
                     )
                 signature = bytes(row["signature"])
+                self._verify_signature(signature, signature_verifier)
                 self.connection.execute("COMMIT")
                 return signature
 
@@ -140,6 +145,7 @@ class ConsensusSigningJournal:
                 raise ConsensusSigningJournalError(
                     "signer returned an invalid consensus signature"
                 )
+            self._verify_signature(signature, signature_verifier)
             self.connection.execute(
                 """
                 INSERT INTO consensus_signatures (
@@ -191,13 +197,15 @@ class ConsensusSigningJournal:
             """
         ).fetchone()
         return {
-            "schema_version": "junca-consensus-signing-journal/v2",
+            "schema_version": "junca-consensus-signing-journal/v3",
             "chain_id": self.chain_id,
             "signature_count": int(signature_row["signature_count"]),
             "latest_height": signature_row["latest_height"],
             "watermark_validator_count": int(watermark_row["validator_count"]),
             "watermark_latest_height": watermark_row["latest_height"],
             "rollback_signing_protected": True,
+            "signature_verified_before_persist": True,
+            "stored_signature_verified_before_replay": True,
             "startup_integrity_check": "PASS",
             "private_key_material_stored": False,
             "key_resource_stored": False,
@@ -258,3 +266,19 @@ class ConsensusSigningJournal:
                 self.connection.execute("ROLLBACK")
             self.connection.close()
             raise
+
+    @staticmethod
+    def _verify_signature(
+        signature: bytes,
+        verifier: VoteSignatureVerifier,
+    ) -> None:
+        try:
+            verified = verifier(signature)
+        except Exception as exc:
+            raise ConsensusSigningJournalError(
+                "consensus signature verification failed"
+            ) from exc
+        if verified is not True:
+            raise ConsensusSigningJournalError(
+                "consensus signature verification failed"
+            )

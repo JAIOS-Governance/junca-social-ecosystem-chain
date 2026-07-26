@@ -174,6 +174,11 @@ class LiveValidatorRuntime:
                     binding.key_resource,
                     unsigned.signing_payload,
                 ),
+                signature_verifier=lambda signature: self.signature_verifier(
+                    validator_id,
+                    unsigned.signing_payload,
+                    signature,
+                ),
             )
         except ConsensusSigningJournalError as exc:
             raise ValidatorRuntimeError(str(exc)) from exc
