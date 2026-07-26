@@ -30,6 +30,11 @@ class AwsFoundationTests(unittest.TestCase):
             / ".github/workflows/"
             "junca-social-ecosystem-chain-aws-foundation-execution.yml"
         ).read_text(encoding="utf-8")
+        cls.self_permission_recovery = (
+            ROOT
+            / ".github/workflows/"
+            "junca-chain-runtime-self-permission-recovery.yml"
+        ).read_text(encoding="utf-8")
         cls.gates = json.loads(
             (
                 ROOT
@@ -154,6 +159,29 @@ class AwsFoundationTests(unittest.TestCase):
             "JuncaChainPublicTestnetDeployment",
         ):
             self.assertIn(required, self.execution_workflow)
+
+    def test_runtime_role_can_simulate_only_its_own_policy(self) -> None:
+        for required in (
+            'resource "aws_iam_role_policy" "deployment_self_permission_readback"',
+            'name = "SelfPermissionReadback"',
+            'Action   = "iam:SimulatePrincipalPolicy"',
+            "Resource = aws_iam_role.deployment.arn",
+        ):
+            self.assertIn(required, self.bootstrap)
+
+    def test_self_permission_recovery_is_exact_and_fail_closed(self) -> None:
+        for required in (
+            "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+            "--role-name \"$TARGET_ROLE_NAME\"",
+            "--policy-name SelfPermissionReadback",
+            '"Resource": "$TARGET_ROLE_ARN"',
+            "broad_iam_grant: false",
+            "docs_runtime_role_used: false",
+            "AWS foundation remains fail-closed",
+        ):
+            self.assertIn(required, self.self_permission_recovery)
+        self.assertNotIn("JuncaChainDocsProductionDeployment", self.self_permission_recovery)
+        self.assertNotIn('"Resource": "*"', self.self_permission_recovery)
 
 
 if __name__ == "__main__":
