@@ -114,7 +114,11 @@ await readFile(join(dist, "icon-maskable-512.png"));
 await readFile(join(dist, "apple-touch-icon.png"));
 const favicon = await readFile(join(dist, "favicon.svg"), "utf8");
 if (!favicon.includes('data-typeface="Optima LT Std Bold"')) failures.push("favicon J does not declare the approved wordmark typeface");
-if (/<text[\s>]/.test(favicon)) failures.push("favicon J must ship as an outlined vector, not runtime text");
+if (!favicon.includes('data-rendering="flattened-approved-specimen"')) failures.push("favicon J is not pinned to the approved flattened specimen");
+if (!favicon.includes('data-source="Monotype official Optima Bold specimen"')) failures.push("favicon J provenance is missing");
+if (!favicon.includes('href="data:image/png;base64,')) failures.push("favicon J must be self-contained");
+if (/<text[\s>]/.test(favicon)) failures.push("favicon J must ship as a flattened asset, not runtime text");
+if (favicon.includes("M287 82c33-4 70-4 110 1")) failures.push("favicon retains the retired hand-drawn J");
 const infrastructure = await readFile(join(repositoryRoot, "infra", "aws", "docs-publication", "main.yaml"), "utf8");
 const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "junca-chain-docs-production.yml"), "utf8");
 for (const required of [
