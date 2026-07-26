@@ -1,0 +1,38 @@
+{
+  "schema_version": "junca-public-testnet-oidc-trust-handoff/v1",
+  "chain": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "network": "Public Testnet / No Monetary Value",
+  "aws_account_id": "595710543956",
+  "aws_region": "us-east-1",
+  "oidc_provider_arn": "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com",
+  "expected_subject": "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet",
+  "current_token_subject": "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet",
+  "target_role_arns": [
+    "arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment",
+    "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment"
+  ],
+  "minimum_statement_patch": {
+    "Sid": "GitHubActionsPublicTestnetOIDC",
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet"
+      }
+    }
+  },
+  "apply_rule": "For each target role, preserve the complete current AssumeRolePolicyDocument and replace only the statement whose Sid is GitHubActionsPublicTestnetOIDC; append the statement if that Sid is absent.",
+  "readback_command": "aws iam get-role --role-name ROLE_NAME --query 'Role.AssumeRolePolicyDocument.Statement[?Sid==`GitHubActionsPublicTestnetOIDC`]' --output json",
+  "rollback_policy": "Before update, save the complete URL-decoded AssumeRolePolicyDocument for each role. On failed readback or failed OIDC assumption, run aws iam update-assume-role-policy --role-name ROLE_NAME --policy-document file://ROLE_NAME.before.json and repeat the readback command.",
+  "workflow_rerun_url": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/workflows/junca-chain-aws-canonical-inventory.yml",
+  "prohibited_deployment_role_arn": "arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment",
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "deployment_performed": false
+}
