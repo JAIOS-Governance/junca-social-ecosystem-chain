@@ -61,6 +61,30 @@ jobs:
       NODE_ARTIFACT_NAME: ${{ inputs.node_artifact_name || format('junca-validator-runtime-{0}', github.event.workflow_run.id) }}
       GENESIS_ARTIFACT_NAME: ${{ inputs.genesis_artifact_name || format('junca-validator-genesis-{0}', github.event.workflow_run.id) }}
     steps:
+      - name: Initialize failure-safe build evidence
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          jq -n \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_artifact_name "$NODE_ARTIFACT_NAME" \
+            --arg genesis_artifact_name "$GENESIS_ARTIFACT_NAME" '{
+              schema_version: "junca-validator-ami-build/v1",
+              state: "AMI_BUILD_STARTED",
+              network: "Public Testnet",
+              notice: "Public Testnet / No Monetary Value",
+              governance: "JAIOS Institutional Governance",
+              source_run_id: $source_run_id,
+              source_commit: $source_commit,
+              node_artifact_name: $node_artifact_name,
+              genesis_artifact_name: $genesis_artifact_name,
+              terraform_state_changed: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/junca-validator-ami-build.json
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SOURCE_COMMIT }}
@@ -321,6 +345,38 @@ jobs:
             }' > artifacts/junca-validator-ami-build.json
           sha256sum artifacts/junca-validator-ami-build.json > artifacts/SHA256SUMS
           echo "ami_id=$ami_id" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize failure evidence
+        if: failure()
+        env:
+          WORKFLOW_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          node_sha256="${NODE_SHA256:-}"
+          genesis_sha256="${GENESIS_SHA256:-}"
+          jq -n \
+            --arg status "$WORKFLOW_JOB_STATUS" \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "$node_sha256" \
+            --arg genesis_sha256 "$genesis_sha256" '{
+              schema_version: "junca-validator-ami-build/v1",
+              state: "AMI_BUILD_FAILED",
+              workflow_job_status: $status,
+              network: "Public Testnet",
+              notice: "Public Testnet / No Monetary Value",
+              governance: "JAIOS Institutional Governance",
+              source_run_id: $source_run_id,
+              source_commit: $source_commit,
+              node_artifact_sha256: (if $node_sha256 == "" then null else $node_sha256 end),
+              genesis_sha256: (if $genesis_sha256 == "" then null else $genesis_sha256 end),
+              terraform_state_changed: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/junca-validator-ami-build.json
+          sha256sum artifacts/junca-validator-ami-build.json > artifacts/SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         if: always()
