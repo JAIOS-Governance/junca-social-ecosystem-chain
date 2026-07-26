@@ -40,19 +40,23 @@ output "validator_instance_ids" {
 }
 
 output "public_rpc_url" {
-  value = "https://${local.rpc_hostname}"
+  value = var.enable_public_services ? "https://${local.rpc_hostname}" : null
 }
 
 output "explorer_url" {
-  value = "https://${local.explorer_hostname}"
+  value = var.enable_public_services ? "https://${local.explorer_hostname}" : null
 }
 
 output "health_url" {
-  value = "https://${local.health_hostname}"
+  value = var.enable_public_services ? "https://${local.health_hostname}" : null
 }
 
 output "load_balancer_arn" {
-  value = aws_lb.public.arn
+  value = try(aws_lb.public[0].arn, null)
+}
+
+output "deployment_stage" {
+  value = var.enable_public_services ? "public-services" : "validators-only"
 }
 
 output "runtime_boundary" {
