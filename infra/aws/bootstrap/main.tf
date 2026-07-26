@@ -164,8 +164,8 @@ resource "aws_iam_role" "deployment" {
         }
         StringLike = {
           "token.actions.githubusercontent.com:sub" = [
-            "repo:JAIOS-Governance/junca-social-ecosystem-chain:ref:refs/heads/main",
-            "repo:JAIOS-Governance/junca-social-ecosystem-chain:environment:public-testnet"
+            "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:ref:refs/heads/main",
+            "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet"
           ]
         }
       }
