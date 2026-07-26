@@ -5,6 +5,10 @@ from tempfile import TemporaryDirectory
 import hashlib
 import unittest
 
+from jaios.social_ecosystem_chain.consensus_signing_journal import (
+    ConsensusSigningJournal,
+    ConsensusSigningJournalError,
+)
 from jaios.social_ecosystem_chain.finality import FinalityVote, Validator
 from jaios.social_ecosystem_chain.mempool import TransactionPool
 from jaios.social_ecosystem_chain.node_pipeline import NodeExecutionPipeline
@@ -64,9 +68,14 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             )
             for item in self.initial.validators
         }
+        self.journal = ConsensusSigningJournal(
+            Path(self.directory.name, "consensus-signing.sqlite"),
+            chain_id=CHAIN_ID,
+        )
         self.runtime = self.build_runtime()
 
     def tearDown(self) -> None:
+        self.journal.close()
         self.store.close()
         self.directory.cleanup()
 
@@ -83,6 +92,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             signer_bindings=overrides.pop("signer_bindings", self.bindings),
             signer=signer,
             signature_verifier=verifier,
+            signing_journal=overrides.pop("signing_journal", self.journal),
             **overrides,
         )
 
@@ -132,7 +142,15 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
         rejecting.propose()
         with self.assertRaisesRegex(ValueError, "signature verification"):
             rejecting.accept_vote(rejecting.sign_vote("validator-1"))
-        malformed = self.build_runtime(signer=lambda resource, payload: b"short")
+        malformed_journal = ConsensusSigningJournal(
+            Path(self.directory.name, "malformed-signing.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        self.addCleanup(malformed_journal.close)
+        malformed = self.build_runtime(
+            signer=lambda resource, payload: b"short",
+            signing_journal=malformed_journal,
+        )
         malformed.propose()
         with self.assertRaisesRegex(ValidatorRuntimeError, "invalid consensus"):
             malformed.sign_vote("validator-1")
@@ -217,6 +235,69 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     ValidatorRuntimeError, "strictly increasing"
                 ):
                     self.runtime.advance_round(invalid)
+
+    def test_signing_journal_replays_signature_without_provider_call(self) -> None:
+        calls = 0
+
+        def counted_signer(resource: str, payload: bytes) -> bytes:
+            nonlocal calls
+            calls += 1
+            return signature(resource, payload)
+
+        runtime = self.build_runtime(signer=counted_signer)
+        runtime.propose()
+        first = runtime.sign_vote("validator-1")
+        second = runtime.sign_vote("validator-1")
+        self.assertEqual(first, second)
+        self.assertEqual(calls, 1)
+        evidence = runtime.evidence()["signing_journal"]
+        self.assertEqual(evidence["signature_count"], 1)
+        self.assertFalse(evidence["private_key_material_stored"])
+
+    def test_signing_journal_survives_restart_and_rejects_conflict(self) -> None:
+        self.runtime.propose()
+        vote = self.runtime.sign_vote("validator-1")
+        self.journal.close()
+        restarted = ConsensusSigningJournal(
+            Path(self.directory.name, "consensus-signing.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            replay = restarted.get_or_sign(
+                validator_id=vote.validator_id,
+                height=vote.height,
+                round=vote.round,
+                block_hash=vote.block_hash,
+                signing_payload=vote.signing_payload,
+                signer=lambda: self.fail("provider must not be called for replay"),
+            )
+            self.assertEqual(replay, vote.signature)
+            with self.assertRaisesRegex(
+                ConsensusSigningJournalError, "double-sign"
+            ):
+                restarted.get_or_sign(
+                    validator_id=vote.validator_id,
+                    height=vote.height,
+                    round=vote.round,
+                    block_hash="0x" + ("f" * 64),
+                    signing_payload=b"conflicting-payload",
+                    signer=lambda: b"x" * 64,
+                )
+        finally:
+            restarted.close()
+            self.journal = ConsensusSigningJournal(
+                Path(self.directory.name, "consensus-signing.sqlite"),
+                chain_id=CHAIN_ID,
+            )
+
+    def test_signing_journal_rejects_cross_chain_reuse(self) -> None:
+        with self.assertRaisesRegex(
+            ConsensusSigningJournalError, "different chain_id"
+        ):
+            ConsensusSigningJournal(
+                Path(self.directory.name, "consensus-signing.sqlite"),
+                chain_id=CHAIN_ID + 1,
+            )
 
 
 if __name__ == "__main__":
