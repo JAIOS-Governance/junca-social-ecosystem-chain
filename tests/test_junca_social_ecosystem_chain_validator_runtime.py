@@ -440,7 +440,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     signature_verifier=lambda value: True,
                 )
             evidence = restarted.evidence()
-            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v5")
+            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v6")
             self.assertEqual(evidence["watermark_latest_height"], 12)
             self.assertEqual(evidence["startup_integrity_check"], "PASS")
         finally:
@@ -464,6 +464,29 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
         evidence = self.journal.evidence()
         self.assertTrue(evidence["signature_verified_before_persist"])
         self.assertTrue(evidence["stored_signature_verified_before_replay"])
+
+    def test_startup_rejects_semantically_corrupted_journal(self) -> None:
+        self.runtime.propose()
+        vote = self.runtime.sign_vote("validator-1")
+        journal_path = Path(self.directory.name, "consensus-signing.sqlite")
+        self.journal.connection.execute(
+            """
+            UPDATE consensus_signatures
+            SET payload_digest=?
+            WHERE validator_id=? AND height=? AND round=?
+            """,
+            ("0" * 64, vote.validator_id, vote.height, vote.round),
+        )
+        self.journal.close()
+        with self.assertRaisesRegex(
+            ConsensusSigningJournalError, "semantic integrity"
+        ):
+            ConsensusSigningJournal(journal_path, chain_id=CHAIN_ID)
+        self.journal = ConsensusSigningJournal(
+            Path(self.directory.name, "replacement-signing.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+
 
     def test_signer_provider_failure_is_sanitized_and_rolled_back(self) -> None:
         secret_detail = "provider credential token must never escape"
