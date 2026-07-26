@@ -38,6 +38,9 @@ class AwsFoundationTests(unittest.TestCase):
             / ".github/workflows/"
             "junca-social-ecosystem-chain-aws-foundation-execution.yml"
         ).read_text(encoding="utf-8")
+        cls.foundation_script = (
+            ROOT / "scripts/junca_public_testnet_foundation.sh"
+        ).read_text(encoding="utf-8")
         cls.self_permission_recovery = (
             ROOT
             / ".github/workflows/"
@@ -198,9 +201,32 @@ class AwsFoundationTests(unittest.TestCase):
             "terraform -chdir=infra/aws/bootstrap apply",
             "bootstrap-outputs.json",
             "-migrate-state -force-copy",
-            "Reject unimplemented foundation apply",
+            "scripts/junca_public_testnet_foundation.sh foundation-apply",
         ):
             self.assertIn(required, self.execution_workflow)
+
+    def test_foundation_plan_and_apply_are_durable_and_fail_closed(self) -> None:
+        self.assertIn('backend "s3" {}', self.runtime)
+        for required in (
+            "public-testnet/bootstrap.tfstate",
+            "public-testnet/terraform.tfstate",
+            "foundation.tfplan",
+            'select(index("delete"))',
+            "enable_public_services: false",
+            "quorum_verified: false",
+            "public_services_enabled: false",
+            "terraform -chdir=infra/aws/public-testnet apply",
+        ):
+            self.assertIn(required, self.foundation_script)
+        for required in (
+            "JUNCA_PUBLIC_TESTNET_NODE_AMI_ID",
+            "JUNCA_PUBLIC_TESTNET_GENESIS_SHA256",
+            "JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT",
+            "Produce guarded validator foundation plan",
+            "Apply guarded validator foundation",
+        ):
+            self.assertIn(required, self.execution_workflow)
+        self.assertNotIn("Reject unimplemented foundation apply", self.execution_workflow)
 
     def test_bootstrap_plan_rejects_delete_or_replace_actions(self) -> None:
         self.assertIn(
