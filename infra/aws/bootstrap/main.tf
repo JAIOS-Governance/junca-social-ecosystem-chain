@@ -274,6 +274,7 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         "route53:GetHostedZone",
         "route53:ListHostedZones",
         "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource",
         "acm:AddTagsToCertificate",
         "acm:DeleteCertificate",
         "acm:DescribeCertificate",
