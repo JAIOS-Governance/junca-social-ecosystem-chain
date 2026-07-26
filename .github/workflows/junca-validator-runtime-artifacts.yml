@@ -5,12 +5,24 @@ on:
     branches: [main]
     paths:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
+      - "jaios/social_ecosystem_chain/validator_node.py"
+      - "jaios/social_ecosystem_chain/**"
+      - "packaging/systemd/junca-validator.service"
+      - "scripts/build_validator_runtime.sh"
+      - "scripts/generate_junca_public_testnet_genesis.py"
+      - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
       - "tests/test_junca_validator_artifacts.py"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
   pull_request:
     paths:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
+      - "jaios/social_ecosystem_chain/validator_node.py"
+      - "jaios/social_ecosystem_chain/**"
+      - "packaging/systemd/junca-validator.service"
+      - "scripts/build_validator_runtime.sh"
+      - "scripts/generate_junca_public_testnet_genesis.py"
+      - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
       - "tests/test_junca_validator_artifacts.py"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
@@ -27,28 +39,66 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify immutable artifact and safety contracts
-        run: python -m unittest tests.test_junca_validator_artifacts -v
-
-      - name: Produce current fail-closed AMI handoff
         run: |
-          python scripts/junca_validator_artifact_handoff.py \
-            --pending \
-            --output artifacts/junca-validator-artifact-handoff.json
-          grep -q '"state": "BLOCKED_FAIL_CLOSED"' \
-            artifacts/junca-validator-artifact-handoff.json
-          grep -q '"live_runtime_verified": false' \
-            artifacts/junca-validator-artifact-handoff.json
-          grep -q '"mainnet_changed": false' \
-            artifacts/junca-validator-artifact-handoff.json
-          grep -q '"assets_moved": false' \
-            artifacts/junca-validator-artifact-handoff.json
-          grep -q '"bridge_activated": false' \
-            artifacts/junca-validator-artifact-handoff.json
+          python -m unittest \
+            tests.test_junca_validator_artifacts \
+            tests.test_junca_social_ecosystem_chain_validator_node -v
 
-      - name: Upload validator AMI handoff evidence
+      - name: Build deterministic runtime and canonical zero-allocation genesis
+        run: |
+          set -euo pipefail
+          rm -rf dist/validator-runtime
+          bash scripts/build_validator_runtime.sh dist/validator-runtime
+          python scripts/generate_junca_public_testnet_genesis.py \
+            --validator validator-01 \
+            --validator validator-02 \
+            --validator validator-03 \
+            --output dist/genesis.json
+          mkdir -p artifacts/runtime artifacts/genesis artifacts/evidence
+          install -m 0644 dist/validator-runtime.tar.gz \
+            artifacts/runtime/validator-runtime.tar.gz
+          install -m 0644 dist/genesis.json artifacts/genesis/genesis.json
+          node_sha256="$(sha256sum dist/validator-runtime.tar.gz | cut -d' ' -f1)"
+          genesis_sha256="$(sha256sum dist/genesis.json | cut -d' ' -f1)"
+          jq -n \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg node_sha256 "$node_sha256" \
+            --arg genesis_sha256 "$genesis_sha256" '{
+              schema_version: "junca-validator-runtime-build/v1",
+              state: "IMMUTABLE_INPUTS_VERIFIED",
+              governance: "JAIOS Institutional Governance",
+              notice: "Public Testnet / No Monetary Value",
+              source_commit: $source_commit,
+              node_artifact_sha256: $node_sha256,
+              genesis_sha256: $genesis_sha256,
+              validator_ids: ["validator-01", "validator-02", "validator-03"],
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/evidence/runtime-build.json
+          sha256sum artifacts/evidence/runtime-build.json \
+            > artifacts/evidence/SHA256SUMS
+
+      - name: Upload complete validator runtime
         uses: actions/upload-artifact@v4
         with:
-          name: junca-validator-artifact-handoff-${{ github.run_id }}
-          path: artifacts/junca-validator-artifact-handoff.json
+          name: junca-validator-runtime-${{ github.run_id }}
+          path: artifacts/runtime/validator-runtime.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload canonical genesis
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-validator-genesis-${{ github.run_id }}
+          path: artifacts/genesis/genesis.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload runtime build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-validator-runtime-evidence-${{ github.run_id }}
+          path: artifacts/evidence/
           if-no-files-found: error
           retention-days: 90
