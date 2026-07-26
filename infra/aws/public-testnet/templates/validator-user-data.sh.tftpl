@@ -14,6 +14,11 @@ GENESIS_SHA256=${genesis_sha256}
 NODE_ARTIFACT_SHA256=${node_sha256}
 SIGNER_RESOURCE_ARN=${signer_arn}
 PUBLIC_RPC=false
+P2P_PORT=30303
+# Comma-separated exact-three contracts:
+# validator-01=arn:aws:kms:...,... and validator-01=10.x.x.x:30303,...
+VALIDATOR_SIGNER_BINDINGS=${signer_bindings}
+VALIDATOR_PEER_ENDPOINTS=${peer_endpoints}
 BRIDGE_ACTIVATED=false
 EOF
 chmod 0640 /etc/junca/runtime.env
@@ -22,7 +27,7 @@ chmod 0640 /etc/junca/runtime.env
 # No private key, mnemonic or signer secret is written by this bootstrap.
 test -x /usr/local/bin/junca-chain-node
 printf '%s  %s\n' '${genesis_sha256}' /etc/junca/genesis.json | sha256sum --check --strict
-printf '%s  %s\n' '${node_sha256}' /usr/local/bin/junca-chain-node | sha256sum --check --strict
+printf '%s  %s\n' '${node_sha256}' /opt/junca/validator-runtime.tar.gz | sha256sum --check --strict
 
 cat >/etc/systemd/system/junca-validator.service <<'EOF'
 [Unit]
@@ -33,7 +38,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/junca/runtime.env
-ExecStart=/usr/local/bin/junca-chain-node --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json --http.addr 127.0.0.1 --http.api eth,net,web3 --mine --signer-resource "$SIGNER_RESOURCE_ARN"
+ExecStart=/usr/local/bin/junca-chain-node --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json --data-dir /var/lib/junca --validator-id "$VALIDATOR_ID" --http.addr 127.0.0.1 --http.port 8545 --http.api eth,net,web3 --mine --signer-resource "$SIGNER_RESOURCE_ARN"
 Restart=on-failure
 RestartSec=10
 NoNewPrivileges=true
