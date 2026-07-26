@@ -1,0 +1,38 @@
+{
+  "schema": "jaios-technical-reference-icon-correction/v1",
+  "date_jst": "2026-07-27",
+  "canonical_url": "https://docs.jaios-governance.org/",
+  "canonical_source": "docs/technical-reference",
+  "authority": "JAIOS Institutional Governance",
+  "constitution_revision": "40",
+  "ceo_instruction": "Use the approved J glyph for smartphone and browser icons, not the corporate symbol.",
+  "target_release": "2026.07.27-R21",
+  "scope": [
+    "browser favicon",
+    "Android 192x192 icon",
+    "Android 512x512 icon",
+    "Android maskable icon",
+    "Apple Touch icon",
+    "PWA manifest"
+  ],
+  "approved_j_source_commit": "2e98641a652c80c569aca708d404a4344c7eea8f",
+  "typeface": "Optima LT Std Bold",
+  "rendering": "flattened static specimen; no runtime font dependency",
+  "digests": {
+    "icon_192_sha256": "6588f3699cc6d5d3c6fdf2ea557221e519d929063c4d12a9ffb3c2ef38265fdf",
+    "icon_512_sha256": "6a4dade831a4a9b6e72761a172b713ccddc8d904ab0f2fea34a17d5cf3993172",
+    "maskable_512_sha256": "6a4dade831a4a9b6e72761a172b713ccddc8d904ab0f2fea34a17d5cf3993172",
+    "apple_touch_sha256": "b851abc4eed6991b3dae2914422b9ae3ecb32913e85283dca1452e124248a675",
+    "favicon_svg_sha256": "bc11c73a7ef748b95b52d249559bf3b08aa52bba0d9b20f347d31f24a50af456"
+  },
+  "boundaries": {
+    "page_wordmark_changed": false,
+    "body_typography_changed": false,
+    "brand_site_changed": false,
+    "runtime_state_changed": false,
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  },
+  "rollback_point": "446cab8773e0e0a1eea57e8b51c5cb1bb80b77cd"
+}
