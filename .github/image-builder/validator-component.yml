@@ -1,0 +1,33 @@
+name: JUNCAValidatorRuntime
+description: Install and verify the immutable JUNCA Public Testnet validator runtime
+schemaVersion: 1.0
+phases:
+  - name: build
+    steps:
+      - name: InstallRuntime
+        action: ExecuteBash
+        inputs:
+          commands:
+            - set -euo pipefail
+            - install -d -m 0755 /opt/junca /etc/junca
+            - dnf install -y python3-boto3
+            - aws s3 cp s3://__BUCKET__/validator-runtime.tar.gz /tmp/validator-runtime.tar.gz
+            - aws s3 cp s3://__BUCKET__/genesis.json /tmp/genesis.json
+            - echo "__NODE_SHA256__  /tmp/validator-runtime.tar.gz" | sha256sum --check
+            - echo "__GENESIS_SHA256__  /tmp/genesis.json" | sha256sum --check
+            - install -m 0644 /tmp/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz
+            - tar -xzf /opt/junca/validator-runtime.tar.gz -C /
+            - install -m 0644 /tmp/genesis.json /etc/junca/genesis.json
+            - rm -f /tmp/validator-runtime.tar.gz /tmp/genesis.json
+  - name: validate
+    steps:
+      - name: VerifyRuntime
+        action: ExecuteBash
+        inputs:
+          commands:
+            - set -euo pipefail
+            - test -x /usr/local/bin/junca-chain-node
+            - test -s /etc/junca/genesis.json
+            - echo "__NODE_SHA256__  /opt/junca/validator-runtime.tar.gz" | sha256sum --check
+            - echo "__GENESIS_SHA256__  /etc/junca/genesis.json" | sha256sum --check
+            - python3 -c 'import json; d=json.load(open("/etc/junca/genesis.json")); assert d["network"] == "public-testnet"; assert d["notice"] == "Public Testnet / No Monetary Value"; assert d["validator_ids"] == ["validator-01", "validator-02", "validator-03"]'
