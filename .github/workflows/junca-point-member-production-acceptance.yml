@@ -1,0 +1,47 @@
+name: JUNCA POINT MEMBER Production Acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-point-member-production-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for Sites production cutover and request OTP
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://member.jaios-governance.org/api/member-auth/request-code"
+          for attempt in $(seq 1 12); do
+            status="$(curl --silent --show-error --output response.json --write-out '%{http_code}' \
+              --request POST \
+              --header 'content-type: application/json' \
+              --data '{"email":"juncajapan.jp@gmail.com"}' \
+              "$endpoint" || true)"
+            body="$(cat response.json 2>/dev/null || true)"
+            echo "Attempt $attempt: HTTP $status $body"
+            if [ "$status" = "200" ] && python3 - <<'PY'
+          import json
+          data=json.load(open('response.json'))
+          raise SystemExit(0 if data.get('ok') is True else 1)
+          PY
+            then
+              echo "### JUNCA POINT MEMBER Production Acceptance" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Production URL: https://member.jaios-governance.org/member-login" >> "$GITHUB_STEP_SUMMARY"
+              echo "- OTP request API: PASS" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Registered member: juncajapan.jp@gmail.com" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Sender path: desk@junca-global.group via AWS relay" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Production OTP request did not pass within the acceptance window."
+          exit 1
