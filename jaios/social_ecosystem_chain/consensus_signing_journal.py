@@ -30,6 +30,12 @@ class ConsensusSigningJournal:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
+        integrity = self.connection.execute("PRAGMA quick_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            self.connection.close()
+            raise ConsensusSigningJournalError(
+                "signing journal integrity check failed"
+            )
         self.connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS metadata (
@@ -45,9 +51,17 @@ class ConsensusSigningJournal:
                 signature BLOB NOT NULL,
                 PRIMARY KEY (validator_id, height, round)
             );
+            CREATE TABLE IF NOT EXISTS validator_watermarks (
+                validator_id TEXT PRIMARY KEY,
+                height INTEGER NOT NULL,
+                round INTEGER NOT NULL,
+                CHECK (height > 0),
+                CHECK (round >= 0)
+            );
             """
         )
         self._bind_chain()
+        self._restore_watermarks()
 
     def close(self) -> None:
         self.connection.close()
@@ -105,6 +119,22 @@ class ConsensusSigningJournal:
                 self.connection.execute("COMMIT")
                 return signature
 
+            watermark = self.connection.execute(
+                """
+                SELECT height, round
+                FROM validator_watermarks
+                WHERE validator_id=?
+                """,
+                (validator_id,),
+            ).fetchone()
+            if watermark is not None and (
+                height < watermark["height"]
+                or (height == watermark["height"] and round < watermark["round"])
+            ):
+                raise ConsensusSigningJournalError(
+                    "consensus vote is below the persistent signing watermark"
+                )
+
             signature = signer()
             if not isinstance(signature, bytes) or len(signature) not in {64, 65}:
                 raise ConsensusSigningJournalError(
@@ -125,6 +155,21 @@ class ConsensusSigningJournal:
                     signature,
                 ),
             )
+            self.connection.execute(
+                """
+                INSERT INTO validator_watermarks (validator_id, height, round)
+                VALUES (?, ?, ?)
+                ON CONFLICT(validator_id) DO UPDATE SET
+                    height=excluded.height,
+                    round=excluded.round
+                WHERE excluded.height > validator_watermarks.height
+                   OR (
+                       excluded.height = validator_watermarks.height
+                       AND excluded.round > validator_watermarks.round
+                   )
+                """,
+                (validator_id, height, round),
+            )
             self.connection.execute("COMMIT")
             return signature
         except BaseException:
@@ -133,17 +178,27 @@ class ConsensusSigningJournal:
             raise
 
     def evidence(self) -> dict[str, object]:
-        row = self.connection.execute(
+        signature_row = self.connection.execute(
             """
             SELECT COUNT(*) AS signature_count, MAX(height) AS latest_height
             FROM consensus_signatures
             """
         ).fetchone()
+        watermark_row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS validator_count, MAX(height) AS latest_height
+            FROM validator_watermarks
+            """
+        ).fetchone()
         return {
-            "schema_version": "junca-consensus-signing-journal/v1",
+            "schema_version": "junca-consensus-signing-journal/v2",
             "chain_id": self.chain_id,
-            "signature_count": int(row["signature_count"]),
-            "latest_height": row["latest_height"],
+            "signature_count": int(signature_row["signature_count"]),
+            "latest_height": signature_row["latest_height"],
+            "watermark_validator_count": int(watermark_row["validator_count"]),
+            "watermark_latest_height": watermark_row["latest_height"],
+            "rollback_signing_protected": True,
+            "startup_integrity_check": "PASS",
             "private_key_material_stored": False,
             "key_resource_stored": False,
             "mainnet_changed": False,
@@ -165,3 +220,41 @@ class ConsensusSigningJournal:
             raise ConsensusSigningJournalError(
                 "signing journal is bound to a different chain_id"
             )
+
+    def _restore_watermarks(self) -> None:
+        """Backfill monotonic watermarks for journals created by schema v1."""
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO validator_watermarks (validator_id, height, round)
+                SELECT signatures.validator_id, signatures.height, signatures.round
+                FROM consensus_signatures AS signatures
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM consensus_signatures AS newer
+                    WHERE newer.validator_id = signatures.validator_id
+                      AND (
+                          newer.height > signatures.height
+                          OR (
+                              newer.height = signatures.height
+                              AND newer.round > signatures.round
+                          )
+                      )
+                )
+                ON CONFLICT(validator_id) DO UPDATE SET
+                    height=excluded.height,
+                    round=excluded.round
+                WHERE excluded.height > validator_watermarks.height
+                   OR (
+                       excluded.height = validator_watermarks.height
+                       AND excluded.round > validator_watermarks.round
+                   )
+                """
+            )
+            self.connection.execute("COMMIT")
+        except BaseException:
+            if self.connection.in_transaction:
+                self.connection.execute("ROLLBACK")
+            self.connection.close()
+            raise
