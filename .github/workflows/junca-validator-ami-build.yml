@@ -1,0 +1,281 @@
+name: JUNCA Validator Immutable AMI Build
+
+on:
+  workflow_run:
+    workflows: ["JUNCA Validator Runtime Artifacts"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: GitHub Actions run containing the immutable node and genesis artifacts
+        required: true
+        type: string
+      source_commit:
+        description: Exact 40-character source commit bound to the runtime
+        required: true
+        type: string
+      node_artifact_name:
+        description: Artifact name containing junca-chain-node
+        required: true
+        type: string
+      genesis_artifact_name:
+        description: Artifact name containing genesis.json
+        required: true
+        type: string
+      node_sha256:
+        description: Expected lowercase SHA-256 of junca-chain-node
+        required: true
+        type: string
+      genesis_sha256:
+        description: Expected lowercase SHA-256 of genesis.json
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-ami-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 90
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      NETWORK: Public Testnet
+      GOVERNANCE: JAIOS Institutional Governance
+      NOTICE: Public Testnet / No Monetary Value
+      IMAGE_BUILDER_INSTANCE_PROFILE: JuncaChainPublicTestnetImageBuilder
+      SOURCE_RUN_ID: ${{ inputs.source_run_id || github.event.workflow_run.id }}
+      SOURCE_COMMIT: ${{ inputs.source_commit || github.event.workflow_run.head_sha }}
+      NODE_ARTIFACT_NAME: ${{ inputs.node_artifact_name || format('junca-validator-runtime-{0}', github.event.workflow_run.id) }}
+      GENESIS_ARTIFACT_NAME: ${{ inputs.genesis_artifact_name || format('junca-validator-genesis-{0}', github.event.workflow_run.id) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-ami-${{ github.run_id }}
+
+      - name: Enforce immutable Public Testnet boundary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$IMAGE_BUILDER_INSTANCE_PROFILE"
+          for attempt in $(seq 1 60); do
+            if aws iam get-instance-profile \
+              --instance-profile-name "$IMAGE_BUILDER_INSTANCE_PROFILE" \
+              >/dev/null 2>&1; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 10
+          done
+          source_head="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID}" \
+            --jq .head_sha)"
+          test "$source_head" = "$SOURCE_COMMIT"
+          jq -e '
+            .notice == "Public Testnet / No Monetary Value" and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json
+
+      - name: Download and verify immutable inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/node build/genesis artifacts
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "${{ github.repository }}" \
+            --name "$NODE_ARTIFACT_NAME" \
+            --dir build/node
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "${{ github.repository }}" \
+            --name "$GENESIS_ARTIFACT_NAME" \
+            --dir build/genesis
+          mapfile -t nodes < <(find build/node -type f -name validator-runtime.tar.gz)
+          mapfile -t geneses < <(find build/genesis -type f -name genesis.json)
+          test "${#nodes[@]}" = 1
+          test "${#geneses[@]}" = 1
+          install -m 0644 "${nodes[0]}" build/validator-runtime.tar.gz
+          install -m 0644 "${geneses[0]}" build/genesis.json
+          node_sha256="$(sha256sum build/validator-runtime.tar.gz | cut -d' ' -f1)"
+          genesis_sha256="$(sha256sum build/genesis.json | cut -d' ' -f1)"
+          [[ "$node_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "$node_sha256  build/validator-runtime.tar.gz" | sha256sum --check
+          echo "$genesis_sha256  build/genesis.json" | sha256sum --check
+          if [[ -n "${{ inputs.node_sha256 || '' }}" ]]; then
+            test "$node_sha256" = "${{ inputs.node_sha256 }}"
+          fi
+          if [[ -n "${{ inputs.genesis_sha256 || '' }}" ]]; then
+            test "$genesis_sha256" = "${{ inputs.genesis_sha256 }}"
+          fi
+          echo "NODE_SHA256=$node_sha256" >> "$GITHUB_ENV"
+          echo "GENESIS_SHA256=$genesis_sha256" >> "$GITHUB_ENV"
+          jq -e '
+            .network == "public-testnet" and
+            .notice == "Public Testnet / No Monetary Value" and
+            (.validator_ids == ["validator-01", "validator-02", "validator-03"])
+          ' build/genesis.json
+
+      - name: Build immutable AMI with temporary Image Builder resources
+        id: image
+        run: |
+          set -euo pipefail
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bucket="junca-validator-ami-build-${AWS_ACCOUNT_ID}-${suffix}"
+          component_name="junca-validator-${suffix}"
+          recipe_name="junca-validator-${suffix}"
+          infra_name="junca-validator-${suffix}"
+          distribution_name="junca-validator-${suffix}"
+          cleanup() {
+            aws s3 rm "s3://${bucket}" --recursive >/dev/null 2>&1 || true
+            aws s3api delete-bucket-policy --bucket "$bucket" >/dev/null 2>&1 || true
+            aws s3api delete-bucket --bucket "$bucket" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          aws s3api create-bucket --bucket "$bucket" --region "$AWS_REGION"
+          aws s3api put-public-access-block --bucket "$bucket" \
+            --public-access-block-configuration \
+            BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          aws s3 cp build/validator-runtime.tar.gz "s3://${bucket}/validator-runtime.tar.gz"
+          aws s3 cp build/genesis.json "s3://${bucket}/genesis.json"
+
+          profile_json="$(aws iam get-instance-profile \
+            --instance-profile-name "$IMAGE_BUILDER_INSTANCE_PROFILE")"
+          builder_role_arn="$(jq -r '.InstanceProfile.Roles | if length == 1 then .[0].Arn else empty end' \
+            <<<"$profile_json")"
+          test -n "$builder_role_arn"
+          jq -n --arg role "$builder_role_arn" '{
+            Version: "2012-10-17",
+            Statement: [{
+              Sid: "ImageBuilderReadOnly",
+              Effect: "Allow",
+              Principal: {AWS: $role},
+              Action: "s3:GetObject",
+              Resource: "'"arn:aws:s3:::${bucket}/*"'"
+            }]
+          }' > build/bucket-policy.json
+          aws s3api put-bucket-policy --bucket "$bucket" \
+            --policy file://build/bucket-policy.json
+
+          sed \
+            -e "s|__BUCKET__|${bucket}|g" \
+            -e "s|__NODE_SHA256__|${NODE_SHA256}|g" \
+            -e "s|__GENESIS_SHA256__|${GENESIS_SHA256}|g" \
+            .github/image-builder/validator-component.yml \
+            > build/validator-component.yml
+          component_arn="$(aws imagebuilder create-component \
+            --name "$component_name" --semantic-version 1.0.0 \
+            --platform Linux --data file://build/validator-component.yml \
+            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            SourceCommit="${SOURCE_COMMIT}" \
+            NodeArtifactSHA256="${NODE_SHA256}" \
+            GenesisSHA256="${GENESIS_SHA256}" \
+            --query componentBuildVersionArn --output text)"
+
+          parent_image="$(aws ssm get-parameter \
+            --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+            --query Parameter.Value --output text)"
+          recipe_arn="$(aws imagebuilder create-image-recipe \
+            --name "$recipe_name" --semantic-version 1.0.0 \
+            --parent-image "$parent_image" \
+            --components componentArn="$component_arn" \
+            --block-device-mappings \
+            'deviceName=/dev/xvda,ebs={deleteOnTermination=true,volumeSize=16,volumeType=gp3,encrypted=true}' \
+            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            SourceCommit="${SOURCE_COMMIT}" \
+            --query imageRecipeArn --output text)"
+          infra_arn="$(aws imagebuilder create-infrastructure-configuration \
+            --name "$infra_name" \
+            --instance-profile-name "$IMAGE_BUILDER_INSTANCE_PROFILE" \
+            --instance-types t3.small \
+            --terminate-instance-on-failure \
+            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            --query infrastructureConfigurationArn --output text)"
+          distribution_arn="$(aws imagebuilder create-distribution-configuration \
+            --name "$distribution_name" \
+            --distributions "region=${AWS_REGION},amiDistributionConfiguration={name=junca-validator-public-testnet-{{imagebuilder:buildDate}},description='${NOTICE}',amiTags={Network='${NETWORK}',Governance='${GOVERNANCE}',SourceCommit='${SOURCE_COMMIT}',NodeArtifactSHA256='${NODE_SHA256}',GenesisSHA256='${GENESIS_SHA256}',MainnetChanged=false,AssetsMoved=false,BridgeActivated=false}}" \
+            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            --query distributionConfigurationArn --output text)"
+          image_arn="$(aws imagebuilder create-image \
+            --image-recipe-arn "$recipe_arn" \
+            --infrastructure-configuration-arn "$infra_arn" \
+            --distribution-configuration-arn "$distribution_arn" \
+            --tags Network="$NETWORK" Governance="$GOVERNANCE" \
+            SourceCommit="${SOURCE_COMMIT}" \
+            --query imageBuildVersionArn --output text)"
+          aws imagebuilder wait image-build-completed --image-build-version-arn "$image_arn"
+          image_json="$(aws imagebuilder get-image --image-build-version-arn "$image_arn")"
+          test "$(jq -r '.image.state.status' <<<"$image_json")" = AVAILABLE
+          ami_id="$(jq -r --arg region "$AWS_REGION" '
+            [.image.outputResources.amis[] | select(.region == $region)] |
+            if length == 1 then .[0].image else empty end
+          ' <<<"$image_json")"
+          [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+
+          readback="$(aws ec2 describe-images --image-ids "$ami_id" --output json)"
+          jq -e --arg commit "${SOURCE_COMMIT}" \
+            --arg node "${NODE_SHA256}" \
+            --arg genesis "${GENESIS_SHA256}" '
+            .Images | length == 1 and
+            .[0].State == "available" and
+            ([.[0].Tags[] | select(.Key == "Network") | .Value] | first) == "Public Testnet" and
+            ([.[0].Tags[] | select(.Key == "Governance") | .Value] | first) == "JAIOS Institutional Governance" and
+            ([.[0].Tags[] | select(.Key == "SourceCommit") | .Value] | first) == $commit and
+            ([.[0].Tags[] | select(.Key == "NodeArtifactSHA256") | .Value] | first) == $node and
+            ([.[0].Tags[] | select(.Key == "GenesisSHA256") | .Value] | first) == $genesis
+          ' <<<"$readback"
+
+          jq -n --arg ami_id "$ami_id" --arg image_arn "$image_arn" \
+            --arg source_commit "${SOURCE_COMMIT}" \
+            --arg node_sha256 "${NODE_SHA256}" \
+            --arg genesis_sha256 "${GENESIS_SHA256}" '{
+              schema_version: "junca-validator-ami-build/v1",
+              state: "AMI_VERIFIED",
+              network: "Public Testnet",
+              notice: "Public Testnet / No Monetary Value",
+              governance: "JAIOS Institutional Governance",
+              ami_id: $ami_id,
+              image_builder_arn: $image_arn,
+              source_commit: $source_commit,
+              node_artifact_sha256: $node_sha256,
+              genesis_sha256: $genesis_sha256,
+              terraform_state_changed: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/junca-validator-ami-build.json
+          sha256sum artifacts/junca-validator-ami-build.json > artifacts/SHA256SUMS
+          echo "ami_id=$ami_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-ami-build-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
