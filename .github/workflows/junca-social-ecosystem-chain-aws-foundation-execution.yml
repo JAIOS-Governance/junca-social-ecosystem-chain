@@ -279,7 +279,12 @@ jobs:
           test -n "$STATE_BUCKET_NAME"
           [[ "$STATE_BUCKET_NAME" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]
           [[ "$GITHUB_OIDC_THUMBPRINT" =~ ^[0-9a-f]{40}$ ]]
-          terraform -chdir=infra/aws/bootstrap init -backend=false -input=false
+          cat > infra/aws/bootstrap/bootstrap_override.tf <<'EOF'
+          terraform {
+            backend "local" {}
+          }
+          EOF
+          terraform -chdir=infra/aws/bootstrap init -reconfigure -input=false
 
           # Import canonical resources that predate Terraform ownership.
           if aws iam get-role --role-name JuncaChainPublicTestnetDeployment >/dev/null 2>&1; then
@@ -343,6 +348,7 @@ jobs:
             > artifacts/bootstrap-outputs.json
           state_kms_key_arn="$(jq -er .state_kms_key_arn.value artifacts/bootstrap-outputs.json)"
           lock_table="$(jq -er .lock_table.value artifacts/bootstrap-outputs.json)"
+          rm infra/aws/bootstrap/bootstrap_override.tf
           terraform -chdir=infra/aws/bootstrap init -input=false \
             -migrate-state -force-copy \
             -backend-config="bucket=$STATE_BUCKET_NAME" \
