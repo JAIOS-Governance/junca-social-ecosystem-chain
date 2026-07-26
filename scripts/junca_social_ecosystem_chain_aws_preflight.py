@@ -28,6 +28,9 @@ REQUIRED_MARKERS = {
     "aws_backup_plan",
     "aws_cloudwatch_metric_alarm",
     "validator_signer_kms_key_arns",
+    "systemctl enable --now junca-validator.service",
+    "sha256sum -c -",
+    "JUNCA_SIGNER_KMS_ARN",
 }
 FORBIDDEN_SECRET_MARKERS = (
     "BEGIN PRIVATE KEY",
