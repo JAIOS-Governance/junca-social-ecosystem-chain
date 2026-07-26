@@ -152,9 +152,63 @@ locals {
   name                 = "junca-social-ecosystem-chain-testnet"
   public_subnet_cidrs  = ["10.67.0.0/24", "10.67.1.0/24", "10.67.2.0/24"]
   private_subnet_cidrs = ["10.67.16.0/20", "10.67.32.0/20", "10.67.48.0/20"]
+  validator_private_ips = ["10.67.16.10", "10.67.32.10", "10.67.48.10"]
   rpc_hostname         = "rpc.${var.domain_name}"
   explorer_hostname    = "explorer.${var.domain_name}"
   health_hostname      = "health.${var.domain_name}"
+}
+
+resource "aws_sns_topic" "validator_alerts" {
+  name              = "${local.name}-validator-alerts"
+  kms_master_key_id = "alias/aws/sns"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_acm_certificate" "public_services" {
+  domain_name               = local.rpc_hostname
+  subject_alternative_names = [
+    local.explorer_hostname,
+    local.health_hostname,
+  ]
+  validation_method = "DNS"
+
+  options {
+    certificate_transparency_logging_preference = "ENABLED"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+    prevent_destroy       = true
+  }
+}
+
+resource "aws_route53_record" "certificate_validation" {
+  for_each = {
+    for option in aws_acm_certificate.public_services.domain_validation_options :
+    option.domain_name => {
+      name   = option.resource_record_name
+      record = option.resource_record_value
+      type   = option.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  zone_id         = var.route53_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  ttl             = 300
+  records         = [each.value.record]
+}
+
+resource "aws_acm_certificate_validation" "public_services" {
+  certificate_arn         = aws_acm_certificate.public_services.arn
+  validation_record_fqdns = [
+    for record in aws_route53_record.certificate_validation :
+    record.fqdn
+  ]
 }
 
 resource "aws_vpc" "testnet" {
@@ -347,6 +401,12 @@ resource "aws_iam_role_policy" "validator_signer_boundary" {
   })
 }
 
+resource "aws_iam_role_policy_attachment" "validator_ssm" {
+  count      = 3
+  role       = aws_iam_role.validator[count.index].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 resource "aws_iam_instance_profile" "validator" {
   count = 3
   name  = "${local.name}-validator-${count.index + 1}"
@@ -364,6 +424,7 @@ resource "aws_instance" "validator" {
   ami                         = var.node_ami_id
   instance_type               = var.validator_instance_type
   subnet_id                   = aws_subnet.private[count.index].id
+  private_ip                  = local.validator_private_ips[count.index]
   vpc_security_group_ids      = [aws_security_group.validator.id]
   associate_public_ip_address = false
   iam_instance_profile        = aws_iam_instance_profile.validator[count.index].name
@@ -388,6 +449,14 @@ resource "aws_instance" "validator" {
     genesis_sha256      = var.genesis_sha256
     node_sha256         = var.node_artifact_sha256
     signer_arn          = var.validator_signer_arns[count.index]
+    signer_bindings = join(",", [
+      for index, arn in var.validator_signer_arns :
+      format("validator-%02d=%s", index + 1, arn)
+    ])
+    peer_endpoints = join(",", [
+      for index, address in local.validator_private_ips :
+      format("validator-%02d=%s:30303", index + 1, address)
+    ])
     cloudwatch_log_name = aws_cloudwatch_log_group.validator.name
   })
 
@@ -538,7 +607,7 @@ resource "aws_lb_listener" "https" {
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.certificate_arn
+  certificate_arn   = aws_acm_certificate_validation.public_services.certificate_arn
 
   default_action {
     type = "fixed-response"
@@ -611,6 +680,6 @@ resource "aws_cloudwatch_metric_alarm" "validator_status" {
   period              = 60
   statistic           = "Maximum"
   threshold           = 1
-  alarm_actions       = [var.alert_topic_arn]
+  alarm_actions       = [aws_sns_topic.validator_alerts.arn]
   dimensions          = { InstanceId = aws_instance.validator[count.index].id }
 }
