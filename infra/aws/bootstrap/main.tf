@@ -234,6 +234,21 @@ resource "aws_iam_role_policy" "deployment_state" {
   })
 }
 
+resource "aws_iam_role_policy" "deployment_self_permission_readback" {
+  name = "SelfPermissionReadback"
+  role = aws_iam_role.deployment.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "SimulateCanonicalDeploymentRoleOnly"
+      Effect   = "Allow"
+      Action   = "iam:SimulatePrincipalPolicy"
+      Resource = aws_iam_role.deployment.arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "deployment_infrastructure" {
   name = "PublicTestnetInfrastructure"
   role = aws_iam_role.deployment.id
