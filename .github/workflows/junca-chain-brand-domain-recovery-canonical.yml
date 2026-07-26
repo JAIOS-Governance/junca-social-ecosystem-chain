@@ -49,7 +49,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    environment: public-testnet
+    environment: junca-chain-docs-production
     timeout-minutes: 15
     env:
       AWS_REGION: us-east-1
