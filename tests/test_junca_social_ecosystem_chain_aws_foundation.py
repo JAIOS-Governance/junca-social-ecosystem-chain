@@ -42,6 +42,10 @@ class AwsFoundationTests(unittest.TestCase):
         cls.foundation_script = (
             ROOT / "scripts/junca_public_testnet_foundation.sh"
         ).read_text(encoding="utf-8")
+        cls.validator_foundation_release = (
+            ROOT
+            / ".github/workflows/junca-validator-foundation-release.yml"
+        ).read_text(encoding="utf-8")
         cls.self_permission_recovery = (
             ROOT
             / ".github/workflows/"
@@ -168,6 +172,8 @@ class AwsFoundationTests(unittest.TestCase):
             'resource "aws_iam_instance_profile" "validator_image_builder"',
             "JuncaChainPublicTestnetImageBuilder",
             "EC2InstanceProfileForImageBuilder",
+            "AmazonSSMManagedInstanceCore",
+            'resource "aws_iam_role_policy_attachment" "validator_image_builder_ssm_managed"',
             "JuncaValidatorImmutableInputRead",
             "junca-validator-ami-build-${var.aws_account_id}-*",
             'Action   = "iam:PassRole"',
@@ -273,6 +279,39 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.execution_workflow)
         self.assertNotIn("Reject unimplemented foundation apply", self.execution_workflow)
+
+    def test_validator_release_pins_terraform_before_foundation_apply(self) -> None:
+        setup_index = self.validator_foundation_release.index(
+            "hashicorp/setup-terraform@v3"
+        )
+        version_index = self.validator_foundation_release.index(
+            "terraform_version: 1.9.8"
+        )
+        apply_index = self.validator_foundation_release.index(
+            "scripts/junca_public_testnet_foundation.sh foundation-apply"
+        )
+        self.assertLess(setup_index, version_index)
+        self.assertLess(version_index, apply_index)
+        self.assertIn(
+            "terraform_wrapper: false", self.validator_foundation_release
+        )
+        self.assertIn(
+            "group: junca-public-testnet-aws-foundation",
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "cancel-in-progress: false", self.validator_foundation_release
+        )
+
+    def test_deployment_role_can_refresh_and_update_validator_iam_roles(self) -> None:
+        for action in (
+            "iam:GetRole",
+            "iam:ListAttachedRolePolicies",
+            "iam:ListInstanceProfilesForRole",
+            "iam:ListRolePolicies",
+            "iam:UpdateAssumeRolePolicy",
+        ):
+            self.assertIn(action, self.bootstrap)
 
     def test_managed_acm_and_sns_are_not_external_foundation_inputs(self) -> None:
         for deprecated_input in (
