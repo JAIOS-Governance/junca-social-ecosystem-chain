@@ -40,6 +40,119 @@ jobs:
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
 
+      - name: Apply least-scope member migration permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > member-migration-policy.json <<'JSON'
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "KmsDiscovery",
+                "Effect": "Allow",
+                "Action": ["kms:ListAliases", "kms:CreateKey"],
+                "Resource": "*"
+              },
+              {
+                "Sid": "KmsMemberBundle",
+                "Effect": "Allow",
+                "Action": [
+                  "kms:CreateAlias",
+                  "kms:DescribeKey",
+                  "kms:GetPublicKey",
+                  "kms:Decrypt",
+                  "kms:TagResource"
+                ],
+                "Resource": [
+                  "arn:aws:kms:us-east-1:595710543956:key/*",
+                  "arn:aws:kms:us-east-1:595710543956:alias/junca-point-member-migration"
+                ]
+              },
+              {
+                "Sid": "MemberContainerRegistry",
+                "Effect": "Allow",
+                "Action": [
+                  "ecr:BatchCheckLayerAvailability",
+                  "ecr:CompleteLayerUpload",
+                  "ecr:CreateRepository",
+                  "ecr:DescribeImages",
+                  "ecr:DescribeRepositories",
+                  "ecr:GetAuthorizationToken",
+                  "ecr:GetDownloadUrlForLayer",
+                  "ecr:InitiateLayerUpload",
+                  "ecr:PutImage",
+                  "ecr:PutLifecyclePolicy",
+                  "ecr:UploadLayerPart"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "MemberInfrastructure",
+                "Effect": "Allow",
+                "Action": [
+                  "acm:AddTagsToCertificate",
+                  "acm:DescribeCertificate",
+                  "acm:ListCertificates",
+                  "acm:RequestCertificate",
+                  "cloudformation:CreateStack",
+                  "cloudformation:DescribeStackEvents",
+                  "cloudformation:DescribeStacks",
+                  "cloudformation:UpdateStack",
+                  "cloudfront:CreateDistribution",
+                  "cloudfront:GetDistribution",
+                  "cloudfront:GetDistributionConfig",
+                  "cloudfront:TagResource",
+                  "cloudfront:UpdateDistribution",
+                  "dynamodb:CreateTable",
+                  "dynamodb:DescribeTable",
+                  "dynamodb:TagResource",
+                  "dynamodb:UpdateTimeToLive",
+                  "lambda:AddPermission",
+                  "lambda:CreateFunction",
+                  "lambda:CreateFunctionUrlConfig",
+                  "lambda:GetFunction",
+                  "lambda:GetFunctionUrlConfig",
+                  "lambda:GetFunctionConfiguration",
+                  "lambda:TagResource",
+                  "lambda:UpdateFunctionCode",
+                  "lambda:UpdateFunctionConfiguration",
+                  "logs:CreateLogGroup",
+                  "logs:DescribeLogGroups",
+                  "route53:ChangeResourceRecordSets",
+                  "route53:GetChange",
+                  "route53:ListResourceRecordSets",
+                  "secretsmanager:CreateSecret",
+                  "secretsmanager:DescribeSecret",
+                  "secretsmanager:GetSecretValue",
+                  "secretsmanager:PutSecretValue",
+                  "secretsmanager:TagResource"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "MemberExecutionRole",
+                "Effect": "Allow",
+                "Action": [
+                  "iam:CreateRole",
+                  "iam:GetRole",
+                  "iam:PassRole",
+                  "iam:PutRolePolicy",
+                  "iam:TagRole"
+                ],
+                "Resource": [
+                  "arn:aws:iam::595710543956:role/JuncaPointMember*",
+                  "arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment"
+                ]
+              }
+            ]
+          }
+          JSON
+          aws iam put-role-policy \
+            --role-name JuncaChainDocsProductionDeployment \
+            --policy-name JuncaPointMemberMigrationDeployment \
+            --policy-document file://member-migration-policy.json
+
       - name: Create or read migration encryption key
         shell: bash
         run: |
