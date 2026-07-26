@@ -71,7 +71,7 @@ jobs:
             "timeout 20s systemctl stop junca-validator.service || systemctl kill --kill-who=all --signal=KILL junca-validator.service || true",
             "systemctl reset-failed junca-validator.service || true",
             "systemctl start --no-block junca-validator.service",
-            "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health && exit 0; sleep 2; done; journalctl -u junca-validator.service --no-pager -n 100; exit 1"
+            "for attempt in $(seq 1 20); do curl -fsS http://127.0.0.1:8545/health && exit 0; sleep 2; done; systemctl status junca-validator.service --no-pager -l || true; journalctl -u junca-validator.service --no-pager -n 100; exit 1"
           ]}' > artifacts/ssm-recovery.json
           command_id="$(aws ssm send-command \
             --instance-ids "${instances[@]}" \
