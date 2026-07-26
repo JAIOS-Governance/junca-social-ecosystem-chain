@@ -14,6 +14,10 @@ class AwsOidcBootstrapTests(unittest.TestCase):
             ROOT
             / ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
         ).read_text(encoding="utf-8")
+        self.inventory_role = (
+            ROOT
+            / "infrastructure/aws/bootstrap/public-testnet-inventory-role.yaml"
+        ).read_text(encoding="utf-8")
 
     def test_trust_is_repository_and_environment_scoped(self) -> None:
         self.assertIn(
@@ -70,6 +74,41 @@ class AwsOidcBootstrapTests(unittest.TestCase):
                 value in self.template or value in self.workflow,
                 msg=f"missing boundary: {value}",
             )
+
+    def test_missing_role_recovery_is_iam_only_and_read_only(self) -> None:
+        self.assertIn("RoleName: JuncaChainPublicTestnetDeployment", self.inventory_role)
+        self.assertIn(
+            "Sid: GitHubActionsPublicTestnetOIDC", self.inventory_role
+        )
+        self.assertIn(
+            "repo:JAIOS-Governance@${RepositoryOwnerId}/"
+            "junca-social-ecosystem-chain@${RepositoryId}:"
+            "environment:${EnvironmentName}",
+            self.inventory_role,
+        )
+        for required_action in (
+            "ec2:DescribeVpcs",
+            "ec2:DescribeSubnets",
+            "route53:ListHostedZonesByName",
+            "kms:ListAliases",
+            "ecr:DescribeRepositories",
+            "s3:ListAllMyBuckets",
+            "dynamodb:ListTables",
+        ):
+            self.assertIn(required_action, self.inventory_role)
+        for forbidden in (
+            "AWS::EC2::",
+            "AWS::S3::",
+            "AWS::DynamoDB::",
+            "AWS::KMS::",
+            "AWS::ECS::",
+            "AWS::Route53::",
+            "CreateRole",
+            "RunInstances",
+            "ChangeResourceRecordSets",
+            "terraform apply",
+        ):
+            self.assertNotIn(forbidden, self.inventory_role)
 
 
 if __name__ == "__main__":
