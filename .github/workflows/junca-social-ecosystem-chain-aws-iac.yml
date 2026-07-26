@@ -11,6 +11,7 @@ on:
       - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
       - "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
       - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-foundation-execution.yml"
   pull_request:
     paths:
       - "infra/aws/**"
@@ -19,6 +20,7 @@ on:
       - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
       - "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
       - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-foundation-execution.yml"
   workflow_dispatch:
 
 permissions:
