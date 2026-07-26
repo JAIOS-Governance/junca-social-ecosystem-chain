@@ -46,6 +46,15 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(boundary, self.workflow)
 
+    def test_failure_evidence_is_initialized_and_always_uploaded(self):
+        self.assertIn("Initialize failure-safe build evidence", self.workflow)
+        self.assertIn('state: "AMI_BUILD_STARTED"', self.workflow)
+        self.assertIn("Finalize failure evidence", self.workflow)
+        self.assertIn('state: "AMI_BUILD_FAILED"', self.workflow)
+        self.assertIn("if: failure()", self.workflow)
+        self.assertIn("if: always()", self.workflow)
+        self.assertIn("if-no-files-found: error", self.workflow)
+
     def test_component_verifies_installed_runtime(self):
         self.assertIn("__NODE_SHA256__", self.component)
         self.assertIn("__GENESIS_SHA256__", self.component)
