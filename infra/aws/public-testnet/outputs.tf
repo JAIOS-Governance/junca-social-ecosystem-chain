@@ -28,9 +28,9 @@ output "validator_signer_readback" {
 
 output "approved_node_ami_readback" {
   value = {
-    id            = data.aws_ami.approved_node.id
-    name          = data.aws_ami.approved_node.name
-    creation_date = data.aws_ami.approved_node.creation_date
+    id                  = data.aws_ami.approved_node.id
+    name                = data.aws_ami.approved_node.name
+    creation_date       = data.aws_ami.approved_node.creation_date
     owner_id            = data.aws_ami.approved_node.owner_id
     architecture        = data.aws_ami.approved_node.architecture
     root_device_type    = data.aws_ami.approved_node.root_device_type
