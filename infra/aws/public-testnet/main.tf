@@ -228,9 +228,9 @@ resource "aws_security_group" "endpoints" {
   vpc_id = aws_vpc.testnet.id
 
   ingress {
-    protocol        = "tcp"
-    from_port       = 443
-    to_port         = 443
+    protocol  = "tcp"
+    from_port = 443
+    to_port   = 443
     security_groups = concat(
       [aws_security_group.validator.id],
       var.enable_public_services ? [aws_security_group.read_only_services[0].id] : [],
