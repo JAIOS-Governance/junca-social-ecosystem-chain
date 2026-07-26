@@ -1,0 +1,34 @@
+name: JUNCA Terraform One Shot Format
+
+on:
+  push:
+    branches:
+      - agent/aws-validator-stage-first-20260726
+    paths:
+      - .github/workflows/junca-terraform-one-shot-format.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/aws-validator-stage-first-20260726
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      - name: Format and remove one-shot workflow
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/aws/public-testnet fmt -recursive
+          git rm .github/workflows/junca-terraform-one-shot-format.yml
+          git config user.name "junca-governance-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add infra/aws/public-testnet
+          git commit -m "Format validator-stage Terraform"
+          git push origin HEAD:agent/aws-validator-stage-first-20260726
