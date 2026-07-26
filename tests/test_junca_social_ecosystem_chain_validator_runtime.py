@@ -33,6 +33,23 @@ def signature(resource: str, payload: bytes) -> bytes:
     return first + second
 
 
+def vote_payload(
+    *,
+    validator_id: str,
+    height: int,
+    round: int,
+    block_hash: str,
+) -> bytes:
+    return FinalityVote(
+        chain_id=CHAIN_ID,
+        height=height,
+        round=round,
+        block_hash=block_hash,
+        validator_id=validator_id,
+        signature=b"",
+    ).signing_payload
+
+
 class LiveValidatorRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = TemporaryDirectory()
@@ -287,7 +304,12 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     height=vote.height,
                     round=vote.round,
                     block_hash="0x" + ("f" * 64),
-                    signing_payload=b"conflicting-payload",
+                    signing_payload=vote_payload(
+                        validator_id=vote.validator_id,
+                        height=vote.height,
+                        round=vote.round,
+                        block_hash="0x" + ("f" * 64),
+                    ),
                     signer=lambda: b"x" * 64,
                     signature_verifier=lambda value: True,
                 )
@@ -314,7 +336,12 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             height=8,
             round=3,
             block_hash="0x" + ("8" * 64),
-            signing_payload=b"height-8-round-3",
+            signing_payload=vote_payload(
+                validator_id="validator-1",
+                height=8,
+                round=3,
+                block_hash="0x" + ("8" * 64),
+            ),
             signer=signer,
             signature_verifier=lambda value: value == b"s" * 64,
         )
@@ -328,7 +355,12 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                         height=height,
                         round=round,
                         block_hash="0x" + ("7" * 64),
-                        signing_payload=f"{height}:{round}".encode(),
+                        signing_payload=vote_payload(
+                            validator_id="validator-1",
+                            height=height,
+                            round=round,
+                            block_hash="0x" + ("7" * 64),
+                        ),
                         signer=signer,
                         signature_verifier=lambda value: True,
                     )
@@ -338,7 +370,12 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             height=8,
             round=4,
             block_hash="0x" + ("8" * 64),
-            signing_payload=b"height-8-round-4",
+            signing_payload=vote_payload(
+                validator_id="validator-1",
+                height=8,
+                round=4,
+                block_hash="0x" + ("8" * 64),
+            ),
             signer=signer,
             signature_verifier=lambda value: value == b"s" * 64,
         )
@@ -347,7 +384,12 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             height=9,
             round=0,
             block_hash="0x" + ("9" * 64),
-            signing_payload=b"height-9-round-0",
+            signing_payload=vote_payload(
+                validator_id="validator-1",
+                height=9,
+                round=0,
+                block_hash="0x" + ("9" * 64),
+            ),
             signer=signer,
             signature_verifier=lambda value: value == b"s" * 64,
         )
@@ -366,7 +408,12 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
             height=12,
             round=5,
             block_hash="0x" + ("c" * 64),
-            signing_payload=b"legacy-vote",
+            signing_payload=vote_payload(
+                validator_id="validator-1",
+                height=12,
+                round=5,
+                block_hash="0x" + ("c" * 64),
+            ),
             signer=lambda: b"l" * 64,
             signature_verifier=lambda value: value == b"l" * 64,
         )
@@ -383,12 +430,17 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     height=11,
                     round=0,
                     block_hash="0x" + ("b" * 64),
-                    signing_payload=b"rollback",
+                    signing_payload=vote_payload(
+                        validator_id="validator-1",
+                        height=11,
+                        round=0,
+                        block_hash="0x" + ("b" * 64),
+                    ),
                     signer=lambda: b"x" * 64,
                     signature_verifier=lambda value: True,
                 )
             evidence = restarted.evidence()
-            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v3")
+            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v4")
             self.assertEqual(evidence["watermark_latest_height"], 12)
             self.assertEqual(evidence["startup_integrity_check"], "PASS")
         finally:
@@ -412,6 +464,44 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
         evidence = self.journal.evidence()
         self.assertTrue(evidence["signature_verified_before_persist"])
         self.assertTrue(evidence["stored_signature_verified_before_replay"])
+
+    def test_signing_journal_rejects_noncanonical_payload_before_signing(self) -> None:
+        calls = 0
+
+        def signer() -> bytes:
+            nonlocal calls
+            calls += 1
+            return b"s" * 64
+
+        canonical = vote_payload(
+            validator_id="validator-1",
+            height=4,
+            round=2,
+            block_hash="0x" + ("4" * 64),
+        )
+        tampered_payloads = (
+            canonical.replace(str(CHAIN_ID).encode(), str(CHAIN_ID + 1).encode()),
+            canonical.replace(b'"height":4', b'"height":5'),
+            canonical.replace(b'"round":2', b'"round":3'),
+            canonical.replace(b'"validator-1"', b'"validator-2"'),
+            canonical + b" ",
+        )
+        for payload in tampered_payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(
+                    ConsensusSigningJournalError, "canonical consensus vote"
+                ):
+                    self.journal.get_or_sign(
+                        validator_id="validator-1",
+                        height=4,
+                        round=2,
+                        block_hash="0x" + ("4" * 64),
+                        signing_payload=payload,
+                        signer=signer,
+                        signature_verifier=lambda value: True,
+                    )
+        self.assertEqual(calls, 0)
+        self.assertEqual(self.journal.evidence()["signature_count"], 0)
 
 
 if __name__ == "__main__":

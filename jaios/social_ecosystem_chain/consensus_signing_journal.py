@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
@@ -99,6 +100,13 @@ class ConsensusSigningJournal:
             raise ConsensusSigningJournalError("signer is required")
         if not callable(signature_verifier):
             raise ConsensusSigningJournalError("signature_verifier is required")
+        self._validate_signing_payload(
+            validator_id=validator_id,
+            height=height,
+            round=round,
+            block_hash=block_hash,
+            signing_payload=signing_payload,
+        )
 
         payload_digest = hashlib.sha256(signing_payload).hexdigest()
         self.connection.execute("BEGIN IMMEDIATE")
@@ -197,7 +205,7 @@ class ConsensusSigningJournal:
             """
         ).fetchone()
         return {
-            "schema_version": "junca-consensus-signing-journal/v3",
+            "schema_version": "junca-consensus-signing-journal/v4",
             "chain_id": self.chain_id,
             "signature_count": int(signature_row["signature_count"]),
             "latest_height": signature_row["latest_height"],
@@ -206,6 +214,7 @@ class ConsensusSigningJournal:
             "rollback_signing_protected": True,
             "signature_verified_before_persist": True,
             "stored_signature_verified_before_replay": True,
+            "canonical_payload_binding_enforced": True,
             "startup_integrity_check": "PASS",
             "private_key_material_stored": False,
             "key_resource_stored": False,
@@ -281,4 +290,30 @@ class ConsensusSigningJournal:
         if verified is not True:
             raise ConsensusSigningJournalError(
                 "consensus signature verification failed"
+            )
+
+    def _validate_signing_payload(
+        self,
+        *,
+        validator_id: str,
+        height: int,
+        round: int,
+        block_hash: str,
+        signing_payload: bytes,
+    ) -> None:
+        expected = json.dumps(
+            {
+                "block_hash": block_hash,
+                "chain_id": self.chain_id,
+                "height": height,
+                "round": round,
+                "validator_id": validator_id,
+                "vote_type": "PRECOMMIT",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if signing_payload != expected:
+            raise ConsensusSigningJournalError(
+                "signing_payload does not match canonical consensus vote"
             )
