@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - agent/public-testnet-oidc-trust-recovery-20260726
     paths:
       - .github/workflows/junca-public-testnet-oidc-trust-recovery.yml
