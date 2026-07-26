@@ -67,6 +67,15 @@ output "deployment_stage" {
   value = var.enable_public_services ? "public-services" : "validators-only"
 }
 
+output "public_services_acceptance_readback" {
+  value = {
+    enabled                   = var.enable_public_services
+    quorum_evidence_sha256    = var.quorum_acceptance_sha256
+    runtime_evidence_sha256   = var.runtime_acceptance_sha256
+    acceptance_evidence_bound = var.quorum_acceptance_sha256 != null && var.runtime_acceptance_sha256 != null
+  }
+}
+
 output "runtime_boundary" {
   value = {
     governance       = "JAIOS Institutional Governance"
