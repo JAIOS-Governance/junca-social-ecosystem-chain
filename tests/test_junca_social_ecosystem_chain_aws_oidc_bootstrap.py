@@ -63,6 +63,20 @@ class AwsOidcBootstrapTests(unittest.TestCase):
         self.assertNotIn("terraform apply", self.workflow)
         self.assertNotIn("pull_request_target", self.workflow)
 
+    def test_readback_runs_automatically_on_canonical_main_change(self) -> None:
+        self.assertIn("push:", self.workflow)
+        self.assertIn("branches: [main]", self.workflow)
+        self.assertIn(
+            '"arn:aws:iam::595710543956:role/'
+            'JuncaChainPublicTestnetDeployment"',
+            self.workflow,
+        )
+        self.assertIn(
+            "inputs.expected_account_id || '595710543956'",
+            self.workflow,
+        )
+        self.assertIn("inputs.aws_region || 'us-east-1'", self.workflow)
+
     def test_readback_is_bound_to_canonical_account_region_and_role(self) -> None:
         self.assertIn("default: us-east-1", self.workflow)
         self.assertNotIn("default: ap-northeast-1", self.workflow)
