@@ -282,8 +282,12 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         "iam:CreateRole",
         "iam:DeleteRole",
         "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies",
         "iam:TagRole",
         "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
         "iam:CreatePolicy",
         "iam:DeletePolicy",
         "iam:GetPolicy",
@@ -344,6 +348,11 @@ resource "aws_iam_role" "validator_image_builder" {
 resource "aws_iam_role_policy_attachment" "validator_image_builder_managed" {
   role       = aws_iam_role.validator_image_builder.name
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/EC2InstanceProfileForImageBuilder"
+}
+
+resource "aws_iam_role_policy_attachment" "validator_image_builder_ssm_managed" {
+  role       = aws_iam_role.validator_image_builder.name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_role_policy" "validator_image_builder_staging_read" {
