@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "chain_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "notice": "Public Testnet / No Monetary Value",
+  "aws_account_id": "595710543956",
+  "aws_region": "us-east-1",
+  "deployment_role_arn": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "release_state": "BLOCKED_FAIL_CLOSED",
+  "apply_authorized": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "gates": [
+    {
+      "gate": "state_backend",
+      "state": "PENDING",
+      "required_evidence": [
+        "state_bucket_arn",
+        "lock_table_arn",
+        "state_kms_key_arn"
+      ]
+    },
+    {
+      "gate": "three_az_network",
+      "state": "PENDING",
+      "required_evidence": [
+        "vpc_id",
+        "three_distinct_availability_zones",
+        "three_private_subnet_ids"
+      ]
+    },
+    {
+      "gate": "validator_signers",
+      "state": "PENDING",
+      "required_evidence": [
+        "three_distinct_kms_signer_arns",
+        "sign_verify_key_usage",
+        "validator_role_isolation"
+      ]
+    },
+    {
+      "gate": "immutable_runtime",
+      "state": "PENDING",
+      "required_evidence": [
+        "approved_ami_id",
+        "node_artifact_sha256",
+        "genesis_sha256"
+      ]
+    },
+    {
+      "gate": "apply_authorization",
+      "state": "PENDING",
+      "required_evidence": [
+        "approved_change_reference",
+        "public_testnet_environment_approval",
+        "write_capable_role_readback"
+      ]
+    }
+  ]
+}
