@@ -40,7 +40,7 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       KEY_ALIAS: alias/junca-point-member-migration
       PUBLIC_KEY_PATH: infra/aws/member-portal/migration-public-key.pem
