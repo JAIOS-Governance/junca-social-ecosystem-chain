@@ -146,7 +146,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 resource "aws_iam_role" "deployment" {
-  name                 = "JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"
+  name                 = "JuncaChainPublicTestnetDeployment"
   max_session_duration = 3600
 
   assume_role_policy = jsonencode({

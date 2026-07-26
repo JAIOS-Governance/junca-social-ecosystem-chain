@@ -18,6 +18,20 @@ class AwsOidcBootstrapTests(unittest.TestCase):
             ROOT
             / "infrastructure/aws/bootstrap/public-testnet-inventory-role.yaml"
         ).read_text(encoding="utf-8")
+        self.binding_workflow = (
+            ROOT
+            / ".github/workflows/"
+            "junca-social-ecosystem-chain-aws-binding-readback.yml"
+        ).read_text(encoding="utf-8")
+        self.bootstrap_variables = (
+            ROOT / "infra/aws/bootstrap/variables.tf"
+        ).read_text(encoding="utf-8")
+        self.runtime_variables = (
+            ROOT / "infra/aws/public-testnet/variables.tf"
+        ).read_text(encoding="utf-8")
+        self.bootstrap_main = (
+            ROOT / "infra/aws/bootstrap/main.tf"
+        ).read_text(encoding="utf-8")
 
     def test_trust_is_repository_and_environment_scoped(self) -> None:
         self.assertIn(
@@ -90,6 +104,27 @@ class AwsOidcBootstrapTests(unittest.TestCase):
         )
         self.assertNotIn("JuncaChainDocsProductionDeployment", self.workflow)
         self.assertIn("unexpected Public Testnet role identity", self.workflow)
+
+    def test_all_aws_foundation_paths_use_canonical_region_and_role(self) -> None:
+        for source in (
+            self.binding_workflow,
+            self.bootstrap_variables,
+            self.runtime_variables,
+        ):
+            self.assertIn("us-east-1", source)
+            self.assertNotIn("ap-northeast-1", source)
+        self.assertIn(
+            "JuncaChainPublicTestnetDeployment",
+            self.binding_workflow,
+        )
+        self.assertIn(
+            'name                 = "JuncaChainPublicTestnetDeployment"',
+            self.bootstrap_main,
+        )
+        self.assertNotIn(
+            "JUNCA-Social-Ecosystem-Chain-Testnet-Deployment",
+            self.bootstrap_main,
+        )
 
     def test_public_boundary_is_exact(self) -> None:
         for value in (
