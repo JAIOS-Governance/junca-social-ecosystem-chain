@@ -261,7 +261,24 @@ jobs:
             --distribution-configuration-arn "$distribution_arn" \
             --tags "$provenance_tags" \
             --query imageBuildVersionArn --output text)"
-          aws imagebuilder wait image-build-completed --image-build-version-arn "$image_arn"
+          for attempt in $(seq 1 180); do
+            image_status="$(aws imagebuilder get-image \
+              --image-build-version-arn "$image_arn" \
+              --query image.state.status --output text)"
+            case "$image_status" in
+              AVAILABLE)
+                break
+                ;;
+              FAILED|CANCELLED)
+                aws imagebuilder get-image \
+                  --image-build-version-arn "$image_arn" \
+                  --query image.state
+                exit 1
+                ;;
+            esac
+            test "$attempt" -lt 180
+            sleep 20
+          done
           image_json="$(aws imagebuilder get-image --image-build-version-arn "$image_arn")"
           test "$(jq -r '.image.state.status' <<<"$image_json")" = AVAILABLE
           ami_id="$(jq -r --arg region "$AWS_REGION" '
