@@ -63,6 +63,19 @@ class AwsOidcBootstrapTests(unittest.TestCase):
         self.assertNotIn("terraform apply", self.workflow)
         self.assertNotIn("pull_request_target", self.workflow)
 
+    def test_readback_is_bound_to_canonical_account_region_and_role(self) -> None:
+        self.assertIn("default: us-east-1", self.workflow)
+        self.assertNotIn("default: ap-northeast-1", self.workflow)
+        self.assertIn('CANONICAL_ACCOUNT_ID: "595710543956"', self.workflow)
+        self.assertIn("CANONICAL_REGION: us-east-1", self.workflow)
+        self.assertIn(
+            "CANONICAL_ROLE_ARN: "
+            "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+            self.workflow,
+        )
+        self.assertNotIn("JuncaChainDocsProductionDeployment", self.workflow)
+        self.assertIn("unexpected Public Testnet role identity", self.workflow)
+
     def test_public_boundary_is_exact(self) -> None:
         for value in (
             "JUNCA Social Ecosystem Chain",
