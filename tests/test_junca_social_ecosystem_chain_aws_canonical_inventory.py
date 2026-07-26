@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
 from scripts.junca_aws_canonical_inventory import InventoryError, build_inventory
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class AwsCanonicalInventoryTests(unittest.TestCase):
@@ -77,6 +81,40 @@ class AwsCanonicalInventoryTests(unittest.TestCase):
         self.responses[("sts", "get-caller-identity")]["Account"] = "invalid"
         with self.assertRaisesRegex(InventoryError, "account identity"):
             build_inventory(region="us-east-1", run=self.run_aws)
+
+    def test_oidc_handoff_matches_verified_immutable_subject(self) -> None:
+        handoff = json.loads(
+            (
+                ROOT
+                / "infrastructure/aws/public-testnet-oidc-trust-handoff.json"
+            ).read_text(encoding="utf-8")
+        )
+        expected = (
+            "repo:JAIOS-Governance@308604370/"
+            "junca-social-ecosystem-chain@1310568313:"
+            "environment:public-testnet"
+        )
+        self.assertEqual(handoff["expected_subject"], expected)
+        self.assertEqual(handoff["current_token_subject"], expected)
+        condition = handoff["minimum_statement_patch"]["Condition"]["StringEquals"]
+        self.assertEqual(condition["token.actions.githubusercontent.com:sub"], expected)
+        self.assertEqual(
+            condition["token.actions.githubusercontent.com:aud"], "sts.amazonaws.com"
+        )
+        self.assertEqual(len(handoff["target_role_arns"]), 2)
+        self.assertNotIn(
+            handoff["prohibited_deployment_role_arn"], handoff["target_role_arns"]
+        )
+        self.assertFalse(handoff["deployment_performed"])
+
+    def test_inventory_workflow_does_not_mutate_repository_oidc_subject(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/junca-chain-aws-canonical-inventory.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("/actions/oidc/customization/sub", workflow)
+        self.assertNotIn("JuncaChainDocsProductionDeployment", workflow)
+        self.assertIn("if: always()", workflow)
+        self.assertIn("junca-github-oidc-redacted.json", workflow)
 
 
 if __name__ == "__main__":
