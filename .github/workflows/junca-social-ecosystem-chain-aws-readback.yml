@@ -59,7 +59,7 @@ jobs:
           mkdir -p artifacts
           actual_account="$(aws sts get-caller-identity --query Account --output text)"
           actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
-          configured_region="$(aws configure get region)"
+          configured_region="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
           test "${actual_account}" = "${EXPECTED_ACCOUNT_ID}"
           test "${actual_account}" = "${CANONICAL_ACCOUNT_ID}"
           test "${configured_region}" = "${EXPECTED_REGION}"
