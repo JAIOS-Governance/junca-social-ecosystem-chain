@@ -1,0 +1,73 @@
+name: JUNCA Chain Search Surface Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 0 * * *"
+  pull_request:
+    paths:
+      - "scripts/junca_chain_search_surface_audit.py"
+      - "tests/test_junca_chain_search_surface_audit.py"
+      - ".github/workflows/junca-chain-search-surface-audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-chain-search-surface-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify audit logic
+        run: python -m unittest tests/test_junca_chain_search_surface_audit.py
+
+      - name: Audit canonical public search surface
+        env:
+          JAIOS_AUDIT_OUTPUT: evidence/search/chain-search-surface-latest.json
+        run: python scripts/junca_chain_search_surface_audit.py
+
+      - name: Publish audit summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f evidence/search/chain-search-surface-latest.json; then
+            python - <<'PY' >>"$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          result = json.loads(
+              Path("evidence/search/chain-search-surface-latest.json").read_text()
+          )
+          print("### JUNCA Chain search surface")
+          print(f"- Status: `{result['status']}`")
+          print(f"- Brand: {result['brand_origin']}")
+          print(f"- Technical reference: {result['technical_reference_origin']}")
+          print(f"- Checks: `{len(result['checks'])}`")
+          print(f"- Failures: `{len(result['failures'])}`")
+          print("- Mainnet changed: `false`")
+          print("- Assets moved: `false`")
+          print("- Bridge activated: `false`")
+          PY
+          else
+            echo "### JUNCA Chain search surface" >>"$GITHUB_STEP_SUMMARY"
+            echo "- Status: \`AUDIT_DID_NOT_PRODUCE_EVIDENCE\`" >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preserve search audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-chain-search-surface-${{ github.run_id }}
+          path: evidence/search/chain-search-surface-latest.json
+          if-no-files-found: warn
+          retention-days: 30
