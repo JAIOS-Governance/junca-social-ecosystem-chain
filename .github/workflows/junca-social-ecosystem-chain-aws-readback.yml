@@ -1,6 +1,10 @@
 name: JUNCA Social Ecosystem Chain AWS Canonical Readback
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
   workflow_dispatch:
     inputs:
       role_arn:
@@ -33,9 +37,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Enforce exact Public Testnet AWS boundary
         env:
-          REQUESTED_ROLE_ARN: ${{ inputs.role_arn }}
-          REQUESTED_ACCOUNT_ID: ${{ inputs.expected_account_id }}
-          REQUESTED_REGION: ${{ inputs.aws_region }}
+          REQUESTED_ROLE_ARN: ${{ inputs.role_arn || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
+          REQUESTED_ACCOUNT_ID: ${{ inputs.expected_account_id || '595710543956' }}
+          REQUESTED_REGION: ${{ inputs.aws_region || 'us-east-1' }}
         run: |
           set -euo pipefail
           test "$REQUESTED_ROLE_ARN" = "$CANONICAL_ROLE_ARN"
@@ -43,13 +47,13 @@ jobs:
           test "$REQUESTED_REGION" = "$CANONICAL_REGION"
       - uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
-          role-to-assume: ${{ inputs.role_arn }}
-          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ inputs.role_arn || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
+          aws-region: ${{ inputs.aws_region || 'us-east-1' }}
           role-session-name: junca-chain-readback-${{ github.run_id }}
       - name: Verify canonical AWS identity
         env:
-          EXPECTED_ACCOUNT_ID: ${{ inputs.expected_account_id }}
-          EXPECTED_REGION: ${{ inputs.aws_region }}
+          EXPECTED_ACCOUNT_ID: ${{ inputs.expected_account_id || '595710543956' }}
+          EXPECTED_REGION: ${{ inputs.aws_region || 'us-east-1' }}
         run: |
           set -euo pipefail
           mkdir -p artifacts
