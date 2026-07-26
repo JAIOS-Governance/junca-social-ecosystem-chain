@@ -164,6 +164,8 @@ resource "aws_security_group" "validator" {
 }
 
 resource "aws_security_group" "public_alb" {
+  count = var.enable_public_services ? 1 : 0
+
   name   = "${local.name}-public-alb"
   vpc_id = aws_vpc.testnet.id
 
@@ -184,6 +186,8 @@ resource "aws_security_group" "public_alb" {
 }
 
 resource "aws_security_group" "read_only_services" {
+  count = var.enable_public_services ? 1 : 0
+
   name   = "${local.name}-read-only-services"
   vpc_id = aws_vpc.testnet.id
 
@@ -192,7 +196,7 @@ resource "aws_security_group" "read_only_services" {
     protocol        = "tcp"
     from_port       = 8545
     to_port         = 8545
-    security_groups = [aws_security_group.public_alb.id]
+    security_groups = [aws_security_group.public_alb[0].id]
   }
 
   ingress {
@@ -200,7 +204,7 @@ resource "aws_security_group" "read_only_services" {
     protocol        = "tcp"
     from_port       = 3000
     to_port         = 3000
-    security_groups = [aws_security_group.public_alb.id]
+    security_groups = [aws_security_group.public_alb[0].id]
   }
 
   ingress {
@@ -208,7 +212,7 @@ resource "aws_security_group" "read_only_services" {
     protocol        = "tcp"
     from_port       = 8080
     to_port         = 8080
-    security_groups = [aws_security_group.public_alb.id]
+    security_groups = [aws_security_group.public_alb[0].id]
   }
 
   egress {
@@ -227,7 +231,10 @@ resource "aws_security_group" "endpoints" {
     protocol        = "tcp"
     from_port       = 443
     to_port         = 443
-    security_groups = [aws_security_group.validator.id, aws_security_group.read_only_services.id]
+    security_groups = concat(
+      [aws_security_group.validator.id],
+      var.enable_public_services ? [aws_security_group.read_only_services[0].id] : []
+    )
   }
 }
 
@@ -341,6 +348,8 @@ resource "aws_instance" "validator" {
 }
 
 resource "aws_iam_role" "read_only" {
+  count = var.enable_public_services ? 1 : 0
+
   name = "${local.name}-read-only"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -353,19 +362,21 @@ resource "aws_iam_role" "read_only" {
 }
 
 resource "aws_iam_instance_profile" "read_only" {
+  count = var.enable_public_services ? 1 : 0
+
   name = "${local.name}-read-only"
-  role = aws_iam_role.read_only.name
+  role = aws_iam_role.read_only[0].name
 }
 
 resource "aws_instance" "rpc" {
-  count = 2
+  count = var.enable_public_services ? 2 : 0
 
   ami                         = var.node_ami_id
   instance_type               = var.rpc_instance_type
   subnet_id                   = aws_subnet.private[count.index].id
-  vpc_security_group_ids      = [aws_security_group.read_only_services.id]
+  vpc_security_group_ids      = [aws_security_group.read_only_services[0].id]
   associate_public_ip_address = false
-  iam_instance_profile        = aws_iam_instance_profile.read_only.name
+  iam_instance_profile        = aws_iam_instance_profile.read_only[0].name
   monitoring                  = true
 
   metadata_options {
@@ -387,14 +398,14 @@ resource "aws_instance" "rpc" {
 }
 
 resource "aws_instance" "explorer" {
-  count = 2
+  count = var.enable_public_services ? 2 : 0
 
   ami                         = var.node_ami_id
   instance_type               = var.explorer_instance_type
   subnet_id                   = aws_subnet.private[count.index + 1].id
-  vpc_security_group_ids      = [aws_security_group.read_only_services.id]
+  vpc_security_group_ids      = [aws_security_group.read_only_services[0].id]
   associate_public_ip_address = false
-  iam_instance_profile        = aws_iam_instance_profile.read_only.name
+  iam_instance_profile        = aws_iam_instance_profile.read_only[0].name
   monitoring                  = true
 
   metadata_options {
@@ -415,16 +426,20 @@ resource "aws_instance" "explorer" {
 }
 
 resource "aws_lb" "public" {
+  count = var.enable_public_services ? 1 : 0
+
   name                       = "junca-testnet-public"
   internal                   = false
   load_balancer_type         = "application"
-  security_groups            = [aws_security_group.public_alb.id]
+  security_groups            = [aws_security_group.public_alb[0].id]
   subnets                    = aws_subnet.public[*].id
   enable_deletion_protection = true
   drop_invalid_header_fields = true
 }
 
 resource "aws_lb_target_group" "rpc" {
+  count = var.enable_public_services ? 1 : 0
+
   name     = "junca-testnet-rpc"
   port     = 8545
   protocol = "HTTP"
@@ -433,13 +448,15 @@ resource "aws_lb_target_group" "rpc" {
 }
 
 resource "aws_lb_target_group_attachment" "rpc" {
-  count            = 2
-  target_group_arn = aws_lb_target_group.rpc.arn
+  count            = var.enable_public_services ? 2 : 0
+  target_group_arn = aws_lb_target_group.rpc[0].arn
   target_id        = aws_instance.rpc[count.index].id
   port             = 8545
 }
 
 resource "aws_lb_target_group" "explorer" {
+  count = var.enable_public_services ? 1 : 0
+
   name     = "junca-testnet-explorer"
   port     = 3000
   protocol = "HTTP"
@@ -448,14 +465,16 @@ resource "aws_lb_target_group" "explorer" {
 }
 
 resource "aws_lb_target_group_attachment" "explorer" {
-  count            = 2
-  target_group_arn = aws_lb_target_group.explorer.arn
+  count            = var.enable_public_services ? 2 : 0
+  target_group_arn = aws_lb_target_group.explorer[0].arn
   target_id        = aws_instance.explorer[count.index].id
   port             = 3000
 }
 
 resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.public.arn
+  count = var.enable_public_services ? 1 : 0
+
+  load_balancer_arn = aws_lb.public[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -472,11 +491,13 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_lb_listener_rule" "rpc" {
-  listener_arn = aws_lb_listener.https.arn
+  count = var.enable_public_services ? 1 : 0
+
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = 10
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.rpc.arn
+    target_group_arn = aws_lb_target_group.rpc[0].arn
   }
   condition {
     host_header {
@@ -486,11 +507,13 @@ resource "aws_lb_listener_rule" "rpc" {
 }
 
 resource "aws_lb_listener_rule" "explorer" {
-  listener_arn = aws_lb_listener.https.arn
+  count = var.enable_public_services ? 1 : 0
+
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = 20
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.explorer.arn
+    target_group_arn = aws_lb_target_group.explorer[0].arn
   }
   condition {
     host_header {
@@ -500,15 +523,19 @@ resource "aws_lb_listener_rule" "explorer" {
 }
 
 resource "aws_route53_record" "public" {
-  for_each = toset([local.rpc_hostname, local.explorer_hostname, local.health_hostname])
+  for_each = var.enable_public_services ? toset([
+    local.rpc_hostname,
+    local.explorer_hostname,
+    local.health_hostname,
+  ]) : toset([])
 
   zone_id = var.route53_zone_id
   name    = each.value
   type    = "A"
 
   alias {
-    name                   = aws_lb.public.dns_name
-    zone_id                = aws_lb.public.zone_id
+    name                   = aws_lb.public[0].dns_name
+    zone_id                = aws_lb.public[0].zone_id
     evaluate_target_health = true
   }
 }
