@@ -388,7 +388,7 @@ resource "aws_iam_role_policy" "validator_signer_boundary" {
       {
         Sid      = "UseOnlyAssignedSigner"
         Effect   = "Allow"
-        Action   = ["kms:GetPublicKey", "kms:Sign", "kms:DescribeKey"]
+        Action   = ["kms:GetPublicKey", "kms:Sign", "kms:Verify", "kms:DescribeKey"]
         Resource = var.validator_signer_arns[count.index]
       },
       {
@@ -449,6 +449,7 @@ resource "aws_instance" "validator" {
     genesis_sha256 = var.genesis_sha256
     node_sha256    = var.node_artifact_sha256
     signer_arn     = var.validator_signer_arns[count.index]
+    aws_region     = var.aws_region
     signer_bindings = join(",", [
       for index, arn in var.validator_signer_arns :
       format("validator-%02d=%s", index + 1, arn)
