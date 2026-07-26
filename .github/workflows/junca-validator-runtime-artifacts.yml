@@ -1,0 +1,54 @@
+name: JUNCA Validator Runtime Artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "jaios/social_ecosystem_chain/validator_artifacts.py"
+      - "scripts/junca_validator_artifact_handoff.py"
+      - "tests/test_junca_validator_artifacts.py"
+      - ".github/workflows/junca-validator-runtime-artifacts.yml"
+  pull_request:
+    paths:
+      - "jaios/social_ecosystem_chain/validator_artifacts.py"
+      - "scripts/junca_validator_artifact_handoff.py"
+      - "tests/test_junca_validator_artifacts.py"
+      - ".github/workflows/junca-validator-runtime-artifacts.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validator-runtime-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify immutable artifact and safety contracts
+        run: python -m unittest tests.test_junca_validator_artifacts -v
+
+      - name: Produce current fail-closed AMI handoff
+        run: |
+          python scripts/junca_validator_artifact_handoff.py \
+            --pending \
+            --output artifacts/junca-validator-artifact-handoff.json
+          grep -q '"state": "BLOCKED_FAIL_CLOSED"' \
+            artifacts/junca-validator-artifact-handoff.json
+          grep -q '"live_runtime_verified": false' \
+            artifacts/junca-validator-artifact-handoff.json
+          grep -q '"mainnet_changed": false' \
+            artifacts/junca-validator-artifact-handoff.json
+          grep -q '"assets_moved": false' \
+            artifacts/junca-validator-artifact-handoff.json
+          grep -q '"bridge_activated": false' \
+            artifacts/junca-validator-artifact-handoff.json
+
+      - name: Upload validator AMI handoff evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-validator-artifact-handoff-${{ github.run_id }}
+          path: artifacts/junca-validator-artifact-handoff.json
+          if-no-files-found: error
+          retention-days: 90
