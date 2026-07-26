@@ -1,6 +1,10 @@
 terraform {
   required_version = ">= 1.7.0"
 
+  # Created with -backend=false, then migrated immediately after the guarded
+  # bootstrap apply so the local bootstrap state is never the durable source.
+  backend "s3" {}
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
