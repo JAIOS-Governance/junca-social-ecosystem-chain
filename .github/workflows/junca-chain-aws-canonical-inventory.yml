@@ -6,149 +6,129 @@ on:
       - ".github/workflows/junca-chain-aws-canonical-inventory.yml"
       - "scripts/junca_aws_canonical_inventory.py"
       - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
+      - "infrastructure/aws/public-testnet-oidc-trust-handoff.json"
   push:
     branches: [main]
     paths:
       - ".github/workflows/junca-chain-aws-canonical-inventory.yml"
       - "scripts/junca_aws_canonical_inventory.py"
       - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
+      - "infrastructure/aws/public-testnet-oidc-trust-handoff.json"
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
-  group: junca-chain-repository-oidc-subject
+  group: junca-chain-aws-canonical-inventory
   cancel-in-progress: false
 
 jobs:
-  set-default-oidc-subject:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Set standard GitHub OIDC subject for bootstrap role
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location \
-            --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" \
-            --data '{"use_default":true}'
-          state="$(curl --silent --show-error --fail --location \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint")"
-          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is True, s'
-
   canonical-inventory:
-    needs: set-default-oidc-subject
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 15
-    permissions:
-      actions: write
-      contents: read
-      id-token: write
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
+      REQUIRED_SUBJECT: repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Validate readback controller
+
+      - name: Validate readback controller and handoff
         run: |
           python -m py_compile scripts/junca_aws_canonical_inventory.py
           python -m unittest tests.test_junca_social_ecosystem_chain_aws_canonical_inventory -v
-      - name: Configure canonical AWS identity
-        env:
-          GH_TOKEN: ${{ github.token }}
+          python -m json.tool infrastructure/aws/public-testnet-oidc-trust-handoff.json >/dev/null
+
+      - name: Capture redacted OIDC claims
+        id: oidc
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
+          mkdir -p artifacts
+          response="$(curl --silent --show-error --fail \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          token="$(RESPONSE="$response" python3 -c 'import json,os; print(json.loads(os.environ["RESPONSE"])["value"])')"
+          printf '%s' "$token" > /tmp/junca-oidc-token
+          chmod 600 /tmp/junca-oidc-token
+          TOKEN="$token" REQUIRED_SUBJECT="$REQUIRED_SUBJECT" python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          segment = os.environ["TOKEN"].split(".")[1]
+          segment += "=" * (-len(segment) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(segment))
+          allowed = (
+              "aud", "sub", "repository", "repository_id",
+              "repository_owner_id", "environment",
+          )
+          evidence = {key: claims.get(key) for key in allowed}
+          evidence.update({
+              "expected_subject": os.environ["REQUIRED_SUBJECT"],
+              "subject_match": claims.get("sub") == os.environ["REQUIRED_SUBJECT"],
+              "token_included": False,
+              "mainnet_changed": False,
+              "assets_moved": False,
+              "bridge_activated": False,
+              "deployment_performed": False,
+          })
+          Path("artifacts/junca-github-oidc-redacted.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          if not evidence["subject_match"]:
+              raise SystemExit("OIDC subject differs from the verified immutable subject")
+          PY
+
+      - name: Assume an approved Public Testnet role
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat /tmp/junca-oidc-token)"
           roles=(
             "arn:aws:iam::${AWS_ACCOUNT_ID}:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment"
             "arn:aws:iam::${AWS_ACCOUNT_ID}:role/JuncaChainPublicTestnetDeployment"
           )
           selected=""
-          selected_subject=""
-          : > /tmp/junca-aws-assume-evidence.log
-          for mode in default mutable immutable; do
-            case "$mode" in
-              default)
-                subject_payload='{"use_default":true}'
-                ;;
-              mutable)
-                subject_payload='{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
-                ;;
-              immutable)
-                subject_payload='{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":true}'
-                ;;
-            esac
-            curl --silent --show-error --fail-with-body --location \
-              --request PUT \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "X-GitHub-Api-Version: 2026-03-10" \
-              "$endpoint" \
-              --data "$subject_payload"
-            response="$(curl --silent --show-error --fail \
-              --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
-            token="$(RESPONSE="$response" python3 -c 'import json,os; print(json.loads(os.environ["RESPONSE"])["value"])')"
-            subject="$(TOKEN="$token" python3 - <<'PY'
-          import base64
-          import json
-          import os
-
-          segment = os.environ["TOKEN"].split(".")[1]
-          segment += "=" * (-len(segment) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(segment))
-          print(claims["sub"])
-          PY
-          )"
-            printf 'OIDC mode=%s subject=%s\n' "$mode" "$subject" >> /tmp/junca-aws-assume-evidence.log
-            for role in "${roles[@]}"; do
-              if aws sts assume-role-with-web-identity \
-                --role-arn "$role" \
-                --role-session-name "junca-inventory-${GITHUB_RUN_ID}" \
-                --web-identity-token "$token" \
-                --duration-seconds 900 \
-                --output json > /tmp/junca-aws-credentials.json 2> /tmp/junca-aws-assume-error.log; then
-                selected="$role"
-                selected_subject="$subject"
-                break 2
-              fi
-              printf 'Role %s rejected: %s\n' \
-                "$role" \
-                "$(tr '\n' ' ' < /tmp/junca-aws-assume-error.log | sed 's/[[:space:]]\+/ /g')" \
-                >> /tmp/junca-aws-assume-evidence.log
-            done
+          : > artifacts/junca-aws-sts-redacted.log
+          for role in "${roles[@]}"; do
+            if aws sts assume-role-with-web-identity \
+              --role-arn "$role" \
+              --role-session-name "junca-inventory-${GITHUB_RUN_ID}" \
+              --web-identity-token "$token" \
+              --duration-seconds 900 \
+              --output json > /tmp/junca-aws-credentials.json \
+              2> /tmp/junca-aws-assume-error.log; then
+              selected="$role"
+              break
+            fi
+            printf 'role=%s result=REJECTED error=%s\n' \
+              "$role" \
+              "$(tr '\n' ' ' < /tmp/junca-aws-assume-error.log | sed 's/[[:space:]]\+/ /g')" \
+              >> artifacts/junca-aws-sts-redacted.log
           done
+          rm -f /tmp/junca-oidc-token /tmp/junca-aws-assume-error.log
           if [ -z "$selected" ]; then
-            cat /tmp/junca-aws-assume-evidence.log
+            echo "No approved Public Testnet role accepted the verified GitHub OIDC token."
             exit 1
           fi
-          printf 'Selected role=%s subject=%s\n' "$selected" "$selected_subject"
+          printf 'role=%s result=ACCEPTED\n' "$selected" >> artifacts/junca-aws-sts-redacted.log
           SELECTED_ROLE="$selected" python3 - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          payload = json.loads(Path("/tmp/junca-aws-credentials.json").read_text())
-          credentials = payload["Credentials"]
+          credentials = json.loads(
+              Path("/tmp/junca-aws-credentials.json").read_text(encoding="utf-8")
+          )["Credentials"]
           values = {
               "AWS_ACCESS_KEY_ID": credentials["AccessKeyId"],
               "AWS_SECRET_ACCESS_KEY": credentials["SecretAccessKey"],
@@ -162,50 +142,31 @@ jobs:
           for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
               print(f"::add-mask::{values[key]}")
           PY
-          rm -f /tmp/junca-aws-credentials.json /tmp/junca-aws-assume-error.log
+          rm -f /tmp/junca-aws-credentials.json
+
       - name: Read canonical non-secret AWS inventory
         run: |
           python scripts/junca_aws_canonical_inventory.py \
             --region "$AWS_REGION" \
             --output artifacts/junca-aws-canonical-inventory.json
-          test "$(jq -r .account_id artifacts/junca-aws-canonical-inventory.json)" = "595710543956"
+          test "$(jq -r .account_id artifacts/junca-aws-canonical-inventory.json)" = "$AWS_ACCOUNT_ID"
+          test "$(jq -r .region artifacts/junca-aws-canonical-inventory.json)" = "$AWS_REGION"
           test "$(jq -r .deployment_performed artifacts/junca-aws-canonical-inventory.json)" = "false"
           test "$(jq -r .mainnet_changed artifacts/junca-aws-canonical-inventory.json)" = "false"
           test "$(jq -r .assets_moved artifacts/junca-aws-canonical-inventory.json)" = "false"
           test "$(jq -r .bridge_activated artifacts/junca-aws-canonical-inventory.json)" = "false"
-      - uses: actions/upload-artifact@v4
+
+      - name: Record evidence digests
+        if: always()
+        run: |
+          cp infrastructure/aws/public-testnet-oidc-trust-handoff.json artifacts/
+          sha256sum artifacts/* > artifacts/SHA256SUMS
+
+      - name: Upload redacted recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: junca-aws-canonical-inventory-${{ github.run_id }}
-          path: artifacts/junca-aws-canonical-inventory.json
+          path: artifacts/
           if-no-files-found: error
           retention-days: 90
-
-  restore-canonical-oidc-subject:
-    if: always()
-    needs: [set-default-oidc-subject, canonical-inventory]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Restore canonical GitHub OIDC subject
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location \
-            --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" \
-            --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
-          state="$(curl --silent --show-error --fail --location \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint")"
-          STATE="$state" python3 -c 'import json,os; s=json.loads(os.environ["STATE"]); assert s.get("use_default") is False and s.get("include_claim_keys")==["repo","context"] and s.get("use_immutable_subject") is False, s'
