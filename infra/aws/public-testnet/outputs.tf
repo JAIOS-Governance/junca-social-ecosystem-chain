@@ -63,6 +63,23 @@ output "load_balancer_arn" {
   value = try(aws_lb.public[0].arn, null)
 }
 
+output "public_services_certificate" {
+  value = {
+    arn                    = aws_acm_certificate_validation.public_services.certificate_arn
+    domain_name            = aws_acm_certificate.public_services.domain_name
+    subject_alternatives   = aws_acm_certificate.public_services.subject_alternative_names
+    validation_method      = aws_acm_certificate.public_services.validation_method
+    validation_record_fqdns = [
+      for record in aws_route53_record.certificate_validation :
+      record.fqdn
+    ]
+  }
+}
+
+output "validator_alert_topic_arn" {
+  value = aws_sns_topic.validator_alerts.arn
+}
+
 output "deployment_stage" {
   value = var.enable_public_services ? "public-services" : "validators-only"
 }
