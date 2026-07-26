@@ -67,8 +67,9 @@ class AwsOidcBootstrapTests(unittest.TestCase):
         self.assertIn("push:", self.workflow)
         self.assertIn("branches: [main]", self.workflow)
         self.assertIn(
-            '"arn:aws:iam::595710543956:role/'
-            'JuncaChainPublicTestnetDeployment"',
+            "CANONICAL_ROLE_ARN: "
+            "arn:aws:iam::595710543956:role/"
+            "JuncaChainPublicTestnetDeployment",
             self.workflow,
         )
         self.assertIn(
