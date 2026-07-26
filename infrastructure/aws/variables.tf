@@ -180,3 +180,13 @@ variable "binary_sha256" {
     error_message = "binary_sha256 must be 64 lowercase hexadecimal characters."
   }
 }
+
+variable "validator_runtime_contract" {
+  description = "Immutable AMI runtime contract. Prevents applying an AMI that lacks the verified node, genesis, configuration, junca user, and systemd."
+  type        = string
+  default     = "junca-validator-runtime/v1"
+  validation {
+    condition     = var.validator_runtime_contract == "junca-validator-runtime/v1"
+    error_message = "validator_runtime_contract must equal junca-validator-runtime/v1."
+  }
+}

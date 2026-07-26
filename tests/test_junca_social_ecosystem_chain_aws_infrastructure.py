@@ -12,6 +12,9 @@ class AwsInfrastructureTests(unittest.TestCase):
         self.variables = Path("infrastructure/aws/variables.tf").read_text(
             encoding="utf-8"
         )
+        self.user_data = Path(
+            "infrastructure/aws/validator-user-data.sh.tftpl"
+        ).read_text(encoding="utf-8")
 
     def test_three_validators_and_failure_domain_check(self) -> None:
         self.assertIn("validator-01 = 0", self.main)
@@ -46,6 +49,17 @@ class AwsInfrastructureTests(unittest.TestCase):
         self.assertIn("validator_signer_kms_key_arns", self.main)
         self.assertNotIn("private_key =", self.main)
         self.assertNotIn("seed_phrase", self.main)
+
+    def test_validator_runtime_starts_only_after_immutable_readback(self) -> None:
+        self.assertIn("sha256sum -c -", self.user_data)
+        self.assertIn("systemctl enable --now junca-validator.service", self.user_data)
+        self.assertIn("systemctl is-active --quiet", self.user_data)
+        self.assertIn("JUNCA_SIGNER_KMS_ARN", self.user_data)
+        self.assertIn("JUNCA_RPC_ADDR=127.0.0.1", self.user_data)
+        self.assertIn("JUNCA_BRIDGE_ROUTE=PAUSED", self.user_data)
+        self.assertIn("NoNewPrivileges=true", self.user_data)
+        self.assertNotIn("BEGIN PRIVATE KEY", self.user_data)
+        self.assertIn("user_data_replace_on_change = true", self.main)
 
     def test_preflight_is_complete_but_blocks_apply(self) -> None:
         completed = subprocess.run(

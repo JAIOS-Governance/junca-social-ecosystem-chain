@@ -6,7 +6,64 @@ printf '%s\n' '${validator_name}' > /etc/junca/validator-name
 printf '%s\n' '${signer_key_arn}' > /etc/junca/external-signer-resource
 printf '%s\n' '${genesis_sha256}' > /etc/junca/genesis.sha256
 printf '%s\n' '${binary_sha256}' > /etc/junca/binary.sha256
+printf '%s\n' '${runtime_contract}' > /etc/junca/runtime-contract
 
-# Runtime service must bind JSON-RPC to loopback only.
-# Secret key material is never rendered into user data or Terraform state.
-printf '%s\n' 'HTTP_ADDR=127.0.0.1' 'HTTP_PORT=8545' > /etc/junca/rpc-boundary
+NODE=/usr/local/bin/junca-chain-node
+GENESIS=/etc/junca/genesis.json
+CONFIG=/etc/junca/validator.toml
+
+test -x "$NODE"
+test -f "$GENESIS"
+test -f "$CONFIG"
+printf '%s  %s\n' '${binary_sha256}' "$NODE" | sha256sum -c -
+printf '%s  %s\n' '${genesis_sha256}' "$GENESIS" | sha256sum -c -
+
+# Resource references are not secret key material. The node must use the
+# instance role and this KMS ARN; no private key enters user data or state.
+cat > /etc/junca/validator.env <<'EOF'
+JUNCA_CHAIN_NAME=JUNCA Social Ecosystem Chain
+JUNCA_GOVERNANCE=JAIOS Institutional Governance
+JUNCA_NETWORK=Public Testnet / No Monetary Value
+JUNCA_RPC_ADDR=127.0.0.1
+JUNCA_RPC_PORT=8545
+JUNCA_BRIDGE_ROUTE=PAUSED
+EOF
+printf '%s=%s\n' 'JUNCA_VALIDATOR_ID' '${validator_name}' >> /etc/junca/validator.env
+printf '%s=%s\n' 'JUNCA_SIGNER_KMS_ARN' '${signer_key_arn}' >> /etc/junca/validator.env
+chmod 0640 /etc/junca/validator.env
+
+cat > /etc/systemd/system/junca-validator.service <<'EOF'
+[Unit]
+Description=JUNCA Social Ecosystem Chain Public Testnet Validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=junca
+Group=junca
+EnvironmentFile=/etc/junca/validator.env
+ExecStartPre=/usr/bin/test -x /usr/local/bin/junca-chain-node
+ExecStartPre=/usr/bin/test -r /etc/junca/genesis.json
+ExecStartPre=/usr/bin/test -r /etc/junca/validator.toml
+ExecStart=/usr/local/bin/junca-chain-node --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/junca
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+install -d -o junca -g junca -m 0750 /var/lib/junca
+systemctl daemon-reload
+systemctl enable --now junca-validator.service
+systemctl is-active --quiet junca-validator.service
