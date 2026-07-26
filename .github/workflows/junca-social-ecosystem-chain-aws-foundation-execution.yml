@@ -199,6 +199,7 @@ jobs:
                 "iam:GetRole", "iam:ListAttachedRolePolicies",
                 "iam:ListInstanceProfilesForRole", "iam:ListRolePolicies",
                 "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
+                "iam:UpdateRole", "iam:UpdateRoleDescription",
                 "iam:GetRolePolicy", "iam:PutRolePolicy"
               ]
             },
