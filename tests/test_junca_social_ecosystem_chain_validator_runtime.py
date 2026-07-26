@@ -440,7 +440,7 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
                     signature_verifier=lambda value: True,
                 )
             evidence = restarted.evidence()
-            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v4")
+            self.assertEqual(evidence["schema_version"], "junca-consensus-signing-journal/v5")
             self.assertEqual(evidence["watermark_latest_height"], 12)
             self.assertEqual(evidence["startup_integrity_check"], "PASS")
         finally:
@@ -464,6 +464,36 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
         evidence = self.journal.evidence()
         self.assertTrue(evidence["signature_verified_before_persist"])
         self.assertTrue(evidence["stored_signature_verified_before_replay"])
+
+    def test_signer_provider_failure_is_sanitized_and_rolled_back(self) -> None:
+        secret_detail = "provider credential token must never escape"
+
+        def failing_signer() -> bytes:
+            raise RuntimeError(secret_detail)
+
+        with self.assertRaisesRegex(
+            ConsensusSigningJournalError, "signer provider call failed"
+        ) as captured:
+            self.journal.get_or_sign(
+                validator_id="validator-1",
+                height=4,
+                round=0,
+                block_hash="0x" + ("4" * 64),
+                signing_payload=vote_payload(
+                    validator_id="validator-1",
+                    height=4,
+                    round=0,
+                    block_hash="0x" + ("4" * 64),
+                ),
+                signer=failing_signer,
+                signature_verifier=lambda value: True,
+            )
+        self.assertNotIn(secret_detail, str(captured.exception))
+        evidence = self.journal.evidence()
+        self.assertEqual(evidence["signature_count"], 0)
+        self.assertEqual(evidence["watermark_validator_count"], 0)
+        self.assertTrue(evidence["signer_provider_errors_sanitized"])
+
 
     def test_signing_journal_rejects_noncanonical_payload_before_signing(self) -> None:
         calls = 0

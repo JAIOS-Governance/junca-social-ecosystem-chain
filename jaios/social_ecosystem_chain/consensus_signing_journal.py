@@ -148,7 +148,7 @@ class ConsensusSigningJournal:
                     "consensus vote is below the persistent signing watermark"
                 )
 
-            signature = signer()
+            signature = self._call_signer(signer)
             if not isinstance(signature, bytes) or len(signature) not in {64, 65}:
                 raise ConsensusSigningJournalError(
                     "signer returned an invalid consensus signature"
@@ -205,7 +205,7 @@ class ConsensusSigningJournal:
             """
         ).fetchone()
         return {
-            "schema_version": "junca-consensus-signing-journal/v4",
+            "schema_version": "junca-consensus-signing-journal/v5",
             "chain_id": self.chain_id,
             "signature_count": int(signature_row["signature_count"]),
             "latest_height": signature_row["latest_height"],
@@ -215,6 +215,7 @@ class ConsensusSigningJournal:
             "signature_verified_before_persist": True,
             "stored_signature_verified_before_replay": True,
             "canonical_payload_binding_enforced": True,
+            "signer_provider_errors_sanitized": True,
             "startup_integrity_check": "PASS",
             "private_key_material_stored": False,
             "key_resource_stored": False,
@@ -275,6 +276,15 @@ class ConsensusSigningJournal:
                 self.connection.execute("ROLLBACK")
             self.connection.close()
             raise
+
+    @staticmethod
+    def _call_signer(signer: VoteSigner) -> bytes:
+        try:
+            return signer()
+        except Exception as exc:
+            raise ConsensusSigningJournalError(
+                "consensus signer provider call failed"
+            ) from exc
 
     @staticmethod
     def _verify_signature(
