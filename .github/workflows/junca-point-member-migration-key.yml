@@ -1,0 +1,102 @@
+name: JUNCA POINT MEMBER Migration Key
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-point-member-migration-key.yml"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 10
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      KEY_ALIAS: alias/junca-point-member-migration
+      PUBLIC_KEY_PATH: infra/aws/member-portal/migration-public-key.pem
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure canonical AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-member-key-${{ github.run_id }}
+
+      - name: Verify AWS account
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+
+      - name: Create or read migration encryption key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_id="$(aws kms list-aliases \
+            --query "Aliases[?AliasName=='${KEY_ALIAS}'].TargetKeyId | [0]" \
+            --output text)"
+          if [ -z "$key_id" ] || [ "$key_id" = "None" ]; then
+            key_id="$(aws kms create-key \
+              --description "JUNCA POINT MEMBER encrypted deployment bundle" \
+              --key-usage ENCRYPT_DECRYPT \
+              --customer-master-key-spec RSA_4096 \
+              --origin AWS_KMS \
+              --tags TagKey=Project,TagValue=JUNCA-POINT-MEMBER TagKey=Purpose,TagValue=Migration \
+              --query KeyMetadata.KeyId \
+              --output text)"
+            aws kms create-alias --alias-name "$KEY_ALIAS" --target-key-id "$key_id"
+          fi
+          spec="$(aws kms describe-key --key-id "$key_id" --query KeyMetadata.KeySpec --output text)"
+          usage="$(aws kms describe-key --key-id "$key_id" --query KeyMetadata.KeyUsage --output text)"
+          test "$spec" = "RSA_4096"
+          test "$usage" = "ENCRYPT_DECRYPT"
+          echo "KEY_ID=$key_id" >> "$GITHUB_ENV"
+
+      - name: Export public encryption key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PUBLIC_KEY_PATH")"
+          aws kms get-public-key \
+            --key-id "$KEY_ID" \
+            --query PublicKey \
+            --output text |
+            base64 --decode > public-key.der
+          openssl pkey -pubin -inform DER -in public-key.der -out "$PUBLIC_KEY_PATH"
+          openssl pkey -pubin -in "$PUBLIC_KEY_PATH" -text -noout | grep -q "4096 bit"
+
+      - name: Publish public key for encrypted deployments
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "$PUBLIC_KEY_PATH" && git ls-files --error-unmatch "$PUBLIC_KEY_PATH" >/dev/null 2>&1; then
+            exit 0
+          fi
+          git config user.name "JUNCA Deployment Automation"
+          git config user.email "desk@junca-global.group"
+          git add "$PUBLIC_KEY_PATH"
+          git commit -m "Add member portal migration public key"
+          git push origin HEAD:main
+
+      - name: Record result
+        shell: bash
+        run: |
+          {
+            echo "### JUNCA POINT MEMBER migration key"
+            echo "- AWS account: $AWS_ACCOUNT_ID"
+            echo "- Alias: $KEY_ALIAS"
+            echo "- Public key: $PUBLIC_KEY_PATH"
+            echo "- Private key export: impossible by AWS KMS design"
+          } >> "$GITHUB_STEP_SUMMARY"
