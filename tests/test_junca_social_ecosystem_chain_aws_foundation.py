@@ -309,6 +309,8 @@ class AwsFoundationTests(unittest.TestCase):
             "broad_iam_grant: false",
             "docs_runtime_role_used: false",
             "AWS foundation remains fail-closed",
+            'echo "::error::Exact self-readback policy was not verified',
+            "exit 1",
         ):
             self.assertIn(required, self.self_permission_recovery)
         self.assertNotIn("JuncaChainDocsProductionDeployment", self.self_permission_recovery)

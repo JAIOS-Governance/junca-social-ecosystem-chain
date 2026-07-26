@@ -224,7 +224,8 @@ jobs:
           set -euo pipefail
           jq . artifacts/runtime-self-permission-recovery.json
           if [[ "${{ steps.recovery.outputs.verification }}" != "PASS" ]]; then
-            echo "::warning::Exact self-readback policy was not verified; AWS foundation remains fail-closed."
+            echo "::error::Exact self-readback policy was not verified; AWS foundation remains fail-closed."
+            exit 1
           fi
 
       - name: Publish non-secret recovery summary
