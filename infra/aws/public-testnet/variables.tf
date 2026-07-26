@@ -63,6 +63,11 @@ variable "validator_signer_arns" {
 variable "node_ami_id" {
   description = "Approved immutable AMI containing the audited node runtime."
   type        = string
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{8,17}$", var.node_ami_id))
+    error_message = "node_ami_id must be an exact approved AMI ID."
+  }
 }
 
 variable "node_artifact_sha256" {

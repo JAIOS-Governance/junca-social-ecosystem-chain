@@ -7,13 +7,17 @@ on:
     paths:
       - "infra/aws/**"
       - "infrastructure/aws/**"
+      - "tests/test_junca_social_ecosystem_chain_aws_foundation.py"
       - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
+      - "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
       - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
   pull_request:
     paths:
       - "infra/aws/**"
       - "infrastructure/aws/**"
+      - "tests/test_junca_social_ecosystem_chain_aws_foundation.py"
       - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
+      - "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
       - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
   workflow_dispatch:
 
@@ -26,9 +30,13 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        module:
-          - infra/aws/bootstrap
-          - infrastructure/aws
+        include:
+          - module: infra/aws/bootstrap
+            evidence_name: bootstrap
+          - module: infra/aws/public-testnet
+            evidence_name: public-testnet
+          - module: infrastructure/aws
+            evidence_name: legacy-runtime
     steps:
       - uses: actions/checkout@v4
 
@@ -68,6 +76,21 @@ jobs:
           assert len(binding["validator_signer_arns"]) == 3
           assert all("PENDING" in value for value in binding["validator_signer_arns"])
           PY
+
+      - name: Validate separated AWS foundation gates
+        run: |
+          mkdir -p artifacts
+          cp config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json \
+            artifacts/junca-aws-foundation-gates.json
+          python -m unittest tests.test_junca_social_ecosystem_chain_aws_foundation -v
+
+      - name: Upload AWS foundation gate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-aws-foundation-gates-${{ matrix.evidence_name }}-${{ github.run_id }}
+          path: artifacts/junca-aws-foundation-gates.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Reject secret material
         run: |
