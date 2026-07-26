@@ -25,6 +25,7 @@ class AwsFoundationTests(unittest.TestCase):
         cls.runtime_outputs = (
             ROOT / "infra/aws/public-testnet/outputs.tf"
         ).read_text(encoding="utf-8")
+        cls.image_builder = cls.bootstrap
         cls.validator_user_data = (
             ROOT
             / "infra/aws/public-testnet/templates/validator-user-data.sh.tftpl"
@@ -109,6 +110,27 @@ class AwsFoundationTests(unittest.TestCase):
             'value = try(aws_lb.public[0].arn, null)', self.runtime_outputs
         )
 
+    def test_runtime_manages_alert_topic_and_dns_validated_certificate(self) -> None:
+        for required in (
+            'resource "aws_sns_topic" "validator_alerts"',
+            'kms_master_key_id = "alias/aws/sns"',
+            'resource "aws_acm_certificate" "public_services"',
+            'resource "aws_route53_record" "certificate_validation"',
+            'resource "aws_acm_certificate_validation" "public_services"',
+            "prevent_destroy       = true",
+            "aws_acm_certificate_validation.public_services.certificate_arn",
+            "aws_sns_topic.validator_alerts.arn",
+        ):
+            self.assertIn(required, self.runtime)
+        self.assertNotIn('variable "certificate_arn"', self.runtime_variables)
+        self.assertNotIn('variable "alert_topic_arn"', self.runtime_variables)
+        self.assertIn(
+            'output "public_services_certificate"', self.runtime_outputs
+        )
+        self.assertIn(
+            'output "validator_alert_topic_arn"', self.runtime_outputs
+        )
+
     def test_runtime_requires_canonical_role_and_immutable_artifacts(self) -> None:
         for required in (
             "JuncaChainPublicTestnetDeployment",
@@ -139,6 +161,26 @@ class AwsFoundationTests(unittest.TestCase):
             'output "approved_node_ami_readback"',
         ):
             self.assertIn(required, self.runtime_outputs)
+
+    def test_image_builder_profile_is_terraform_managed_and_least_privilege(self) -> None:
+        for required in (
+            'resource "aws_iam_role" "validator_image_builder"',
+            'resource "aws_iam_instance_profile" "validator_image_builder"',
+            "JuncaChainPublicTestnetImageBuilder",
+            "EC2InstanceProfileForImageBuilder",
+            "JuncaValidatorImmutableInputRead",
+            "junca-validator-ami-build-${var.aws_account_id}-*",
+            'Action   = "iam:PassRole"',
+            '"imagebuilder.amazonaws.com"',
+            '"ec2.amazonaws.com"',
+            'resource "aws_iam_role_policy" "deployment_ami_build"',
+            "prevent_destroy = true",
+        ):
+            self.assertIn(required, self.image_builder)
+        self.assertNotIn("Action = \"*\"", self.image_builder)
+        self.assertIn(
+            'output "validator_image_builder_profile"', self.bootstrap_outputs
+        )
 
     def test_validator_binary_path_matches_runtime_contract(self) -> None:
         self.assertIn(
@@ -232,6 +274,25 @@ class AwsFoundationTests(unittest.TestCase):
             self.assertIn(required, self.execution_workflow)
         self.assertNotIn("Reject unimplemented foundation apply", self.execution_workflow)
 
+    def test_managed_acm_and_sns_are_not_external_foundation_inputs(self) -> None:
+        for deprecated_input in (
+            "CERTIFICATE_ARN",
+            "ALERT_TOPIC_ARN",
+            "JUNCA_PUBLIC_TESTNET_CERTIFICATE_ARN",
+            "JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN",
+        ):
+            self.assertNotIn(deprecated_input, self.foundation_script)
+            self.assertNotIn(deprecated_input, self.execution_workflow)
+        for required_input in (
+            "NODE_AMI_ID",
+            "NODE_ARTIFACT_SHA256",
+            "GENESIS_SHA256",
+            "SOURCE_COMMIT",
+            "AVAILABILITY_ZONES_JSON",
+        ):
+            self.assertIn(required_input, self.foundation_script)
+            self.assertIn(required_input, self.execution_workflow)
+
     def test_auto_release_preserves_completed_bootstrap_when_runtime_inputs_are_pending(self) -> None:
         for required in (
             "Resolve validator foundation input readiness",
@@ -296,7 +357,7 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_auto_resume_requires_permission_pass_before_bootstrap_plan(self) -> None:
         for required in (
-            "github.event_name == 'workflow_run' && 'auto-release'",
+            "(github.event_name == 'workflow_run' || github.event_name == 'push') && 'auto-release'",
             "bootstrap-apply|foundation-apply|auto-release",
             "env.REQUESTED_PHASE == 'auto-release'",
             "format('https://github.com/{0}/actions/runs/{1}'",
