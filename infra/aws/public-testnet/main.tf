@@ -45,6 +45,14 @@ resource "terraform_data" "canonical_binding_gate" {
       condition     = length(toset(var.availability_zones)) == 3
       error_message = "Validator deployment requires three distinct availability zones."
     }
+    precondition {
+      condition     = var.deployment_principal_arn == "arn:aws:iam::${var.aws_account_id}:role/JuncaChainPublicTestnetDeployment"
+      error_message = "Deployment principal must be the canonical dedicated Public Testnet role."
+    }
+    precondition {
+      condition     = alltrue([for az in var.availability_zones : startswith(az, var.aws_region)])
+      error_message = "All validator availability zones must belong to the canonical AWS region."
+    }
   }
 }
 
