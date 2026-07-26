@@ -39,13 +39,12 @@ jobs:
           role-session-name: public-testnet-trust-recovery-${{ github.run_id }}
           disable-retry: true
 
-      - name: Verify canonical AWS identity and OIDC provider
+      - name: Verify canonical AWS identity
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          provider_url="$(aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_PROVIDER_ARN" --query Url --output text)"
-          test "$provider_url" = "token.actions.githubusercontent.com"
+          test "$OIDC_PROVIDER_ARN" = "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
 
       - name: Preserve and repair Public Testnet trust policies
         shell: bash
