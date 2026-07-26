@@ -22,6 +22,11 @@ output "deployment_principal_arn" {
   value = aws_iam_role.deployment.arn
 }
 
+output "validator_signer_arns" {
+  description = "Three isolated asymmetric validator signer ARNs."
+  value       = aws_kms_key.validator_signer[*].arn
+}
+
 output "backend_configuration" {
   value = {
     bucket         = aws_s3_bucket.terraform_state.id
