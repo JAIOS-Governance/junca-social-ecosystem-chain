@@ -6,7 +6,7 @@
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
     "build": "node ./scripts/build.mjs",
-    "lint": "node --check ./scripts/build.mjs && node --check ./scripts/qa.mjs && node --check ./scripts/clean.mjs",
+    "lint": "node --check ./scripts/build.mjs && node --check ./scripts/qa.mjs && node --check ./scripts/clean.mjs && node --check ./scripts/write-official-favicon.mjs",
     "test": "npm run build && node ./scripts/qa.mjs"
   },
   "engines": {

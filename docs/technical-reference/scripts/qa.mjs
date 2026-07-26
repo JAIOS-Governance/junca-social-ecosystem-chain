@@ -1,4 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,7 +42,7 @@ for (const required of [
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.26 / R18",
+  "Revision · 2026.07.27 / R19",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -68,7 +69,7 @@ for (const required of [
   "Certified Finality and Validator Epoch Safety",
   "strict greater-than-two-thirds voting power",
   "Old-epoch validator proofs are rejected",
-  "321 / 321 automated tests passed",
+  "400 / 400 automated tests passed",
 ]) {
   if (!protocol.includes(required)) failures.push(`/protocol: missing ${required}`);
 }
@@ -88,12 +89,12 @@ const evidence = await readFile(join(dist, "evidence", "index.html"), "utf8");
 for (const required of [
   "Documentation Publication Evidence",
   "Network Runtime Evidence",
-  "a4701b80268c",
-  "/pull/35",
-  "/pull/45",
-  "30155548410",
-  "30155548413",
-  "30155548403",
+  "34d838b8a59c",
+  "/pull/51",
+  "/pull/76",
+  "30224301657",
+  "30211341527",
+  "30212766916",
 ]) {
   if (!evidence.includes(required)) failures.push(`/evidence: missing ${required}`);
 }
@@ -113,12 +114,29 @@ await readFile(join(dist, "icon-512.png"));
 await readFile(join(dist, "icon-maskable-512.png"));
 await readFile(join(dist, "apple-touch-icon.png"));
 const favicon = await readFile(join(dist, "favicon.svg"), "utf8");
-if (!favicon.includes('data-typeface="Optima LT Std Bold"')) failures.push("favicon J does not declare the approved wordmark typeface");
-if (!favicon.includes('data-rendering="flattened-approved-specimen"')) failures.push("favicon J is not pinned to the approved flattened specimen");
-if (!favicon.includes('data-source="Monotype official Optima Bold specimen"')) failures.push("favicon J provenance is missing");
-if (!favicon.includes('href="data:image/png;base64,')) failures.push("favicon J must be self-contained");
-if (/<text[\s>]/.test(favicon)) failures.push("favicon J must ship as a flattened asset, not runtime text");
-if (favicon.includes("M287 82c33-4 70-4 110 1")) failures.push("favicon retains the retired hand-drawn J");
+if (!favicon.includes('data-symbol="JUNCA Official Symbol"')) failures.push("favicon does not declare the official symbol");
+if (!favicon.includes('data-rendering="non-distorting-resize"')) failures.push("favicon symbol rendering contract is missing");
+if (!favicon.includes('data-source-drive-id="1DiGrLHOWRcrVnt2BdijSFDy3U4mSvgBn"')) failures.push("favicon official Drive source is missing");
+if (!favicon.includes('data-source-package-sha256="3dc49cf3e5110207f4a1274e972d194943aaac8df657caa969cc4e326ecceba9"')) failures.push("favicon package digest is missing");
+if (!favicon.includes('href="data:image/png;base64,')) failures.push("favicon symbol must be self-contained");
+if (/<text[\s>]/.test(favicon)) failures.push("favicon must ship as a flattened official symbol, not runtime text");
+for (const prohibitedMarker of ["Monotype official Optima Bold specimen", "flattened-approved-specimen", "Approved Optima Bold J specimen"]) {
+  if (favicon.includes(prohibitedMarker)) failures.push(`favicon retains retired J provenance: ${prohibitedMarker}`);
+}
+const expectedSymbolDigests = new Map([
+  ["official-junca-symbol.png", "6cba53b6217543d9d4fb33a1d4727ea24ee3dfd09a55ac9ed46da46ff13886cb"],
+  ["icon-192.png", "48db3873676c0b70969b47b067a51907d8b69bb2c6b231253bb83a767b7604f7"],
+  ["icon-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
+  ["icon-maskable-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
+  ["apple-touch-icon.png", "30aaf78297a8dd8077025eefc3d7b4bf613fd1ab955dd1d47858f9d797ecec88"],
+]);
+for (const [name, expected] of expectedSymbolDigests) {
+  const path = name === "official-junca-symbol.png"
+    ? join(root, "src", name)
+    : join(dist, name);
+  const actual = createHash("sha256").update(await readFile(path)).digest("hex");
+  if (actual !== expected) failures.push(`${name}: official symbol digest mismatch`);
+}
 const infrastructure = await readFile(join(repositoryRoot, "infra", "aws", "docs-publication", "main.yaml"), "utf8");
 const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "junca-chain-docs-production.yml"), "utf8");
 for (const required of [

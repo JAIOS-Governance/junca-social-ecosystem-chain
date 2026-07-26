@@ -1,0 +1,116 @@
+{
+  "schema": "jaios-technical-reference-daily-audit/v1",
+  "audit_date_jst": "2026-07-27",
+  "canonical_url": "https://docs.jaios-governance.org/",
+  "canonical_source": "docs/technical-reference",
+  "governance": "JAIOS Institutional Governance",
+  "constitution": {
+    "document_id": "1D_uQWXWfRKdrjQjHybTV9bgpBvknauRc0ZkOSe0jBE8",
+    "revision_id": "40",
+    "modified_time": "2026-07-26T08:55:23.366Z",
+    "readback_account": "juncajapan.inc@gmail.com"
+  },
+  "official_symbol": {
+    "drive_file_id": "1DiGrLHOWRcrVnt2BdijSFDy3U4mSvgBn",
+    "file_name": "logo 2026.zip",
+    "modified_time": "2026-07-26T08:42:46.163Z",
+    "file_size_bytes": 407400,
+    "package_sha256": "3dc49cf3e5110207f4a1274e972d194943aaac8df657caa969cc4e326ecceba9",
+    "derived_symbol_sha256": "6cba53b6217543d9d4fb33a1d4727ea24ee3dfd09a55ac9ed46da46ff13886cb",
+    "source_permissions_risk": "ANYONE_WITH_LINK_WRITER_PRESENT",
+    "production_action": "REPLACE_RETIRED_J_ICON_WITH_OFFICIAL_SYMBOL"
+  },
+  "repository": {
+    "main_at_controlled_revision": "34d838b8a59cbaf73d14ed06d91584dfa157da6a",
+    "previous_technical_source": "a4701b80268cce96e4e05d44d6b0f56f853dc58b",
+    "github_release": "NONE_PUBLISHED",
+    "verified_pull_requests": [
+      51,
+      52,
+      55,
+      56,
+      58,
+      62,
+      64,
+      65,
+      66,
+      68,
+      70,
+      71,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      81,
+      84,
+      93,
+      94,
+      95,
+      96,
+      97
+    ]
+  },
+  "verified_change": {
+    "previous_release": "2026.07.26-R18",
+    "target_release": "2026.07.27-R19",
+    "previous_test_count": 321,
+    "current_test_count": 400,
+    "local_test_result": "400/400 PASS",
+    "scope": [
+      "consensus-round recovery",
+      "persistent anti-double-signing journal",
+      "signature verification before persistence",
+      "canonical consensus payload binding",
+      "validator-node runtime and immutable artifact handoff",
+      "validator predeployment acceptance",
+      "three-signer AWS foundation bootstrap",
+      "fail-closed RPC and Explorer publication gates",
+      "official JUNCA symbol for browser and device icons"
+    ]
+  },
+  "workflow_evidence": {
+    "repository_governance": {
+      "run_id": 30224301657,
+      "status": "SUCCESS"
+    },
+    "aws_iac": {
+      "run_id": 30224301634,
+      "status": "SUCCESS"
+    },
+    "aws_foundation_execution": {
+      "run_id": 30224301646,
+      "status": "SUCCESS"
+    },
+    "validator_runtime_artifacts": {
+      "run_id": 30211341527,
+      "status": "SUCCESS"
+    },
+    "validator_immutable_ami": {
+      "run_id": 30211350465,
+      "status": "SUCCESS"
+    },
+    "validator_foundation_release": {
+      "run_id": 30212766916,
+      "status_at_audit": "IN_PROGRESS",
+      "acceptance_effect": "NO_RUNTIME_ACCEPTANCE_CLAIM"
+    }
+  },
+  "runtime_boundary": {
+    "public_testnet_label": "Public Testnet / No Monetary Value",
+    "runtime_status": "UNVERIFIED",
+    "validator_acceptance": "PENDING",
+    "public_rpc": "PENDING",
+    "explorer": "PENDING",
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  },
+  "rollback_point": {
+    "repository_commit": "34d838b8a59cbaf73d14ed06d91584dfa157da6a",
+    "technical_release": "2026.07.26-R18",
+    "technical_source": "a4701b80268cce96e4e05d44d6b0f56f853dc58b"
+  }
+}
