@@ -1,6 +1,16 @@
 name: JUNCA Social Ecosystem Chain AWS Plan
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infrastructure/aws/**"
+      - "scripts/junca_social_ecosystem_chain_aws_preflight.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_infrastructure.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_oidc_bootstrap.py"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-plan.yml"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
   pull_request:
     paths:
       - "infrastructure/aws/**"
