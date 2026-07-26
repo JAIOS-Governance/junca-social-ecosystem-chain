@@ -149,13 +149,13 @@ resource "terraform_data" "canonical_binding_gate" {
 }
 
 locals {
-  name                 = "junca-social-ecosystem-chain-testnet"
-  public_subnet_cidrs  = ["10.67.0.0/24", "10.67.1.0/24", "10.67.2.0/24"]
-  private_subnet_cidrs = ["10.67.16.0/20", "10.67.32.0/20", "10.67.48.0/20"]
+  name                  = "junca-social-ecosystem-chain-testnet"
+  public_subnet_cidrs   = ["10.67.0.0/24", "10.67.1.0/24", "10.67.2.0/24"]
+  private_subnet_cidrs  = ["10.67.16.0/20", "10.67.32.0/20", "10.67.48.0/20"]
   validator_private_ips = ["10.67.16.10", "10.67.32.10", "10.67.48.10"]
-  rpc_hostname         = "rpc.${var.domain_name}"
-  explorer_hostname    = "explorer.${var.domain_name}"
-  health_hostname      = "health.${var.domain_name}"
+  rpc_hostname          = "rpc.${var.domain_name}"
+  explorer_hostname     = "explorer.${var.domain_name}"
+  health_hostname       = "health.${var.domain_name}"
 }
 
 resource "aws_sns_topic" "validator_alerts" {
@@ -168,7 +168,7 @@ resource "aws_sns_topic" "validator_alerts" {
 }
 
 resource "aws_acm_certificate" "public_services" {
-  domain_name               = local.rpc_hostname
+  domain_name = local.rpc_hostname
   subject_alternative_names = [
     local.explorer_hostname,
     local.health_hostname,
@@ -204,7 +204,7 @@ resource "aws_route53_record" "certificate_validation" {
 }
 
 resource "aws_acm_certificate_validation" "public_services" {
-  certificate_arn         = aws_acm_certificate.public_services.arn
+  certificate_arn = aws_acm_certificate.public_services.arn
   validation_record_fqdns = [
     for record in aws_route53_record.certificate_validation :
     record.fqdn
@@ -444,11 +444,11 @@ resource "aws_instance" "validator" {
   }
 
   user_data = templatefile("${path.module}/templates/validator-user-data.sh.tftpl", {
-    validator_id        = format("validator-%02d", count.index + 1)
-    chain_id            = var.chain_id
-    genesis_sha256      = var.genesis_sha256
-    node_sha256         = var.node_artifact_sha256
-    signer_arn          = var.validator_signer_arns[count.index]
+    validator_id   = format("validator-%02d", count.index + 1)
+    chain_id       = var.chain_id
+    genesis_sha256 = var.genesis_sha256
+    node_sha256    = var.node_artifact_sha256
+    signer_arn     = var.validator_signer_arns[count.index]
     signer_bindings = join(",", [
       for index, arn in var.validator_signer_arns :
       format("validator-%02d=%s", index + 1, arn)
