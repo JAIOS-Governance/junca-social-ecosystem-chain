@@ -9,8 +9,8 @@ esac
 
 required_env=(
   AWS_ACCOUNT_ID AWS_REGION STATE_BUCKET_NAME DOMAIN_NAME ROUTE53_ZONE_ID
-  CERTIFICATE_ARN NODE_AMI_ID NODE_ARTIFACT_SHA256 GENESIS_SHA256
-  SOURCE_COMMIT ALERT_TOPIC_ARN AVAILABILITY_ZONES_JSON
+  NODE_AMI_ID NODE_ARTIFACT_SHA256 GENESIS_SHA256 SOURCE_COMMIT
+  AVAILABILITY_ZONES_JSON
   DEPLOYMENT_ROLE_ARN
 )
 for name in "${required_env[@]}"; do
@@ -56,13 +56,11 @@ jq -n \
   --arg aws_region "$AWS_REGION" \
   --arg domain_name "$DOMAIN_NAME" \
   --arg route53_zone_id "$ROUTE53_ZONE_ID" \
-  --arg certificate_arn "$CERTIFICATE_ARN" \
   --arg deployment_principal_arn "$DEPLOYMENT_ROLE_ARN" \
   --arg node_ami_id "$NODE_AMI_ID" \
   --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
   --arg genesis_sha256 "$GENESIS_SHA256" \
   --arg source_commit "$SOURCE_COMMIT" \
-  --arg alert_topic_arn "$ALERT_TOPIC_ARN" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
   --argjson validator_signer_arns "$signer_arns" \
   '{
@@ -71,14 +69,12 @@ jq -n \
     availability_zones: $availability_zones,
     domain_name: $domain_name,
     route53_zone_id: $route53_zone_id,
-    certificate_arn: $certificate_arn,
     deployment_principal_arn: $deployment_principal_arn,
     validator_signer_arns: $validator_signer_arns,
     node_ami_id: $node_ami_id,
     node_artifact_sha256: $node_artifact_sha256,
     genesis_sha256: $genesis_sha256,
     source_commit: $source_commit,
-    alert_topic_arn: $alert_topic_arn,
     enable_public_services: false,
     quorum_acceptance_sha256: null,
     runtime_acceptance_sha256: null
