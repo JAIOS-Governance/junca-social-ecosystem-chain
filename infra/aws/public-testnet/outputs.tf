@@ -28,10 +28,18 @@ output "validator_signer_readback" {
 
 output "approved_node_ami_readback" {
   value = {
-    id            = data.aws_ami.approved_node.id
-    name          = data.aws_ami.approved_node.name
-    creation_date = data.aws_ami.approved_node.creation_date
-    owner_id      = data.aws_ami.approved_node.owner_id
+    id                  = data.aws_ami.approved_node.id
+    name                = data.aws_ami.approved_node.name
+    creation_date       = data.aws_ami.approved_node.creation_date
+    owner_id            = data.aws_ami.approved_node.owner_id
+    architecture        = data.aws_ami.approved_node.architecture
+    root_device_type    = data.aws_ami.approved_node.root_device_type
+    virtualization_type = data.aws_ami.approved_node.virtualization_type
+    source_commit       = data.aws_ami.approved_node.tags["SourceCommit"]
+    node_sha256         = data.aws_ami.approved_node.tags["NodeArtifactSHA256"]
+    genesis_sha256      = data.aws_ami.approved_node.tags["GenesisSHA256"]
+    network             = data.aws_ami.approved_node.tags["Network"]
+    governance          = data.aws_ami.approved_node.tags["Governance"]
   }
 }
 

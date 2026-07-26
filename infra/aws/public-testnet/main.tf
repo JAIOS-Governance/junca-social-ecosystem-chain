@@ -43,6 +43,46 @@ data "aws_ami" "approved_node" {
     name   = "state"
     values = ["available"]
   }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "root-device-type"
+    values = ["ebs"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name   = "tag:SourceCommit"
+    values = [var.source_commit]
+  }
+
+  filter {
+    name   = "tag:NodeArtifactSHA256"
+    values = [var.node_artifact_sha256]
+  }
+
+  filter {
+    name   = "tag:GenesisSHA256"
+    values = [var.genesis_sha256]
+  }
+
+  filter {
+    name   = "tag:Network"
+    values = ["Public Testnet"]
+  }
+
+  filter {
+    name   = "tag:Governance"
+    values = ["JAIOS Institutional Governance"]
+  }
 }
 
 data "aws_kms_key" "validator_signer" {
@@ -73,8 +113,18 @@ resource "terraform_data" "canonical_binding_gate" {
       error_message = "All validator availability zones must belong to the canonical AWS region."
     }
     precondition {
-      condition     = data.aws_ami.approved_node.id == var.node_ami_id
-      error_message = "The approved immutable node AMI must exist in the canonical account and be available."
+      condition = (
+        data.aws_ami.approved_node.id == var.node_ami_id &&
+        data.aws_ami.approved_node.architecture == "x86_64" &&
+        data.aws_ami.approved_node.root_device_type == "ebs" &&
+        data.aws_ami.approved_node.virtualization_type == "hvm" &&
+        data.aws_ami.approved_node.tags["SourceCommit"] == var.source_commit &&
+        data.aws_ami.approved_node.tags["NodeArtifactSHA256"] == var.node_artifact_sha256 &&
+        data.aws_ami.approved_node.tags["GenesisSHA256"] == var.genesis_sha256 &&
+        data.aws_ami.approved_node.tags["Network"] == "Public Testnet" &&
+        data.aws_ami.approved_node.tags["Governance"] == "JAIOS Institutional Governance"
+      )
+      error_message = "The approved AMI must be a self-owned available x86_64 EBS/HVM image whose immutable provenance tags exactly match the source commit, node artifact and genesis."
     }
     precondition {
       condition = alltrue([
