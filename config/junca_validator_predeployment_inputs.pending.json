@@ -1,0 +1,26 @@
+{
+  "schema_version": "junca-validator-predeployment-inputs/v1",
+  "official_chain_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "network_label": "Public Testnet / No Monetary Value",
+  "state": "BLOCKED_FAIL_CLOSED",
+  "required_inputs": {
+    "artifact": "artifacts/junca-validator-artifact-handoff.json",
+    "foundation": "artifacts/junca-aws-foundation-readback.json",
+    "bootstrap": "artifacts/junca-validator-quorum-bootstrap.json"
+  },
+  "missing_evidence": [
+    "immutable AMI readback",
+    "node binary SHA-256",
+    "canonical genesis SHA-256",
+    "three private subnets in distinct us-east-1 availability zones",
+    "three distinct SIGN_VERIFY KMS signer ARNs",
+    "three validator bootnode endpoints",
+    "2-of-3 quorum bootstrap configuration"
+  ],
+  "live_runtime_verified": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "bridge_route": "PAUSED"
+}
