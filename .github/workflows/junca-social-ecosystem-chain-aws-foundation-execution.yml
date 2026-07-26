@@ -272,8 +272,8 @@ jobs:
       - name: Produce guarded bootstrap plan
         if: contains(fromJSON('["bootstrap-plan","bootstrap-apply","auto-release"]'), env.REQUESTED_PHASE)
         env:
-          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET }}
-          GITHUB_OIDC_THUMBPRINT: ${{ inputs.github_oidc_thumbprint || vars.JUNCA_GITHUB_OIDC_THUMBPRINT }}
+          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
+          GITHUB_OIDC_THUMBPRINT: ${{ inputs.github_oidc_thumbprint || vars.JUNCA_GITHUB_OIDC_THUMBPRINT || '6938fd4d98bab03faadb97b34396831e3780aea1' }}
         run: |
           set -euo pipefail
           test -n "$STATE_BUCKET_NAME"
@@ -334,7 +334,7 @@ jobs:
           (env.REQUESTED_PHASE == 'bootstrap-apply' || env.REQUESTED_PHASE == 'auto-release') &&
           steps.authorization.outputs.authorized == 'true'
         env:
-          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET }}
+          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET || 'junca-social-ecosystem-chain-tfstate-595710543956-us-east-1' }}
         run: |
           set -euo pipefail
           terraform -chdir=infra/aws/bootstrap apply -input=false -auto-approve \
