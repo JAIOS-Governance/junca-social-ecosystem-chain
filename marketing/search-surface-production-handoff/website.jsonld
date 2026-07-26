@@ -1,0 +1,17 @@
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "JUNCA Social Ecosystem Chain",
+  "url": "https://chain.jaios-governance.org/",
+  "inLanguage": ["en", "ja"],
+  "publisher": {
+    "@type": "Organization",
+    "name": "JAIOS Institutional Governance",
+    "url": "https://chain.jaios-governance.org/"
+  },
+  "accountablePerson": {
+    "@type": "Organization",
+    "name": "JAIOS Institutional Governance"
+  },
+  "dateModified": "2026-07-26"
+}
