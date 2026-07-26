@@ -36,7 +36,9 @@ class PersistentStateStore:
         if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
             raise StateStoreError("chain_id must be a positive integer")
         self.chain_id = chain_id
-        self.connection = sqlite3.connect(str(path), isolation_level=None)
+        self.connection = sqlite3.connect(
+            str(path), isolation_level=None, check_same_thread=False
+        )
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.execute("PRAGMA journal_mode=WAL")
