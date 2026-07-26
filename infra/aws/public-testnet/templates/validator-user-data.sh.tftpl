@@ -18,11 +18,11 @@ BRIDGE_ACTIVATED=false
 EOF
 chmod 0640 /etc/junca/runtime.env
 
-# The approved AMI must provide /usr/local/bin/junca and /etc/junca/genesis.json.
+# The approved AMI must provide /usr/local/bin/junca-chain-node and /etc/junca/genesis.json.
 # No private key, mnemonic or signer secret is written by this bootstrap.
-test -x /usr/local/bin/junca
+test -x /usr/local/bin/junca-chain-node
 printf '%s  %s\n' '${genesis_sha256}' /etc/junca/genesis.json | sha256sum --check --strict
-printf '%s  %s\n' '${node_sha256}' /usr/local/bin/junca | sha256sum --check --strict
+printf '%s  %s\n' '${node_sha256}' /usr/local/bin/junca-chain-node | sha256sum --check --strict
 
 cat >/etc/systemd/system/junca-validator.service <<'EOF'
 [Unit]
@@ -33,7 +33,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/junca/runtime.env
-ExecStart=/usr/local/bin/junca --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json --http.addr 127.0.0.1 --http.api eth,net,web3 --mine --signer-resource "$SIGNER_RESOURCE_ARN"
+ExecStart=/usr/local/bin/junca-chain-node --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json --http.addr 127.0.0.1 --http.api eth,net,web3 --mine --signer-resource "$SIGNER_RESOURCE_ARN"
 Restart=on-failure
 RestartSec=10
 NoNewPrivileges=true

@@ -10,6 +10,31 @@ output "availability_zones" {
   value = var.availability_zones
 }
 
+
+output "private_subnet_ids" {
+  value = aws_subnet.private[*].id
+}
+
+output "validator_signer_readback" {
+  value = [
+    for signer in data.aws_kms_key.validator_signer : {
+      arn                      = signer.arn
+      key_usage                = signer.key_usage
+      customer_master_key_spec = signer.customer_master_key_spec
+      enabled                  = signer.enabled
+    }
+  ]
+}
+
+output "approved_node_ami_readback" {
+  value = {
+    id            = data.aws_ami.approved_node.id
+    name          = data.aws_ami.approved_node.name
+    creation_date = data.aws_ami.approved_node.creation_date
+    owner_id      = data.aws_ami.approved_node.owner_id
+  }
+}
+
 output "validator_instance_ids" {
   value = aws_instance.validator[*].id
 }
