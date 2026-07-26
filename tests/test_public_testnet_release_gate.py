@@ -43,8 +43,18 @@ def accepted_evidence() -> tuple[dict, dict, dict]:
             {"resource_arn": "arn:aws:kms:us-east-1:595710543956:key/validator-02"},
             {"resource_arn": "arn:aws:kms:us-east-1:595710543956:key/validator-03"},
         ],
+        "immutable_runtime": {
+            "node_ami_id": "ami-0123456789abcdef0",
+            "node_artifact_sha256": "1" * 64,
+            "genesis_sha256": "2" * 64,
+            "rpc_image_sha256": "3" * 64,
+            "explorer_image_sha256": "4" * 64,
+        },
     }
     runtime = identity() | {
+        "live_runtime_verified": True,
+        "deployment_performed": True,
+        "validator_rpc_public": False,
         "validator_quorum": "3/3",
         "public_endpoints": {
             "rpc": "https://rpc.jaios-governance.org",
@@ -59,6 +69,8 @@ def accepted_evidence() -> tuple[dict, dict, dict]:
         )},
     }
     rollback = identity() | {
+        "drill_performed": True,
+        "rollback_target_sha256": "5" * 64,
         "gates": {gate: True for gate in (
             "endpoint_withdrawal", "bridge_pause", "logs_audit", "checkpoint",
             "binary_restore", "genesis_restore", "snapshot_restore", "quorum_recovery",
@@ -69,6 +81,12 @@ def accepted_evidence() -> tuple[dict, dict, dict]:
 
 
 class PublicTestnetReleaseGateTest(unittest.TestCase):
+    def test_rejects_missing_predeployment_evidence(self):
+        binding, runtime, rollback = accepted_evidence()
+        decision = release_gate.evaluate(binding, runtime, rollback)
+        self.assertFalse(decision["accepted"])
+        self.assertIn("predeployment:missing", decision["failures"])
+
     def test_rejects_predeployment_manifest_that_is_not_accepted(self):
         binding, runtime, rollback = accepted_evidence()
         predeployment = {
@@ -89,7 +107,13 @@ class PublicTestnetReleaseGateTest(unittest.TestCase):
 
     def test_accepts_only_complete_canonical_evidence(self) -> None:
         binding, runtime, rollback = accepted_evidence()
-        decision = release_gate.evaluate(binding, runtime, rollback)
+        predeployment = {
+            "decision": "PREDEPLOYMENT_ACCEPTED",
+            "accepted": True,
+            "live_runtime_verified": False,
+            "release_boundary": dict(BOUNDARY),
+        }
+        decision = release_gate.evaluate(binding, runtime, rollback, predeployment)
         self.assertTrue(decision["accepted"])
         self.assertEqual(decision["decision"], "PUBLIC_TESTNET_ACCEPTED")
         self.assertEqual(decision["failure_count"], 0)
@@ -102,6 +126,25 @@ class PublicTestnetReleaseGateTest(unittest.TestCase):
         self.assertFalse(decision["accepted"])
         self.assertIn("runtime.gates.unsafe_rpc_rejection:not_passed", decision["failures"])
         self.assertIn("endpoint.rpc:canonical_https_mismatch", decision["failures"])
+
+    def test_rejects_unverified_live_runtime_public_validator_rpc_and_missing_digests(self) -> None:
+        binding, runtime, rollback = accepted_evidence()
+        binding["immutable_runtime"]["node_artifact_sha256"] = "pending"
+        runtime["live_runtime_verified"] = False
+        runtime["deployment_performed"] = False
+        runtime["validator_rpc_public"] = True
+        rollback["drill_performed"] = False
+        rollback["rollback_target_sha256"] = ""
+        decision = release_gate.evaluate(binding, runtime, rollback)
+        for failure in (
+            "binding.immutable_runtime.node_artifact_sha256:missing_or_invalid",
+            "runtime.live_runtime_verified:not_true",
+            "runtime.deployment_performed:not_true",
+            "runtime.validator_rpc_public:must_be_false",
+            "rollback.drill_performed:not_true",
+            "rollback.rollback_target_sha256:missing_or_invalid",
+        ):
+            self.assertIn(failure, decision["failures"])
 
     def test_rejects_chain_identity_mismatch(self) -> None:
         binding, runtime, rollback = accepted_evidence()

@@ -48,7 +48,9 @@ def evaluate(
 ) -> dict[str, Any]:
     failures: list[str] = []
 
-    if predeployment is not None:
+    if predeployment is None:
+        failures.append("predeployment:missing")
+    else:
         if predeployment.get("decision") != "PREDEPLOYMENT_ACCEPTED":
             failures.append("predeployment.decision:not_accepted")
         if predeployment.get("accepted") is not True:
@@ -94,6 +96,12 @@ def evaluate(
         or any(not isinstance(arn, str) or not arn.startswith(signer_prefix) for arn in signer_arns)
     ):
         failures.append("binding.validator_signers:not_three_distinct")
+    immutable = binding.get("immutable_runtime", {})
+    if not re.fullmatch(r"ami-[0-9a-f]{8,17}", str(immutable.get("node_ami_id", ""))):
+        failures.append("binding.immutable_runtime.node_ami_id:missing_or_invalid")
+    for field in ("node_artifact_sha256", "genesis_sha256", "rpc_image_sha256", "explorer_image_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(immutable.get(field, ""))):
+            failures.append(f"binding.immutable_runtime.{field}:missing_or_invalid")
 
     gates = runtime.get("gates", {})
     required_runtime_gates = (
@@ -107,6 +115,12 @@ def evaluate(
             failures.append(f"runtime.gates.{gate}:not_passed")
     if runtime.get("validator_quorum") != "3/3":
         failures.append("runtime.validator_quorum:not_3_of_3")
+    if runtime.get("live_runtime_verified") is not True:
+        failures.append("runtime.live_runtime_verified:not_true")
+    if runtime.get("deployment_performed") is not True:
+        failures.append("runtime.deployment_performed:not_true")
+    if runtime.get("validator_rpc_public") is not False:
+        failures.append("runtime.validator_rpc_public:must_be_false")
 
     endpoints = runtime.get("public_endpoints", {})
     for name in EXPECTED_HOSTS:
@@ -121,6 +135,10 @@ def evaluate(
     for gate in required_rollback_gates:
         if rollback_gates.get(gate) is not True:
             failures.append(f"rollback.gates.{gate}:not_passed")
+    if rollback.get("drill_performed") is not True:
+        failures.append("rollback.drill_performed:not_true")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(rollback.get("rollback_target_sha256", ""))):
+        failures.append("rollback.rollback_target_sha256:missing_or_invalid")
 
     identities = {
         (source.get("chain_id"), source.get("genesis_hash"))
