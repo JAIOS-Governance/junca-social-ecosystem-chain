@@ -17,6 +17,11 @@ from xml.etree import ElementTree
 
 BRAND_ORIGIN = "https://chain.jaios-governance.org"
 DOCS_ORIGIN = "https://docs.jaios-governance.org"
+OFFICIAL_NAME = "JUNCA Social Ecosystem Chain"
+OPERATOR_NAME = "JAIOS Institutional Governance"
+LEGACY_NAME = "JUNCA Global Chain"
+EXPECTED_TITLE = f"{OFFICIAL_NAME} | {OPERATOR_NAME}"
+EXPECTED_SOCIAL_IMAGE = f"{BRAND_ORIGIN}/icon-512.png"
 BRAND_ROUTES = (
     "/",
     "/context",
@@ -39,20 +44,60 @@ class Response:
     body: str
 
 
-class CanonicalParser(HTMLParser):
+class PublicSurfaceParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.canonical_urls: list[str] = []
+        self.meta: dict[str, str] = {}
+        self.links: list[str] = []
+        self.json_ld: list[str] = []
+        self.title_parts: list[str] = []
+        self._in_title = False
+        self._in_json_ld = False
+        self._json_ld_parts: list[str] = []
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
-        if tag.lower() != "link":
-            return
+        tag = tag.lower()
         values = {key.lower(): value or "" for key, value in attrs}
-        rel_tokens = values.get("rel", "").lower().split()
-        if "canonical" in rel_tokens and values.get("href"):
-            self.canonical_urls.append(values["href"])
+        if tag == "title":
+            self._in_title = True
+        elif tag == "meta":
+            key = values.get("property") or values.get("name")
+            if key:
+                self.meta[key.lower()] = values.get("content", "").strip()
+        elif tag == "link":
+            rel_tokens = values.get("rel", "").lower().split()
+            if "canonical" in rel_tokens and values.get("href"):
+                self.canonical_urls.append(values["href"])
+        elif tag == "a" and values.get("href"):
+            self.links.append(values["href"])
+        elif (
+            tag == "script"
+            and values.get("type", "").lower() == "application/ld+json"
+        ):
+            self._in_json_ld = True
+            self._json_ld_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "title":
+            self._in_title = False
+        elif tag == "script" and self._in_json_ld:
+            self.json_ld.append("".join(self._json_ld_parts).strip())
+            self._in_json_ld = False
+            self._json_ld_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title_parts.append(data)
+        if self._in_json_ld:
+            self._json_ld_parts.append(data)
+
+    @property
+    def title(self) -> str:
+        return "".join(self.title_parts).strip()
 
 
 def fetch_url(url: str) -> Response:
@@ -87,10 +132,21 @@ def fetch_url(url: str) -> Response:
         )
 
 
-def _canonical_urls(html: str) -> list[str]:
-    parser = CanonicalParser()
+def _public_surface(html: str) -> PublicSurfaceParser:
+    parser = PublicSurfaceParser()
     parser.feed(html)
-    return parser.canonical_urls
+    return parser
+
+
+def _json_ld_values(value: object) -> list[object]:
+    values = [value]
+    if isinstance(value, dict):
+        for child in value.values():
+            values.extend(_json_ld_values(child))
+    elif isinstance(value, list):
+        for child in value:
+            values.extend(_json_ld_values(child))
+    return values
 
 
 def _sitemap_locations(xml_text: str) -> list[str]:
@@ -117,11 +173,111 @@ def audit(
     root = fetcher(root_url)
     record("brand_root_http", root.status == 200, f"HTTP {root.status}")
 
-    canonical_urls = _canonical_urls(root.body) if root.status == 200 else []
+    surface = _public_surface(root.body) if root.status == 200 else PublicSurfaceParser()
+    canonical_urls = surface.canonical_urls
     record(
         "brand_root_canonical",
         canonical_urls == [root_url],
         f"observed={canonical_urls!r}",
+    )
+    record(
+        "brand_identity_title",
+        surface.title == EXPECTED_TITLE,
+        f"observed={surface.title!r}",
+    )
+
+    robots_tokens = {
+        token.strip().lower()
+        for token in surface.meta.get("robots", "").split(",")
+        if token.strip()
+    }
+    record(
+        "brand_meta_robots",
+        {"index", "follow"}.issubset(robots_tokens)
+        and "noindex" not in robots_tokens
+        and "nofollow" not in robots_tokens,
+        f"observed={sorted(robots_tokens)!r}",
+    )
+    record(
+        "brand_meta_description",
+        OFFICIAL_NAME.lower() in surface.meta.get("description", "").lower()
+        and "public testnet" in surface.meta.get("description", "").lower(),
+        f"observed={surface.meta.get('description', '')!r}",
+    )
+
+    social_expectations = {
+        "og:title": OFFICIAL_NAME,
+        "og:url": BRAND_ORIGIN,
+        "og:image": EXPECTED_SOCIAL_IMAGE,
+        "twitter:card": "summary_large_image",
+        "twitter:title": OFFICIAL_NAME,
+        "twitter:image": EXPECTED_SOCIAL_IMAGE,
+    }
+    social_mismatches = {
+        key: surface.meta.get(key, "")
+        for key, expected in social_expectations.items()
+        if surface.meta.get(key, "").rstrip("/") != expected.rstrip("/")
+    }
+    social_boundary = "public testnet / no monetary value"
+    social_descriptions = (
+        surface.meta.get("og:description", ""),
+        surface.meta.get("twitter:description", ""),
+    )
+    record(
+        "brand_social_metadata",
+        not social_mismatches
+        and all(
+            social_boundary in description.lower()
+            for description in social_descriptions
+        ),
+        f"mismatches={social_mismatches!r}",
+    )
+
+    social_image = fetcher(EXPECTED_SOCIAL_IMAGE)
+    record(
+        "brand_social_image_http",
+        social_image.status == 200
+        and social_image.content_type.lower().startswith("image/"),
+        f"HTTP {social_image.status}; content-type={social_image.content_type!r}",
+    )
+
+    json_ld_documents: list[object] = []
+    json_ld_errors: list[str] = []
+    for raw_document in surface.json_ld:
+        try:
+            json_ld_documents.append(json.loads(raw_document))
+        except json.JSONDecodeError as error:
+            json_ld_errors.append(str(error))
+    json_ld_flat = [
+        item
+        for document in json_ld_documents
+        for item in _json_ld_values(document)
+    ]
+    record(
+        "brand_json_ld_identity",
+        not json_ld_errors
+        and OFFICIAL_NAME in json_ld_flat
+        and OPERATOR_NAME in json_ld_flat
+        and any(
+            isinstance(item, str)
+            and item.rstrip("/") == BRAND_ORIGIN
+            for item in json_ld_flat
+        ),
+        f"documents={len(json_ld_documents)}; errors={json_ld_errors!r}",
+    )
+    record(
+        "brand_docs_link",
+        any(
+            href.rstrip("/") == DOCS_ORIGIN
+            or href.startswith(f"{DOCS_ORIGIN}/")
+            for href in surface.links
+        ),
+        f"docs links={sum(DOCS_ORIGIN in href for href in surface.links)}",
+    )
+    record(
+        "brand_legacy_name_absent",
+        LEGACY_NAME.lower() not in root.body.lower(),
+        f"prohibited current-name occurrence={root.body.lower().count(LEGACY_NAME.lower())}",
     )
 
     robots_url = f"{BRAND_ORIGIN}/robots.txt"
