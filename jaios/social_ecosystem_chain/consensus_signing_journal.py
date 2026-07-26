@@ -64,6 +64,7 @@ class ConsensusSigningJournal:
         )
         self._bind_chain()
         self._restore_watermarks()
+        self._validate_persisted_state()
 
     def close(self) -> None:
         self.connection.close()
@@ -205,7 +206,7 @@ class ConsensusSigningJournal:
             """
         ).fetchone()
         return {
-            "schema_version": "junca-consensus-signing-journal/v5",
+            "schema_version": "junca-consensus-signing-journal/v6",
             "chain_id": self.chain_id,
             "signature_count": int(signature_row["signature_count"]),
             "latest_height": signature_row["latest_height"],
@@ -217,6 +218,7 @@ class ConsensusSigningJournal:
             "canonical_payload_binding_enforced": True,
             "signer_provider_errors_sanitized": True,
             "startup_integrity_check": "PASS",
+            "startup_semantic_integrity_check": "PASS",
             "private_key_material_stored": False,
             "key_resource_stored": False,
             "mainnet_changed": False,
@@ -276,6 +278,86 @@ class ConsensusSigningJournal:
                 self.connection.execute("ROLLBACK")
             self.connection.close()
             raise
+
+    def _validate_persisted_state(self) -> None:
+        """Reject structurally valid but semantically corrupted journal state."""
+        try:
+            latest: dict[str, tuple[int, int]] = {}
+            rows = self.connection.execute(
+                """
+                SELECT validator_id, height, round, block_hash, payload_digest, signature
+                FROM consensus_signatures
+                """
+            ).fetchall()
+            for row in rows:
+                validator_id = row["validator_id"]
+                height = row["height"]
+                round = row["round"]
+                block_hash = row["block_hash"]
+                payload_digest = row["payload_digest"]
+                signature = row["signature"]
+                if (
+                    not isinstance(validator_id, str)
+                    or not validator_id
+                    or any(char.isspace() for char in validator_id)
+                    or isinstance(height, bool)
+                    or not isinstance(height, int)
+                    or height <= 0
+                    or isinstance(round, bool)
+                    or not isinstance(round, int)
+                    or round < 0
+                    or not isinstance(block_hash, str)
+                    or len(block_hash) != 66
+                    or not block_hash.startswith("0x")
+                    or any(char not in "0123456789abcdef" for char in block_hash[2:])
+                    or not isinstance(payload_digest, str)
+                    or len(payload_digest) != 64
+                    or any(char not in "0123456789abcdef" for char in payload_digest)
+                    or not isinstance(signature, bytes)
+                    or len(signature) not in {64, 65}
+                ):
+                    raise ConsensusSigningJournalError(
+                        "signing journal semantic integrity check failed"
+                    )
+                expected_payload = json.dumps(
+                    {
+                        "block_hash": block_hash,
+                        "chain_id": self.chain_id,
+                        "height": height,
+                        "round": round,
+                        "validator_id": validator_id,
+                        "vote_type": "PRECOMMIT",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                if hashlib.sha256(expected_payload).hexdigest() != payload_digest:
+                    raise ConsensusSigningJournalError(
+                        "signing journal semantic integrity check failed"
+                    )
+                current = latest.get(validator_id)
+                if current is None or (height, round) > current:
+                    latest[validator_id] = (height, round)
+
+            watermark_rows = self.connection.execute(
+                "SELECT validator_id, height, round FROM validator_watermarks"
+            ).fetchall()
+            watermarks = {
+                row["validator_id"]: (row["height"], row["round"])
+                for row in watermark_rows
+            }
+            if watermarks != latest:
+                raise ConsensusSigningJournalError(
+                    "signing journal semantic integrity check failed"
+                )
+        except ConsensusSigningJournalError:
+            self.connection.close()
+            raise
+        except Exception as exc:
+            self.connection.close()
+            raise ConsensusSigningJournalError(
+                "signing journal semantic integrity check failed"
+            ) from exc
 
     @staticmethod
     def _call_signer(signer: VoteSigner) -> bytes:
