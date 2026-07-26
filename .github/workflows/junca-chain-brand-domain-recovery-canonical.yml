@@ -153,6 +153,60 @@ jobs:
             echo "- Explorer record created: false"
           } >> "$GITHUB_STEP_SUMMARY"
 
+
+      - name: Apply Sites-issued MEMBER records
+        id: member_dns
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/member-change.json <<'JSON'
+          {"Comment":"Bind member.jaios-governance.org to Sites","Changes":[
+            {"Action":"UPSERT","ResourceRecordSet":{"Name":"member.jaios-governance.org.","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"custom-domains.chatgpt.site."}]}},
+            {"Action":"UPSERT","ResourceRecordSet":{"Name":"_openai-site-verification.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"openai-site-verification=5HgL7ZV4WE4kuhT9OKEJZ4anM4cXQgaX4PcQrAyflGE\""}]}},
+            {"Action":"UPSERT","ResourceRecordSet":{"Name":"_cf-custom-hostname.member.jaios-governance.org.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"5747a89e-d114-42d8-b33b-b4eaae61c958\""}]}}
+          ]}
+          JSON
+          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch file:///tmp/member-change.json --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = "INSYNC"
+          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+
+      - name: Apply Sites-issued JUNCA GLOBAL records
+        id: global_dns
+        shell: bash
+        run: |
+          set -euo pipefail
+          global_zone="$(aws route53 list-hosted-zones-by-name --dns-name junca-global.group --query "HostedZones[?Name=='junca-global.group.'].Id | [0]" --output text)"
+          test -n "$global_zone"
+          test "$global_zone" != "None"
+          global_zone="${global_zone##*/}"
+          cat >/tmp/global-change.json <<'JSON'
+          {"Comment":"Cut over junca-global.group to Sites Version 107","Changes":[
+            {"Action":"UPSERT","ResourceRecordSet":{"Name":"junca-global.group.","Type":"A","TTL":300,"ResourceRecords":[{"Value":"162.159.143.30"},{"Value":"172.66.3.26"}]}},
+            {"Action":"UPSERT","ResourceRecordSet":{"Name":"_openai-site-verification.junca-global.group.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"openai-site-verification=72QXjN2sYBQCzy8JS-dwPT0Pfk0qzrBFWQEpJwgZAeM\""}]}},
+            {"Action":"UPSERT","ResourceRecordSet":{"Name":"_cf-custom-hostname.junca-global.group.","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"6d02be2e-2b78-4598-bf88-ecff8e3ae441\""}]}}
+          ]}
+          JSON
+          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$global_zone" --change-batch file:///tmp/global-change.json --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          test "$(aws route53 get-change --id "$change_id" --query ChangeInfo.Status --output text)" = "INSYNC"
+          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+
+      - name: Read back MEMBER and JUNCA GLOBAL
+        shell: bash
+        run: |
+          set -euo pipefail
+          global_zone="$(aws route53 list-hosted-zones-by-name --dns-name junca-global.group --query "HostedZones[?Name=='junca-global.group.'].Id | [0]" --output text)"
+          global_zone="${global_zone##*/}"
+          aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='member.jaios-governance.org.' || Name=='_openai-site-verification.member.jaios-governance.org.' || Name=='_cf-custom-hostname.member.jaios-governance.org.']" --output json
+          aws route53 list-resource-record-sets --hosted-zone-id "$global_zone" --query "ResourceRecordSets[?Name=='junca-global.group.' || Name=='_openai-site-verification.junca-global.group.' || Name=='_cf-custom-hostname.junca-global.group.']" --output json
+          {
+            echo "- MEMBER DNS: INSYNC"
+            echo "- JUNCA GLOBAL DNS: INSYNC"
+            echo "- MEMBER change: ${{ steps.member_dns.outputs.change_id }}"
+            echo "- JUNCA GLOBAL change: ${{ steps.global_dns.outputs.change_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   restore-canonical-oidc-subject:
     if: always()
     needs: [set-default-oidc-subject, recover-chain-domain]
