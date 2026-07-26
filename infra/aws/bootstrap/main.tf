@@ -322,8 +322,14 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         StringEqualsIfExists = {
           "aws:ResourceTag/Project" = "JUNCA Social Ecosystem Chain"
         }
+      },
+      {
+        Sid      = "ReadHostedZoneInventory"
+        Effect   = "Allow"
+        Action   = "route53:ListHostedZones"
+        Resource = "*"
       }
-    }]
+    ]
   })
 }
 
