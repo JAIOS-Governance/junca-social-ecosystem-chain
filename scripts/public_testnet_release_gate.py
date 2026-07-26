@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 CHAIN_NAME = "JUNCA Social Ecosystem Chain"
 GOVERNANCE = "JAIOS Institutional Governance"
 NETWORK_LABEL = "Public Testnet / No Monetary Value"
+AWS_ACCOUNT_ID = "595710543956"
+AWS_REGION = "us-east-1"
 EXPECTED_HOSTS = {
     "rpc": "rpc.jaios-governance.org",
     "explorer": "explorer.jaios-governance.org",
@@ -55,11 +57,27 @@ def evaluate(
 
     if binding.get("status") != "AWS_BINDING_READBACK_VERIFIED":
         failures.append("binding.status:not_verified")
-    if len(binding.get("aws", {}).get("failure_domains", [])) != 3:
+    aws = binding.get("aws", {})
+    if aws.get("account_id") != AWS_ACCOUNT_ID:
+        failures.append("binding.aws.account_id:mismatch")
+    if aws.get("region") != AWS_REGION:
+        failures.append("binding.aws.region:mismatch")
+    failure_domains = aws.get("failure_domains", [])
+    if (
+        len(failure_domains) != 3
+        or len(set(failure_domains)) != 3
+        or any(not isinstance(zone, str) or not zone.startswith(AWS_REGION) for zone in failure_domains)
+    ):
         failures.append("binding.failure_domains:not_three")
     signers = binding.get("validator_signers", [])
     signer_arns = [s.get("resource_arn") for s in signers if isinstance(s, dict)]
-    if len(signers) != 3 or len(set(signer_arns)) != 3 or None in signer_arns:
+    signer_prefix = f"arn:aws:kms:{AWS_REGION}:{AWS_ACCOUNT_ID}:key/"
+    if (
+        len(signers) != 3
+        or len(set(signer_arns)) != 3
+        or None in signer_arns
+        or any(not isinstance(arn, str) or not arn.startswith(signer_prefix) for arn in signer_arns)
+    ):
         failures.append("binding.validator_signers:not_three_distinct")
 
     gates = runtime.get("gates", {})

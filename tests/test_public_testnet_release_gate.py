@@ -33,11 +33,15 @@ def identity() -> dict:
 def accepted_evidence() -> tuple[dict, dict, dict]:
     binding = identity() | {
         "status": "AWS_BINDING_READBACK_VERIFIED",
-        "aws": {"failure_domains": ["ap-northeast-1a", "ap-northeast-1c", "ap-northeast-1d"]},
+        "aws": {
+            "account_id": "595710543956",
+            "region": "us-east-1",
+            "failure_domains": ["us-east-1a", "us-east-1b", "us-east-1c"],
+        },
         "validator_signers": [
-            {"resource_arn": "arn:aws:kms:ap-northeast-1:123456789012:key/validator-01"},
-            {"resource_arn": "arn:aws:kms:ap-northeast-1:123456789012:key/validator-02"},
-            {"resource_arn": "arn:aws:kms:ap-northeast-1:123456789012:key/validator-03"},
+            {"resource_arn": "arn:aws:kms:us-east-1:595710543956:key/validator-01"},
+            {"resource_arn": "arn:aws:kms:us-east-1:595710543956:key/validator-02"},
+            {"resource_arn": "arn:aws:kms:us-east-1:595710543956:key/validator-03"},
         ],
     }
     runtime = identity() | {
@@ -94,6 +98,28 @@ class PublicTestnetReleaseGateTest(unittest.TestCase):
         decision = release_gate.evaluate(binding, runtime, rollback)
         self.assertFalse(decision["accepted"])
         self.assertIn("source_commit:mismatch", decision["failures"])
+
+    def test_rejects_noncanonical_aws_account_region_and_signers(self) -> None:
+        binding, runtime, rollback = accepted_evidence()
+        binding["aws"]["account_id"] = "123456789012"
+        binding["aws"]["region"] = "ap-northeast-1"
+        binding["aws"]["failure_domains"] = [
+            "ap-northeast-1a",
+            "ap-northeast-1c",
+            "ap-northeast-1d",
+        ]
+        binding["validator_signers"][0]["resource_arn"] = (
+            "arn:aws:kms:ap-northeast-1:123456789012:key/validator-01"
+        )
+        decision = release_gate.evaluate(binding, runtime, rollback)
+        self.assertFalse(decision["accepted"])
+        self.assertIn("binding.aws.account_id:mismatch", decision["failures"])
+        self.assertIn("binding.aws.region:mismatch", decision["failures"])
+        self.assertIn("binding.failure_domains:not_three", decision["failures"])
+        self.assertIn(
+            "binding.validator_signers:not_three_distinct",
+            decision["failures"],
+        )
 
     def test_rejects_mainnet_asset_or_bridge_change(self) -> None:
         binding, runtime, rollback = accepted_evidence()
