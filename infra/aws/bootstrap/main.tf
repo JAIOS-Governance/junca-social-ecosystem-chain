@@ -300,6 +300,8 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         "iam:GetInstanceProfile",
         "iam:AddRoleToInstanceProfile",
         "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:UntagInstanceProfile",
         "iam:PassRole",
         "logs:*",
         "cloudwatch:*",
