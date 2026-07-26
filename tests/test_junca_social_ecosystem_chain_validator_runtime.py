@@ -185,6 +185,39 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidatorRuntimeError, "not active"):
             self.runtime.sign_vote("unknown")
 
+    def test_round_timeout_discards_old_votes_and_preserves_proposal(self) -> None:
+        proposal = self.runtime.propose(round=2)
+        old_vote = self.runtime.sign_vote("validator-1")
+        self.assertIsNone(self.runtime.accept_vote(old_vote))
+
+        retained = self.runtime.advance_round(3)
+        self.assertEqual(retained, proposal)
+        self.assertEqual(self.runtime.current_round, 3)
+        self.assertEqual(self.runtime.evidence()["current_round"], 3)
+        with self.assertRaisesRegex(ValidatorRuntimeError, "pending proposal"):
+            self.runtime.accept_vote(old_vote)
+
+        self.assertIsNone(
+            self.runtime.accept_vote(self.runtime.sign_vote("validator-1"))
+        )
+        self.assertIsNone(
+            self.runtime.accept_vote(self.runtime.sign_vote("validator-2"))
+        )
+        finalized = self.runtime.accept_vote(
+            self.runtime.sign_vote("validator-3")
+        )
+        self.assertIsNotNone(finalized)
+        self.assertEqual(self.store.head_height, 1)
+
+    def test_round_must_advance_strictly(self) -> None:
+        self.runtime.propose(round=4)
+        for invalid in (True, 3, 4, -1):
+            with self.subTest(round=invalid):
+                with self.assertRaisesRegex(
+                    ValidatorRuntimeError, "strictly increasing"
+                ):
+                    self.runtime.advance_round(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()

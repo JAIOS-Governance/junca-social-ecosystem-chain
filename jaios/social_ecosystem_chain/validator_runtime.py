@@ -100,6 +100,10 @@ class LiveValidatorRuntime:
     def pending_proposal(self) -> ExecutedProposal | None:
         return self._proposal
 
+    @property
+    def current_round(self) -> int:
+        return self._round
+
     def replace_signer_bindings(
         self,
         bindings: Mapping[str, ValidatorSignerBinding],
@@ -158,6 +162,33 @@ class LiveValidatorRuntime:
             signature=signature,
         )
 
+    def advance_round(self, round: int) -> ExecutedProposal:
+        """Move a pending proposal to a strictly newer consensus round.
+
+        The executed proposal is retained, while all votes from the previous
+        round are discarded by replacing the finality state machine.  Votes
+        remain cryptographically bound to their original round and therefore
+        cannot be replayed after a timeout.
+        """
+        proposal, active, _ = self._pending()
+        if (
+            isinstance(round, bool)
+            or not isinstance(round, int)
+            or round <= self._round
+        ):
+            raise ValidatorRuntimeError(
+                "new consensus round must be a strictly increasing integer"
+            )
+        if active.set_hash != self.schedule.at_height(proposal.height).set_hash:
+            raise ValidatorRuntimeError("active validator set changed during proposal")
+        self._machine = FinalityStateMachine(
+            chain_id=self.pipeline.config.chain_id,
+            validators=active.validators,
+            initial_finalized_height=self.pipeline.store.head_height,
+        )
+        self._round = round
+        return proposal
+
     def accept_vote(self, vote: FinalityVote) -> FinalizedProposal | None:
         proposal, active, machine = self._pending()
         if (
@@ -202,6 +233,7 @@ class LiveValidatorRuntime:
             "chain_id": self.pipeline.config.chain_id,
             "head_height": self.pipeline.store.head_height,
             "pending_height": None if pending is None else pending.height,
+            "current_round": self._round,
             "validator_set_epoch": active.epoch,
             "validator_set_hash": active.set_hash,
             "signer_bindings": [
