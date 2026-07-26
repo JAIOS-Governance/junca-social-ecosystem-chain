@@ -65,10 +65,10 @@ output "load_balancer_arn" {
 
 output "public_services_certificate" {
   value = {
-    arn                    = aws_acm_certificate_validation.public_services.certificate_arn
-    domain_name            = aws_acm_certificate.public_services.domain_name
-    subject_alternatives   = aws_acm_certificate.public_services.subject_alternative_names
-    validation_method      = aws_acm_certificate.public_services.validation_method
+    arn                  = aws_acm_certificate_validation.public_services.certificate_arn
+    domain_name          = aws_acm_certificate.public_services.domain_name
+    subject_alternatives = aws_acm_certificate.public_services.subject_alternative_names
+    validation_method    = aws_acm_certificate.public_services.validation_method
     validation_record_fqdns = [
       for record in aws_route53_record.certificate_validation :
       record.fqdn
