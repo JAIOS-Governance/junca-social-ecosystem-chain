@@ -1,6 +1,11 @@
 name: JUNCA Chain AWS Foundation Execution
 
 on:
+  workflow_run:
+    workflows:
+      - "JUNCA Chain Runtime Self Permission Recovery"
+    types:
+      - completed
   push:
     branches: [main]
     paths:
@@ -39,6 +44,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -47,7 +53,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  recovery-evidence:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download exact triggering recovery evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: junca-runtime-self-permission-recovery-${{ github.event.workflow_run.id }}
+          path: artifacts/recovery
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Require verified recovery before automatic resume
+        run: |
+          set -euo pipefail
+          evidence=artifacts/recovery/runtime-self-permission-recovery.json
+          jq -e '
+            .account_id == "595710543956" and
+            .region == "us-east-1" and
+            .target_role_arn ==
+              "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment" and
+            .granted_action == "iam:SimulatePrincipalPolicy" and
+            .recovery_result == "APPLIED" and
+            .verification == "PASS" and
+            .broad_iam_grant == false and
+            .docs_runtime_role_used == false and
+            .apply_executed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' "$evidence"
+
   permission-readback:
+    needs:
+      - recovery-evidence
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_run' ||
+       needs.recovery-evidence.result == 'success')
     environment: public-testnet
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -56,7 +105,9 @@ jobs:
       AWS_REGION: us-east-1
       DEPLOYMENT_ROLE_NAME: JuncaChainPublicTestnetDeployment
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
-      REQUESTED_PHASE: ${{ inputs.phase || 'permission-readback' }}
+      REQUESTED_PHASE: ${{ github.event_name == 'workflow_run' && 'bootstrap-plan' || inputs.phase || 'permission-readback' }}
+      AUTO_RESUME: ${{ github.event_name == 'workflow_run' }}
+      RECOVERY_RUN_ID: ${{ github.event.workflow_run.id || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -146,6 +197,8 @@ jobs:
             --arg region "$AWS_REGION" \
             --arg deployment_role_arn "$DEPLOYMENT_ROLE_ARN" \
             --arg requested_phase "$REQUESTED_PHASE" \
+            --arg auto_resume "$AUTO_RESUME" \
+            --arg recovery_run_id "$RECOVERY_RUN_ID" \
             --arg simulation_state "$simulation_state" \
             --arg simulation_error "$simulation_error" \
             --arg permission_gate "$permission_gate" \
@@ -161,6 +214,10 @@ jobs:
               deployment_role_arn: $deployment_role_arn,
               assumed_role_arn: $assumed_role_arn,
               requested_phase: $requested_phase,
+              orchestration: {
+                auto_resume: ($auto_resume == "true"),
+                recovery_run_id: $recovery_run_id
+              },
               required_actions: $required_actions,
               permission_simulation: {
                 state: $simulation_state,
@@ -205,11 +262,17 @@ jobs:
           terraform_version: 1.9.8
           terraform_wrapper: false
 
+      - name: Require permission PASS before any plan
+        if: contains(fromJSON('["bootstrap-plan","foundation-plan"]'), env.REQUESTED_PHASE)
+        run: |
+          set -euo pipefail
+          test "${{ steps.permissions.outputs.permission_gate }}" = "PASS"
+
       - name: Produce bootstrap plan
         if: env.REQUESTED_PHASE == 'bootstrap-plan'
         env:
-          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name }}
-          GITHUB_OIDC_THUMBPRINT: ${{ inputs.github_oidc_thumbprint }}
+          STATE_BUCKET_NAME: ${{ inputs.state_bucket_name || vars.JUNCA_TERRAFORM_STATE_BUCKET }}
+          GITHUB_OIDC_THUMBPRINT: ${{ inputs.github_oidc_thumbprint || vars.JUNCA_GITHUB_OIDC_THUMBPRINT }}
         run: |
           set -euo pipefail
           test -n "$STATE_BUCKET_NAME"
@@ -243,6 +306,7 @@ jobs:
           exit 1
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: junca-aws-foundation-execution-${{ github.run_id }}
           path: artifacts/
