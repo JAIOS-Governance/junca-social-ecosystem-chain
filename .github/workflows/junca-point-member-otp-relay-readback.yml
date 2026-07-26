@@ -12,123 +12,59 @@ permissions:
   id-token: write
 
 jobs:
-  set-default-oidc-subject:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Set standard GitHub OIDC subject
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" --data '{"use_default":true}'
-
   readback:
-    needs: set-default-oidc-subject
     runs-on: ubuntu-latest
-    environment: public-testnet
+    environment: junca-chain-docs-production
     timeout-minutes: 10
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
-      BOOTSTRAP_ROLE_NAME: JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      RELAY_FUNCTION: junca-point-member-otp-relay
+      EXECUTION_ROLE: JuncaPointMemberOtpRelayExecution
     steps:
       - name: Configure canonical AWS identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-member-otp-readback-${{ github.run_id }}
 
-      - name: Verify AWS account
+      - name: Verify AWS account and granted capabilities
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws sesv2 get-account > ses-account.json
+          aws sesv2 list-email-identities > ses-identities.json
+          aws iam get-role --role-name "$EXECUTION_ROLE" > execution-role.json 2>execution-role-error.txt || true
+          aws lambda get-function --function-name "$RELAY_FUNCTION" > relay-function.json 2>relay-function-error.txt || true
+          aws lambda get-function-url-config --function-name "$RELAY_FUNCTION" > relay-url.json 2>relay-url-error.txt || true
 
-      - name: Add minimum readback policy
+      - name: Publish non-secret evidence summary
         shell: bash
         run: |
           set -euo pipefail
-          cat >/tmp/readback-policy.json <<'JSON'
-          {
-            "Version":"2012-10-17",
-            "Statement":[{
-              "Sid":"MemberOtpRelayReadback",
-              "Effect":"Allow",
-              "Action":[
-                "ses:GetAccount","ses:ListEmailIdentities","ses:GetEmailIdentity",
-                "lambda:ListFunctions","lambda:GetFunction","lambda:GetFunctionUrlConfig",
-                "apigateway:GET","apigatewayv2:GetApis","apigatewayv2:GetIntegrations","apigatewayv2:GetRoutes",
-                "secretsmanager:ListSecrets","ssm:DescribeParameters",
-                "ec2:DescribeInstances"
-              ],
-              "Resource":"*"
-            }]
-          }
-          JSON
-          aws iam put-role-policy --role-name "$BOOTSTRAP_ROLE_NAME" --policy-name JuncaPointMemberOtpRelayReadback --policy-document file:///tmp/readback-policy.json
-
-      - name: Read AWS relay capabilities without secret values
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws sesv2 get-account >ses-account.json
-          aws sesv2 list-email-identities >ses-identities.json
-          aws lambda list-functions --max-items 100 >lambda-functions.json
-          aws apigatewayv2 get-apis --max-results 100 >http-apis.json
-          aws secretsmanager list-secrets --max-results 100 --query 'SecretList[].{Name:Name,ARN:ARN}' >secret-names.json
-          aws ssm describe-parameters --max-results 50 --query 'Parameters[].{Name:Name,Type:Type}' >parameter-names.json
-          aws ec2 describe-instances --filters Name=instance-state-name,Values=running --query 'Reservations[].Instances[].{InstanceId:InstanceId,PublicIpAddress:PublicIpAddress,Tags:Tags}' >running-instances.json
-          python3 - <<'PY'
-          import json
+          python3 - <<'PY' | tee "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
           ses=json.load(open('ses-account.json'))
           identities=json.load(open('ses-identities.json')).get('EmailIdentities',[])
-          functions=json.load(open('lambda-functions.json')).get('Functions',[])
-          apis=json.load(open('http-apis.json')).get('Items',[])
-          secrets=json.load(open('secret-names.json'))
-          params=json.load(open('parameter-names.json'))
-          instances=json.load(open('running-instances.json'))
-          print('### JUNCA POINT MEMBER OTP relay readback')
-          print(f"- AWS Account: 595710543956")
+          sender=[]
+          for x in identities:
+              name=x.get('IdentityName','')
+              if name in {'junca-global.group','desk@junca-global.group'}:
+                  sender.append(name)
+          role_exists=pathlib.Path('execution-role.json').exists()
+          function_exists=pathlib.Path('relay-function.json').exists()
+          url_exists=pathlib.Path('relay-url.json').exists()
+          print('### JUNCA POINT MEMBER OTP relay AWS readback')
+          print('- AWS Account: 595710543956')
           print(f"- SES Production Access: {ses.get('ProductionAccessEnabled')}")
           print(f"- SES Sending Enabled: {ses.get('SendingEnabled')}")
-          print('- SES Identities: ' + ', '.join(sorted(x.get('IdentityName','') for x in identities))[:1000])
-          print('- Lambda Functions: ' + ', '.join(sorted(x.get('FunctionName','') for x in functions))[:1000])
-          print('- HTTP APIs: ' + ', '.join(sorted(x.get('Name','') for x in apis))[:1000])
-          print('- Secret Names: ' + ', '.join(sorted(x.get('Name','') for x in secrets))[:1000])
-          print('- Parameter Names: ' + ', '.join(sorted(x.get('Name','') for x in params))[:1000])
-          print('- Running Instances: ' + ', '.join(sorted(x.get('InstanceId','') for x in instances))[:1000])
-          PY
-          python3 - <<'PY' >>"$GITHUB_STEP_SUMMARY"
-          import json
-          ses=json.load(open('ses-account.json'))
-          identities=json.load(open('ses-identities.json')).get('EmailIdentities',[])
-          functions=json.load(open('lambda-functions.json')).get('Functions',[])
-          apis=json.load(open('http-apis.json')).get('Items',[])
-          secrets=json.load(open('secret-names.json'))
-          params=json.load(open('parameter-names.json'))
-          instances=json.load(open('running-instances.json'))
-          print('### JUNCA POINT MEMBER OTP relay readback')
-          print(f"- AWS Account: 595710543956")
-          print(f"- SES Production Access: {ses.get('ProductionAccessEnabled')}")
-          print(f"- SES Sending Enabled: {ses.get('SendingEnabled')}")
-          print('- SES Identities: ' + ', '.join(sorted(x.get('IdentityName','') for x in identities))[:1000])
-          print('- Lambda Functions: ' + ', '.join(sorted(x.get('FunctionName','') for x in functions))[:1000])
-          print('- HTTP APIs: ' + ', '.join(sorted(x.get('Name','') for x in apis))[:1000])
-          print('- Secret Names: ' + ', '.join(sorted(x.get('Name','') for x in secrets))[:1000])
-          print('- Parameter Names: ' + ', '.join(sorted(x.get('Name','') for x in params))[:1000])
-          print('- Running Instances: ' + ', '.join(sorted(x.get('InstanceId','') for x in instances))[:1000])
+          print('- Approved sender identity present: ' + (', '.join(sender) if sender else 'NO'))
+          print(f'- Execution role exists: {role_exists}')
+          print(f'- Relay function exists: {function_exists}')
+          print(f'- Relay Function URL exists: {url_exists}')
           PY
 
       - name: Upload non-secret readback evidence
@@ -138,31 +74,11 @@ jobs:
           path: |
             ses-account.json
             ses-identities.json
-            lambda-functions.json
-            http-apis.json
-            secret-names.json
-            parameter-names.json
-            running-instances.json
+            execution-role.json
+            execution-role-error.txt
+            relay-function.json
+            relay-function-error.txt
+            relay-url.json
+            relay-url-error.txt
+          if-no-files-found: ignore
           retention-days: 14
-
-  restore-canonical-oidc-subject:
-    if: always()
-    needs: [set-default-oidc-subject, readback]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Restore canonical immutable GitHub OIDC subject
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
