@@ -14,7 +14,7 @@ on:
       aws_region:
         description: Canonical AWS region
         required: true
-        default: ap-northeast-1
+        default: us-east-1
         type: string
 
 permissions:
@@ -25,8 +25,22 @@ jobs:
   canonical-readback:
     environment: public-testnet
     runs-on: ubuntu-latest
+    env:
+      CANONICAL_ACCOUNT_ID: "595710543956"
+      CANONICAL_REGION: us-east-1
+      CANONICAL_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
     steps:
       - uses: actions/checkout@v4
+      - name: Enforce exact Public Testnet AWS boundary
+        env:
+          REQUESTED_ROLE_ARN: ${{ inputs.role_arn }}
+          REQUESTED_ACCOUNT_ID: ${{ inputs.expected_account_id }}
+          REQUESTED_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -euo pipefail
+          test "$REQUESTED_ROLE_ARN" = "$CANONICAL_ROLE_ARN"
+          test "$REQUESTED_ACCOUNT_ID" = "$CANONICAL_ACCOUNT_ID"
+          test "$REQUESTED_REGION" = "$CANONICAL_REGION"
       - uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
           role-to-assume: ${{ inputs.role_arn }}
@@ -43,7 +57,13 @@ jobs:
           actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
           configured_region="$(aws configure get region)"
           test "${actual_account}" = "${EXPECTED_ACCOUNT_ID}"
+          test "${actual_account}" = "${CANONICAL_ACCOUNT_ID}"
           test "${configured_region}" = "${EXPECTED_REGION}"
+          test "${configured_region}" = "${CANONICAL_REGION}"
+          case "${actual_arn}" in
+            arn:aws:sts::595710543956:assumed-role/JuncaChainPublicTestnetDeployment/*) ;;
+            *) echo "unexpected Public Testnet role identity" >&2; exit 1 ;;
+          esac
           jq -n \
             --arg account_id "${actual_account}" \
             --arg role_arn "${actual_arn}" \
