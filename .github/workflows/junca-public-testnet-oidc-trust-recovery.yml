@@ -113,26 +113,6 @@ jobs:
           PY
           done
 
-      - name: Verify exact public-testnet OIDC assumption
-        shell: bash
-        run: |
-          set -euo pipefail
-          token_json="$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")"
-          token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json")"
-          actual_subject="$(TOKEN="$token" python3 - <<'PY'
-          import base64
-          import json
-          import os
-          segment = os.environ["TOKEN"].split(".")[1]
-          segment += "=" * (-len(segment) % 4)
-          print(json.loads(base64.urlsafe_b64decode(segment))["sub"])
-          PY
-          )"
-          test "$actual_subject" = "$REQUIRED_SUBJECT"
-          for role in JUNCA-Social-Ecosystem-Chain-Testnet-Deployment JuncaChainPublicTestnetDeployment; do
-            aws sts assume-role-with-web-identity               --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${role}"               --role-session-name "public-testnet-trust-verify-${GITHUB_RUN_ID}"               --web-identity-token "$token"               --duration-seconds 900               --query 'SubjectFromWebIdentityToken'               --output text | grep -Fx "$REQUIRED_SUBJECT"
-          done
-
       - name: Record non-secret recovery summary
         shell: bash
         run: |
@@ -145,9 +125,55 @@ jobs:
             echo "- Subject: $REQUIRED_SUBJECT"
             echo "- Target Roles: 2"
             echo "- Trust Readback: PASS"
-            echo "- AssumeRoleWithWebIdentity: 2/2 PASS"
+            echo "- Exact assumption verification: delegated to public-testnet environment job"
             echo "- Mainnet Changed=false"
             echo "- Assets Moved=false"
             echo "- Bridge Activated=false"
             echo "- AWS Infrastructure Apply Executed=false"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+  verify-public-testnet-assumption:
+    needs: repair
+    strategy:
+      fail-fast: false
+      matrix:
+        role:
+          - JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+          - JuncaChainPublicTestnetDeployment
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Assume repaired role from exact public-testnet subject
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::595710543956:role/${{ matrix.role }}
+          aws-region: us-east-1
+          role-session-name: public-testnet-trust-verify-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Verify canonical account and role
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "595710543956"
+          actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          case "$actual_arn" in
+            arn:aws:sts::595710543956:assumed-role/${{ matrix.role }}/*) ;;
+            *) echo "Unexpected role identity: $actual_arn" >&2; exit 1 ;;
+          esac
+          {
+            echo "### Public Testnet OIDC assumption"
+            echo "- Role: ${{ matrix.role }}"
+            echo "- Account: 595710543956"
+            echo "- Region: us-east-1"
+            echo "- Environment: public-testnet"
+            echo "- AssumeRoleWithWebIdentity: PASS"
+            echo "- Mainnet Changed=false"
+            echo "- Assets Moved=false"
+            echo "- Bridge Activated=false"
           } >> "$GITHUB_STEP_SUMMARY"
