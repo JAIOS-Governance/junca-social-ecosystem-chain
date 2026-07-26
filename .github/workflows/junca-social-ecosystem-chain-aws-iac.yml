@@ -1,6 +1,14 @@
 name: JUNCA Chain AWS IaC
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/aws/**"
+      - "infrastructure/aws/**"
+      - "config/junca_social_ecosystem_chain_aws_binding.pending.json"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
   pull_request:
     paths:
       - "infra/aws/**"
