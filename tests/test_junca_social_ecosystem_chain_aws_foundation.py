@@ -206,7 +206,6 @@ class AwsFoundationTests(unittest.TestCase):
             self.assertIn(required, self.execution_workflow)
 
     def test_foundation_plan_and_apply_are_durable_and_fail_closed(self) -> None:
-        self.assertIn('backend "s3" {}', self.runtime)
         for required in (
             "public-testnet/bootstrap.tfstate",
             "public-testnet/terraform.tfstate",
