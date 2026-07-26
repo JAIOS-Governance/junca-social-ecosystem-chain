@@ -25,30 +25,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  set-standard-oidc:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Set AWS-compatible standard GitHub OIDC subject
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" --data '{"use_default":true}'
-
   publish:
-    needs: set-standard-oidc
     runs-on: ubuntu-latest
-    environment: public-testnet
+    environment: junca-chain-docs-production
     timeout-minutes: 30
     permissions:
       id-token: write
@@ -56,78 +35,45 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
-      DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
+      BOOTSTRAP_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       HOSTED_ZONE_ID: Z0336017285464TX0NT1G
       DOMAIN: voice.jaios-governance.org
       CNAME_TARGET: ${{ inputs.cname_target }}
       OPENAI_VERIFICATION_VALUE: ${{ inputs.openai_verification_value }}
       CLOUDFLARE_VALIDATION_VALUE: ${{ inputs.cloudflare_validation_value }}
     steps:
-      - name: Configure canonical AWS bootstrap identity
+      - name: Configure canonical AWS production identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: jaios-voice-domain-${{ github.run_id }}
           disable-retry: true
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Sid":"VoiceDnsWriteOnly","Effect":"Allow","Action":"route53:ChangeResourceRecordSets","Resource":"arn:aws:route53:::hostedzone/Z0336017285464TX0NT1G","Condition":{"ForAllValues:StringEquals":{"route53:ChangeResourceRecordSetsNormalizedRecordNames":["voice.jaios-governance.org","_openai-site-verification.voice.jaios-governance.org","_cf-custom-hostname.voice.jaios-governance.org"],"route53:ChangeResourceRecordSetsRecordTypes":["CNAME","TXT"],"route53:ChangeResourceRecordSetsActions":["UPSERT"]},"Null":{"route53:ChangeResourceRecordSetsNormalizedRecordNames":"false","route53:ChangeResourceRecordSetsRecordTypes":"false","route53:ChangeResourceRecordSetsActions":"false"}}},{"Sid":"VoiceDnsZoneReadback","Effect":"Allow","Action":["route53:GetHostedZone","route53:ListResourceRecordSets"],"Resource":"arn:aws:route53:::hostedzone/Z0336017285464TX0NT1G"},{"Sid":"VoiceDnsChangeReadback","Effect":"Allow","Action":"route53:GetChange","Resource":"arn:aws:route53:::change/*"}]}
 
-      - name: Verify exact production boundary and inputs
+      - name: Verify exact production boundary inputs and baseline
         shell: bash
         run: |
           set -euo pipefail
+          echo "::add-mask::$OPENAI_VERIFICATION_VALUE"
+          echo "::add-mask::$CLOUDFLARE_VALIDATION_VALUE"
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           test "$(aws route53 get-hosted-zone --id "$HOSTED_ZONE_ID" --query HostedZone.Name --output text)" = "jaios-governance.org."
           test "$CNAME_TARGET" = "custom-domains.chatgpt.site."
-          [[ "$OPENAI_VERIFICATION_VALUE" =~ ^openai-site-verification=[A-Za-z0-9_-]+$ ]]
-          [[ "$CLOUDFLARE_VALIDATION_VALUE" =~ ^[A-Za-z0-9_-]+$ ]]
-
-      - name: Apply minimum Voice-domain IAM policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat >/tmp/voice-domain-policy.json <<'JSON'
-          {
-            "Version":"2012-10-17",
-            "Statement":[
-              {
-                "Sid":"JaiosVoiceCustomDomainDnsWrite",
-                "Effect":"Allow",
-                "Action":"route53:ChangeResourceRecordSets",
-                "Resource":"arn:aws:route53:::hostedzone/Z0336017285464TX0NT1G",
-                "Condition":{
-                  "ForAllValues:StringEquals":{
-                    "route53:ChangeResourceRecordSetsNormalizedRecordNames":[
-                      "voice.jaios-governance.org",
-                      "_openai-site-verification.voice.jaios-governance.org",
-                      "_cf-custom-hostname.voice.jaios-governance.org"
-                    ],
-                    "route53:ChangeResourceRecordSetsRecordTypes":["CNAME","TXT"],
-                    "route53:ChangeResourceRecordSetsActions":["UPSERT"]
-                  },
-                  "Null":{
-                    "route53:ChangeResourceRecordSetsNormalizedRecordNames":"false",
-                    "route53:ChangeResourceRecordSetsRecordTypes":"false",
-                    "route53:ChangeResourceRecordSetsActions":"false"
-                  }
-                }
-              },
-              {
-                "Sid":"Route53ChangeReadback",
-                "Effect":"Allow",
-                "Action":"route53:GetChange",
-                "Resource":"arn:aws:route53:::change/*"
-              }
-            ]
-          }
-          JSON
-          aws iam put-role-policy \
-            --role-name "$DOCS_ROLE_NAME" \
-            --policy-name JaiosVoiceCustomDomainDns \
-            --policy-document file:///tmp/voice-domain-policy.json
-          aws iam get-role-policy \
-            --role-name "$DOCS_ROLE_NAME" \
-            --policy-name JaiosVoiceCustomDomainDns >/tmp/iam-readback.json
+          [[ "$OPENAI_VERIFICATION_VALUE" =~ ^openai-site-verification=[A-Za-z0-9_-]{43}$ ]]
+          [[ "$CLOUDFLARE_VALIDATION_VALUE" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$HOSTED_ZONE_ID" \
+            --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.' || Name=='chain.jaios-governance.org.' || Name=='member.jaios-governance.org.']" \
+            --output json >/tmp/preserved-before.json
+          python3 - <<'PY'
+          import json
+          rows = json.load(open('/tmp/preserved-before.json', encoding='utf-8'))
+          names = {row['Name'] for row in rows}
+          expected = {'docs.jaios-governance.org.', 'chain.jaios-governance.org.', 'member.jaios-governance.org.'}
+          assert names == expected, (names, expected)
+          PY
 
       - name: Apply exact Sites-issued Voice records
         id: dns
@@ -138,14 +84,11 @@ jobs:
             --arg cname "$CNAME_TARGET" \
             --arg openai "$OPENAI_VERIFICATION_VALUE" \
             --arg cf "$CLOUDFLARE_VALIDATION_VALUE" \
-            '{
-              Comment:"Bind JAIOS Voice to its existing Sites project",
-              Changes:[
-                {Action:"UPSERT",ResourceRecordSet:{Name:"voice.jaios-governance.org.",Type:"CNAME",TTL:300,ResourceRecords:[{Value:$cname}]}},
-                {Action:"UPSERT",ResourceRecordSet:{Name:"_openai-site-verification.voice.jaios-governance.org.",Type:"TXT",TTL:300,ResourceRecords:[{Value:("\"" + $openai + "\"")}]}},
-                {Action:"UPSERT",ResourceRecordSet:{Name:"_cf-custom-hostname.voice.jaios-governance.org.",Type:"TXT",TTL:300,ResourceRecords:[{Value:("\"" + $cf + "\"")}]}}
-              ]
-            }' >/tmp/change.json
+            '{Comment:"Bind JAIOS Voice to its existing Sites project",Changes:[
+              {Action:"UPSERT",ResourceRecordSet:{Name:"voice.jaios-governance.org.",Type:"CNAME",TTL:300,ResourceRecords:[{Value:$cname}]}},
+              {Action:"UPSERT",ResourceRecordSet:{Name:"_openai-site-verification.voice.jaios-governance.org.",Type:"TXT",TTL:300,ResourceRecords:[{Value:("\"" + $openai + "\"")}]}},
+              {Action:"UPSERT",ResourceRecordSet:{Name:"_cf-custom-hostname.voice.jaios-governance.org.",Type:"TXT",TTL:300,ResourceRecords:[{Value:("\"" + $cf + "\"")}]}}
+            ]}' >/tmp/change.json
           change_id="$(aws route53 change-resource-record-sets \
             --hosted-zone-id "$HOSTED_ZONE_ID" \
             --change-batch file:///tmp/change.json \
@@ -164,26 +107,33 @@ jobs:
             --output json)"
           RECORDS="$records" python3 - <<'PY'
           import json, os
-          rows = {row["Name"]: row for row in json.loads(os.environ["RECORDS"])}
+          rows = {row['Name']: row for row in json.loads(os.environ['RECORDS'])}
           assert set(rows) == {
-              "voice.jaios-governance.org.",
-              "_openai-site-verification.voice.jaios-governance.org.",
-              "_cf-custom-hostname.voice.jaios-governance.org.",
+              'voice.jaios-governance.org.',
+              '_openai-site-verification.voice.jaios-governance.org.',
+              '_cf-custom-hostname.voice.jaios-governance.org.',
           }
-          assert rows["voice.jaios-governance.org."]["ResourceRecords"][0]["Value"] == os.environ["CNAME_TARGET"]
-          assert os.environ["OPENAI_VERIFICATION_VALUE"] in rows["_openai-site-verification.voice.jaios-governance.org."]["ResourceRecords"][0]["Value"]
-          assert os.environ["CLOUDFLARE_VALIDATION_VALUE"] in rows["_cf-custom-hostname.voice.jaios-governance.org."]["ResourceRecords"][0]["Value"]
+          assert rows['voice.jaios-governance.org.']['Type'] == 'CNAME'
+          assert rows['voice.jaios-governance.org.']['ResourceRecords'] == [{'Value': os.environ['CNAME_TARGET']}]
+          openai = rows['_openai-site-verification.voice.jaios-governance.org.']
+          cloudflare = rows['_cf-custom-hostname.voice.jaios-governance.org.']
+          assert openai['Type'] == 'TXT' and cloudflare['Type'] == 'TXT'
+          assert openai['ResourceRecords'] == [{'Value': '"' + os.environ['OPENAI_VERIFICATION_VALUE'] + '"'}]
+          assert cloudflare['ResourceRecords'] == [{'Value': '"' + os.environ['CLOUDFLARE_VALIDATION_VALUE'] + '"'}]
           PY
-          for preserved in \
-            docs.jaios-governance.org. \
-            chain.jaios-governance.org. \
-            member.jaios-governance.org.
-          do
-            test "$(aws route53 list-resource-record-sets \
-              --hosted-zone-id "$HOSTED_ZONE_ID" \
-              --query "length(ResourceRecordSets[?Name=='$preserved'])" \
-              --output text)" -ge 1
-          done
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$HOSTED_ZONE_ID" \
+            --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.' || Name=='chain.jaios-governance.org.' || Name=='member.jaios-governance.org.']" \
+            --output json >/tmp/preserved-after.json
+          python3 - <<'PY'
+          import json
+          def canonical(path):
+              with open(path, encoding='utf-8') as handle:
+                  return sorted(json.load(handle), key=lambda row: (row['Name'], row['Type']))
+          before = canonical('/tmp/preserved-before.json')
+          after = canonical('/tmp/preserved-after.json')
+          assert before == after, {'before': before, 'after': after}
+          PY
 
       - name: DNS TLS and JAIOS Voice acceptance
         shell: bash
@@ -191,15 +141,13 @@ jobs:
           set -euo pipefail
           for _ in $(seq 1 90); do
             cname="$(dig +short "$DOMAIN" CNAME | tail -1)"
-            if [ "$cname" = "$CNAME_TARGET" ]; then
-              break
-            fi
+            if [ "$cname" = "$CNAME_TARGET" ]; then break; fi
             sleep 10
           done
           test "$(dig +short "$DOMAIN" CNAME | tail -1)" = "$CNAME_TARGET"
           status="$(curl -sS -L -o /tmp/home.html -w '%{http_code}' \
             --max-redirs 10 --connect-timeout 20 --max-time 60 "https://$DOMAIN/")"
-          case "$status" in 2*|3*) ;; *) echo "Unexpected HTTP status: $status"; exit 1;; esac
+          case "$status" in 2*) ;; *) echo "Unexpected final HTTP status: $status"; exit 1;; esac
           openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" </dev/null 2>/dev/null |
             openssl x509 -noout -subject -issuer -dates -ext subjectAltName >/tmp/certificate.txt
           grep -Fq "DNS:$DOMAIN" /tmp/certificate.txt
@@ -212,27 +160,5 @@ jobs:
             echo "- HTTP Status: $status"
             echo "- TLS SAN: PASS"
             echo "- JAIOS Voice identity: PASS"
-            echo "- Existing docs / chain / member records preserved: true"
+            echo "- Existing docs / chain / member records preserved exactly: true"
           } >>"$GITHUB_STEP_SUMMARY"
-
-  restore-canonical-oidc:
-    if: always()
-    needs: [set-standard-oidc, publish]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Restore canonical repository context
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/oidc/customization/sub"
-          curl --silent --show-error --fail-with-body --location --request PUT \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            "$endpoint" --data '{"use_default":false,"include_claim_keys":["repo","context"],"use_immutable_subject":false}'
