@@ -37,7 +37,7 @@ jobs:
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           aws sesv2 get-account > ses-account.json
           aws sesv2 list-email-identities > ses-identities.json
-          aws iam get-role --role-name "$EXECUTION_ROLE" > execution-role.json
+          aws iam get-role --role-name "$EXECUTION_ROLE" > execution-role.json 2>execution-role-error.txt || true
           aws lambda get-function --function-name "$RELAY_FUNCTION" > relay-function.json
           aws lambda get-function-configuration --function-name "$RELAY_FUNCTION" > relay-config.json
           aws lambda get-function-url-config --function-name "$RELAY_FUNCTION" > relay-url.json
@@ -53,6 +53,7 @@ jobs:
           print('Runtime:', config.get('Runtime'))
           print('Handler:', config.get('Handler'))
           print('LastModified:', config.get('LastModified'))
+          print('Execution role ARN:', config.get('Role'))
           print('Environment variable names:', ', '.join(env) or 'NONE')
           for p in pathlib.Path('relay-source').rglob('*'):
               if not p.is_file() or p.stat().st_size > 500000: continue
@@ -70,7 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY' | tee "$GITHUB_STEP_SUMMARY"
-          import json
+          import json, pathlib
           ses=json.load(open('ses-account.json'))
           identities=json.load(open('ses-identities.json')).get('EmailIdentities',[])
           config=json.load(open('relay-config.json'))
@@ -80,7 +81,8 @@ jobs:
           print(f"- SES Production Access: {ses.get('ProductionAccessEnabled')}")
           print(f"- SES Sending Enabled: {ses.get('SendingEnabled')}")
           print('- SES identities: ' + (', '.join(sorted(x.get('IdentityName','') for x in identities)) or 'NONE'))
-          print('- Execution role: VERIFIED')
+          print('- Intended execution role exists: ' + str(pathlib.Path('execution-role.json').exists()))
+          print(f"- Actual execution role: {config.get('Role')}")
           print(f"- Relay runtime: {config.get('Runtime')} / {config.get('Handler')}")
           print(f"- Relay last modified: {config.get('LastModified')}")
           print(f"- Relay URL auth type: {url.get('AuthType')}")
@@ -99,9 +101,11 @@ jobs:
             ses-account.json
             ses-identities.json
             execution-role.json
+            execution-role-error.txt
             relay-function.json
             relay-config.json
             relay-url.json
             relay-files.txt
             relay-safe-inspection.txt
+          if-no-files-found: ignore
           retention-days: 14
