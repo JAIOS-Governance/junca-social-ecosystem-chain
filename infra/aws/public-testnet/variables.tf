@@ -80,6 +80,12 @@ variable "node_artifact_sha256" {
   }
 }
 
+variable "enable_public_services" {
+  description = "Enable RPC, Explorer, public ALB and DNS only after validator quorum acceptance."
+  type        = bool
+  default     = false
+}
+
 variable "validator_instance_type" {
   type    = string
   default = "m7i.large"
