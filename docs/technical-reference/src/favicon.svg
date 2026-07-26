@@ -1,7 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="JUNCA Social Ecosystem Chain technical reference mark">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" role="img" aria-label="JUNCA Social Ecosystem Chain technical reference mark">
+  <metadata>Approved Optima Bold J specimen, flattened from Monotype official type specimen; no runtime font substitution.</metadata>
   <rect width="512" height="512" rx="116" fill="#0B2A4B"/>
   <rect x="18" y="18" width="476" height="476" rx="100" fill="none" stroke="#D5C49E" stroke-width="8"/>
-  <g data-typeface="Optima LT Std Bold" aria-hidden="true">
-    <path d="M287 82c33-4 70-4 110 1l-5 28c-11-3-22-5-34-5v230c0 97-50 150-139 150-74 0-120-38-129-104l63-15c8 42 29 63 67 63 49 0 74-33 74-95V107c-15 1-28 5-40 12l-4-29c12-4 24-6 37-8Z" fill="#D5C49E"/>
-  </g>
+  <image
+    x="205"
+    y="76"
+    width="102"
+    height="360"
+    preserveAspectRatio="xMidYMid meet"
+    data-typeface="Optima LT Std Bold"
+    data-rendering="flattened-approved-specimen"
+    data-source="Monotype official Optima Bold specimen"
+    href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKUAAAJFAgMAAADBnt/iAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAJUExURf///9XEnv///30W2l8AAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAAd0SU1FB+oHGgcPNFXsB1AAAAGvSURBVHja7dxBbsMgEIXh8YIjcB+OwALf/yptpbRy4iF+LsbEyc8SfZqBGTvCUoTZcsRilTHN6X4izvPs6e9pj/6M5Vy4zVWoN16NhifUoNDr0qkuCxQK/T+1Q2iGQqEfQuNb0ASFQqFXpgH6utSgUCgUCoVCoVAoFAr9dFqg0I+nw19DKBQKhUKhUCgUCoVCoVAodDxNUCgUCoVCH2mEQqFQ6IXoDD2ZGhR6Cq3fwFCgo2mG6jQ10PAW1N6SDv/r45rGA2i+EE0XotZC53ZaRtM8mqYWOh1AbTAtXajTgXAqTV2oNdEol/UAmrtQp1a192UHtSZaeQZLF+rVKjTTpFOvVrGVulfC6rvaQStlTTr18u+olU/dAvi1ulABXnJXfXo1eql+Vc9bqp9/xy+rt9TK/rMc1Ftq7cigb6rtHBLl/DvOQbWgWQ6647Oh6EHX+Wuyz1eD03+9/p3OK0HdVI0mmfpXrbvdyjo1mfpB3XaZTLNMqzfNr2mq0igHXVGTaX5Cg5r+kZpM81M6qenv6IZcUtsauvyjSaaCvLVLgDcqyR+6VaXfETZ6tKSi+wJjkZspxZZWVgAAAABJRU5ErkJggg=="
+    xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKUAAAJFAgMAAADBnt/iAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAJUExURf///9XEnv///30W2l8AAAABdFJOUwBA5thmAAAAAWJLR0QAiAUdSAAAAAd0SU1FB+oHGgcPNFXsB1AAAAGvSURBVHja7dxBbsMgEIXh8YIjcB+OwALf/yptpbRy4iF+LsbEyc8SfZqBGTvCUoTZcsRilTHN6X4izvPs6e9pj/6M5Vy4zVWoN16NhifUoNDr0qkuCxQK/T+1Q2iGQqEfQuNb0ASFQqFXpgH6utSgUCgUCoVCoVAoFAr9dFqg0I+nw19DKBQKhUKhUCgUCoVCoVAodDxNUCgUCoVCH2mEQqFQ6IXoDD2ZGhR6Cq3fwFCgo2mG6jQ10PAW1N6SDv/r45rGA2i+EE0XotZC53ZaRtM8mqYWOh1AbTAtXajTgXAqTV2oNdEol/UAmrtQp1a192UHtSZaeQZLF+rVKjTTpFOvVrGVulfC6rvaQStlTTr18u+olU/dAvi1ulABXnJXfXo1eql+Vc9bqp9/xy+rt9TK/rMc1Ftq7cigb6rtHBLl/DvOQbWgWQ6647Oh6EHX+Wuyz1eD03+9/p3OK0HdVI0mmfpXrbvdyjo1mfpB3XaZTLNMqzfNr2mq0igHXVGTaX5Cg5r+kZpM81M6qenv6IZcUtsauvyjSaaCvLVLgDcqyR+6VaXfETZ6tKSi+wJjkZspxZZWVgAAAABJRU5ErkJggg=="
+    aria-hidden="true"
+  />
 </svg>
