@@ -132,6 +132,15 @@ jobs:
           aws-region: us-east-1
           role-session-name: junca-foundation-${{ github.run_id }}
 
+      - name: Reconcile exact bootstrap policy for authorized auto-release
+        if: github.event_name == 'workflow_run'
+        run: |
+          set -euo pipefail
+          aws iam put-role-policy \
+            --role-name "$DEPLOYMENT_ROLE_NAME" \
+            --policy-name PublicTestnetFoundationBootstrap \
+            --policy-document file://config/junca_public_testnet_foundation_bootstrap_policy.json
+
       - name: Read back identity and required permissions
         id: permissions
         shell: bash
@@ -185,7 +194,9 @@ jobs:
             {
               "resource": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
               "actions": [
-                "iam:GetRole", "iam:TagRole", "iam:UpdateAssumeRolePolicy",
+                "iam:GetRole", "iam:ListAttachedRolePolicies",
+                "iam:ListInstanceProfilesForRole", "iam:ListRolePolicies",
+                "iam:TagRole", "iam:UpdateAssumeRolePolicy",
                 "iam:GetRolePolicy", "iam:PutRolePolicy"
               ]
             },
@@ -193,6 +204,7 @@ jobs:
               "resource": "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com",
               "actions": [
                 "iam:GetOpenIDConnectProvider",
+                "iam:ListOpenIDConnectProviderTags",
                 "iam:AddClientIDToOpenIDConnectProvider",
                 "iam:UpdateOpenIDConnectProviderThumbprint",
                 "iam:TagOpenIDConnectProvider"
