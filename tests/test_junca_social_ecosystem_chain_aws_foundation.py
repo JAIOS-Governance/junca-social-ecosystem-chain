@@ -279,7 +279,10 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_auto_resume_requires_permission_pass_before_bootstrap_plan(self) -> None:
         for required in (
-            "github.event_name == 'workflow_run' && 'bootstrap-plan'",
+            "github.event_name == 'workflow_run' && 'auto-release'",
+            "bootstrap-apply|foundation-apply|auto-release",
+            "env.REQUESTED_PHASE == 'auto-release'",
+            "format('https://github.com/{0}/actions/runs/{1}'",
             "Require permission PASS before any plan",
             'test "${{ steps.permissions.outputs.permission_gate }}" = "PASS"',
             "JUNCA_TERRAFORM_STATE_BUCKET",
