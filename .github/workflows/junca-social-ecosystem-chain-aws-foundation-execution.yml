@@ -164,7 +164,8 @@ jobs:
                 "s3:GetEncryptionConfiguration", "s3:GetBucketOwnershipControls",
                 "s3:ListBucket", "s3:PutBucketVersioning",
                 "s3:PutEncryptionConfiguration", "s3:PutBucketPublicAccessBlock",
-                "s3:PutBucketOwnershipControls", "s3:PutBucketPolicy"
+                "s3:PutBucketOwnershipControls", "s3:PutBucketPolicy",
+                "s3:PutBucketTagging"
               ]
             },
             {
@@ -197,7 +198,7 @@ jobs:
               "actions": [
                 "iam:GetRole", "iam:ListAttachedRolePolicies",
                 "iam:ListInstanceProfilesForRole", "iam:ListRolePolicies",
-                "iam:TagRole", "iam:UpdateAssumeRolePolicy",
+                "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
                 "iam:GetRolePolicy", "iam:PutRolePolicy"
               ]
             },
