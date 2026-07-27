@@ -46,6 +46,10 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             self.assertIn(required, CONTROLLER)
         for prohibited in ("aws ec2 detach-volume", "--force-detach"):
             self.assertNotIn(prohibited, CONTROLLER)
+        self.assertIn(
+            'all($values[]; . == null or . == "")',
+            CONTROLLER,
+        )
 
     def test_acceptance_plan_allows_only_exact_tag_updates(self) -> None:
         for required in (
