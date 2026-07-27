@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.27";
-const revision = "R25";
+const revision = "R26";
 const chainSource = "372b4e1fc5967f50e037323c62513a1c2875e819";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 const governanceFooter = '<div><span>Governance</span><strong>JAIOS Institutional Governance</strong></div>';
@@ -108,13 +108,16 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R25")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R26")
       .replaceAll("Runtime Deployment in Progress", "Public Testnet Runtime Active")
       .replaceAll("Pending Live Acceptance", "Live Acceptance Verified")
       .replaceAll("Pending Runtime Binding", "Read-only Endpoint Active")
       .replaceAll("Runtime Unverified", "Runtime Verified")
       .replaceAll("Runtime unverified", "Runtime verified")
-      .replaceAll("Public endpoint pending", "Public endpoint active"),
+      .replaceAll("Public endpoint pending", "Public endpoint active")
+      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260727-r26")
+      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260727-r26")
+      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260727-r26"),
     "utf8",
   );
 }

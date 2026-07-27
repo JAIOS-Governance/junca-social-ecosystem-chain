@@ -55,10 +55,10 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png"',
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png"',
-  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260727-r26"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260727-r26"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260727-r26"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260727-r26"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -68,7 +68,7 @@ for (const required of [
   "AWS Runtime",
   "Live Acceptance Verified",
   "Assets Moved",
-  "Revision · 2026.07.27 / R25",
+  "Revision · 2026.07.27 / R26",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -134,7 +134,7 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R25") failures.push("release manifest revision must be R25");
+if (releaseManifest.revision !== "R26") failures.push("release manifest revision must be R26");
 if (releaseManifest.runtime_status !== "VERIFIED") failures.push("release manifest runtime must be verified");
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
@@ -147,9 +147,9 @@ const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanife
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
-  "/icon-192.png",
-  "/icon-512.png",
-  "/icon-maskable-512.png",
+  "/icon-192.png?v=20260727-r26",
+  "/icon-512.png?v=20260727-r26",
+  "/icon-maskable-512.png?v=20260727-r26",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
