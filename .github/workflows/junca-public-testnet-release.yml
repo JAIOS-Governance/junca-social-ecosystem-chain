@@ -1,0 +1,179 @@
+name: JUNCA Public Testnet Release
+
+on:
+  workflow_run:
+    workflows: ["JUNCA Validator Foundation Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      foundation_run_id:
+        description: "Successful Validator Foundation Release run ID"
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  publish-and-verify:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 45
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      DOMAIN_NAME: jaios-governance.org
+      ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+      AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
+      FOUNDATION_RUN_ID: ${{ github.event.workflow_run.id || inputs.foundation_run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: junca-validator-foundation-release-${{ env.FOUNDATION_RUN_ID }}
+          path: acceptance
+          github-token: ${{ github.token }}
+          run-id: ${{ env.FOUNDATION_RUN_ID }}
+
+      - name: Verify immutable acceptance evidence
+        run: |
+          set -euo pipefail
+          evidence=acceptance/public-testnet-runtime-acceptance.json
+          jq -e '
+            .schema_version == "junca-public-testnet-runtime-acceptance/v1" and
+            .result == "PASS" and
+            (.validators | length) == 3 and
+            (.validators | map(.status) | unique) == ["healthy"] and
+            (.validators | map(.head_height) | min) >= 1 and
+            (.validators | map(.head_hash) | unique | length) == 1 and
+            (.validators | map(.consensus.last_certificate_hash) | unique | length) == 1 and
+            all(.validators[];
+              .consensus.last_certificate.signed_power == 3 and
+              .consensus.last_certificate.total_power == 3
+            ) and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' "$evidence"
+          digest="$(sha256sum "$evidence" | cut -d' ' -f1)"
+          recorded="$(cut -d' ' -f1 acceptance/public-testnet-runtime-acceptance.json.sha256)"
+          test "$digest" = "$recorded"
+          {
+            echo "QUORUM_ACCEPTANCE_SHA256=$digest"
+            echo "RUNTIME_ACCEPTANCE_SHA256=$digest"
+            echo "NODE_AMI_ID=$(jq -er .ami_id acceptance/ami/junca-validator-ami-build.json)"
+            echo "NODE_ARTIFACT_SHA256=$(jq -er .node_artifact_sha256 acceptance/ami/junca-validator-ami-build.json)"
+            echo "GENESIS_SHA256=$(jq -er .genesis_sha256 acceptance/ami/junca-validator-ami-build.json)"
+            echo "SOURCE_COMMIT=$(jq -er .source_commit acceptance/ami/junca-validator-ami-build.json)"
+          } >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-public-testnet-release-${{ github.run_id }}
+
+      - name: Apply acceptance-bound public services
+        run: bash scripts/junca_public_testnet_release.sh
+
+      - name: Require all public targets healthy
+        run: |
+          set -euo pipefail
+          for target_group in \
+            "$(jq -er .public_target_group_arns.value.rpc artifacts/public-release-outputs.json)" \
+            "$(jq -er .public_target_group_arns.value.explorer artifacts/public-release-outputs.json)"
+          do
+            aws elbv2 wait target-in-service --target-group-arn "$target_group"
+            test "$(aws elbv2 describe-target-health \
+              --target-group-arn "$target_group" \
+              --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+              --output text)" = "3"
+          done
+
+      - name: Public Testnet endpoint acceptance
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 10 https://health.jaios-governance.org/health \
+              > artifacts/public-health.json; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 10
+          done
+          jq -e '
+            .status == "healthy" and .read_only == true and
+            .mainnet_changed == false and .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/public-health.json
+
+          curl -fsS --max-time 10 \
+            https://explorer.jaios-governance.org/explorer.json \
+            > artifacts/public-explorer.json
+          jq -e '
+            .status == "ready" and .finalized_only == true and
+            .head.height >= 1 and .head.signed_power == 3 and .head.total_power == 3
+          ' artifacts/public-explorer.json
+
+          curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+            https://rpc.jaios-governance.org/ > artifacts/public-rpc.json
+          jq -e '.result | test("^0x[0-9a-f]+$")' artifacts/public-rpc.json
+
+          status="$(curl -sS -o artifacts/unsafe-rpc.json -w '%{http_code}' \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"eth_sendRawTransaction","params":["0x00"]}' \
+            https://rpc.jaios-governance.org/)"
+          test "$status" = "403"
+          jq -e '.error.code == -32601' artifacts/unsafe-rpc.json
+
+          jq -n \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg acceptance_sha256 "$RUNTIME_ACCEPTANCE_SHA256" \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile rpc artifacts/public-rpc.json '{
+              schema_version: "junca-public-testnet-publication/v1",
+              result: "PASS",
+              release_run_url: $run_url,
+              validator_acceptance_sha256: $acceptance_sha256,
+              endpoints: {
+                rpc: "https://rpc.jaios-governance.org",
+                explorer: "https://explorer.jaios-governance.org",
+                health: "https://health.jaios-governance.org"
+              },
+              health: $health[0],
+              explorer: $explorer[0],
+              rpc: $rpc[0],
+              unsafe_rpc_rejected: true,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/public-testnet-publication.json
+          sha256sum artifacts/public-testnet-publication.json \
+            > artifacts/public-testnet-publication.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-testnet-release-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
