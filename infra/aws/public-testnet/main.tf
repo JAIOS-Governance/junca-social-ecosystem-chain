@@ -268,6 +268,22 @@ resource "aws_security_group" "validator" {
     self        = true
   }
 
+  ingress {
+    description     = "Read-only public RPC from TLS gateway"
+    protocol        = "tcp"
+    from_port       = 8546
+    to_port         = 8546
+    security_groups = var.enable_public_services ? [aws_security_group.public_alb[0].id] : []
+  }
+
+  ingress {
+    description     = "Finalized-only explorer from TLS gateway"
+    protocol        = "tcp"
+    from_port       = 3000
+    to_port         = 3000
+    security_groups = var.enable_public_services ? [aws_security_group.public_alb[0].id] : []
+  }
+
   egress {
     description = "AWS private endpoints and validator quorum"
     protocol    = "-1"
@@ -299,44 +315,6 @@ resource "aws_security_group" "public_alb" {
   }
 }
 
-resource "aws_security_group" "read_only_services" {
-  count = var.enable_public_services ? 1 : 0
-
-  name   = "${local.name}-read-only-services"
-  vpc_id = aws_vpc.testnet.id
-
-  ingress {
-    description     = "RPC from TLS gateway"
-    protocol        = "tcp"
-    from_port       = 8545
-    to_port         = 8545
-    security_groups = [aws_security_group.public_alb[0].id]
-  }
-
-  ingress {
-    description     = "Explorer from TLS gateway"
-    protocol        = "tcp"
-    from_port       = 3000
-    to_port         = 3000
-    security_groups = [aws_security_group.public_alb[0].id]
-  }
-
-  ingress {
-    description     = "Health from TLS gateway"
-    protocol        = "tcp"
-    from_port       = 8080
-    to_port         = 8080
-    security_groups = [aws_security_group.public_alb[0].id]
-  }
-
-  egress {
-    protocol    = "-1"
-    from_port   = 0
-    to_port     = 0
-    cidr_blocks = [aws_vpc.testnet.cidr_block]
-  }
-}
-
 resource "aws_security_group" "endpoints" {
   name   = "${local.name}-endpoints"
   vpc_id = aws_vpc.testnet.id
@@ -345,10 +323,7 @@ resource "aws_security_group" "endpoints" {
     protocol  = "tcp"
     from_port = 443
     to_port   = 443
-    security_groups = concat(
-      [aws_security_group.validator.id],
-      var.enable_public_services ? [aws_security_group.read_only_services[0].id] : [],
-    )
+    security_groups = [aws_security_group.validator.id]
   }
 }
 
@@ -482,84 +457,6 @@ resource "aws_instance" "validator" {
   }
 }
 
-resource "aws_iam_role" "read_only" {
-  count = var.enable_public_services ? 1 : 0
-
-  name = "${local.name}-read-only"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_instance_profile" "read_only" {
-  count = var.enable_public_services ? 1 : 0
-
-  name = "${local.name}-read-only"
-  role = aws_iam_role.read_only[0].name
-}
-
-resource "aws_instance" "rpc" {
-  count = var.enable_public_services ? 2 : 0
-
-  ami                         = var.node_ami_id
-  instance_type               = var.rpc_instance_type
-  subnet_id                   = aws_subnet.private[count.index].id
-  vpc_security_group_ids      = [aws_security_group.read_only_services[0].id]
-  associate_public_ip_address = false
-  iam_instance_profile        = aws_iam_instance_profile.read_only[0].name
-  monitoring                  = true
-
-  metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
-  }
-
-  root_block_device {
-    encrypted   = true
-    volume_type = "gp3"
-    volume_size = 200
-  }
-
-  tags = {
-    Name      = format("${local.name}-rpc-%02d", count.index + 1)
-    PublicRPC = "gateway-only"
-    UnsafeRPC = "denied"
-  }
-}
-
-resource "aws_instance" "explorer" {
-  count = var.enable_public_services ? 2 : 0
-
-  ami                         = var.node_ami_id
-  instance_type               = var.explorer_instance_type
-  subnet_id                   = aws_subnet.private[count.index + 1].id
-  vpc_security_group_ids      = [aws_security_group.read_only_services[0].id]
-  associate_public_ip_address = false
-  iam_instance_profile        = aws_iam_instance_profile.read_only[0].name
-  monitoring                  = true
-
-  metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
-  }
-
-  root_block_device {
-    encrypted   = true
-    volume_type = "gp3"
-    volume_size = 300
-  }
-
-  tags = {
-    Name          = format("${local.name}-explorer-%02d", count.index + 1)
-    FinalizedOnly = "true"
-  }
-}
-
 resource "aws_lb" "public" {
   count = var.enable_public_services ? 1 : 0
 
@@ -576,17 +473,17 @@ resource "aws_lb_target_group" "rpc" {
   count = var.enable_public_services ? 1 : 0
 
   name     = "junca-testnet-rpc"
-  port     = 8545
+  port     = 8546
   protocol = "HTTP"
   vpc_id   = aws_vpc.testnet.id
   health_check { path = "/health" }
 }
 
 resource "aws_lb_target_group_attachment" "rpc" {
-  count            = var.enable_public_services ? 2 : 0
+  count            = var.enable_public_services ? 3 : 0
   target_group_arn = aws_lb_target_group.rpc[0].arn
-  target_id        = aws_instance.rpc[count.index].id
-  port             = 8545
+  target_id        = aws_instance.validator[count.index].id
+  port             = 8546
 }
 
 resource "aws_lb_target_group" "explorer" {
@@ -600,10 +497,53 @@ resource "aws_lb_target_group" "explorer" {
 }
 
 resource "aws_lb_target_group_attachment" "explorer" {
-  count            = var.enable_public_services ? 2 : 0
+  count            = var.enable_public_services ? 3 : 0
   target_group_arn = aws_lb_target_group.explorer[0].arn
-  target_id        = aws_instance.explorer[count.index].id
+  target_id        = aws_instance.validator[count.index].id
   port             = 3000
+}
+
+resource "aws_wafv2_web_acl" "public" {
+  count = var.enable_public_services ? 1 : 0
+
+  name  = "junca-testnet-public"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "PerIpRateLimit"
+    priority = 1
+    action {
+      block {}
+    }
+    statement {
+      rate_based_statement {
+        aggregate_key_type = "IP"
+        limit              = 1200
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "JuncaTestnetPerIpRateLimit"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "JuncaTestnetPublic"
+    sampled_requests_enabled   = true
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "public" {
+  count = var.enable_public_services ? 1 : 0
+
+  resource_arn = aws_lb.public[0].arn
+  web_acl_arn  = aws_wafv2_web_acl.public[0].arn
 }
 
 resource "aws_lb_listener" "https" {
