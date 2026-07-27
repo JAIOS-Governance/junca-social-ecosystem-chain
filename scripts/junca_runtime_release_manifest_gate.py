@@ -73,11 +73,21 @@ def evaluate(
         expected_genesis_sha256,
         manifest.get("ami_id"),
     )
+    request_sha256 = manifest.get("request_sha256")
+    if not SHA256.fullmatch(str(request_sha256)):
+        failures.append("manifest.request_sha256:invalid")
+    if explorer.get("request_sha256") != request_sha256:
+        failures.append("explorer.request_sha256:mismatch")
+    if ebs.get("request_sha256") != request_sha256:
+        failures.append("ebs.request_sha256:mismatch")
 
-    if manifest.get("schema_version") != "junca-runtime-release-manifest/v1":
+    if (
+        manifest.get("schema_version")
+        != "junca-runtime-pre-rollout-baseline/v1"
+    ):
         failures.append("manifest.schema_version:mismatch")
-    if manifest.get("state") != "RELEASE_CANDIDATE":
-        failures.append("manifest.state:not_candidate")
+    if manifest.get("state") != "PRE_ROLLOUT_BASELINE_VERIFIED":
+        failures.append("manifest.state:not_baseline_verified")
     if manifest.get("network") != "Public Testnet":
         failures.append("manifest.network:mismatch")
     if manifest.get("notice") != "Public Testnet / No Monetary Value":
@@ -150,15 +160,21 @@ def evaluate(
         if not all(previous_binding):
             failures.append("manifest.previous_runtime:incomplete")
 
-    if manifest.get("explorer_acceptance_sha256") != explorer_evidence_sha256:
-        failures.append("manifest.explorer_acceptance_sha256:mismatch")
-    if manifest.get("ebs_migration_sha256") != ebs_evidence_sha256:
-        failures.append("manifest.ebs_migration_sha256:mismatch")
+    if manifest.get("explorer_baseline_sha256") != explorer_evidence_sha256:
+        failures.append("manifest.explorer_baseline_sha256:mismatch")
+    if manifest.get("ebs_baseline_sha256") != ebs_evidence_sha256:
+        failures.append("manifest.ebs_baseline_sha256:mismatch")
 
-    if explorer.get("schema_version") != "junca-public-explorer-acceptance/v2":
-        failures.append("explorer.schema_version:not_v2")
-    if explorer.get("accepted") is not True or explorer.get("status") != "PASS":
-        failures.append("explorer.acceptance:not_passed")
+    if (
+        explorer.get("schema_version")
+        != "junca-public-explorer-pre-rollout-baseline/v1"
+    ):
+        failures.append("explorer.schema_version:not_pre_rollout_baseline")
+    if (
+        explorer.get("candidate_accepted") is not False
+        or explorer.get("status") != "BASELINE_VERIFIED"
+    ):
+        failures.append("explorer.baseline:not_verified")
     if explorer.get("finalized_only") is not True:
         failures.append("explorer.finalized_only:not_true")
     if explorer.get("read_only") is not True:
@@ -167,17 +183,37 @@ def evaluate(
         failures.append("explorer.unsafe_rpc_rejection:not_true")
     if _candidate_binding(explorer) != expected:
         failures.append("explorer.candidate_binding:mismatch")
+    observed_explorer = explorer.get("observed_runtime")
+    if (
+        not isinstance(observed_explorer, Mapping)
+        or not all(_candidate_binding(observed_explorer))
+        or _candidate_binding(observed_explorer) == expected
+    ):
+        failures.append("explorer.observed_runtime:not_distinct_baseline")
 
-    if ebs.get("schema_version") != "junca-validator-ebs-migration/v1":
+    if (
+        ebs.get("schema_version")
+        != "junca-validator-ebs-pre-rollout-baseline/v1"
+    ):
         failures.append("ebs.schema_version:mismatch")
-    if ebs.get("state") != "VERIFIED_PASS":
-        failures.append("ebs.state:not_verified_pass")
+    if (
+        ebs.get("candidate_accepted") is not False
+        or ebs.get("state") != "BASELINE_VERIFIED"
+    ):
+        failures.append("ebs.state:not_baseline_verified")
     if ebs.get("migration_complete") is not True:
         failures.append("ebs.migration_complete:not_true")
     if ebs.get("data_loss") is not False:
         failures.append("ebs.data_loss:not_false")
     if _candidate_binding(ebs) != expected:
         failures.append("ebs.candidate_binding:mismatch")
+    observed_ebs = ebs.get("observed_runtime")
+    if (
+        not isinstance(observed_ebs, Mapping)
+        or not all(_candidate_binding(observed_ebs))
+        or _candidate_binding(observed_ebs) == expected
+    ):
+        failures.append("ebs.observed_runtime:not_distinct_baseline")
     volumes = ebs.get("validator_volumes")
     if not isinstance(volumes, list):
         failures.append("ebs.validator_volumes:missing")
@@ -222,11 +258,13 @@ def evaluate(
         "schema_version": "junca-runtime-release-manifest-decision/v1",
         "decision": "PROMOTION_GATE_PASS" if not failures else "PROMOTION_GATE_REJECTED",
         "accepted": not failures,
+        "phase": "PREDEPLOYMENT_READINESS",
         "candidate": {
             "source_commit": expected_source_commit,
             "node_artifact_sha256": expected_artifact_sha256,
             "genesis_sha256": expected_genesis_sha256,
             "ami_id": manifest.get("ami_id"),
+            "request_sha256": request_sha256,
         },
         "failure_count": len(failures),
         "failures": failures,
