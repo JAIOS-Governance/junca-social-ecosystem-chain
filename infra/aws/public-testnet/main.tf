@@ -172,7 +172,6 @@ resource "aws_acm_certificate" "public_services" {
   domain_name = local.rpc_hostname
   subject_alternative_names = [
     local.explorer_hostname,
-    local.scan_hostname,
     local.health_hostname,
   ]
   validation_method = "DNS"
@@ -209,6 +208,46 @@ resource "aws_acm_certificate_validation" "public_services" {
   certificate_arn = aws_acm_certificate.public_services.arn
   validation_record_fqdns = [
     for record in aws_route53_record.certificate_validation :
+    record.fqdn
+  ]
+}
+
+resource "aws_acm_certificate" "scan" {
+  domain_name       = local.scan_hostname
+  validation_method = "DNS"
+
+  options {
+    certificate_transparency_logging_preference = "ENABLED"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+    prevent_destroy       = true
+  }
+}
+
+resource "aws_route53_record" "scan_certificate_validation" {
+  for_each = {
+    for option in aws_acm_certificate.scan.domain_validation_options :
+    option.domain_name => {
+      name   = option.resource_record_name
+      record = option.resource_record_value
+      type   = option.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  zone_id         = var.route53_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  ttl             = 300
+  records         = [each.value.record]
+}
+
+resource "aws_acm_certificate_validation" "scan" {
+  certificate_arn = aws_acm_certificate.scan.arn
+  validation_record_fqdns = [
+    for record in aws_route53_record.scan_certificate_validation :
     record.fqdn
   ]
 }
@@ -565,6 +604,13 @@ resource "aws_lb_listener" "https" {
       status_code  = "404"
     }
   }
+}
+
+resource "aws_lb_listener_certificate" "scan" {
+  count = var.enable_public_services ? 1 : 0
+
+  listener_arn    = aws_lb_listener.https[0].arn
+  certificate_arn = aws_acm_certificate_validation.scan.certificate_arn
 }
 
 resource "aws_lb_listener_rule" "rpc" {
