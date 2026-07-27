@@ -378,7 +378,14 @@ def private_health(values):
                         "finalized": 1,
                         "certificate_hash": certificate_hash,
                         "timestamp": FINALIZED_TIMESTAMP,
+                        "timestamp_state": "DURABLE_PERSISTED",
                     },
+                    "timestamp_schema_tables": [
+                        "block_timestamps",
+                        "blocks",
+                        "finality_certificates",
+                        "metadata",
+                    ],
                     "certificate": dict(certificate),
                 },
                 "health": {
@@ -748,6 +755,114 @@ class EvidenceCollectorTests(unittest.TestCase):
             runtime["readback"]["finalized_head"]["timestamp"],
             FINALIZED_TIMESTAMP,
         )
+        self.assertEqual(
+            runtime["readback"]["finalized_head"]["timestamp_state"],
+            "DURABLE_PERSISTED",
+        )
+
+    def test_legacy_schema_without_persisted_timestamp_is_explicit(self):
+        values = fixture()
+        values["public"]["public_services_acceptance_readback"]["value"][
+            "enabled"
+        ] = False
+        values["endpoints"] = None
+        values["private_validator_health"] = private_health(values)
+        for item in values["private_validator_health"]["validators"]:
+            item["health"].pop("head_timestamp")
+            item["durable_state"]["head"]["timestamp"] = None
+            item["durable_state"]["head"][
+                "timestamp_state"
+            ] = "LEGACY_NOT_PERSISTED"
+            item["durable_state"]["timestamp_schema_tables"] = [
+                "blocks",
+                "finality_certificates",
+                "metadata",
+            ]
+        _, paths = self.collect(values)
+        runtime = json.loads(paths[1].read_text(encoding="utf-8"))
+        self.assertIsNone(
+            runtime["readback"]["finalized_head"]["timestamp"]
+        )
+        self.assertEqual(
+            runtime["readback"]["finalized_head"]["timestamp_state"],
+            "LEGACY_NOT_PERSISTED",
+        )
+        self.assertEqual(
+            {
+                item["durable_timestamp_state"]
+                for item in runtime["readback"]["validators"]
+            },
+            {"LEGACY_NOT_PERSISTED"},
+        )
+
+    def test_legacy_timestamp_state_rejects_health_or_schema_drift(self):
+        mutations = (
+            (
+                "health_present",
+                lambda validators: validators[0]["health"].update(
+                    {"head_timestamp": FINALIZED_TIMESTAMP}
+                ),
+                "legacy_health_timestamp:present",
+            ),
+            (
+                "partial_schema_state",
+                lambda validators: validators[1]["durable_state"][
+                    "head"
+                ].update(
+                    {
+                        "timestamp": FINALIZED_TIMESTAMP,
+                        "timestamp_state": "DURABLE_PERSISTED",
+                    }
+                ),
+                "timestamp_schema_tables:invalid",
+            ),
+            (
+                "schema_tables_drift",
+                lambda validators: validators[2]["durable_state"].update(
+                    {
+                        "timestamp_schema_tables": [
+                            "block_timestamps",
+                            "blocks",
+                            "finality_certificates",
+                            "metadata",
+                        ]
+                    }
+                ),
+                "timestamp_schema_tables:invalid",
+            ),
+        )
+        for name, mutate, error in mutations:
+            with self.subTest(name=name):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(
+                    values
+                )
+                validators = values["private_validator_health"][
+                    "validators"
+                ]
+                for item in validators:
+                    item["health"].pop("head_timestamp")
+                    item["durable_state"]["head"]["timestamp"] = None
+                    item["durable_state"]["head"][
+                        "timestamp_state"
+                    ] = "LEGACY_NOT_PERSISTED"
+                    item["durable_state"][
+                        "timestamp_schema_tables"
+                    ] = [
+                        "blocks",
+                        "finality_certificates",
+                        "metadata",
+                    ]
+                mutate(validators)
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    error,
+                ):
+                    self.collect(values)
 
     def test_present_health_timestamp_must_match_durable_timestamp(self):
         for value, error in (
@@ -1292,6 +1407,10 @@ class EvidenceCollectorTests(unittest.TestCase):
             connection = sqlite3.connect(state_path)
             connection.executescript(
                 """
+                CREATE TABLE metadata(
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                );
                 CREATE TABLE blocks(
                   height INTEGER PRIMARY KEY,
                   block_hash TEXT,
@@ -1356,7 +1475,17 @@ class EvidenceCollectorTests(unittest.TestCase):
                 "finalized": 1,
                 "certificate_hash": certificate["certificate_hash"],
                 "timestamp": FINALIZED_TIMESTAMP,
+                "timestamp_state": "DURABLE_PERSISTED",
             },
+        )
+        self.assertEqual(
+            readback["durable_state"]["timestamp_schema_tables"],
+            [
+                "block_timestamps",
+                "blocks",
+                "finality_certificates",
+                "metadata",
+            ],
         )
         self.assertEqual(
             readback["durable_state"]["certificate"],
@@ -1381,6 +1510,10 @@ class EvidenceCollectorTests(unittest.TestCase):
             connection = sqlite3.connect(state_path)
             connection.executescript(
                 """
+                CREATE TABLE metadata(
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                );
                 CREATE TABLE blocks(
                   height INTEGER PRIMARY KEY,
                   block_hash TEXT,
@@ -1431,6 +1564,149 @@ class EvidenceCollectorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "durable finalized head timestamp is absent",
+            result.stderr,
+        )
+
+    def test_workflow_durable_reader_accepts_exact_legacy_schema_without_time(
+        self,
+    ):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        match = re.search(
+            r"base64 -w0 <<'PY'\n(?P<script>.*?)\n          PY",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        script = textwrap.dedent(match.group("script"))
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "state.sqlite"
+            connection = sqlite3.connect(state_path)
+            connection.executescript(
+                """
+                CREATE TABLE metadata(
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                );
+                CREATE TABLE blocks(
+                  height INTEGER PRIMARY KEY,
+                  block_hash TEXT,
+                  finalized INTEGER,
+                  certificate_hash TEXT
+                );
+                CREATE TABLE finality_certificates(
+                  height INTEGER PRIMARY KEY,
+                  certificate_json TEXT NOT NULL
+                );
+                """
+            )
+            certificate = finality_certificate()
+            connection.execute(
+                "INSERT INTO blocks VALUES(?,?,?,?)",
+                (
+                    FINALIZED_HEIGHT,
+                    FINALIZED_HASH,
+                    1,
+                    certificate["certificate_hash"],
+                ),
+            )
+            connection.execute(
+                "INSERT INTO finality_certificates VALUES(?,?)",
+                (FINALIZED_HEIGHT, json.dumps(certificate)),
+            )
+            connection.commit()
+            connection.close()
+            script = script.replace(
+                "/var/lib/junca/state.sqlite",
+                str(state_path),
+            )
+            environment = dict(os.environ)
+            environment["JUNCA_HEALTH_JSON"] = json.dumps(
+                {"status": "healthy"}
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        readback = json.loads(result.stdout)
+        self.assertEqual(
+            readback["durable_state"]["head"]["timestamp_state"],
+            "LEGACY_NOT_PERSISTED",
+        )
+        self.assertIsNone(
+            readback["durable_state"]["head"]["timestamp"]
+        )
+        self.assertEqual(
+            readback["durable_state"]["timestamp_schema_tables"],
+            ["blocks", "finality_certificates", "metadata"],
+        )
+
+    def test_workflow_legacy_reader_rejects_non_durable_health_timestamp(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        match = re.search(
+            r"base64 -w0 <<'PY'\n(?P<script>.*?)\n          PY",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        script = textwrap.dedent(match.group("script"))
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "state.sqlite"
+            connection = sqlite3.connect(state_path)
+            connection.executescript(
+                """
+                CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT);
+                CREATE TABLE blocks(
+                  height INTEGER PRIMARY KEY,
+                  block_hash TEXT,
+                  finalized INTEGER,
+                  certificate_hash TEXT
+                );
+                CREATE TABLE finality_certificates(
+                  height INTEGER PRIMARY KEY,
+                  certificate_json TEXT NOT NULL
+                );
+                """
+            )
+            certificate = finality_certificate()
+            connection.execute(
+                "INSERT INTO blocks VALUES(?,?,?,?)",
+                (
+                    FINALIZED_HEIGHT,
+                    FINALIZED_HASH,
+                    1,
+                    certificate["certificate_hash"],
+                ),
+            )
+            connection.execute(
+                "INSERT INTO finality_certificates VALUES(?,?)",
+                (FINALIZED_HEIGHT, json.dumps(certificate)),
+            )
+            connection.commit()
+            connection.close()
+            script = script.replace(
+                "/var/lib/junca/state.sqlite",
+                str(state_path),
+            )
+            environment = dict(os.environ)
+            environment["JUNCA_HEALTH_JSON"] = json.dumps(
+                {
+                    "status": "healthy",
+                    "head_timestamp": FINALIZED_TIMESTAMP,
+                }
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "legacy health timestamp is not durably persisted",
             result.stderr,
         )
 

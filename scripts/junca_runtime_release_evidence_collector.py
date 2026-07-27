@@ -982,13 +982,59 @@ def verify_private_validator_health(
             f"private_ssm.{validator_id}.durable_head:mismatch",
         )
         durable_head_timestamp = durable_head.get("timestamp")
-        require(
-            isinstance(durable_head_timestamp, int)
-            and not isinstance(durable_head_timestamp, bool)
-            and durable_head_timestamp >= 0,
-            f"private_ssm.{validator_id}.durable_head_timestamp:invalid",
+        durable_timestamp_state = durable_head.get("timestamp_state")
+        timestamp_schema_tables = durable_state.get(
+            "timestamp_schema_tables"
         )
-        if health_has_head_timestamp:
+        if durable_timestamp_state == "DURABLE_PERSISTED":
+            require(
+                isinstance(durable_head_timestamp, int)
+                and not isinstance(durable_head_timestamp, bool)
+                and durable_head_timestamp > 0,
+                f"private_ssm.{validator_id}."
+                "durable_head_timestamp:invalid",
+            )
+            require(
+                timestamp_schema_tables
+                == [
+                    "block_timestamps",
+                    "blocks",
+                    "finality_certificates",
+                    "metadata",
+                ],
+                f"private_ssm.{validator_id}."
+                "timestamp_schema_tables:invalid",
+            )
+        elif durable_timestamp_state == "LEGACY_NOT_PERSISTED":
+            require(
+                durable_head_timestamp is None,
+                f"private_ssm.{validator_id}."
+                "legacy_timestamp:not_null",
+            )
+            require(
+                not health_has_head_timestamp,
+                f"private_ssm.{validator_id}."
+                "legacy_health_timestamp:present",
+            )
+            require(
+                timestamp_schema_tables
+                == [
+                    "blocks",
+                    "finality_certificates",
+                    "metadata",
+                ],
+                f"private_ssm.{validator_id}."
+                "timestamp_schema_tables:invalid",
+            )
+        else:
+            raise EvidenceError(
+                f"private_ssm.{validator_id}."
+                "durable_timestamp_state:invalid"
+            )
+        if (
+            durable_timestamp_state == "DURABLE_PERSISTED"
+            and health_has_head_timestamp
+        ):
             require(
                 health_head_timestamp == durable_head_timestamp,
                 f"private_ssm.{validator_id}.head_timestamp:"
@@ -1016,7 +1062,15 @@ def verify_private_validator_health(
             )
         chain_ids.append(chain_id)
         certificates.append(serialized_certificate)
-        heads.append((height, head_hash, durable_head_timestamp))
+        heads.append(
+            (
+                height,
+                head_hash,
+                durable_timestamp_state,
+                durable_head_timestamp,
+                tuple(timestamp_schema_tables),
+            )
+        )
         normalized.append(
             {
                 "validator_id": validator_id,
@@ -1026,6 +1080,8 @@ def verify_private_validator_health(
                     runtime_certificate_states[-1],
                 "durable_certificate_hash":
                     migration_certificate_hash,
+                "durable_timestamp_state": durable_timestamp_state,
+                "timestamp_schema_tables": timestamp_schema_tables,
             }
         )
 
@@ -1035,7 +1091,13 @@ def verify_private_validator_health(
         len(set(certificates)) == 1,
         "private_ssm.finality_certificate:mismatch",
     )
-    height, head_hash, durable_head_timestamp = heads[0]
+    (
+        height,
+        head_hash,
+        durable_timestamp_state,
+        durable_head_timestamp,
+        _,
+    ) = heads[0]
     return {
         "mode": "private_ssm",
         "scope": report.get("scope"),
@@ -1046,6 +1108,7 @@ def verify_private_validator_health(
             "height": height,
             "hash": head_hash,
             "timestamp": durable_head_timestamp,
+            "timestamp_state": durable_timestamp_state,
             "certificate_hash": migration_certificate_hash,
         },
         "immutable_runtime_certificate_activation_pending":

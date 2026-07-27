@@ -74,6 +74,8 @@ def _private_ssm_baseline(
     ):
         failures.append("private_ssm.readback:invalid")
     validators = readback.get("validators")
+    timestamp_states: list[Any] = []
+    timestamp_schema_tables: list[Any] = []
     if not isinstance(validators, list):
         failures.append("private_ssm.validators:missing")
     else:
@@ -89,6 +91,16 @@ def _private_ssm_baseline(
         ]
         signer_digests = [
             item.get("signer_resource_digest")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        timestamp_states = [
+            item.get("durable_timestamp_state")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        timestamp_schema_tables = [
+            item.get("timestamp_schema_tables")
             for item in validators
             if isinstance(item, Mapping)
         ]
@@ -118,6 +130,50 @@ def _private_ssm_baseline(
         or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
     ):
         failures.append("private_ssm.finalized_head:invalid")
+    else:
+        timestamp_state = finalized.get("timestamp_state")
+        timestamp = finalized.get("timestamp")
+        expected_tables: list[str] | None
+        if timestamp_state == "DURABLE_PERSISTED":
+            expected_tables = [
+                "block_timestamps",
+                "blocks",
+                "finality_certificates",
+                "metadata",
+            ]
+            if (
+                not isinstance(timestamp, int)
+                or isinstance(timestamp, bool)
+                or timestamp <= 0
+            ):
+                failures.append(
+                    "private_ssm.finalized_head.timestamp:invalid"
+                )
+        elif timestamp_state == "LEGACY_NOT_PERSISTED":
+            expected_tables = [
+                "blocks",
+                "finality_certificates",
+                "metadata",
+            ]
+            if timestamp is not None:
+                failures.append(
+                    "private_ssm.finalized_head.legacy_timestamp:not_null"
+                )
+        else:
+            expected_tables = None
+            failures.append(
+                "private_ssm.finalized_head.timestamp_state:invalid"
+            )
+        if (
+            expected_tables is not None
+            and (
+                timestamp_states != [timestamp_state] * 3
+                or timestamp_schema_tables != [expected_tables] * 3
+            )
+        ):
+            failures.append(
+                "private_ssm.validators.timestamp_schema:not_exact_three"
+            )
     quorum = readback.get("quorum")
     if not isinstance(quorum, Mapping):
         failures.append("private_ssm.quorum:missing")

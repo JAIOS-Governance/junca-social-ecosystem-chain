@@ -438,16 +438,63 @@ jobs:
           ).fetchone()
           if head is None:
               raise RuntimeError("durable finalized head is absent")
-          timestamp_row = connection.execute(
-              """
-              SELECT timestamp
-              FROM block_timestamps
-              WHERE height=?
-              """,
-              (head["height"],),
-          ).fetchone()
-          if timestamp_row is None:
-              raise RuntimeError("durable finalized head timestamp is absent")
+          schema_tables = sorted(
+              row["name"]
+              for row in connection.execute(
+                  """
+                  SELECT name
+                  FROM sqlite_master
+                  WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                  """
+              )
+          )
+          if "block_timestamps" in schema_tables:
+              if schema_tables != [
+                  "block_timestamps",
+                  "blocks",
+                  "finality_certificates",
+                  "metadata",
+              ]:
+                  raise RuntimeError(
+                      "durable timestamp schema tables are unexpected"
+                  )
+              timestamp_row = connection.execute(
+                  """
+                  SELECT timestamp
+                  FROM block_timestamps
+                  WHERE height=?
+                  """,
+                  (head["height"],),
+              ).fetchone()
+              if timestamp_row is None:
+                  raise RuntimeError(
+                      "durable finalized head timestamp is absent"
+                  )
+              timestamp = timestamp_row["timestamp"]
+              if (
+                  isinstance(timestamp, bool)
+                  or not isinstance(timestamp, int)
+                  or timestamp <= 0
+              ):
+                  raise RuntimeError(
+                      "durable finalized head timestamp is invalid"
+                  )
+              timestamp_state = "DURABLE_PERSISTED"
+          else:
+              if schema_tables != [
+                  "blocks",
+                  "finality_certificates",
+                  "metadata",
+              ]:
+                  raise RuntimeError(
+                      "legacy durable state schema tables are unexpected"
+                  )
+              if "head_timestamp" in health:
+                  raise RuntimeError(
+                      "legacy health timestamp is not durably persisted"
+                  )
+              timestamp = None
+              timestamp_state = "LEGACY_NOT_PERSISTED"
           certificate_row = connection.execute(
               """
               SELECT certificate_json
@@ -468,8 +515,10 @@ jobs:
                           "quick_check": quick_check,
                           "head": {
                               **dict(head),
-                              "timestamp": timestamp_row["timestamp"],
+                              "timestamp": timestamp,
+                              "timestamp_state": timestamp_state,
                           },
+                          "timestamp_schema_tables": schema_tables,
                           "certificate": certificate,
                       },
                   },
