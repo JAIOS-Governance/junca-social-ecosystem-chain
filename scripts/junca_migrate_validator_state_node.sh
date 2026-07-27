@@ -47,6 +47,7 @@ test "$runtime_signer_arn" = "$expected_signer_arn"
 state_path=/var/lib/junca
 temporary_mount=/mnt/junca-validator-state-migration
 rollback_path="/var/lib/junca-root-rollback-${rollback_token}"
+filesystem_label_expected=JUNCA_VALIDATOR_
 expected_serial="${volume_id//-/}"
 device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${expected_serial}"
 before_health="/tmp/junca-health-before-${rollback_token}.json"
@@ -520,20 +521,26 @@ if [[ -z "$filesystem" ]]; then
       tr -d '[:space:]'
   )"
   # Only an empty/unformatted exact device may reach mkfs.
-  mkfs.ext4 -m 0 -L JUNCA_VALIDATOR_STATE "$device"
+  # ext4 volume labels are limited to 16 bytes. Keep the canonical identity
+  # exact and explicit rather than relying on mkfs/e2label truncation.
+  mkfs.ext4 -m 0 -L "$filesystem_label_expected" "$device"
 else
   test "$filesystem" = ext4
-  filesystem_label="$(blkid -o value -s LABEL "$device" 2>/dev/null || true)"
+  filesystem_label="$(
+    blkid -c /dev/null -o value -s LABEL "$device" 2>/dev/null || true
+  )"
   if [[ -z "$filesystem_label" ]]; then
     # An earlier fail-closed attempt may have created the exact dedicated
     # ext4 filesystem before assigning its identity label. Repair only that
     # empty-label condition on the Terraform-bound, unmounted volume; never
     # relabel a differently identified filesystem.
-    e2label "$device" JUNCA_VALIDATOR_STATE
+    e2label "$device" "$filesystem_label_expected"
     sync
-    filesystem_label="$(blkid -o value -s LABEL "$device")"
+    filesystem_label="$(
+      blkid -c /dev/null -o value -s LABEL "$device"
+    )"
   fi
-  test "$filesystem_label" = JUNCA_VALIDATOR_STATE
+  test "$filesystem_label" = "$filesystem_label_expected"
 fi
 install -d -m 0750 "$temporary_mount"
 mount -o noatime,nosuid,nodev "$device" "$temporary_mount"

@@ -102,7 +102,9 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             'cmp "$source_manifest" "$target_manifest"',
             "copy_manifest_sha256",
             'test "$filesystem" = ext4',
-            "JUNCA_VALIDATOR_STATE",
+            "filesystem_label_expected=JUNCA_VALIDATOR_",
+            '-L "$filesystem_label_expected"',
+            "blkid -c /dev/null",
             'rmdir "$temporary_mount/lost+found"',
             'if [[ -f "$temporary_mount/state.sqlite" ]]',
             'local rollback_status="$1"',
@@ -116,18 +118,26 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             self.assertIn(required, NODE)
 
     def test_ext4_label_repair_is_limited_to_exact_empty_label(self) -> None:
+        label_line = next(
+            line
+            for line in NODE.splitlines()
+            if line.startswith("filesystem_label_expected=")
+        )
+        expected_label = label_line.split("=", 1)[1]
+        self.assertLessEqual(len(expected_label.encode("ascii")), 16)
+        self.assertEqual(expected_label, "JUNCA_VALIDATOR_")
         unmounted = 'test -z "$(findmnt -rn -S "$resolved_device" -o TARGET)"'
         read_label = (
-            'filesystem_label="$(blkid -o value -s LABEL "$device" '
-            '2>/dev/null || true)"'
+            'blkid -c /dev/null -o value -s LABEL "$device" '
+            '2>/dev/null || true'
         )
         empty_label = 'if [[ -z "$filesystem_label" ]]; then'
-        relabel = 'e2label "$device" JUNCA_VALIDATOR_STATE'
+        relabel = 'e2label "$device" "$filesystem_label_expected"'
         readback = (
-            'filesystem_label="$(blkid -o value -s LABEL "$device")"'
+            'blkid -c /dev/null -o value -s LABEL "$device"'
         )
         final_gate = (
-            'test "$filesystem_label" = JUNCA_VALIDATOR_STATE'
+            'test "$filesystem_label" = "$filesystem_label_expected"'
         )
         for required in (
             unmounted,
@@ -141,8 +151,9 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             self.assertIn(required, NODE)
         self.assertLess(NODE.index(unmounted), NODE.index(read_label))
         self.assertLess(NODE.index(empty_label), NODE.index(relabel))
-        self.assertLess(NODE.index(relabel), NODE.index(readback))
-        self.assertLess(NODE.index(readback), NODE.index(final_gate))
+        readback_index = NODE.index(readback, NODE.index(relabel))
+        self.assertLess(NODE.index(relabel), readback_index)
+        self.assertLess(readback_index, NODE.index(final_gate))
 
     def test_quorum_checkpoints_bind_canonical_finality_continuity(
         self,
