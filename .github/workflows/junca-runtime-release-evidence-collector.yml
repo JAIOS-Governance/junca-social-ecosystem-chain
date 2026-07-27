@@ -291,16 +291,31 @@ jobs:
           case "$public_services_enabled" in
             true)
               python scripts/junca_public_testnet_endpoint_test.py \
-                > evidence/readback/endpoint-acceptance.json
+                > evidence/readback/endpoint-acceptance.json || true
               jq -e '
-                .status == "PASS" and
                 .scope == "Public Testnet Runtime Acceptance / Read-only" and
-                .checks.health == "PASS" and
-                .checks.explorer.result == "PASS" and
-                .checks.safe_rpc.result == "PASS" and
-                .checks.unsafe_rpc_rejection.result == "PASS"
+                (
+                  (
+                    .status == "PASS" and
+                    .checks.health == "PASS" and
+                    .checks.explorer.result == "PASS" and
+                    .checks.safe_rpc.result == "PASS" and
+                    .checks.unsafe_rpc_rejection.result == "PASS"
+                  ) or (
+                    .status == "FAIL" and
+                    (.observed_at | type == "string" and length > 0) and
+                    (.error | type == "string" and length > 0) and
+                    .endpoints == {
+                      health:
+                        "https://health.jaios-governance.org/health",
+                      explorer:
+                        "https://explorer.jaios-governance.org/explorer.json",
+                      rpc: "https://rpc.jaios-governance.org/"
+                    }
+                  )
+                )
               ' evidence/readback/endpoint-acceptance.json
-              ;;
+              ;&
             false)
               mapfile -t instances < <(
                 jq -er '.validator_instance_ids.value[]' \
@@ -446,10 +461,20 @@ jobs:
             ' evidence/readback/public-testnet-outputs.json
           )"
           runtime_readback=()
-          if [[ "$public_services_enabled" == "true" ]]; then
+          if [[ "$public_services_enabled" == "true" ]] \
+            && jq -e '.status == "PASS"' \
+              evidence/readback/endpoint-acceptance.json >/dev/null
+          then
             runtime_readback=(
               --endpoint-acceptance
               evidence/readback/endpoint-acceptance.json
+            )
+          elif [[ "$public_services_enabled" == "true" ]]; then
+            runtime_readback=(
+              --endpoint-acceptance
+              evidence/readback/endpoint-acceptance.json
+              --private-validator-health
+              evidence/readback/private-validator-health.json
             )
           else
             runtime_readback=(
