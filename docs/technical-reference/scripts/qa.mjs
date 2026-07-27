@@ -83,6 +83,15 @@ for (const font of ["Cormorant Garamond", "Source Serif 4", "Inter", "Shuei Minc
 if (!home.includes(".wordmark img{display:block;width:190px")) {
   failures.push("canonical JUNCA wordmark display rule missing");
 }
+if (!home.includes(".site-header .header-explorer-link{display:none!important}")) {
+  failures.push("mobile header must hide the desktop Explorer shortcut");
+}
+if (!home.includes("grid-template-columns:minmax(0,1fr) auto!important")) {
+  failures.push("mobile header must remain a two-column brand/menu layout");
+}
+if (!home.includes("max-width:min(150px,52vw)")) {
+  failures.push("mobile JUNCA wordmark viewport guard missing");
+}
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
 for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
   if (!css.includes(required)) failures.push(`approved design stylesheet missing ${required}`);

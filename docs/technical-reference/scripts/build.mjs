@@ -90,7 +90,9 @@ const governanceLinkStyle = [
   '.documentation-nav-head .official-brand-lockup span{display:block;margin-top:.65rem}',
   '.hero .official-product-name img{width:min(410px,78vw);height:auto;margin-bottom:1rem}',
   '.hero .official-product-name span{display:block}',
-  '@media(width<=720px){.site-header{gap:.7rem}.wordmark img{width:150px}.menu-toggle{margin-left:auto}',
+  '@media(width<=720px){.site-header{grid-template-columns:minmax(0,1fr) auto!important;gap:.7rem}',
+  '.site-header .header-explorer-link{display:none!important}.wordmark{overflow:hidden}',
+  '.wordmark img{width:150px;max-width:min(150px,52vw)}.menu-toggle{margin-left:auto;justify-self:end}',
   '.hero .official-product-name img{width:min(300px,82vw)}.official-product-name span{font-size:.72em}}',
   '</style>',
 ].join("");
