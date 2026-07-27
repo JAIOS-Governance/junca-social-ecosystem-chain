@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,8 +11,6 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-
-from .explorer_page import EXPLORER_DOCUMENT
 
 
 NOTICE = "Public Testnet / No Monetary Value"
@@ -144,17 +143,6 @@ class PublicGateway:
     def health(self) -> tuple[int, Mapping[str, Any]]:
         evidence = self._validator_health()
         healthy = evidence.get("status") == "healthy"
-        certificate = (
-            evidence.get("consensus", {}).get("last_certificate")
-            if isinstance(evidence.get("consensus"), Mapping)
-            else None
-        )
-        finalized = (
-            isinstance(certificate, Mapping)
-            and certificate.get("finality_status") == "FINALIZED"
-            and certificate.get("height") == evidence.get("head_height")
-            and certificate.get("block_hash") == evidence.get("head_hash")
-        )
         body = {
             "schema_version": "junca-public-gateway-health/v1",
             "status": "healthy" if healthy else "unhealthy",
@@ -164,9 +152,6 @@ class PublicGateway:
                 "head_hash": evidence.get("head_hash"),
             },
             "read_only": True,
-            "finalized_only": True,
-            "signed_power": certificate.get("signed_power") if finalized else None,
-            "total_power": certificate.get("total_power") if finalized else None,
             "mainnet_changed": False,
             "assets_moved": False,
             "bridge_activated": False,
@@ -186,12 +171,20 @@ class PublicGateway:
             and certificate.get("height") == evidence.get("head_height")
             and certificate.get("block_hash") == evidence.get("head_hash")
         )
+        network = self._public_network_metadata()
+        block = (
+            self._finalized_block_metadata(
+                certificate.get("height"), certificate.get("block_hash")
+            )
+            if finalized
+            else None
+        )
         body = {
-            "schema_version": "junca-public-explorer/v1",
+            "schema_version": "junca-public-explorer/v2",
             "notice": NOTICE,
             "finalized_only": True,
-            "read_only": True,
             "status": "ready" if finalized else "syncing",
+            "network": network,
             "head": (
                 {
                     "height": evidence.get("head_height"),
@@ -201,10 +194,16 @@ class PublicGateway:
                     ),
                     "signed_power": certificate.get("signed_power"),
                     "total_power": certificate.get("total_power"),
+                    "timestamp": block.get("timestamp") if block else None,
+                    "state_root": block.get("state_root") if block else None,
+                    "transaction_count": (
+                        block.get("transaction_count") if block else None
+                    ),
                 }
                 if finalized
                 else None
             ),
+            "read_only": True,
             "mainnet_changed": False,
             "assets_moved": False,
             "bridge_activated": False,
@@ -212,8 +211,28 @@ class PublicGateway:
         return (200 if finalized else 503), body
 
     def explorer_html(self) -> tuple[int, str]:
-        status, _evidence = self.explorer()
-        return status, EXPLORER_DOCUMENT
+        status, evidence = self.explorer()
+        head = evidence.get("head")
+        if isinstance(head, Mapping):
+            detail = (
+                f"<dl><dt>Finalized height</dt><dd>{html.escape(str(head['height']))}</dd>"
+                f"<dt>Finalized hash</dt><dd><code>{html.escape(str(head['hash']))}</code></dd>"
+                f"<dt>Certificate</dt><dd><code>{html.escape(str(head['certificate_hash']))}</code></dd>"
+                f"<dt>Quorum</dt><dd>{html.escape(str(head['signed_power']))}/"
+                f"{html.escape(str(head['total_power']))}</dd></dl>"
+            )
+        else:
+            detail = "<p>Finalized chain data is synchronizing.</p>"
+        document = (
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>JUNCA Public Testnet Explorer</title></head><body>"
+            "<main><h1>JUNCA Social Ecosystem Chain</h1>"
+            f"<p>{html.escape(NOTICE)}</p>{detail}"
+            "<p>Finalized blocks only. Mainnet and asset movement are not active.</p>"
+            "</main></body></html>"
+        )
+        return status, document
 
     def _validator_health(self) -> Mapping[str, Any]:
         response = self._transport(
@@ -231,6 +250,74 @@ class PublicGateway:
         ):
             raise PublicGatewayError("validator health envelope is invalid")
         return result
+
+    def _public_network_metadata(self) -> Mapping[str, Any]:
+        chain_id = self._public_rpc_result("eth_chainId", [])
+        peer_count = self._public_rpc_result("net_peerCount", [])
+        client_version = self._public_rpc_result("web3_clientVersion", [])
+        return {
+            "chain_id": chain_id if isinstance(chain_id, str) else None,
+            "chain_id_decimal": self._hex_quantity(chain_id),
+            "client_version": (
+                client_version if isinstance(client_version, str) else None
+            ),
+            "peer_count": self._hex_quantity(peer_count),
+            "peer_count_hex": peer_count if isinstance(peer_count, str) else None,
+        }
+
+    def _finalized_block_metadata(
+        self, height: object, expected_hash: object
+    ) -> Mapping[str, Any] | None:
+        if not isinstance(height, int) or height < 0 or not isinstance(expected_hash, str):
+            return None
+        block = self._public_rpc_result(
+            "eth_getBlockByNumber", ["latest", False]
+        )
+        if (
+            not isinstance(block, Mapping)
+            or block.get("number") != hex(height)
+            or block.get("hash") != expected_hash
+        ):
+            return None
+        transactions = block.get("transactions")
+        return {
+            "timestamp": block.get("timestamp") if isinstance(block.get("timestamp"), str) else None,
+            "state_root": block.get("stateRoot") if isinstance(block.get("stateRoot"), str) else None,
+            "transaction_count": (
+                len(transactions) if isinstance(transactions, Sequence)
+                and not isinstance(transactions, (str, bytes, bytearray)) else None
+            ),
+        }
+
+    def _public_rpc_result(self, method: str, params: Sequence[object]) -> object:
+        response = self._transport(
+            self.upstream,
+            {
+                "jsonrpc": "2.0",
+                "id": f"gateway-explorer-{method}",
+                "method": method,
+                "params": list(params),
+            },
+        )
+        body = response.body
+        if (
+            response.status != 200
+            or body.get("jsonrpc") != "2.0"
+            or body.get("id") != f"gateway-explorer-{method}"
+            or ("result" in body) == ("error" in body)
+        ):
+            return None
+        return body.get("result")
+
+    @staticmethod
+    def _hex_quantity(value: object) -> int | None:
+        if not isinstance(value, str) or not value.startswith("0x"):
+            return None
+        try:
+            parsed = int(value, 16)
+        except ValueError:
+            return None
+        return parsed if parsed >= 0 else None
 
     @staticmethod
     def _rpc_error(request_id: Any, code: int, message: str) -> Mapping[str, Any]:
@@ -297,19 +384,6 @@ def make_handler(gateway: PublicGateway) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header(
-                "Permissions-Policy",
-                "camera=(), microphone=(), geolocation=(), payment=()",
-            )
-            self.send_header(
-                "Content-Security-Policy",
-                "default-src 'self'; base-uri 'none'; form-action 'none'; "
-                "frame-ancestors 'none'; img-src 'self' data:; "
-                "style-src 'self' 'unsafe-inline'; "
-                "script-src 'self' 'unsafe-inline'; connect-src 'self'",
-            )
             self.end_headers()
             self.wfile.write(body)
 
