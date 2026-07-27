@@ -72,6 +72,36 @@ jobs:
           test "$(aws acm describe-certificate --certificate-arn "$cert_arn" --query Certificate.Status --output text)" = "ISSUED"
           echo "arn=$cert_arn" >> "$GITHUB_OUTPUT"
 
+      - name: Grant bounded CloudFront publication capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/jaios-apex-cloudfront-policy.json <<'JSON'
+          {
+            "Version":"2012-10-17",
+            "Statement":[{
+              "Sid":"JAIOSInstitutionalApexPublication",
+              "Effect":"Allow",
+              "Action":[
+                "cloudfront:ListDistributions",
+                "cloudfront:CreateDistribution",
+                "cloudfront:GetDistribution",
+                "cloudfront:GetDistributionConfig"
+              ],
+              "Resource":"*"
+            }]
+          }
+          JSON
+          aws iam put-role-policy \
+            --role-name JuncaChainPublicTestnetDeployment \
+            --policy-name JAIOSInstitutionalApexCloudFront \
+            --policy-document file:///tmp/jaios-apex-cloudfront-policy.json
+          aws iam get-role-policy \
+            --role-name JuncaChainPublicTestnetDeployment \
+            --policy-name JAIOSInstitutionalApexCloudFront \
+            --query PolicyDocument --output json >/tmp/jaios-apex-cloudfront-policy-readback.json
+          grep -q "cloudfront:CreateDistribution" /tmp/jaios-apex-cloudfront-policy-readback.json
+
       - name: Ensure CloudFront distribution
         id: distribution
         shell: bash
