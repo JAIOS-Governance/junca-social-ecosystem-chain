@@ -401,19 +401,15 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.execution_workflow)
 
-    def test_recovery_completion_auto_resumes_with_verified_artifact(self) -> None:
+    def test_foundation_execution_requires_manual_dispatch(self) -> None:
         for required in (
-            "workflow_run:",
-            "JUNCA Chain Runtime Self Permission Recovery",
-            "Download exact triggering recovery evidence",
-            "recovery_result == \"APPLIED\"",
-            "recovery_result == \"PRESENT\"",
-            "verification == \"PASS\"",
-            "needs.recovery-evidence.result == 'success'",
-            "RECOVERY_RUN_ID",
-            "AUTO_RESUME",
+            "workflow_dispatch:",
+            "apply_confirmation:",
+            "approved_change_reference:",
         ):
             self.assertIn(required, self.execution_workflow)
+        self.assertNotIn("\n  workflow_run:", self.execution_workflow)
+        self.assertNotIn("\n  push:", self.execution_workflow)
 
     def test_recovery_accepts_exact_existing_permission_without_mutation(self) -> None:
         for required in (
@@ -425,12 +421,9 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.self_permission_recovery)
 
-    def test_auto_resume_requires_permission_pass_before_bootstrap_plan(self) -> None:
+    def test_manual_apply_requires_permission_pass_before_bootstrap_plan(self) -> None:
         for required in (
-            "(github.event_name == 'workflow_run' || github.event_name == 'push') && 'auto-release'",
             "bootstrap-apply|foundation-apply|auto-release",
-            "env.REQUESTED_PHASE == 'auto-release'",
-            "format('https://github.com/{0}/actions/runs/{1}'",
             "Require permission PASS before any plan",
             'test "${{ steps.permissions.outputs.permission_gate }}" = "PASS"',
             "JUNCA_TERRAFORM_STATE_BUCKET",
