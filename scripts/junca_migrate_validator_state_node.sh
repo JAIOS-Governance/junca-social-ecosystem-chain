@@ -523,7 +523,9 @@ if [[ -z "$filesystem" ]]; then
   # Only an empty/unformatted exact device may reach mkfs.
   # ext4 volume labels are limited to 16 bytes. Keep the canonical identity
   # exact and explicit rather than relying on mkfs/e2label truncation.
-  mkfs.ext4 -m 0 -L "$filesystem_label_expected" "$device"
+  # Keep stdout reserved for the single machine-readable phase result. The
+  # mkfs transcript remains available in SSM stderr evidence.
+  mkfs.ext4 -q -m 0 -L "$filesystem_label_expected" "$device" >&2
 else
   test "$filesystem" = ext4
   filesystem_label="$(

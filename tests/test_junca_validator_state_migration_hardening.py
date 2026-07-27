@@ -117,7 +117,7 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             "copy_manifest_sha256",
             'test "$filesystem" = ext4',
             "filesystem_label_expected=JUNCA_VALIDATOR_",
-            '-L "$filesystem_label_expected"',
+            'mkfs.ext4 -q -m 0 -L "$filesystem_label_expected" "$device" >&2',
             "blkid -c /dev/null",
             'rmdir "$temporary_mount/lost+found"',
             'if [[ -f "$temporary_mount/state.sqlite" ]]',
