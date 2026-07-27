@@ -7,14 +7,14 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.27";
-const revision = "R23";
+const revision = "R24";
 const chainSource = "f4fbc9fa39cbd8f1c4d57fea9bca86bb2afaf37d";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 const governanceFooter = '<div><span>Governance</span><strong>JAIOS Institutional Governance</strong></div>';
 const governanceLink = [
   '<a class="jaios-institutional-link" href="https://jaios-governance.org/"',
   ' aria-label="Open the JAIOS Institutional Governance official website">',
-  '<img src="/junca-j-r21.svg" alt="" width="48" height="48"/>',
+  '<img src="/official-junca-symbol.png" alt="" width="48" height="48"/>',
   '<span><small>Governance</small><strong>JAIOS Institutional Governance</strong>',
   '<em>Official institutional website →</em></span></a>',
 ].join("");
@@ -24,8 +24,17 @@ const explorerLink = [
   '<span><small>Public Testnet</small><strong>Public Explorer</strong>',
   '<em>Read finalized network data →</em></span></a>',
 ].join("");
+const headerExplorerLink = [
+  '<a class="header-explorer-link" href="https://explorer.jaios-governance.org/"',
+  ' aria-label="Open live JUNCA Social Ecosystem Chain Public Explorer">',
+  '<span>Live Public Explorer</span><em>Finalized readback ↗</em></a>',
+].join("");
 const governanceLinkStyle = [
   '<style id="jaios-institutional-link-style">',
+  '.site-header .header-explorer-link{display:flex;flex-direction:column;margin-left:auto;',
+  'padding:.55rem .8rem;border:1px solid rgba(198,169,107,.45);color:inherit;text-decoration:none}',
+  '.site-header .header-explorer-link span{font-size:.68rem;font-weight:700;color:#0b2a4b}',
+  '.site-header .header-explorer-link em{font-size:.55rem;font-style:normal;color:#806a3c}',
   'footer .jaios-institutional-link{display:grid;grid-template-columns:48px 1fr;',
   'gap:.85rem;align-items:center;color:inherit;text-decoration:none;',
   'border:1px solid rgba(220,228,235,.18);padding:.8rem .9rem;',
@@ -64,8 +73,13 @@ for (const route of routes) {
     path,
     source
       .replace("</head>", `${governanceLinkStyle}</head>`)
+      .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R23"),
+      .replaceAll("junca-j-r21.svg", "favicon.svg")
+      .replaceAll("junca-j-r21-192.png", "icon-192.png")
+      .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
+      .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R24"),
     "utf8",
   );
 }

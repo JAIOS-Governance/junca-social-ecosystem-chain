@@ -1,0 +1,15 @@
+{
+  "schema": "junca-chain-docs-navigation-evidence/v1",
+  "revision": "2026.07.27-R24",
+  "canonical": "https://docs.jaios-governance.org/",
+  "destination": "https://explorer.jaios-governance.org/",
+  "icon_source": {
+    "drive_file_id": "1DiGrLHOWRcrVnt2BdijSFDy3U4mSvgBn",
+    "asset": "official-junca-symbol.png",
+    "rendering": "non-distorting"
+  },
+  "boundary": "Public Testnet / No Monetary Value",
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

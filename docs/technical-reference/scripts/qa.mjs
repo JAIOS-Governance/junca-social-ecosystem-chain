@@ -31,7 +31,8 @@ for (const route of routes) {
     'class="jaios-institutional-link"',
     'href="https://explorer.jaios-governance.org/"',
     'class="public-explorer-link"',
-    'src="/junca-j-r21.svg"',
+    'src="/official-junca-symbol.png"',
+    'class="header-explorer-link"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
   }
@@ -43,10 +44,10 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/junca-j-r21.svg"',
-  'rel="icon" href="https://docs.jaios-governance.org/junca-j-r21-192.png"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/junca-j-r21-apple-touch.png"',
-  'rel="manifest" href="https://docs.jaios-governance.org/junca-j-r21.webmanifest"',
+  'rel="icon" href="https://docs.jaios-governance.org/favicon.svg"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -56,7 +57,7 @@ for (const required of [
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.27 / R23",
+  "Revision · 2026.07.27 / R24",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -123,12 +124,12 @@ if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) fa
 await readFile(join(dist, "404.html"), "utf8");
 await readFile(join(dist, "release-manifest.json"), "utf8");
 await readFile(join(dist, "manifest.webmanifest"), "utf8");
-const installManifest = JSON.parse(await readFile(join(dist, "junca-j-r21.webmanifest"), "utf8"));
+const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanifest"), "utf8"));
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 for (const requiredIcon of [
-  "/junca-j-r21-192.png",
-  "/junca-j-r21-512.png",
-  "/junca-j-r21-maskable-512.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
@@ -142,11 +143,6 @@ await readFile(join(dist, "junca-j-r21-192.png"));
 await readFile(join(dist, "junca-j-r21-512.png"));
 await readFile(join(dist, "junca-j-r21-maskable-512.png"));
 await readFile(join(dist, "junca-j-r21-apple-touch.png"));
-const jFavicon = await readFile(join(dist, "junca-j-r21.svg"), "utf8");
-if (!jFavicon.includes("Optima LT Std Bold")) failures.push("J favicon does not declare the approved typeface");
-if (!jFavicon.includes("flattened-approved-specimen")) failures.push("J favicon must use the approved flattened specimen");
-if (!jFavicon.includes("Monotype official Optima Bold specimen")) failures.push("J favicon provenance is missing");
-if (/<text[\s>]/.test(jFavicon)) failures.push("J favicon must not depend on a runtime font");
 const favicon = await readFile(join(dist, "favicon.svg"), "utf8");
 if (!favicon.includes('data-symbol="JUNCA Official Symbol"')) failures.push("favicon does not declare the official symbol");
 if (!favicon.includes('data-rendering="non-distorting-resize"')) failures.push("favicon symbol rendering contract is missing");
