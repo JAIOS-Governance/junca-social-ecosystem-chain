@@ -285,6 +285,14 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                             "validator_id": f"validator-0{index}",
                             "instance_id": f"i-{index:017x}",
                             "signer_resource_digest": f"{index}" * 64,
+                            "durable_timestamp_state":
+                                "DURABLE_PERSISTED",
+                            "timestamp_schema_tables": [
+                                "block_timestamps",
+                                "blocks",
+                                "finality_certificates",
+                                "metadata",
+                            ],
                         }
                         for index in range(1, 4)
                     ],
@@ -292,6 +300,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                         "height": 100,
                         "hash": "0x" + "a" * 64,
                         "timestamp": 2_000_000_000,
+                        "timestamp_state": "DURABLE_PERSISTED",
                         "certificate_hash": "0x" + "b" * 64,
                     },
                     "quorum": {
@@ -397,6 +406,14 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                             "validator_id": f"validator-0{index}",
                             "instance_id": f"i-{index:017x}",
                             "signer_resource_digest": f"{index}" * 64,
+                            "durable_timestamp_state":
+                                "DURABLE_PERSISTED",
+                            "timestamp_schema_tables": [
+                                "block_timestamps",
+                                "blocks",
+                                "finality_certificates",
+                                "metadata",
+                            ],
                         }
                         for index in range(1, 4)
                     ],
@@ -404,6 +421,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                         "height": 100,
                         "hash": "0x" + "a" * 64,
                         "timestamp": 2_000_000_000,
+                        "timestamp_state": "DURABLE_PERSISTED",
                         "certificate_hash": "0x" + "b" * 64,
                     },
                     "quorum": {
@@ -423,6 +441,72 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             "PUBLIC_ENDPOINTS_UNAVAILABLE",
         )
         self.assertFalse(manifest["public_endpoint_acceptance"])
+
+    def test_private_ssm_legacy_timestamp_absence_is_explicit_and_exact_three(
+        self,
+    ):
+        manifest, explorer, ebs = evidence()
+        manifest["baseline_mode"] = "private_ssm"
+        manifest["public_services_enabled"] = False
+        manifest["public_endpoint_acceptance"] = False
+        legacy_tables = [
+            "blocks",
+            "finality_certificates",
+            "metadata",
+        ]
+        explorer.update(
+            {
+                "schema_version":
+                    "junca-private-ssm-pre-rollout-baseline/v1",
+                "baseline_mode": "private_ssm",
+                "public_services_enabled": False,
+                "public_endpoint_acceptance": False,
+                "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
+                "readback": {
+                    "mode": "private_ssm",
+                    "scope": (
+                        "Public Testnet Pre-rollout Baseline / "
+                        "Private SSM Read-only"
+                    ),
+                    "validator_count": 3,
+                    "chain_id": 20260723,
+                    "validators": [
+                        {
+                            "validator_id": f"validator-0{index}",
+                            "instance_id": f"i-{index:017x}",
+                            "signer_resource_digest": f"{index}" * 64,
+                            "durable_timestamp_state":
+                                "LEGACY_NOT_PERSISTED",
+                            "timestamp_schema_tables": legacy_tables,
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "finalized_head": {
+                        "height": 100,
+                        "hash": "0x" + "a" * 64,
+                        "timestamp": None,
+                        "timestamp_state": "LEGACY_NOT_PERSISTED",
+                        "certificate_hash": "0x" + "b" * 64,
+                    },
+                    "quorum": {
+                        "signed_power": 3,
+                        "total_power": 3,
+                        "validator_ids": list(gate.VALIDATOR_IDS),
+                    },
+                },
+            }
+        )
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertTrue(decision["accepted"], decision["failures"])
+
+        explorer["readback"]["validators"][1][
+            "durable_timestamp_state"
+        ] = "DURABLE_PERSISTED"
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertIn(
+            "private_ssm.validators.timestamp_schema:not_exact_three",
+            decision["failures"],
+        )
 
     def test_public_outage_binding_and_digest_tamper_fail_closed(self):
         manifest, explorer, ebs = evidence()
