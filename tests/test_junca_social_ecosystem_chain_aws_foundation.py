@@ -149,6 +149,25 @@ class AwsFoundationTests(unittest.TestCase):
             self.runtime_variables,
         )
 
+    def test_validator_roles_sign_only_with_their_assigned_key_but_verify_quorum(self) -> None:
+        signer_boundary = self.runtime.split(
+            'resource "aws_iam_role_policy" "validator_signer_boundary"', 1
+        )[1].split(
+            'resource "aws_iam_role_policy_attachment" "validator_ssm"', 1
+        )[0]
+        self.assertIn('Sid      = "UseOnlyAssignedSigner"', signer_boundary)
+        self.assertIn('Action   = ["kms:Sign"]', signer_boundary)
+        self.assertIn(
+            "Resource = var.validator_signer_arns[count.index]", signer_boundary
+        )
+        self.assertIn('Sid      = "VerifyValidatorQuorum"', signer_boundary)
+        self.assertIn(
+            'Action   = ["kms:GetPublicKey", "kms:Verify", "kms:DescribeKey"]',
+            signer_boundary,
+        )
+        self.assertIn("Resource = var.validator_signer_arns", signer_boundary)
+        self.assertEqual(signer_boundary.count('"kms:Sign"'), 1)
+
     def test_runtime_reads_back_ami_and_signer_properties(self) -> None:
         for required in (
             'data "aws_ami" "approved_node"',
