@@ -1238,6 +1238,9 @@ class AwsFoundationTests(unittest.TestCase):
             'candidate_head="$GITHUB_SHA"',
             ".candidate.provenance_head_sha // .head_sha",
             ".head_sha == $producer_head",
+            'compare/${candidate_head}...${GITHUB_SHA}',
+            "--mode recovery-head",
+            "recovery-head-decision.json",
             'echo "ROLLING_CANDIDATE_HEAD_SHA=$candidate_head"',
             '--arg head "$ROLLING_CANDIDATE_HEAD_SHA"',
             ".candidate.source_commit == $source_commit",
@@ -1253,12 +1256,33 @@ class AwsFoundationTests(unittest.TestCase):
             "candidate_provenance_head_sha",
             ".candidate.provenance_head_sha // .head_sha",
             "write_live_rollout_prefix_readback",
+            "live-prefix-volume-$((index + 1)).json",
+            ".[0].VolumeId == $volume_id",
+            "rollback: $rollback[0]",
             'jq -er \'.live_updated_count\' '
             "artifacts/live-prefix-decision.json",
             'build_pre_rollout_finality_bindings \\\n'
             '      "$live_updated_count"',
         ):
             self.assertIn(required, self.foundation_script)
+        live_readback_definition = self.foundation_script.index(
+            "write_live_rollout_prefix_readback() {"
+        )
+        live_readback_call = self.foundation_script.index(
+            "write_live_rollout_prefix_readback \\"
+        )
+        first_mutation = self.foundation_script.index(
+            "set_runtime_finality \\\n    0 0", live_readback_call
+        )
+        volume_readback = self.foundation_script.index(
+            "artifacts/live-prefix-volume-$((index + 1)).json",
+            live_readback_definition,
+        )
+        rollback_floor = self.foundation_script.index(
+            "--slurpfile rollback", live_readback_definition
+        )
+        self.assertLess(volume_readback, first_mutation)
+        self.assertLess(rollback_floor, first_mutation)
 
     def test_post_apply_failures_are_checkpointed_and_ssm_errors_retry(self) -> None:
         for required in (
@@ -1280,6 +1304,11 @@ class AwsFoundationTests(unittest.TestCase):
             'ping_status="$(aws ssm describe-instance-information',
             self.foundation_script,
         )
+        capture = self.foundation_script.split(
+            "capture_validator_observation() {", 1
+        )[1].split("\n}\n\nwrite_live_rollout_prefix_readback()", 1)[0]
+        self.assertIn("wait_for_ssm_online", capture)
+        self.assertNotIn("describe-instance-information", capture)
         helper = self.foundation_script.split("wait_for_ssm_online() {", 1)[
             1
         ].split("\n}\n\nwrite_post_apply_checkpoint()", 1)[0]
