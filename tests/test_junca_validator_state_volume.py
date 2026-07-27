@@ -12,6 +12,7 @@ class ValidatorStateVolumeTests(unittest.TestCase):
         cls.volume = (module / "validator-state-volume.tf").read_text(
             encoding="utf-8"
         )
+        cls.runtime = (module / "main.tf").read_text(encoding="utf-8")
         cls.variables = (module / "variables.tf").read_text(encoding="utf-8")
         cls.outputs = (module / "outputs.tf").read_text(encoding="utf-8")
         cls.runbook = (module / "VALIDATOR_STATE_MIGRATION.md").read_text(
@@ -69,6 +70,21 @@ class ValidatorStateVolumeTests(unittest.TestCase):
         )
         self.assertIn(
             'can(regex("^snap-[0-9a-f]{8,17}$", snapshot_id))', self.variables
+        )
+
+    def test_nullable_rollback_snapshots_are_plan_safe(self) -> None:
+        null_safe_length = (
+            "try(length(var.validator_state_rollback_snapshot_ids), 0) == 3"
+        )
+        self.assertIn(null_safe_length, self.volume)
+        self.assertIn(null_safe_length, self.runtime)
+        self.assertNotIn(
+            "\n          length(var.validator_state_rollback_snapshot_ids) == 3",
+            self.volume,
+        )
+        self.assertNotIn(
+            "\n          length(var.validator_state_rollback_snapshot_ids) == 3",
+            self.runtime,
         )
 
     def test_output_exposes_migration_readback_without_secrets(self) -> None:

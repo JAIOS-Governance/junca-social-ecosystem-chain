@@ -536,7 +536,7 @@ resource "aws_instance" "validator" {
         (
           var.provision_validator_state_volumes &&
           var.validator_state_rollback_snapshot_ids != null &&
-          length(var.validator_state_rollback_snapshot_ids) == 3
+          try(length(var.validator_state_rollback_snapshot_ids), 0) == 3
         )
       )
       error_message = "Accepted validator state requires provisioned volumes and three rollback snapshots."
