@@ -96,7 +96,7 @@ write_tfvars() {
   )"
   if [[ "$state_volume_count" == 3 ]]; then
     restored_snapshot_ids="$(
-      jq -ce '
+      jq -c '
         .validator_state_volume_readback.value
         | map(.restored_snapshot) as $values
         | if all($values[]; . == null or . == "") then null else $values end
