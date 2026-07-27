@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/junca-validator-ami-build.yml"
 COMPONENT = ROOT / ".github/image-builder/validator-component.yml"
+RUNTIME_RECOVERY = ROOT / ".github/workflows/junca-validator-runtime-recovery.yml"
 
 
 class ValidatorAmiWorkflowTests(unittest.TestCase):
@@ -12,6 +13,7 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
     def setUpClass(cls):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.component = COMPONENT.read_text(encoding="utf-8")
+        cls.runtime_recovery = RUNTIME_RECOVERY.read_text(encoding="utf-8")
 
     def test_workflow_binds_all_immutable_inputs(self):
         for field in (
@@ -29,6 +31,19 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertIn("aws imagebuilder create-image", self.workflow)
         self.assertNotIn("terraform apply", self.workflow)
         self.assertNotIn("cloudformation", self.workflow.lower())
+
+    def test_ami_build_is_manual_and_cannot_chain_from_runtime_artifacts(self):
+        self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertNotIn("workflow_run:", self.workflow)
+        self.assertNotIn("github.event.workflow_run", self.workflow)
+
+    def test_runtime_recovery_cannot_apply_from_push(self):
+        self.assertIn("workflow_dispatch:", self.runtime_recovery)
+        self.assertNotIn("\n  push:", self.runtime_recovery)
+        self.assertIn(
+            "inputs.authorize_rollout == 'PUBLIC_TESTNET_RUNTIME_RECOVERY'",
+            self.runtime_recovery,
+        )
 
     def test_uses_fixed_terraform_managed_instance_profile(self):
         self.assertIn(
