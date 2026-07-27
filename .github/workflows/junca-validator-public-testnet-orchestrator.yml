@@ -1,0 +1,359 @@
+name: JUNCA Validator Public Testnet Release Orchestrator
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - config/junca_validator_ami_build_request.json
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: junca-validator-public-testnet-release-orchestrator
+  cancel-in-progress: false
+
+jobs:
+  authorize-and-orchestrate:
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 360
+    env:
+      REQUEST_PATH: config/junca_validator_ami_build_request.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify signed request-only main commit
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "${{ github.event.repository.default_branch }}" = main
+          test "$GITHUB_REPOSITORY" = JAIOS-Governance/junca-social-ecosystem-chain
+          commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}")"
+          jq -e --arg path "$REQUEST_PATH" '
+            .commit.verification.verified == true and
+            .commit.verification.reason == "valid" and
+            (.files | length) == 1 and
+            .files[0].filename == $path and
+            (.files[0].status == "added" or .files[0].status == "modified")
+          ' <<<"$commit_json"
+          python scripts/junca_validator_ami_build_request.py \
+            --request "$REQUEST_PATH" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Dispatch and monitor immutable AMI
+        id: ami
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.request.outputs.source_run_id }}
+          SOURCE_COMMIT: ${{ steps.request.outputs.source_commit }}
+          NODE_ARTIFACT_NAME: ${{ steps.request.outputs.node_artifact_name }}
+          GENESIS_ARTIFACT_NAME: ${{ steps.request.outputs.genesis_artifact_name }}
+          NODE_SHA256: ${{ steps.request.outputs.node_sha256 }}
+          GENESIS_SHA256: ${{ steps.request.outputs.genesis_sha256 }}
+          REQUEST_SHA256: ${{ steps.request.outputs.request_sha256 }}
+        run: |
+          set -euo pipefail
+          workflow_name="JUNCA Validator Immutable AMI Build"
+          workflow_path=".github/workflows/junca-validator-ami-build.yml"
+          workflows="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows?per_page=100" |
+            jq -s '[.[].workflows[]]')"
+          workflow="$(jq -c \
+            --arg name "$workflow_name" \
+            --arg path "$workflow_path" \
+            '[.[] | select(.name == $name and .path == $path)] |
+             if length == 1 then .[0] else error("AMI workflow mismatch") end' \
+            <<<"$workflows")"
+          workflow_id="$(jq -r .id <<<"$workflow")"
+          dispatched_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/dispatches" \
+            -f ref=main \
+            -f "inputs[source_run_id]=${SOURCE_RUN_ID}" \
+            -f "inputs[source_commit]=${SOURCE_COMMIT}" \
+            -f "inputs[node_artifact_name]=${NODE_ARTIFACT_NAME}" \
+            -f "inputs[genesis_artifact_name]=${GENESIS_ARTIFACT_NAME}" \
+            -f "inputs[node_sha256]=${NODE_SHA256}" \
+            -f "inputs[genesis_sha256]=${GENESIS_SHA256}" \
+            -f "inputs[request_sha256]=${REQUEST_SHA256}"
+
+          run_id=""
+          for attempt in $(seq 1 90); do
+            runs="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?branch=main&event=workflow_dispatch&per_page=30")"
+            matches="$(jq -c \
+              --arg since "$dispatched_at" \
+              --arg head "$GITHUB_SHA" '
+              [.workflow_runs[] |
+                select(.created_at >= $since and .head_sha == $head)
+              ]' <<<"$runs")"
+            count="$(jq length <<<"$matches")"
+            test "$count" -le 1
+            if [[ "$count" = 1 ]]; then
+              run_id="$(jq -r '.[0].id' <<<"$matches")"
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for attempt in $(seq 1 190); do
+            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r .status <<<"$run")"
+            [[ "$status" == completed ]] && break
+            test "$attempt" -lt 190
+            sleep 30
+          done
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head "$GITHUB_SHA" \
+            --arg path "$workflow_path" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Immutable AMI Build" and
+            .path == $path and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .head_sha == $head and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run"
+          mkdir -p artifacts/ami
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-validator-ami-build-${run_id}" \
+            --dir artifacts/ami
+          jq -e \
+            --arg request "$REQUEST_SHA256" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node "$NODE_SHA256" \
+            --arg genesis "$GENESIS_SHA256" '
+            .state == "AMI_VERIFIED" and
+            .request_sha256 == $request and
+            .source_commit == $source_commit and
+            .node_artifact_sha256 == $node and
+            .genesis_sha256 == $genesis and
+            .terraform_state_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/ami/junca-validator-ami-build.json
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch and monitor pre-rollout evidence collector
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AMI_RUN_ID: ${{ steps.ami.outputs.run_id }}
+          SOURCE_COMMIT: ${{ steps.request.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          workflow_name="JUNCA Runtime Release Evidence Collector"
+          workflow_path=".github/workflows/junca-runtime-release-evidence-collector.yml"
+          workflows="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows?per_page=100" |
+            jq -s '[.[].workflows[]]')"
+          workflow="$(jq -c \
+            --arg name "$workflow_name" \
+            --arg path "$workflow_path" '
+            [.[] | select(
+              .name == $name and .path == $path and .state == "active"
+            )] |
+            if length == 1 then .[0] else error("collector workflow mismatch") end
+          ' <<<"$workflows")"
+          workflow_id="$(jq -r .id <<<"$workflow")"
+          dispatched_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/dispatches" \
+            -f ref=main \
+            -f "inputs[ami_run_id]=${AMI_RUN_ID}" \
+            -f "inputs[source_commit]=${SOURCE_COMMIT}"
+
+          run_id=""
+          for attempt in $(seq 1 90); do
+            runs="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?branch=main&event=workflow_dispatch&per_page=30")"
+            matches="$(jq -c \
+              --arg since "$dispatched_at" \
+              --arg head "$GITHUB_SHA" '
+              [.workflow_runs[] |
+                select(.created_at >= $since and .head_sha == $head)
+              ]' <<<"$runs")"
+            count="$(jq length <<<"$matches")"
+            test "$count" -le 1
+            if [[ "$count" = 1 ]]; then
+              run_id="$(jq -r '.[0].id' <<<"$matches")"
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for attempt in $(seq 1 190); do
+            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            [[ "$(jq -r .status <<<"$run")" == completed ]] && break
+            test "$attempt" -lt 190
+            sleep 30
+          done
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head "$GITHUB_SHA" \
+            --arg path "$workflow_path" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Runtime Release Evidence Collector" and
+            .path == $path and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .head_sha == $head and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch and monitor release manifest gate
+        id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence.outputs.run_id }}
+          SOURCE_COMMIT: ${{ steps.request.outputs.source_commit }}
+          NODE_SHA256: ${{ steps.request.outputs.node_sha256 }}
+          GENESIS_SHA256: ${{ steps.request.outputs.genesis_sha256 }}
+        run: |
+          set -euo pipefail
+          workflow_name="JUNCA Runtime Release Manifest Gate"
+          workflow_path=".github/workflows/junca-runtime-release-manifest-gate.yml"
+          workflows="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows?per_page=100" |
+            jq -s '[.[].workflows[]]')"
+          workflow_id="$(jq -r \
+            --arg name "$workflow_name" \
+            --arg path "$workflow_path" '
+            [.[] | select(.name == $name and .path == $path)] |
+            if length == 1 then .[0].id else error("manifest workflow mismatch") end
+          ' <<<"$workflows")"
+          dispatched_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/dispatches" \
+            -f ref=main \
+            -f "inputs[evidence_run_id]=${EVIDENCE_RUN_ID}" \
+            -f "inputs[source_commit]=${SOURCE_COMMIT}" \
+            -f "inputs[node_artifact_sha256]=${NODE_SHA256}" \
+            -f "inputs[genesis_sha256]=${GENESIS_SHA256}"
+
+          run_id=""
+          for attempt in $(seq 1 90); do
+            runs="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?branch=main&event=workflow_dispatch&per_page=30")"
+            matches="$(jq -c \
+              --arg since "$dispatched_at" \
+              --arg head "$GITHUB_SHA" '
+              [.workflow_runs[] |
+                select(.created_at >= $since and .head_sha == $head)
+              ]' <<<"$runs")"
+            count="$(jq length <<<"$matches")"
+            test "$count" -le 1
+            if [[ "$count" = 1 ]]; then
+              run_id="$(jq -r '.[0].id' <<<"$matches")"
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for attempt in $(seq 1 40); do
+            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            [[ "$(jq -r .status <<<"$run")" == completed ]] && break
+            test "$attempt" -lt 40
+            sleep 15
+          done
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head "$GITHUB_SHA" \
+            --arg path "$workflow_path" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Runtime Release Manifest Gate" and
+            .path == $path and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .head_sha == $head and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch Validator Foundation rolling release
+        id: foundation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AMI_RUN_ID: ${{ steps.ami.outputs.run_id }}
+          MANIFEST_GATE_RUN_ID: ${{ steps.manifest.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          workflow_name="JUNCA Validator Foundation Release"
+          workflow_path=".github/workflows/junca-validator-foundation-release.yml"
+          workflows="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows?per_page=100" |
+            jq -s '[.[].workflows[]]')"
+          workflow_id="$(jq -r \
+            --arg name "$workflow_name" \
+            --arg path "$workflow_path" '
+            [.[] | select(.name == $name and .path == $path)] |
+            if length == 1 then .[0].id else error("foundation workflow mismatch") end
+          ' <<<"$workflows")"
+          dispatched_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/dispatches" \
+            -f ref=main \
+            -f "inputs[ami_run_id]=${AMI_RUN_ID}" \
+            -f "inputs[manifest_gate_run_id]=${MANIFEST_GATE_RUN_ID}" \
+            -f "inputs[authorize_rollout]=PUBLIC_TESTNET_ROLLOUT"
+
+          run_id=""
+          for attempt in $(seq 1 90); do
+            runs="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?branch=main&event=workflow_dispatch&per_page=30")"
+            matches="$(jq -c \
+              --arg since "$dispatched_at" \
+              --arg head "$GITHUB_SHA" '
+              [.workflow_runs[] |
+                select(.created_at >= $since and .head_sha == $head)
+              ]' <<<"$runs")"
+            count="$(jq length <<<"$matches")"
+            test "$count" -le 1
+            if [[ "$count" = 1 ]]; then
+              run_id="$(jq -r '.[0].id' <<<"$matches")"
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for attempt in $(seq 1 310); do
+            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            [[ "$(jq -r .status <<<"$run")" == completed ]] && break
+            test "$attempt" -lt 310
+            sleep 30
+          done
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head "$GITHUB_SHA" \
+            --arg path "$workflow_path" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Foundation Release" and
+            .path == $path and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .head_sha == $head and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "The public endpoint release remains provenance-bound to this successful Foundation workflow_run."
