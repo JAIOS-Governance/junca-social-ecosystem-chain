@@ -7,6 +7,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+import threading
 
 
 class ConsensusSigningJournalError(ValueError):
@@ -28,7 +29,12 @@ class ConsensusSigningJournal:
         if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
             raise ConsensusSigningJournalError("chain_id must be a positive integer")
         self.chain_id = chain_id
-        self.connection = sqlite3.connect(str(path), isolation_level=None)
+        self._lock = threading.RLock()
+        self.connection = sqlite3.connect(
+            str(path),
+            isolation_level=None,
+            check_same_thread=False,
+        )
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
@@ -67,7 +73,8 @@ class ConsensusSigningJournal:
         self._validate_persisted_state()
 
     def close(self) -> None:
-        self.connection.close()
+        with self._lock:
+            self.connection.close()
 
     def get_or_sign(
         self,
@@ -110,9 +117,10 @@ class ConsensusSigningJournal:
         )
 
         payload_digest = hashlib.sha256(signing_payload).hexdigest()
-        self.connection.execute("BEGIN IMMEDIATE")
-        try:
-            row = self.connection.execute(
+        with self._lock:
+            self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.connection.execute(
                 """
                 SELECT block_hash, payload_digest, signature
                 FROM consensus_signatures
@@ -120,20 +128,20 @@ class ConsensusSigningJournal:
                 """,
                 (validator_id, height, round),
             ).fetchone()
-            if row is not None:
-                if (
-                    row["block_hash"] != block_hash
-                    or row["payload_digest"] != payload_digest
-                ):
-                    raise ConsensusSigningJournalError(
-                        "conflicting consensus vote would double-sign"
-                    )
-                signature = bytes(row["signature"])
-                self._verify_signature(signature, signature_verifier)
-                self.connection.execute("COMMIT")
-                return signature
+                if row is not None:
+                    if (
+                        row["block_hash"] != block_hash
+                        or row["payload_digest"] != payload_digest
+                    ):
+                        raise ConsensusSigningJournalError(
+                            "conflicting consensus vote would double-sign"
+                        )
+                    signature = bytes(row["signature"])
+                    self._verify_signature(signature, signature_verifier)
+                    self.connection.execute("COMMIT")
+                    return signature
 
-            watermark = self.connection.execute(
+                watermark = self.connection.execute(
                 """
                 SELECT height, round
                 FROM validator_watermarks
@@ -141,70 +149,71 @@ class ConsensusSigningJournal:
                 """,
                 (validator_id,),
             ).fetchone()
-            if watermark is not None and (
-                height < watermark["height"]
-                or (height == watermark["height"] and round < watermark["round"])
-            ):
-                raise ConsensusSigningJournalError(
-                    "consensus vote is below the persistent signing watermark"
-                )
+                if watermark is not None and (
+                    height < watermark["height"]
+                    or (height == watermark["height"] and round < watermark["round"])
+                ):
+                    raise ConsensusSigningJournalError(
+                        "consensus vote is below the persistent signing watermark"
+                    )
 
-            signature = self._call_signer(signer)
-            if not isinstance(signature, bytes) or len(signature) not in {64, 65}:
-                raise ConsensusSigningJournalError(
-                    "signer returned an invalid consensus signature"
+                signature = self._call_signer(signer)
+                if not isinstance(signature, bytes) or len(signature) not in {64, 65}:
+                    raise ConsensusSigningJournalError(
+                        "signer returned an invalid consensus signature"
+                    )
+                self._verify_signature(signature, signature_verifier)
+                self.connection.execute(
+                    """
+                    INSERT INTO consensus_signatures (
+                        validator_id, height, round, block_hash, payload_digest, signature
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        validator_id,
+                        height,
+                        round,
+                        block_hash,
+                        payload_digest,
+                        signature,
+                    ),
                 )
-            self._verify_signature(signature, signature_verifier)
-            self.connection.execute(
-                """
-                INSERT INTO consensus_signatures (
-                    validator_id, height, round, block_hash, payload_digest, signature
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    validator_id,
-                    height,
-                    round,
-                    block_hash,
-                    payload_digest,
-                    signature,
-                ),
-            )
-            self.connection.execute(
-                """
-                INSERT INTO validator_watermarks (validator_id, height, round)
-                VALUES (?, ?, ?)
-                ON CONFLICT(validator_id) DO UPDATE SET
-                    height=excluded.height,
-                    round=excluded.round
-                WHERE excluded.height > validator_watermarks.height
-                   OR (
-                       excluded.height = validator_watermarks.height
-                       AND excluded.round > validator_watermarks.round
-                   )
-                """,
-                (validator_id, height, round),
-            )
-            self.connection.execute("COMMIT")
-            return signature
-        except BaseException:
-            if self.connection.in_transaction:
-                self.connection.execute("ROLLBACK")
-            raise
+                self.connection.execute(
+                    """
+                    INSERT INTO validator_watermarks (validator_id, height, round)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(validator_id) DO UPDATE SET
+                        height=excluded.height,
+                        round=excluded.round
+                    WHERE excluded.height > validator_watermarks.height
+                       OR (
+                           excluded.height = validator_watermarks.height
+                           AND excluded.round > validator_watermarks.round
+                       )
+                    """,
+                    (validator_id, height, round),
+                )
+                self.connection.execute("COMMIT")
+                return signature
+            except BaseException:
+                if self.connection.in_transaction:
+                    self.connection.execute("ROLLBACK")
+                raise
 
     def evidence(self) -> dict[str, object]:
-        signature_row = self.connection.execute(
-            """
-            SELECT COUNT(*) AS signature_count, MAX(height) AS latest_height
-            FROM consensus_signatures
-            """
-        ).fetchone()
-        watermark_row = self.connection.execute(
-            """
-            SELECT COUNT(*) AS validator_count, MAX(height) AS latest_height
-            FROM validator_watermarks
-            """
-        ).fetchone()
+        with self._lock:
+            signature_row = self.connection.execute(
+                """
+                SELECT COUNT(*) AS signature_count, MAX(height) AS latest_height
+                FROM consensus_signatures
+                """
+            ).fetchone()
+            watermark_row = self.connection.execute(
+                """
+                SELECT COUNT(*) AS validator_count, MAX(height) AS latest_height
+                FROM validator_watermarks
+                """
+            ).fetchone()
         return {
             "schema_version": "junca-consensus-signing-journal/v6",
             "chain_id": self.chain_id,
