@@ -59,7 +59,7 @@ resource "aws_ebs_volume" "validator_state" {
       JuncaMigrationState               = "VERIFIED_PASS"
       JuncaFilesystemVerified           = "true"
       JuncaStateStoreIntegrity          = "true"
-      JuncaFinalityCertificateRecovered = "true"
+      JuncaFinalityCertificateBackfilled = "true"
       JuncaRollbackSnapshotId = (
         var.validator_state_rollback_snapshot_ids[count.index]
       )
