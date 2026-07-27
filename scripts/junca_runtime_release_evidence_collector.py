@@ -20,6 +20,8 @@ from typing import Any, Mapping, Sequence
 
 ACCOUNT_ID = "595710543956"
 REGION = "us-east-1"
+CHAIN_ID = 20260723
+NETWORK_NOTICE = "Public Testnet / No Monetary Value"
 VALIDATOR_IDS = ("validator-01", "validator-02", "validator-03")
 BOUNDARY = {
     "mainnet_changed": False,
@@ -36,6 +38,22 @@ HASH = re.compile(r"0x[0-9a-f]{64}")
 RUN_ID = re.compile(r"[1-9][0-9]*")
 MIGRATION_TOKEN = re.compile(r"[0-9]+-[1-9][0-9]*")
 REPOSITORY = "JAIOS-Governance/junca-social-ecosystem-chain"
+CERTIFICATE_FIELDS = {
+    "schema_version",
+    "chain_id",
+    "height",
+    "round",
+    "block_hash",
+    "signed_power",
+    "total_power",
+    "validator_ids",
+    "vote_hashes",
+    "certificate_hash",
+    "finality_status",
+    "mainnet_changed",
+    "assets_moved",
+    "bridge_activated",
+}
 
 
 class EvidenceError(RuntimeError):
@@ -59,6 +77,103 @@ def digest(path: str | Path) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+def canonical_json(value: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise EvidenceError("finality_certificate:invalid_json") from exc
+
+
+def verify_finality_certificate(
+    value: Any,
+    *,
+    height: int,
+    head_hash: str,
+    certificate_hash: str,
+    label: str,
+) -> str:
+    require(
+        isinstance(value, Mapping) and set(value) == CERTIFICATE_FIELDS,
+        f"{label}:invalid_fields",
+    )
+    certificate = dict(value)
+    require(
+        certificate.get("schema_version")
+        == "junca-finality-certificate/v1",
+        f"{label}.schema_version:mismatch",
+    )
+    require(
+        certificate.get("chain_id") == CHAIN_ID
+        and certificate.get("height") == height
+        and certificate.get("block_hash") == head_hash
+        and certificate.get("certificate_hash") == certificate_hash,
+        f"{label}.head_binding:mismatch",
+    )
+    for field in (
+        "chain_id",
+        "height",
+        "round",
+        "signed_power",
+        "total_power",
+    ):
+        require(
+            isinstance(certificate.get(field), int)
+            and not isinstance(certificate.get(field), bool),
+            f"{label}.{field}:invalid",
+        )
+    require(
+        certificate.get("finality_status") == "FINALIZED"
+        and certificate.get("signed_power") == 3
+        and certificate.get("total_power") == 3
+        and certificate.get("validator_ids") == list(VALIDATOR_IDS),
+        f"{label}.quorum:invalid",
+    )
+    round_number = certificate.get("round")
+    require(
+        isinstance(round_number, int)
+        and not isinstance(round_number, bool)
+        and round_number >= 0,
+        f"{label}.round:invalid",
+    )
+    vote_hashes = certificate.get("vote_hashes")
+    require(
+        isinstance(vote_hashes, list)
+        and len(vote_hashes) == 3
+        and len(set(vote_hashes)) == 3
+        and all(HASH.fullmatch(str(item)) is not None for item in vote_hashes),
+        f"{label}.vote_hashes:invalid",
+    )
+    for field in BOUNDARY:
+        require(
+            certificate.get(field) is False,
+            f"{label}.{field}:not_false",
+        )
+    body = {
+        "block_hash": head_hash,
+        "chain_id": CHAIN_ID,
+        "height": height,
+        "round": round_number,
+        "signed_power": 3,
+        "total_power": 3,
+        "validator_ids": list(VALIDATOR_IDS),
+        "vote_hashes": vote_hashes,
+    }
+    expected_hash = "0x" + hashlib.sha256(
+        b"JUNCA_FINALITY_CERTIFICATE_V1\x00"
+        + canonical_json(body).encode("utf-8")
+    ).hexdigest()
+    require(
+        certificate_hash == expected_hash,
+        f"{label}.certificate_hash:mismatch",
+    )
+    return canonical_json(certificate)
 
 
 def output_value(outputs: Mapping[str, Any], name: str) -> Any:
@@ -375,7 +490,7 @@ def verify_migration_evidence(
     validator_volumes: Sequence[Mapping[str, Any]],
     instance_root_volumes: Mapping[str, str],
     snapshot_root_volumes: Mapping[str, str],
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
     require(RUN_ID.fullmatch(expected_run_id) is not None, "migration.expected_run_id:invalid")
     require(COMMIT.fullmatch(expected_head_sha) is not None, "migration.expected_head_sha:invalid")
     require(
@@ -419,6 +534,46 @@ def verify_migration_evidence(
     require(
         evidence.get("immutable_runtime_mount_activation_pending") is True,
         "migration.immutable_runtime_mount_activation_pending:not_true",
+    )
+    certificate_activation_pending = evidence.get(
+        "immutable_runtime_certificate_activation_pending"
+    )
+    require(
+        isinstance(certificate_activation_pending, bool),
+        "migration.immutable_runtime_certificate_activation_pending:not_bool",
+    )
+    require(
+        evidence.get("bootstrap_changed") is False,
+        "migration.bootstrap_changed:not_false",
+    )
+    for field in BOUNDARY:
+        require(
+            evidence.get(field) is False,
+            f"migration.{field}:not_false",
+        )
+    finalized_head = evidence.get("finalized_head")
+    require(
+        isinstance(finalized_head, Mapping)
+        and set(finalized_head)
+        == {"height", "hash", "certificate_hash"},
+        "migration.finalized_head:invalid",
+    )
+    finalized_height = finalized_head.get("height")
+    finalized_hash = finalized_head.get("hash")
+    finalized_certificate_hash = finalized_head.get("certificate_hash")
+    require(
+        isinstance(finalized_height, int)
+        and not isinstance(finalized_height, bool)
+        and finalized_height >= 1,
+        "migration.finalized_head.height:invalid",
+    )
+    require(
+        HASH.fullmatch(str(finalized_hash)) is not None,
+        "migration.finalized_head.hash:invalid",
+    )
+    require(
+        HASH.fullmatch(str(finalized_certificate_hash)) is not None,
+        "migration.finalized_head.certificate_hash:invalid",
     )
 
     expected_state_volume_ids = [
@@ -501,7 +656,13 @@ def verify_migration_evidence(
         len({item["root_volume_id"] for item in normalized}) == 3,
         "migration.validator_mappings.root_volumes:not_distinct",
     )
-    return normalized
+    return normalized, {
+        "height": finalized_height,
+        "hash": finalized_hash,
+        "certificate_hash": finalized_certificate_hash,
+        "immutable_runtime_certificate_activation_pending":
+            certificate_activation_pending,
+    }
 
 
 def verify_endpoint_acceptance(report: Mapping[str, Any]) -> dict[str, Any]:
@@ -533,6 +694,7 @@ def verify_private_validator_health(
     report: Mapping[str, Any],
     instance_ids: Sequence[str],
     signers: Sequence[Mapping[str, str]],
+    migration_finality: Mapping[str, Any],
 ) -> dict[str, Any]:
     require(
         report.get("schema_version")
@@ -559,9 +721,16 @@ def verify_private_validator_health(
         for item in signers
     }
     normalized: list[dict[str, Any]] = []
-    heads: list[tuple[Any, Any, Any, Any]] = []
+    heads: list[tuple[Any, Any, Any]] = []
     certificates: list[str] = []
     chain_ids: list[Any] = []
+    runtime_certificate_states: list[str] = []
+    migration_height = migration_finality.get("height")
+    migration_hash = migration_finality.get("hash")
+    migration_certificate_hash = migration_finality.get("certificate_hash")
+    activation_pending = migration_finality.get(
+        "immutable_runtime_certificate_activation_pending"
+    )
     for validator_id, instance_id, item in zip(
         VALIDATOR_IDS, instance_ids, validators, strict=True
     ):
@@ -580,7 +749,7 @@ def verify_private_validator_health(
             f"private_ssm.{validator_id}.health:not_healthy",
         )
         require(
-            health.get("network") == "Public Testnet / No Monetary Value",
+            health.get("network") == NETWORK_NOTICE,
             f"private_ssm.{validator_id}.network:mismatch",
         )
         require(
@@ -598,6 +767,17 @@ def verify_private_validator_health(
         require(
             HASH.fullmatch(str(head_hash)) is not None,
             f"private_ssm.{validator_id}.head_hash:invalid",
+        )
+        head_timestamp = health.get("head_timestamp")
+        require(
+            isinstance(head_timestamp, int)
+            and not isinstance(head_timestamp, bool)
+            and head_timestamp >= 0,
+            f"private_ssm.{validator_id}.head_timestamp:invalid",
+        )
+        require(
+            height == migration_height and head_hash == migration_hash,
+            f"private_ssm.{validator_id}.migration_head:mismatch",
         )
         require(
             health.get("signer_resource_digest")
@@ -634,39 +814,89 @@ def verify_private_validator_health(
             )
         certificate_hash = consensus.get("last_certificate_hash")
         certificate = consensus.get("last_certificate")
-        require(
-            HASH.fullmatch(str(certificate_hash)) is not None
-            and isinstance(certificate, Mapping),
-            f"private_ssm.{validator_id}.certificate:missing",
+        authenticated_vote_count = consensus.get(
+            "authenticated_vote_count"
         )
-        require(
-            certificate.get("finality_status") == "FINALIZED"
-            and certificate.get("height") == height
-            and certificate.get("block_hash") == head_hash
-            and certificate.get("signed_power") == 3
-            and certificate.get("total_power") == 3
-            and certificate.get("validator_ids") == list(VALIDATOR_IDS),
-            f"private_ssm.{validator_id}.certificate:invalid",
-        )
+        if certificate is None or certificate_hash is None:
+            require(
+                certificate is None
+                and certificate_hash is None
+                and isinstance(authenticated_vote_count, int)
+                and not isinstance(authenticated_vote_count, bool)
+                and authenticated_vote_count == 0,
+                f"private_ssm.{validator_id}.certificate:partial_null",
+            )
+            require(
+                activation_pending is True,
+                f"private_ssm.{validator_id}.certificate:"
+                "activation_not_pending",
+            )
+            runtime_certificate_states.append("ACTIVATION_PENDING")
+        else:
+            require(
+                certificate_hash == migration_certificate_hash
+                and isinstance(authenticated_vote_count, int)
+                and not isinstance(authenticated_vote_count, bool)
+                and authenticated_vote_count == 3,
+                f"private_ssm.{validator_id}.certificate:binding_mismatch",
+            )
+            runtime_certificate_states.append("LIVE")
         chain_id = health.get("chain_id")
         require(
-            isinstance(chain_id, int)
-            and not isinstance(chain_id, bool)
-            and chain_id > 0
+            chain_id == CHAIN_ID
             and consensus.get("chain_id") == chain_id,
             f"private_ssm.{validator_id}.chain_id:invalid",
         )
-        serialized_certificate = json.dumps(
-            certificate, sort_keys=True, separators=(",", ":")
+        durable_state = item.get("durable_state")
+        require(
+            isinstance(durable_state, Mapping)
+            and durable_state.get("quick_check") == "ok",
+            f"private_ssm.{validator_id}.durable_state:invalid",
         )
+        durable_head = durable_state.get("head")
+        require(
+            isinstance(durable_head, Mapping)
+            and durable_head.get("height") == height
+            and durable_head.get("block_hash") == head_hash
+            and isinstance(durable_head.get("finalized"), int)
+            and not isinstance(durable_head.get("finalized"), bool)
+            and durable_head.get("finalized") == 1
+            and durable_head.get("certificate_hash")
+            == migration_certificate_hash,
+            f"private_ssm.{validator_id}.durable_head:mismatch",
+        )
+        serialized_certificate = verify_finality_certificate(
+            durable_state.get("certificate"),
+            height=height,
+            head_hash=head_hash,
+            certificate_hash=str(migration_certificate_hash),
+            label=f"private_ssm.{validator_id}.durable_certificate",
+        )
+        if certificate is not None:
+            live_serialized = verify_finality_certificate(
+                certificate,
+                height=height,
+                head_hash=head_hash,
+                certificate_hash=str(migration_certificate_hash),
+                label=f"private_ssm.{validator_id}.certificate",
+            )
+            require(
+                live_serialized == serialized_certificate,
+                f"private_ssm.{validator_id}.certificate:"
+                "durable_mismatch",
+            )
         chain_ids.append(chain_id)
         certificates.append(serialized_certificate)
-        heads.append((height, head_hash, health.get("head_timestamp"), certificate_hash))
+        heads.append((height, head_hash, head_timestamp))
         normalized.append(
             {
                 "validator_id": validator_id,
                 "instance_id": instance_id,
                 "signer_resource_digest": health.get("signer_resource_digest"),
+                "runtime_certificate_state":
+                    runtime_certificate_states[-1],
+                "durable_certificate_hash":
+                    migration_certificate_hash,
             }
         )
 
@@ -676,7 +906,7 @@ def verify_private_validator_health(
         len(set(certificates)) == 1,
         "private_ssm.finality_certificate:mismatch",
     )
-    height, head_hash, head_timestamp, certificate_hash = heads[0]
+    height, head_hash, head_timestamp = heads[0]
     return {
         "mode": "private_ssm",
         "scope": report.get("scope"),
@@ -687,7 +917,16 @@ def verify_private_validator_health(
             "height": height,
             "hash": head_hash,
             "timestamp": head_timestamp,
-            "certificate_hash": certificate_hash,
+            "certificate_hash": migration_certificate_hash,
+        },
+        "immutable_runtime_certificate_activation_pending":
+            activation_pending,
+        "runtime_certificate_states": runtime_certificate_states,
+        "durable_certificate_binding": {
+            "height": height,
+            "hash": head_hash,
+            "certificate_hash": migration_certificate_hash,
+            "validator_count": 3,
         },
         "quorum": {
             "signed_power": 3,
@@ -737,7 +976,7 @@ def collect(
     )
     validator_volumes, snapshot_ids = verify_volumes(volumes, state_outputs, instance_ids)
     snapshot_root_volumes = verify_snapshots(snapshots, snapshot_ids)
-    migration_mappings = verify_migration_evidence(
+    migration_mappings, migration_finality = verify_migration_evidence(
         migration_evidence,
         expected_run_id=expected_migration_run_id,
         expected_head_sha=expected_migration_head_sha,
@@ -764,7 +1003,10 @@ def collect(
             "private_ssm:required_when_public_services_disabled",
         )
         endpoint_readback = verify_private_validator_health(
-            private_validator_health, instance_ids, signers
+            private_validator_health,
+            instance_ids,
+            signers,
+            migration_finality,
         )
         baseline_mode = "private_ssm"
         baseline_schema = "junca-private-ssm-pre-rollout-baseline/v1"
@@ -802,6 +1044,16 @@ def collect(
                 expected_migration_request_sha256,
         },
         "migration_validator_mappings": migration_mappings,
+        "migration_finalized_head": {
+            "height": migration_finality["height"],
+            "hash": migration_finality["hash"],
+            "certificate_hash":
+                migration_finality["certificate_hash"],
+        },
+        "immutable_runtime_certificate_activation_pending":
+            migration_finality[
+                "immutable_runtime_certificate_activation_pending"
+            ],
         **binding,
         "observed_runtime": previous,
         "validator_volumes": validator_volumes,
