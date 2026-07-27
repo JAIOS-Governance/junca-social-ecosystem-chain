@@ -3,9 +3,14 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
+import sqlite3
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -44,6 +49,42 @@ REQUEST = "9" * 64
 MIGRATION_RUN_ID = "123456789"
 MIGRATION_HEAD = "8" * 40
 MIGRATION_REQUEST = "7" * 64
+CHAIN_ID = 20260723
+FINALIZED_HEIGHT = 100
+FINALIZED_HASH = "0x" + "1" * 64
+
+
+def finality_certificate():
+    vote_hashes = ["0x" + str(index) * 64 for index in range(3, 6)]
+    body = {
+        "block_hash": FINALIZED_HASH,
+        "chain_id": CHAIN_ID,
+        "height": FINALIZED_HEIGHT,
+        "round": 0,
+        "signed_power": 3,
+        "total_power": 3,
+        "validator_ids": [
+            "validator-01",
+            "validator-02",
+            "validator-03",
+        ],
+        "vote_hashes": vote_hashes,
+    }
+    certificate_hash = "0x" + hashlib.sha256(
+        b"JUNCA_FINALITY_CERTIFICATE_V1\x00"
+        + json.dumps(
+            body, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": "junca-finality-certificate/v1",
+        **body,
+        "certificate_hash": certificate_hash,
+        "finality_status": "FINALIZED",
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
 
 
 def aws_tags(values: dict[str, str]) -> list[dict[str, str]]:
@@ -298,26 +339,25 @@ def migration_evidence(values):
         "validator_mappings": mappings,
         "runtime_mount_verified": True,
         "immutable_runtime_mount_activation_pending": True,
+        "immutable_runtime_certificate_activation_pending": True,
+        "finalized_head": {
+            "height": FINALIZED_HEIGHT,
+            "hash": FINALIZED_HASH,
+            "certificate_hash":
+                finality_certificate()["certificate_hash"],
+        },
+        "bootstrap_changed": False,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
     }
 
 
 def private_health(values):
     instance_ids = values["public"]["validator_instance_ids"]["value"]
     signer_arns = values["bootstrap"]["validator_signer_arns"]["value"]
-    head_hash = "0x" + "1" * 64
-    certificate_hash = "0x" + "2" * 64
-    certificate = {
-        "finality_status": "FINALIZED",
-        "height": 100,
-        "block_hash": head_hash,
-        "signed_power": 3,
-        "total_power": 3,
-        "validator_ids": [
-            "validator-01",
-            "validator-02",
-            "validator-03",
-        ],
-    }
+    certificate = finality_certificate()
+    certificate_hash = certificate["certificate_hash"]
     validators = []
     for index, (instance_id, signer_arn) in enumerate(
         zip(instance_ids, signer_arns, strict=True), start=1
@@ -327,13 +367,23 @@ def private_health(values):
             {
                 "validator_id": validator_id,
                 "instance_id": instance_id,
+                "durable_state": {
+                    "quick_check": "ok",
+                    "head": {
+                        "height": FINALIZED_HEIGHT,
+                        "block_hash": FINALIZED_HASH,
+                        "finalized": 1,
+                        "certificate_hash": certificate_hash,
+                    },
+                    "certificate": dict(certificate),
+                },
                 "health": {
                     "status": "healthy",
                     "network": "Public Testnet / No Monetary Value",
-                    "chain_id": 8453,
+                    "chain_id": CHAIN_ID,
                     "validator_id": validator_id,
-                    "head_height": 100,
-                    "head_hash": head_hash,
+                    "head_height": FINALIZED_HEIGHT,
+                    "head_hash": FINALIZED_HASH,
                     "head_timestamp": 2_000_000_000,
                     "signer_resource_digest": hashlib.sha256(
                         signer_arn.encode("utf-8")
@@ -345,11 +395,12 @@ def private_health(values):
                     "consensus": {
                         "schema_version":
                             "junca-public-testnet-consensus-runtime/v1",
-                        "chain_id": 8453,
-                        "head_height": 100,
+                        "chain_id": CHAIN_ID,
+                        "head_height": FINALIZED_HEIGHT,
                         "required_vote_count": 3,
-                        "last_certificate_hash": certificate_hash,
-                        "last_certificate": dict(certificate),
+                        "last_certificate_hash": None,
+                        "last_certificate": None,
+                        "authenticated_vote_count": 0,
                         "private_key_material_accepted": False,
                         "mainnet_changed": False,
                         "assets_moved": False,
@@ -440,6 +491,19 @@ class EvidenceCollectorTests(unittest.TestCase):
         )
         self.assertEqual(runtime["readback"]["validator_count"], 3)
         self.assertEqual(runtime["readback"]["quorum"]["signed_power"], 3)
+        self.assertEqual(
+            runtime["readback"]["runtime_certificate_states"],
+            ["ACTIVATION_PENDING"] * 3,
+        )
+        self.assertTrue(
+            runtime["readback"][
+                "immutable_runtime_certificate_activation_pending"
+            ]
+        )
+        self.assertEqual(
+            ebs["migration_finalized_head"],
+            values["migration_evidence"]["finalized_head"],
+        )
         decision = gate.evaluate(
             manifest,
             runtime,
@@ -463,7 +527,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             "head_hash"
         ] = "0x" + "3" * 64
         with self.assertRaisesRegex(
-            collector.EvidenceError, "certificate:invalid"
+            collector.EvidenceError, "migration_head:mismatch"
         ):
             self.collect(values)
 
@@ -480,6 +544,248 @@ class EvidenceCollectorTests(unittest.TestCase):
             collector.EvidenceError, "bridge_activated"
         ):
             self.collect(values)
+
+    def test_null_live_certificate_requires_validated_activation_transition(self):
+        mutations = (
+            (
+                "pending_false",
+                lambda values: values["migration_evidence"].update(
+                    {
+                        "immutable_runtime_certificate_activation_pending":
+                            False
+                    }
+                ),
+                "activation_not_pending",
+            ),
+            (
+                "pending_missing",
+                lambda values: values["migration_evidence"].pop(
+                    "immutable_runtime_certificate_activation_pending"
+                ),
+                "not_bool",
+            ),
+            (
+                "partial_null_hash",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][0]["health"]["consensus"].update(
+                    {
+                        "last_certificate_hash":
+                            finality_certificate()["certificate_hash"]
+                    }
+                ),
+                "partial_null",
+            ),
+            (
+                "partial_null_votes",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][1]["health"]["consensus"].update(
+                    {"authenticated_vote_count": 3}
+                ),
+                "partial_null",
+            ),
+            (
+                "boolean_vote_count",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][2]["health"]["consensus"].update(
+                    {"authenticated_vote_count": False}
+                ),
+                "partial_null",
+            ),
+        )
+        for name, mutate, error in mutations:
+            with self.subTest(name=name):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                mutate(values)
+                with self.assertRaisesRegex(
+                    collector.EvidenceError, error
+                ):
+                    self.collect(values)
+
+    def test_live_certificate_is_accepted_without_activation_pending(self):
+        values = fixture()
+        values["public"]["public_services_acceptance_readback"]["value"][
+            "enabled"
+        ] = False
+        values["endpoints"] = None
+        values["migration_evidence"][
+            "immutable_runtime_certificate_activation_pending"
+        ] = False
+        values["private_validator_health"] = private_health(values)
+        certificate = finality_certificate()
+        for item in values["private_validator_health"]["validators"]:
+            item["health"]["consensus"].update(
+                {
+                    "last_certificate_hash":
+                        certificate["certificate_hash"],
+                    "last_certificate": dict(certificate),
+                    "authenticated_vote_count": 3,
+                }
+            )
+        _, paths = self.collect(values)
+        runtime = json.loads(paths[1].read_text(encoding="utf-8"))
+        self.assertEqual(
+            runtime["readback"]["runtime_certificate_states"],
+            ["LIVE"] * 3,
+        )
+        self.assertFalse(
+            runtime["readback"][
+                "immutable_runtime_certificate_activation_pending"
+            ]
+        )
+
+    def test_three_durable_certificate_bindings_must_match_migration(self):
+        mutations = (
+            (
+                "missing",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][0].pop("durable_state"),
+                "durable_state:invalid",
+            ),
+            (
+                "quick_check",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][0]["durable_state"].update(
+                    {"quick_check": "corrupt"}
+                ),
+                "durable_state:invalid",
+            ),
+            (
+                "height",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][1]["durable_state"]["head"].update(
+                    {"height": FINALIZED_HEIGHT - 1}
+                ),
+                "durable_head:mismatch",
+            ),
+            (
+                "head_hash",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][2]["durable_state"]["head"].update(
+                    {"block_hash": "0x" + "9" * 64}
+                ),
+                "durable_head:mismatch",
+            ),
+            (
+                "certificate_hash",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][0]["durable_state"]["head"].update(
+                    {"certificate_hash": "0x" + "9" * 64}
+                ),
+                "durable_head:mismatch",
+            ),
+            (
+                "boolean_finalized",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][0]["durable_state"]["head"].update(
+                    {"finalized": True}
+                ),
+                "durable_head:mismatch",
+            ),
+            (
+                "certificate_body",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][1]["durable_state"]["certificate"].update(
+                    {"round": 1}
+                ),
+                "certificate_hash:mismatch",
+            ),
+            (
+                "certificate_boundary",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][2]["durable_state"]["certificate"].update(
+                    {"bridge_activated": True}
+                ),
+                "bridge_activated:not_false",
+            ),
+        )
+        for name, mutate, error in mutations:
+            with self.subTest(name=name):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                mutate(values)
+                with self.assertRaisesRegex(
+                    collector.EvidenceError, error
+                ):
+                    self.collect(values)
+
+    def test_migration_finalized_head_and_boundaries_fail_closed(self):
+        mutations = (
+            (
+                "height",
+                lambda evidence: evidence["finalized_head"].update(
+                    {"height": 0}
+                ),
+                "finalized_head.height",
+            ),
+            (
+                "hash",
+                lambda evidence: evidence["finalized_head"].update(
+                    {"hash": "0x123"}
+                ),
+                "finalized_head.hash",
+            ),
+            (
+                "certificate_hash",
+                lambda evidence: evidence["finalized_head"].update(
+                    {"certificate_hash": "0x123"}
+                ),
+                "finalized_head.certificate_hash",
+            ),
+            (
+                "extra_finalized_field",
+                lambda evidence: evidence["finalized_head"].update(
+                    {"untrusted": True}
+                ),
+                "finalized_head:invalid",
+            ),
+            (
+                "mainnet",
+                lambda evidence: evidence.update(
+                    {"mainnet_changed": True}
+                ),
+                "mainnet_changed:not_false",
+            ),
+            (
+                "assets",
+                lambda evidence: evidence.update({"assets_moved": True}),
+                "assets_moved:not_false",
+            ),
+            (
+                "bridge",
+                lambda evidence: evidence.update(
+                    {"bridge_activated": True}
+                ),
+                "bridge_activated:not_false",
+            ),
+        )
+        for name, mutate, error in mutations:
+            with self.subTest(name=name):
+                values = fixture()
+                mutate(values["migration_evidence"])
+                with self.assertRaisesRegex(
+                    collector.EvidenceError, error
+                ):
+                    self.collect(values)
 
     def test_missing_migration_marker_fails_closed(self):
         values = fixture()
@@ -610,6 +916,15 @@ class EvidenceCollectorTests(unittest.TestCase):
             ".immutable_runtime_mount_activation_pending == true",
             workflow,
         )
+        self.assertIn(
+            ".immutable_runtime_certificate_activation_pending == true",
+            workflow,
+        )
+        self.assertIn(
+            '.certificate_hash\n'
+            '                    | test("^0x[0-9a-f]{64}$")',
+            workflow,
+        )
         self.assertIn("--expected-migration-run-id", workflow)
         self.assertIn("--expected-migration-head-sha", workflow)
         self.assertIn(
@@ -632,9 +947,113 @@ class EvidenceCollectorTests(unittest.TestCase):
             "curl -fsS http://127.0.0.1:8545/health",
             workflow,
         )
+        self.assertIn(
+            '"file:/var/lib/junca/state.sqlite?mode=ro"',
+            workflow,
+        )
+        self.assertIn(
+            'connection.execute("PRAGMA query_only=ON")',
+            workflow,
+        )
+        self.assertIn(
+            'connection.execute("PRAGMA quick_check")',
+            workflow,
+        )
+        self.assertIn(
+            "FROM finality_certificates",
+            workflow,
+        )
+        self.assertIn(
+            "durable_state: $readback[0].durable_state",
+            workflow,
+        )
+        self.assertNotIn(
+            "sqlite3.connect(\"/var/lib/junca/state.sqlite\"",
+            workflow,
+        )
         self.assertIn("--private-validator-health", workflow)
         self.assertIn("test \"$(find evidence/release -type f | wc -l)\" = 3", workflow)
         self.assertIn("path: evidence/release/", workflow)
+
+    def test_workflow_durable_reader_emits_health_head_and_certificate(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        match = re.search(
+            r"base64 -w0 <<'PY'\n(?P<script>.*?)\n          PY",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        script = textwrap.dedent(match.group("script"))
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "state.sqlite"
+            connection = sqlite3.connect(state_path)
+            connection.executescript(
+                """
+                CREATE TABLE blocks(
+                  height INTEGER PRIMARY KEY,
+                  block_hash TEXT,
+                  finalized INTEGER,
+                  certificate_hash TEXT
+                );
+                CREATE TABLE finality_certificates(
+                  height INTEGER PRIMARY KEY,
+                  certificate_json TEXT NOT NULL
+                );
+                """
+            )
+            certificate = finality_certificate()
+            connection.execute(
+                "INSERT INTO blocks VALUES(?,?,?,?)",
+                (
+                    FINALIZED_HEIGHT,
+                    FINALIZED_HASH,
+                    1,
+                    certificate["certificate_hash"],
+                ),
+            )
+            connection.execute(
+                "INSERT INTO finality_certificates VALUES(?,?)",
+                (
+                    FINALIZED_HEIGHT,
+                    json.dumps(certificate),
+                ),
+            )
+            connection.commit()
+            connection.close()
+            script = script.replace(
+                "/var/lib/junca/state.sqlite",
+                str(state_path),
+            )
+            environment = dict(os.environ)
+            environment["JUNCA_HEALTH_JSON"] = json.dumps(
+                {"status": "healthy"}
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        readback = json.loads(result.stdout)
+        self.assertEqual(readback["health"], {"status": "healthy"})
+        self.assertEqual(
+            readback["durable_state"]["head"],
+            {
+                "height": FINALIZED_HEIGHT,
+                "block_hash": FINALIZED_HASH,
+                "finalized": 1,
+                "certificate_hash": certificate["certificate_hash"],
+            },
+        )
+        self.assertEqual(
+            readback["durable_state"]["certificate"],
+            certificate,
+        )
+        self.assertEqual(
+            readback["durable_state"]["quick_check"],
+            "ok",
+        )
 
 
 if __name__ == "__main__":
