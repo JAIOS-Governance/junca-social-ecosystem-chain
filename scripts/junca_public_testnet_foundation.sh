@@ -85,13 +85,111 @@ terraform -chdir=infra/aws/public-testnet plan -input=false \
   -out="$GITHUB_WORKSPACE/artifacts/foundation.tfplan"
 terraform -chdir=infra/aws/public-testnet show -json \
   "$GITHUB_WORKSPACE/artifacts/foundation.tfplan" > artifacts/foundation-plan.json
-jq -e '[.resource_changes[]?.change.actions | select(index("delete"))] | length == 0' \
-  artifacts/foundation-plan.json >/dev/null
+
+# Destructive changes remain fail-closed. The only permitted delete action is
+# an AMI-driven replacement of one or more of the three canonical validators.
+jq -e '
+  [
+    .resource_changes[]?
+    | select(.change.actions | index("delete"))
+    | {
+        address,
+        actions: .change.actions,
+        replace_paths: (.change.replace_paths // [])
+      }
+  ] as $deletions
+  | ($deletions | length) == 0 or
+    (
+      ($deletions | length) >= 1 and
+      ($deletions | length) <= 3 and
+      ([ $deletions[].address ] | unique | length) == ($deletions | length) and
+      all(
+        $deletions[];
+        (.address == "aws_instance.validator[0]" or
+         .address == "aws_instance.validator[1]" or
+         .address == "aws_instance.validator[2]") and
+        (.actions | index("create")) != null and
+        (.actions | index("delete")) != null and
+        (.replace_paths | any(.[]; . == ["ami"]))
+      )
+    )
+' artifacts/foundation-plan.json >/dev/null
+
+mapfile -t validator_replacements < <(
+  jq -r '
+    .resource_changes[]?
+    | select(.change.actions | index("delete"))
+    | .address
+  ' artifacts/foundation-plan.json
+)
 
 apply_executed=false
 if [[ "$phase" == "foundation-apply" ]]; then
-  terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
-    "$GITHUB_WORKSPACE/artifacts/foundation.tfplan"
+  if (( ${#validator_replacements[@]} > 0 )); then
+    # Rotate one validator at a time. Fixed private IPs require destroy-before-
+    # create; SSM Online readback prevents advancing before the replacement is
+    # manageable. Other resources remain untouched during each targeted step.
+    for address in "${validator_replacements[@]}"; do
+      index="${address##*[}"
+      index="${index%]}"
+      target_plan="$GITHUB_WORKSPACE/artifacts/foundation-validator-${index}.tfplan"
+      target_json="artifacts/foundation-validator-${index}-plan.json"
+
+      terraform -chdir=infra/aws/public-testnet plan -input=false \
+        -var-file="$GITHUB_WORKSPACE/artifacts/foundation.auto.tfvars.json" \
+        -target="$address" \
+        -out="$target_plan"
+      terraform -chdir=infra/aws/public-testnet show -json "$target_plan" \
+        > "$target_json"
+      jq -e --arg address "$address" '
+        [
+          .resource_changes[]?
+          | select(.change.actions | index("delete"))
+          | {
+              address,
+              actions: .change.actions,
+              replace_paths: (.change.replace_paths // [])
+            }
+        ] as $deletions
+        | ($deletions | length) == 1 and
+          $deletions[0].address == $address and
+          ($deletions[0].actions | index("create")) != null and
+          ($deletions[0].actions | index("delete")) != null and
+          ($deletions[0].replace_paths | any(.[]; . == ["ami"]))
+      ' "$target_json" >/dev/null
+
+      terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
+        "$target_plan"
+
+      new_instance="$(terraform -chdir=infra/aws/public-testnet output -json \
+        validator_instance_ids | jq -er ".[${index}]")"
+      for attempt in $(seq 1 60); do
+        ping_status="$(aws ssm describe-instance-information \
+          --filters "Key=InstanceIds,Values=${new_instance}" \
+          --query 'InstanceInformationList[0].PingStatus' --output text)"
+        [[ "$ping_status" == "Online" ]] && break
+        test "$attempt" -lt 60
+        sleep 10
+      done
+    done
+
+    # Reconcile non-destructive dependants (for example CloudWatch alarm
+    # instance IDs) only after every validator replacement is SSM-managed.
+    terraform -chdir=infra/aws/public-testnet plan -input=false \
+      -var-file="$GITHUB_WORKSPACE/artifacts/foundation.auto.tfvars.json" \
+      -out="$GITHUB_WORKSPACE/artifacts/foundation-reconcile.tfplan"
+    terraform -chdir=infra/aws/public-testnet show -json \
+      "$GITHUB_WORKSPACE/artifacts/foundation-reconcile.tfplan" \
+      > artifacts/foundation-reconcile-plan.json
+    jq -e '[.resource_changes[]?.change.actions | select(index("delete"))] | length == 0' \
+      artifacts/foundation-reconcile-plan.json >/dev/null
+    terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
+      "$GITHUB_WORKSPACE/artifacts/foundation-reconcile.tfplan"
+  else
+    terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
+      "$GITHUB_WORKSPACE/artifacts/foundation.tfplan"
+  fi
+
   apply_executed=true
   terraform -chdir=infra/aws/public-testnet output -json > artifacts/foundation-outputs.json
   jq -e '

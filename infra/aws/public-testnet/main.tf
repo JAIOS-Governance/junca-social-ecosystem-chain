@@ -462,7 +462,6 @@ resource "aws_instance" "validator" {
   })
 
   lifecycle {
-    create_before_destroy = true
     precondition {
       condition     = data.aws_caller_identity.current.account_id == var.aws_account_id
       error_message = "AWS account binding mismatch."
