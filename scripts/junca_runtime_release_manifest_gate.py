@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -67,7 +69,7 @@ def _private_ssm_baseline(
     if (
         readback.get("mode") != "private_ssm"
         or readback.get("scope")
-        != "Public Testnet Runtime Acceptance / Private SSM Read-only"
+        != "Public Testnet Pre-rollout Baseline / Private SSM Read-only"
         or readback.get("validator_count") != 3
     ):
         failures.append("private_ssm.readback:invalid")
@@ -127,6 +129,96 @@ def _private_ssm_baseline(
         failures.append("private_ssm.quorum:not_exact_three")
 
 
+def _public_endpoint_outage(
+    outage: Mapping[str, Any], failures: list[str]
+) -> None:
+    if (
+        outage.get("schema_version")
+        != "junca-public-endpoint-outage/v1"
+        or outage.get("status") != "PUBLIC_ENDPOINTS_UNAVAILABLE"
+        or outage.get("public_services_enabled") is not True
+        or outage.get("public_endpoint_acceptance") is not False
+    ):
+        failures.append("public_outage.status:invalid")
+    endpoint_test = outage.get("endpoint_test")
+    exit_code = outage.get("endpoint_test_exit_code")
+    if (
+        not isinstance(outage.get("observed_at"), str)
+        or not outage.get("observed_at")
+        or not isinstance(exit_code, int)
+        or isinstance(exit_code, bool)
+        or not 1 <= exit_code <= 255
+        or not isinstance(endpoint_test, Mapping)
+        or endpoint_test.get("status") != "FAIL"
+        or not isinstance(endpoint_test.get("error"), str)
+        or not endpoint_test.get("error")
+    ):
+        failures.append("public_outage.endpoint_test:invalid")
+    observations = outage.get("observations")
+    expected = (
+        (
+            "health",
+            "GET",
+            "https://health.jaios-governance.org/health",
+        ),
+        (
+            "explorer",
+            "GET",
+            "https://explorer.jaios-governance.org/explorer.json",
+        ),
+        ("rpc", "POST", "https://rpc.jaios-governance.org/"),
+    )
+    if (
+        not isinstance(observations, list)
+        or len(observations) != 3
+        or any(not isinstance(item, Mapping) for item in observations)
+    ):
+        failures.append("public_outage.observations:not_exact_three")
+    else:
+        failed = 0
+        for item, (name, method, url) in zip(
+            observations, expected, strict=True
+        ):
+            curl_exit = item.get("curl_exit_code")
+            http_status = item.get("http_status")
+            body_sha256 = item.get("body_sha256")
+            body_base64 = item.get("body_base64")
+            if (
+                item.get("name") != name
+                or item.get("method") != method
+                or item.get("url") != url
+                or not isinstance(curl_exit, int)
+                or isinstance(curl_exit, bool)
+                or not 0 <= curl_exit <= 255
+                or not isinstance(http_status, int)
+                or isinstance(http_status, bool)
+                or not 0 <= http_status <= 599
+                or SHA256.fullmatch(str(body_sha256)) is None
+                or not isinstance(body_base64, str)
+                or not isinstance(item.get("stderr"), str)
+            ):
+                failures.append(f"public_outage.{name}:invalid")
+                continue
+            try:
+                body = base64.b64decode(body_base64, validate=True)
+            except (ValueError, binascii.Error):
+                failures.append(f"public_outage.{name}:body_base64_invalid")
+                continue
+            if (
+                len(body) > 65536
+                or hashlib.sha256(body).hexdigest() != body_sha256
+            ):
+                failures.append(f"public_outage.{name}:body_digest_mismatch")
+                continue
+            if curl_exit != 0 or http_status != 200:
+                failed += 1
+        if failed < 1:
+            failures.append("public_outage:no_failed_observation")
+    for field in BOUNDARY_FIELDS:
+        if outage.get(field) is not False:
+            failures.append(f"public_outage.{field}:not_false")
+
+
 def evaluate(
     manifest: Mapping[str, Any],
     explorer: Mapping[str, Any],
@@ -148,6 +240,11 @@ def evaluate(
     request_sha256 = manifest.get("request_sha256")
     migration_evidence_sha256 = manifest.get("migration_evidence_sha256")
     baseline_mode = manifest.get("baseline_mode")
+    public_services_enabled = manifest.get("public_services_enabled")
+    public_endpoint_acceptance = manifest.get(
+        "public_endpoint_acceptance"
+    )
+    public_endpoint_outage = manifest.get("public_endpoint_outage")
     if not SHA256.fullmatch(str(request_sha256)):
         failures.append("manifest.request_sha256:invalid")
     if explorer.get("request_sha256") != request_sha256:
@@ -248,6 +345,15 @@ def evaluate(
         failures.append("manifest.baseline_mode:invalid")
     if explorer.get("baseline_mode") != baseline_mode:
         failures.append("explorer.baseline_mode:mismatch")
+    if explorer.get("public_services_enabled") is not public_services_enabled:
+        failures.append("explorer.public_services_enabled:mismatch")
+    if (
+        explorer.get("public_endpoint_acceptance")
+        is not public_endpoint_acceptance
+    ):
+        failures.append("explorer.public_endpoint_acceptance:mismatch")
+    if explorer.get("public_endpoint_outage") != public_endpoint_outage:
+        failures.append("explorer.public_endpoint_outage:mismatch")
     expected_explorer_schema = (
         "junca-public-explorer-pre-rollout-baseline/v1"
         if baseline_mode == "public_endpoints"
@@ -265,9 +371,27 @@ def evaluate(
     if explorer.get("read_only") is not True:
         failures.append("explorer.read_only:not_true")
     if baseline_mode == "public_endpoints":
+        if (
+            public_services_enabled is not True
+            or public_endpoint_acceptance is not True
+            or public_endpoint_outage is not None
+        ):
+            failures.append("public_endpoints.acceptance_binding:invalid")
         if explorer.get("unsafe_rpc_rejection") is not True:
             failures.append("explorer.unsafe_rpc_rejection:not_true")
     elif baseline_mode == "private_ssm":
+        if public_endpoint_acceptance is not False:
+            failures.append("private_ssm.public_endpoint_acceptance:not_false")
+        if public_services_enabled is True:
+            if isinstance(public_endpoint_outage, Mapping):
+                _public_endpoint_outage(public_endpoint_outage, failures)
+            else:
+                failures.append("private_ssm.public_outage:missing")
+        elif public_services_enabled is False:
+            if public_endpoint_outage is not None:
+                failures.append("private_ssm.public_outage:unexpected")
+        else:
+            failures.append("private_ssm.public_services_enabled:invalid")
         if (
             explorer.get("unsafe_rpc_rejection")
             != "NOT_APPLICABLE_PRIVATE_SSM"
@@ -352,6 +476,14 @@ def evaluate(
         "decision": "PROMOTION_GATE_PASS" if not failures else "PROMOTION_GATE_REJECTED",
         "accepted": not failures,
         "phase": "PREDEPLOYMENT_READINESS",
+        "baseline_mode": baseline_mode,
+        "public_services_enabled": public_services_enabled,
+        "public_endpoint_acceptance": public_endpoint_acceptance,
+        "public_endpoint_outage_status": (
+            public_endpoint_outage.get("status")
+            if isinstance(public_endpoint_outage, Mapping)
+            else None
+        ),
         "candidate": {
             "source_commit": expected_source_commit,
             "node_artifact_sha256": expected_artifact_sha256,

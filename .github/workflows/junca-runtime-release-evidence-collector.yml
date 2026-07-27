@@ -290,33 +290,124 @@ jobs:
           )"
           case "$public_services_enabled" in
             true)
+              set +e
               python scripts/junca_public_testnet_endpoint_test.py \
-                > evidence/readback/endpoint-acceptance.json || true
-              jq -e '
-                .scope == "Public Testnet Runtime Acceptance / Read-only" and
-                (
-                  (
-                    .status == "PASS" and
-                    .checks.health == "PASS" and
-                    .checks.explorer.result == "PASS" and
-                    .checks.safe_rpc.result == "PASS" and
-                    .checks.unsafe_rpc_rejection.result == "PASS"
-                  ) or (
-                    .status == "FAIL" and
-                    (.observed_at | type == "string" and length > 0) and
-                    (.error | type == "string" and length > 0) and
-                    .endpoints == {
-                      health:
-                        "https://health.jaios-governance.org/health",
-                      explorer:
-                        "https://explorer.jaios-governance.org/explorer.json",
-                      rpc: "https://rpc.jaios-governance.org/"
-                    }
-                  )
-                )
-              ' evidence/readback/endpoint-acceptance.json
-              ;&
+                > evidence/readback/endpoint-acceptance.json
+              endpoint_exit_code="$?"
+              set -e
+              if [[ "$endpoint_exit_code" == "0" ]]; then
+                jq -e '
+                  .status == "PASS" and
+                  .scope ==
+                    "Public Testnet Runtime Acceptance / Read-only" and
+                  .checks.health == "PASS" and
+                  .checks.explorer.result == "PASS" and
+                  .checks.safe_rpc.result == "PASS" and
+                  .checks.unsafe_rpc_rejection.result == "PASS"
+                ' evidence/readback/endpoint-acceptance.json
+                echo public_endpoints \
+                  > evidence/readback/runtime-baseline-mode
+              else
+                jq -e '
+                  .status == "FAIL" and
+                  (.error | type) == "string" and
+                  (.error | length) > 0
+                ' evidence/readback/endpoint-acceptance.json
+                outage_probe() {
+                  local name="$1"
+                  local method="$2"
+                  local url="$3"
+                  local payload="${4:-}"
+                  local body="evidence/readback/outage-${name}.body"
+                  local error="evidence/readback/outage-${name}.stderr"
+                  local http_status
+                  local curl_exit
+                  : >"$body"
+                  : >"$error"
+                  set +e
+                  if [[ "$method" == "GET" ]]; then
+                    http_status="$(
+                      curl --silent --show-error --max-time 15 \
+                        --output "$body" --write-out '%{http_code}' \
+                        "$url" 2>"$error"
+                    )"
+                  else
+                    http_status="$(
+                      curl --silent --show-error --max-time 15 \
+                        --request POST \
+                        --header 'Content-Type: application/json' \
+                        --data "$payload" \
+                        --output "$body" --write-out '%{http_code}' \
+                        "$url" 2>"$error"
+                    )"
+                  fi
+                  curl_exit="$?"
+                  set -e
+                  [[ "$http_status" =~ ^[0-9]{3}$ ]]
+                  test "$(wc -c <"$body")" -le 65536
+                  test "$(wc -c <"$error")" -le 65536
+                  jq -n \
+                    --arg name "$name" \
+                    --arg method "$method" \
+                    --arg url "$url" \
+                    --argjson curl_exit_code "$curl_exit" \
+                    --argjson http_status "$((10#$http_status))" \
+                    --arg body_sha256 "$(sha256sum "$body" | cut -d' ' -f1)" \
+                    --arg body_base64 "$(base64 -w0 "$body")" \
+                    --arg stderr "$(cat "$error")" '{
+                      name: $name,
+                      method: $method,
+                      url: $url,
+                      curl_exit_code: $curl_exit_code,
+                      http_status: $http_status,
+                      body_sha256: $body_sha256,
+                      body_base64: $body_base64,
+                      stderr: $stderr
+                    }' > "evidence/readback/outage-${name}.json"
+                }
+                outage_probe health GET \
+                  https://health.jaios-governance.org/health
+                outage_probe explorer GET \
+                  https://explorer.jaios-governance.org/explorer.json
+                outage_probe rpc POST \
+                  https://rpc.jaios-governance.org/ \
+                  '{"jsonrpc":"2.0","id":"outage-read-only","method":"eth_chainId","params":[]}'
+                jq -n \
+                  --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                  --argjson endpoint_test_exit_code "$endpoint_exit_code" \
+                  --slurpfile endpoint_test \
+                    evidence/readback/endpoint-acceptance.json \
+                  --slurpfile health evidence/readback/outage-health.json \
+                  --slurpfile explorer \
+                    evidence/readback/outage-explorer.json \
+                  --slurpfile rpc evidence/readback/outage-rpc.json '{
+                    schema_version: "junca-public-endpoint-outage/v1",
+                    status: "PUBLIC_ENDPOINTS_UNAVAILABLE",
+                    public_services_enabled: true,
+                    public_endpoint_acceptance: false,
+                    observed_at: $observed_at,
+                    endpoint_test_exit_code: $endpoint_test_exit_code,
+                    endpoint_test: $endpoint_test[0],
+                    observations: [$health[0], $explorer[0], $rpc[0]],
+                    mainnet_changed: false,
+                    assets_moved: false,
+                    bridge_activated: false
+                  }' > evidence/readback/public-endpoint-outage.json
+                echo private_ssm_public_outage \
+                  > evidence/readback/runtime-baseline-mode
+              fi
+              ;;
             false)
+              echo private_ssm_services_disabled \
+                > evidence/readback/runtime-baseline-mode
+              ;;
+            *)
+              echo "public services readback must be boolean" >&2
+              exit 1
+              ;;
+          esac
+          baseline_mode="$(cat evidence/readback/runtime-baseline-mode)"
+          if [[ "$baseline_mode" != "public_endpoints" ]]; then
               mapfile -t instances < <(
                 jq -er '.validator_instance_ids.value[]' \
                   evidence/readback/public-testnet-outputs.json
@@ -399,28 +490,45 @@ jobs:
               [[ "$command_id" =~ ^[0-9a-f-]{36}$ ]]
               for index in 0 1 2; do
                 instance_id="${instances[$index]}"
+                invocation="evidence/readback/private-health-invocation-${index}.json"
+                poll_errors="evidence/readback/private-health-invocation-${index}.poll-errors.log"
+                : >"$poll_errors"
                 command_status=""
                 for attempt in $(seq 1 60); do
-                  command_status="$(
-                    aws ssm get-command-invocation \
+                  invocation_attempt="${invocation}.attempt"
+                  error_attempt="${poll_errors}.attempt"
+                  set +e
+                  aws ssm get-command-invocation \
                       --command-id "$command_id" \
                       --instance-id "$instance_id" \
-                      --query Status --output text
-                  )"
+                      >"$invocation_attempt" 2>"$error_attempt"
+                  invocation_exit="$?"
+                  set -e
+                  if [[ "$invocation_exit" != "0" ]]; then
+                    cat "$error_attempt" >>"$poll_errors"
+                    if grep -q 'InvocationDoesNotExist' "$error_attempt"; then
+                      test "$attempt" -lt 60
+                      sleep 2
+                      continue
+                    fi
+                    cat "$error_attempt" >&2
+                    exit 1
+                  fi
+                  mv "$invocation_attempt" "$invocation"
+                  command_status="$(jq -er '.Status' "$invocation")"
                   case "$command_status" in
                     Success) break ;;
-                    Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+                    Failed|Cancelled|TimedOut|Cancelling)
+                      cat "$invocation" >&2
+                      exit 1
+                      ;;
                   esac
                   test "$attempt" -lt 60
                   sleep 2
                 done
                 test "$command_status" = "Success"
-                invocation="evidence/readback/private-health-invocation-${index}.json"
                 readback="evidence/readback/private-readback-${index}.json"
                 item="evidence/readback/private-validator-${index}.json"
-                aws ssm get-command-invocation \
-                  --command-id "$command_id" \
-                  --instance-id "$instance_id" >"$invocation"
                 jq -er '.StandardOutputContent | fromjson' \
                   "$invocation" >"$readback"
                 jq -n \
@@ -438,50 +546,44 @@ jobs:
                 schema_version: "junca-private-ssm-validator-baseline/v1",
                 status: "PASS",
                 scope:
-                  "Public Testnet Runtime Acceptance / Private SSM Read-only",
+                  "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
                 validators: .
               }' evidence/readback/private-validator-[0-2].json \
                 > evidence/readback/private-validator-health.json
-              ;;
-            *)
-              echo "public services readback must be boolean" >&2
-              exit 1
-              ;;
-          esac
+          fi
 
       - name: Build exact fail-closed release evidence
         run: |
           set -euo pipefail
           mkdir -p evidence/release
-          public_services_enabled="$(
-            jq -r '
-              .public_services_acceptance_readback.value.enabled
-              | if type == "boolean" then .
-                else error("public services readback must be boolean") end
-            ' evidence/readback/public-testnet-outputs.json
-          )"
+          baseline_mode="$(cat evidence/readback/runtime-baseline-mode)"
           runtime_readback=()
-          if [[ "$public_services_enabled" == "true" ]] \
-            && jq -e '.status == "PASS"' \
-              evidence/readback/endpoint-acceptance.json >/dev/null
-          then
+          case "$baseline_mode" in
+            public_endpoints)
             runtime_readback=(
               --endpoint-acceptance
               evidence/readback/endpoint-acceptance.json
             )
-          elif [[ "$public_services_enabled" == "true" ]]; then
-            runtime_readback=(
-              --endpoint-acceptance
-              evidence/readback/endpoint-acceptance.json
-              --private-validator-health
-              evidence/readback/private-validator-health.json
-            )
-          else
+              ;;
+            private_ssm_services_disabled)
             runtime_readback=(
               --private-validator-health
               evidence/readback/private-validator-health.json
             )
-          fi
+              ;;
+            private_ssm_public_outage)
+              runtime_readback=(
+                --private-validator-health
+                evidence/readback/private-validator-health.json
+                --public-endpoint-outage
+                evidence/readback/public-endpoint-outage.json
+              )
+              ;;
+            *)
+              echo "unsupported runtime baseline mode" >&2
+              exit 1
+              ;;
+          esac
           python scripts/junca_runtime_release_evidence_collector.py \
             --candidate-ami evidence/ami/junca-validator-ami-build.json \
             --bootstrap-outputs evidence/readback/bootstrap-outputs.json \
@@ -503,6 +605,20 @@ jobs:
           test -f evidence/release/junca-runtime-pre-rollout-baseline.json
           test -f evidence/release/junca-public-explorer-pre-rollout-baseline.json
           test -f evidence/release/junca-validator-ebs-pre-rollout-baseline.json
+
+      - name: Preserve failed readback diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-runtime-readback-failure-${{ github.run_id }}
+          path: |
+            evidence/readback/endpoint-acceptance.json
+            evidence/readback/public-endpoint-outage.json
+            evidence/readback/outage-*.json
+            evidence/readback/private-health-invocation-*.json
+            evidence/readback/private-health-invocation-*.log
+          if-no-files-found: warn
+          retention-days: 90
 
       - uses: actions/upload-artifact@v4
         with:
