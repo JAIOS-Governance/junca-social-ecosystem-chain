@@ -58,11 +58,17 @@ jobs:
             .head_repository.full_name == $repository
           ' <<<"$evidence_run_json"
 
+      - name: Prove isolated evidence path is absent
+        run: |
+          set -euo pipefail
+          test ! -e downloaded-release-evidence
+          test ! -L downloaded-release-evidence
+
       - name: Download exact pre-rollout evidence
         uses: actions/download-artifact@v4
         with:
           name: junca-runtime-release-evidence-${{ inputs.evidence_run_id }}
-          path: evidence
+          path: downloaded-release-evidence
           repository: ${{ github.repository }}
           github-token: ${{ github.token }}
           run-id: ${{ inputs.evidence_run_id }}
@@ -71,10 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          test "$(find evidence -type f | wc -l)" = 3
-          test -f evidence/junca-runtime-pre-rollout-baseline.json
-          test -f evidence/junca-public-explorer-pre-rollout-baseline.json
-          test -f evidence/junca-validator-ebs-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence
+          test "$(find downloaded-release-evidence -type f | wc -l)" = 3
+          test -f downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json
+          test -f downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json
+          test -f downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json
 
       - name: Fail-closed release manifest decision
         env:
@@ -87,9 +94,9 @@ jobs:
           [[ "$NODE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
           python scripts/junca_runtime_release_manifest_gate.py \
-            --manifest evidence/junca-runtime-pre-rollout-baseline.json \
-            --explorer-acceptance evidence/junca-public-explorer-pre-rollout-baseline.json \
-            --ebs-migration evidence/junca-validator-ebs-pre-rollout-baseline.json \
+            --manifest downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json \
+            --explorer-acceptance downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json \
+            --ebs-migration downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json \
             --expected-source-commit "$SOURCE_COMMIT" \
             --expected-artifact-sha256 "$NODE_ARTIFACT_SHA256" \
             --expected-genesis-sha256 "$GENESIS_SHA256" \

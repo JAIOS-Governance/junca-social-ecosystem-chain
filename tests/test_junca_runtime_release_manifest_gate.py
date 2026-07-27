@@ -661,12 +661,17 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         self.assertIn("repository: ${{ github.repository }}", workflow)
         self.assertIn("github-token: ${{ github.token }}", workflow)
         self.assertIn("run-id: ${{ inputs.evidence_run_id }}", workflow)
+        self.assertIn("Prove isolated evidence path is absent", workflow)
+        self.assertIn("test ! -e downloaded-release-evidence", workflow)
+        self.assertIn("test ! -L downloaded-release-evidence", workflow)
+        self.assertIn("path: downloaded-release-evidence", workflow)
+        self.assertNotIn("\n          path: evidence\n", workflow)
         self.assertNotIn("gh run download", workflow)
         self.assertNotIn("pattern:", workflow)
         self.assertNotIn("artifact-ids:", workflow)
         self.assertNotIn("merge-multiple:", workflow)
         self.assertIn(
-            'test "$(find evidence -type f | wc -l)" = 3',
+            'test "$(find downloaded-release-evidence -type f | wc -l)" = 3',
             workflow,
         )
         for evidence_file in (
@@ -674,7 +679,10 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             "junca-public-explorer-pre-rollout-baseline.json",
             "junca-validator-ebs-pre-rollout-baseline.json",
         ):
-            self.assertIn(f"test -f evidence/{evidence_file}", workflow)
+            isolated_path = f"downloaded-release-evidence/{evidence_file}"
+            self.assertIn(f"test -f {isolated_path}", workflow)
+            self.assertNotIn(f" evidence/{evidence_file}", workflow)
+            self.assertIn(isolated_path, workflow)
 
     def test_workflow_contains_no_deployment_or_apply_command(self):
         workflow = WORKFLOW.read_text(encoding="utf-8").lower()
