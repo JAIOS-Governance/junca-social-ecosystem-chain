@@ -133,6 +133,22 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
         ):
             self.assertIn(required, WORKFLOW)
 
+    def test_existing_runtime_evidence_is_preserved_as_valid_json(self) -> None:
+        self.assertIn(
+            "jq -c '\n      "
+            ".public_services_acceptance_readback.value.quorum_evidence_sha256",
+            CONTROLLER,
+        )
+        self.assertIn(
+            "jq -c '\n      "
+            ".public_services_acceptance_readback.value.runtime_evidence_sha256",
+            CONTROLLER,
+        )
+        self.assertIn(
+            ".automatic_finality_readback.value.enabled // false",
+            CONTROLLER,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
