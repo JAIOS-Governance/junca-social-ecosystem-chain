@@ -17,6 +17,20 @@ WORKFLOW = (
 
 
 class ValidatorStateMigrationHardeningTests(unittest.TestCase):
+    def test_evidence_array_lengths_are_parenthesized_before_boolean_gates(
+        self,
+    ) -> None:
+        self.assertIn(
+            "($invocation | length) == 1 and",
+            CONTROLLER,
+        )
+        self.assertIn(
+            "($binding | length) == 1 and",
+            CONTROLLER,
+        )
+        self.assertNotIn("$invocation | length == 1", CONTROLLER)
+        self.assertNotIn("$binding | length == 1", CONTROLLER)
+
     def test_provision_plan_is_fixed_property_allowlist_and_rerunnable(
         self,
     ) -> None:
