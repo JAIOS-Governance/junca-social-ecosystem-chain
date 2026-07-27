@@ -4,6 +4,16 @@ on:
   workflow_run:
     workflows: ["JUNCA Validator Immutable AMI Build"]
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-foundation-release.yml"
+  workflow_dispatch:
+    inputs:
+      ami_run_id:
+        description: "Verified immutable AMI workflow run ID"
+        required: false
+        default: "30231847135"
 
 permissions:
   actions: read
@@ -18,7 +28,7 @@ concurrency:
 
 jobs:
   deploy-and-accept:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 45
@@ -30,10 +40,11 @@ jobs:
       DOMAIN_NAME: jaios-governance.org
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
+      AMI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ami_run_id || '30231847135' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -42,10 +53,10 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: junca-validator-ami-build-${{ github.event.workflow_run.id }}
+          name: junca-validator-ami-build-${{ env.AMI_RUN_ID }}
           path: artifacts/ami
           github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ env.AMI_RUN_ID }}
 
       - uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
@@ -103,13 +114,16 @@ jobs:
               "curl -fsS -H Content-Type:application/json --data '\''{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"junca_broadcastVote\",\"params\":[]}'\'' http://127.0.0.1:8545/"
             ]
           }' > artifacts/ssm-broadcast.json
-          command_id="$(aws ssm send-command \
-            --instance-ids "${instances[@]}" \
-            --document-name AWS-RunShellScript \
-            --parameters file://artifacts/ssm-broadcast.json \
-            --comment "JUNCA Public Testnet Runtime Acceptance" \
-            --query Command.CommandId --output text)"
           for instance in "${instances[@]}"; do
+            # Serialize votes by validator identity. A concurrent broadcast can
+            # let a late local RPC propose the next height after height N has
+            # already finalized, obscuring the certificate being accepted.
+            command_id="$(aws ssm send-command \
+              --instance-ids "$instance" \
+              --document-name AWS-RunShellScript \
+              --parameters file://artifacts/ssm-broadcast.json \
+              --comment "JUNCA Public Testnet Runtime Acceptance" \
+              --query Command.CommandId --output text)"
             aws ssm wait command-executed \
               --command-id "$command_id" --instance-id "$instance"
             aws ssm get-command-invocation \
