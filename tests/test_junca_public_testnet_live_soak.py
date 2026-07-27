@@ -19,6 +19,7 @@ COMMIT = "a" * 40
 NODE = "b" * 64
 GENESIS = "c" * 64
 AMI = "ami-0123456789abcdef0"
+REQUEST = "d" * 64
 
 
 def observations(start: datetime, base_height: int):
@@ -60,6 +61,7 @@ def segment(index: int):
         node_artifact_sha256=NODE,
         genesis_sha256=GENESIS,
         ami_id=AMI,
+        request_sha256=REQUEST,
     )
 
 
@@ -71,6 +73,7 @@ class LiveSoakTests(unittest.TestCase):
             node_artifact_sha256=NODE,
             genesis_sha256=GENESIS,
             ami_id=AMI,
+            request_sha256=REQUEST,
             foundation_run_id="123",
             public_release_run_id="456",
             final_runtime_readback_sha256="d" * 64,
@@ -89,6 +92,7 @@ class LiveSoakTests(unittest.TestCase):
             node_artifact_sha256=NODE,
             genesis_sha256=GENESIS,
             ami_id=AMI,
+            request_sha256=REQUEST,
         )
         self.assertFalse(result["accepted"])
         self.assertIn("segment.candidate_binding:mismatch", result["failures"])
@@ -108,8 +112,11 @@ class LiveSoakTests(unittest.TestCase):
             '.path == ".github/workflows/junca-public-testnet-release.yml"',
             workflow,
         )
+        self.assertIn('.event == "workflow_run"', workflow)
         self.assertEqual(workflow.count("junca-public-testnet-live-soak-segment.yml"), 6)
         self.assertIn("timeout-minutes: 270", segment_workflow)
+        self.assertIn("request_sha256:", segment_workflow)
+        self.assertIn("$tags.RequestDigest == $request_sha256", workflow)
         self.assertNotIn("terraform apply", workflow.lower())
         self.assertNotIn("aws ec2 run-instances", workflow.lower())
 
