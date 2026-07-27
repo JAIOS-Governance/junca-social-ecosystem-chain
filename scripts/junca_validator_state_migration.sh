@@ -243,7 +243,10 @@ case "$state_volume_count" in
           .change.after.snapshot_id == null and
           .change.after.tags.StatePath == "/var/lib/junca" and
           .change.after.tags.MigrationRequired == "true" and
-          .change.after.tags.PublicTestnetOnly == "true"
+          .change.after.tags.PublicTestnetOnly == "true" and
+          .change.after.tags.MainnetChanged == "false" and
+          .change.after.tags.AssetsMoved == "false" and
+          .change.after.tags.BridgeActivated == "false"
         )
     ' "$artifact_dir/validator-state-provision-plan.json" >/dev/null
     terraform -chdir="$runtime_dir" apply -input=false -auto-approve \
@@ -291,6 +294,9 @@ validate_state_volume_attachment_readback() {
     .Volumes[0].Throughput == 250 and
     tag_values("StatePath") == ["/var/lib/junca"] and
     tag_values("PublicTestnetOnly") == ["true"] and
+    tag_values("MainnetChanged") == ["false"] and
+    tag_values("AssetsMoved") == ["false"] and
+    tag_values("BridgeActivated") == ["false"] and
     (
       (
         tag_values("MigrationRequired") == ["true"] and
@@ -318,6 +324,79 @@ validate_state_volume_attachment_readback() {
       )
     )
   ' "$readback_path" >/dev/null
+}
+
+validate_state_volume_acceptance_plan() {
+  local plan_path="$1"
+  local snapshot_ids_json="$2"
+  jq -e --argjson snapshot_ids "$snapshot_ids_json" '
+    [
+      .resource_changes[]?
+      | select(.change.actions != ["no-op"] and .change.actions != ["read"])
+    ] as $changes
+    | ($changes | length) <= 3 and
+      ($changes | map(.address) | unique | length) == ($changes | length) and
+      all(
+        $changes[];
+        .change.actions == ["update"] and
+        (.address | test("^aws_ebs_volume\\.validator_state\\[[0-2]\\]$")) and
+        (
+          (.address | capture("\\[(?<index>[0-2])\\]$").index | tonumber)
+          as $index
+          | (
+              .change.before | del(.tags, .tags_all)
+            ) == (
+              .change.after | del(.tags, .tags_all)
+            ) and
+            .change.after.encrypted == true and
+            .change.after.type == "gp3" and
+            .change.after.size == 200 and
+            .change.after.iops == 6000 and
+            .change.after.throughput == 250 and
+            (
+              .change.after.snapshot_id == null or
+              .change.after.snapshot_id == ""
+            ) and
+            .change.after.tags.Name == .change.before.tags.Name and
+            .change.after.tags.Validator == .change.before.tags.Validator and
+            .change.after.tags.FailureDomain ==
+              .change.before.tags.FailureDomain and
+            .change.after.tags.StatePath == "/var/lib/junca" and
+            .change.after.tags.PublicTestnetOnly == "true" and
+            .change.after.tags.MainnetChanged == "false" and
+            .change.after.tags.AssetsMoved == "false" and
+            .change.after.tags.BridgeActivated == "false" and
+            .change.after.tags.MigrationRequired == "false" and
+            .change.after.tags.JuncaMigrationState == "VERIFIED_PASS" and
+            .change.after.tags.JuncaFilesystemVerified == "true" and
+            .change.after.tags.JuncaStateStoreIntegrity == "true" and
+            .change.after.tags.JuncaFinalityCertificateBackfilled ==
+              "true" and
+            .change.after.tags.JuncaRollbackSnapshotId ==
+              $snapshot_ids[$index] and
+            (
+              .change.after.tags | keys | sort
+            ) == (
+              [
+                "AssetsMoved",
+                "BridgeActivated",
+                "FailureDomain",
+                "JuncaFilesystemVerified",
+                "JuncaFinalityCertificateBackfilled",
+                "JuncaMigrationState",
+                "JuncaRollbackSnapshotId",
+                "JuncaStateStoreIntegrity",
+                "MainnetChanged",
+                "MigrationRequired",
+                "Name",
+                "PublicTestnetOnly",
+                "StatePath",
+                "Validator"
+              ] | sort
+            )
+        )
+      )
+  ' "$plan_path" >/dev/null
 }
 
 # The live validators may legitimately have user-data drift from newly merged
@@ -1462,64 +1541,8 @@ terraform -chdir="$runtime_dir" plan -input=false \
 terraform -chdir="$runtime_dir" show -json \
   "$artifact_dir/validator-state-acceptance.tfplan" \
   >"$artifact_dir/validator-state-acceptance-plan.json"
-jq -e --argjson snapshot_ids "$rollback_json" '
-  [
-    .resource_changes[]?
-    | select(.change.actions != ["no-op"] and .change.actions != ["read"])
-  ] as $changes
-  | ($changes | length) <= 3 and
-    ($changes | map(.address) | unique | length) == ($changes | length) and
-    all(
-      $changes[];
-      .change.actions == ["update"] and
-      (.address | test("^aws_ebs_volume\\.validator_state\\[[0-2]\\]$")) and
-      (
-        (.address | capture("\\[(?<index>[0-2])\\]$").index | tonumber)
-        as $index
-        | (
-            .change.before | del(.tags, .tags_all)
-          ) == (
-            .change.after | del(.tags, .tags_all)
-          ) and
-          .change.after.encrypted == true and
-          .change.after.type == "gp3" and
-          .change.after.size == 200 and
-          .change.after.iops == 6000 and
-          .change.after.throughput == 250 and
-          .change.after.snapshot_id == null and
-          .change.after.tags.Name == .change.before.tags.Name and
-          .change.after.tags.Validator == .change.before.tags.Validator and
-          .change.after.tags.FailureDomain ==
-            .change.before.tags.FailureDomain and
-          .change.after.tags.StatePath == "/var/lib/junca" and
-          .change.after.tags.PublicTestnetOnly == "true" and
-          .change.after.tags.MigrationRequired == "false" and
-          .change.after.tags.JuncaMigrationState == "VERIFIED_PASS" and
-          .change.after.tags.JuncaFilesystemVerified == "true" and
-          .change.after.tags.JuncaStateStoreIntegrity == "true" and
-          .change.after.tags.JuncaFinalityCertificateBackfilled == "true" and
-          .change.after.tags.JuncaRollbackSnapshotId ==
-            $snapshot_ids[$index] and
-          (
-            .change.after.tags | keys | sort
-          ) == (
-            [
-              "FailureDomain",
-              "JuncaFilesystemVerified",
-              "JuncaFinalityCertificateBackfilled",
-              "JuncaMigrationState",
-              "JuncaRollbackSnapshotId",
-              "JuncaStateStoreIntegrity",
-              "MigrationRequired",
-              "Name",
-              "PublicTestnetOnly",
-              "StatePath",
-              "Validator"
-            ] | sort
-          )
-      )
-    )
-' "$artifact_dir/validator-state-acceptance-plan.json" >/dev/null
+validate_state_volume_acceptance_plan \
+  "$artifact_dir/validator-state-acceptance-plan.json" "$rollback_json"
 terraform -chdir="$runtime_dir" apply -input=false -auto-approve \
   "$artifact_dir/validator-state-acceptance.tfplan"
 
@@ -1589,6 +1612,18 @@ jq -e \
       [.Tags[]
        | select(.Key == "JuncaFinalityCertificateBackfilled")
        | .Value] == ["true"]
+    ) and
+    (
+      [.Tags[] | select(.Key == "MainnetChanged") | .Value] ==
+      ["false"]
+    ) and
+    (
+      [.Tags[] | select(.Key == "AssetsMoved") | .Value] ==
+      ["false"]
+    ) and
+    (
+      [.Tags[] | select(.Key == "BridgeActivated") | .Value] ==
+      ["false"]
     ) and
     (
       [.Tags[] | select(.Key == "JuncaRollbackSnapshotId") | .Value][0]
