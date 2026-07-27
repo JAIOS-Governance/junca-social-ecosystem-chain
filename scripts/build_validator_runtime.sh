@@ -2,6 +2,8 @@
 set -euo pipefail
 umask 022
 
+# The immutable image contains both the private validator and fail-closed public gateway.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output_dir="${1:-${repo_root}/dist/validator-runtime}"
 
