@@ -554,11 +554,12 @@ wait_ssm_command() {
 }
 
 run_node_phase() {
-    instance_id="$1"
-    volume_id="$2"
-    signer_arn="$3"
-    phase="$4"
-    output_path="$5"
+    local instance_id="$1"
+    local volume_id="$2"
+    local signer_arn="$3"
+    local phase="$4"
+    local output_path="$5"
+    local encoded command request_sha256 command_id wait_status submission_path
     encoded="$(base64 -w0 "$node_script")"
     command="printf '%s' '$encoded' | base64 -d > /tmp/junca-migrate-validator-state; chmod 0750 /tmp/junca-migrate-validator-state; JUNCA_STATE_VOLUME_ID='$volume_id' JUNCA_EXPECTED_SIGNER_ARN='$signer_arn' JUNCA_MIGRATION_TOKEN='$migration_token' JUNCA_MIGRATION_PHASE='$phase' /tmp/junca-migrate-validator-state"
     jq -n --arg command "$command" '{commands: [$command]}' \
@@ -578,13 +579,7 @@ run_node_phase() {
         --timeout-seconds 1800 \
         --query Command.CommandId --output text
     )"
-    active_command_id="$command_id"
-    wait_ssm_command "$command_id" "$instance_id" 180
-    aws ssm get-command-invocation \
-      --command-id "$command_id" --instance-id "$instance_id" \
-      >"$output_path"
-    jq -e '.Status == "Success"' "$output_path" >/dev/null
-    last_node_binding="${output_path%.json}-binding.json"
+    submission_path="${output_path%.json}-submission.json"
     jq -n \
       --arg command_id "$command_id" \
       --arg instance_id "$instance_id" \
@@ -597,8 +592,7 @@ run_node_phase() {
       --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
       --arg head_sha "$GITHUB_SHA" \
       --arg migration_request_sha256 "$MIGRATION_REQUEST_SHA256" \
-      --arg github_event_sha256 "$github_event_sha256" '
-      {
+      --arg github_event_sha256 "$github_event_sha256" '{
         command_id: $command_id,
         instance_id: $instance_id,
         state_volume_id: $state_volume_id,
@@ -611,8 +605,31 @@ run_node_phase() {
         head_sha: $head_sha,
         migration_request_sha256: $migration_request_sha256,
         github_event_sha256: $github_event_sha256
-      }
-    ' >"$last_node_binding"
+      }' >"$submission_path"
+    active_command_id="$command_id"
+    if wait_ssm_command "$command_id" "$instance_id" 180; then
+      wait_status=0
+    else
+      wait_status=$?
+    fi
+    if ! aws ssm get-command-invocation \
+      --command-id "$command_id" --instance-id "$instance_id" \
+      >"$output_path"; then
+      test "$wait_status" -ne 0 && return "$wait_status"
+      return 125
+    fi
+    aws ssm list-command-invocations \
+      --command-id "$command_id" --details \
+      >"${output_path%.json}-details.json" 2>/dev/null || true
+    aws ssm list-commands --command-id "$command_id" \
+      >"${output_path%.json}-command.json" 2>/dev/null || true
+    if [[ "$wait_status" -ne 0 ]]; then
+      jq -r '.StandardErrorContent // empty' "$output_path" >&2 || true
+      return "$wait_status"
+    fi
+    jq -e '.Status == "Success"' "$output_path" >/dev/null
+    last_node_binding="${output_path%.json}-binding.json"
+    cp "$submission_path" "$last_node_binding"
     active_command_id=""
 }
 
@@ -850,13 +867,16 @@ restart_on_controller_error() {
         --instance-ids "$current_instance" \
         --document-name AWS-RunShellScript \
         --parameters \
-          '{"commands":["systemctl start junca-validator","for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health >/dev/null && exit 0; sleep 2; done; exit 1"]}' \
+          '{"commands":["systemctl start junca-validator","for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health && exit 0; sleep 2; done; exit 1"]}' \
         --comment "JUNCA validator state migration rollback" \
         --timeout-seconds 180 \
         --query Command.CommandId --output text 2>/dev/null
     )"
     if [[ -n "$recovery_id" ]]; then
       wait_ssm_command "$recovery_id" "$current_instance" 24
+      aws ssm get-command-invocation \
+        --command-id "$recovery_id" --instance-id "$current_instance" \
+        >"$artifact_dir/ssm/recovery-${current_instance}.json" 2>/dev/null
     fi
   fi
   exit "$controller_status"
