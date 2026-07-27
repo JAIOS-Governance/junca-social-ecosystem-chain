@@ -135,6 +135,8 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("Latest Finalized Block", document)
         self.assertIn("Not Available Yet", document)
         self.assertIn("Public Testnet / No Monetary Value", document)
+        self.assertIn("https://scan.jaios-governance.org/", document)
+        self.assertIn("/junca-chain-logo.png", document)
         self.assertNotIn("private", document.lower())
 
     def test_explorer_rejects_nonfinalized_or_mismatched_head(self) -> None:

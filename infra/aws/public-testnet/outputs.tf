@@ -75,6 +75,10 @@ output "explorer_url" {
   value = var.enable_public_services ? "https://${local.explorer_hostname}" : null
 }
 
+output "scan_url" {
+  value = var.enable_public_services ? "https://${local.scan_hostname}" : null
+}
+
 output "health_url" {
   value = var.enable_public_services ? "https://${local.health_hostname}" : null
 }

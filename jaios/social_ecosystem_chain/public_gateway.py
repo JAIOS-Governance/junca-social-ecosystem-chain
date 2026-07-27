@@ -6,6 +6,7 @@ import argparse
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -25,6 +26,7 @@ ALLOWED_METHODS = frozenset(
     }
 )
 MAX_REQUEST_BYTES = 1_000_000
+LOGO_PATH = Path(__file__).with_name("assets") / "junca-chain-logo-gold-on-navy.png"
 
 
 class PublicGatewayError(ValueError):
@@ -324,6 +326,8 @@ def make_handler(gateway: PublicGateway) -> type[BaseHTTPRequestHandler]:
                 elif self.path in {"/", "/explorer"}:
                     status, body = gateway.explorer_html()
                     self._send(status, "text/html; charset=utf-8", body.encode())
+                elif self.path == "/junca-chain-logo.png":
+                    self._send(200, "image/png", LOGO_PATH.read_bytes(), cache=True)
                 else:
                     self.send_error(404)
             except PublicGatewayError:
@@ -359,11 +363,16 @@ def make_handler(gateway: PublicGateway) -> type[BaseHTTPRequestHandler]:
             encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
             self._send(status, "application/json", encoded)
 
-        def _send(self, status: int, content_type: str, body: bytes) -> None:
+        def _send(
+            self, status: int, content_type: str, body: bytes, *, cache: bool = False
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Cache-Control",
+                "public, max-age=86400, immutable" if cache else "no-store",
+            )
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)

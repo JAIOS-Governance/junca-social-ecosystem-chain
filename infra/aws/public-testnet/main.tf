@@ -155,6 +155,7 @@ locals {
   validator_private_ips = ["10.67.16.10", "10.67.32.10", "10.67.48.10"]
   rpc_hostname          = "rpc.${var.domain_name}"
   explorer_hostname     = "explorer.${var.domain_name}"
+  scan_hostname         = "scan.${var.domain_name}"
   health_hostname       = "health.${var.domain_name}"
 }
 
@@ -171,6 +172,7 @@ resource "aws_acm_certificate" "public_services" {
   domain_name = local.rpc_hostname
   subject_alternative_names = [
     local.explorer_hostname,
+    local.scan_hostname,
     local.health_hostname,
   ]
   validation_method = "DNS"
@@ -592,7 +594,7 @@ resource "aws_lb_listener_rule" "explorer" {
   }
   condition {
     host_header {
-      values = [local.explorer_hostname]
+      values = [local.explorer_hostname, local.scan_hostname]
     }
   }
 }
@@ -601,6 +603,7 @@ resource "aws_route53_record" "public" {
   for_each = var.enable_public_services ? toset([
     local.rpc_hostname,
     local.explorer_hostname,
+    local.scan_hostname,
     local.health_hostname,
   ]) : toset([])
 
