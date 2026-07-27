@@ -133,7 +133,7 @@ jobs:
           ' artifacts/public-health.json
 
           curl -fsS --max-time 10 \
-            https://scan.jaios-governance.org/explorer.json \
+            https://explorer.jaios-governance.org/explorer.json \
             > artifacts/public-explorer.json
           jq -e '
             .status == "ready" and .finalized_only == true and
@@ -164,8 +164,8 @@ jobs:
               validator_acceptance_sha256: $acceptance_sha256,
               endpoints: {
                 rpc: "https://rpc.jaios-governance.org",
-                explorer: "https://scan.jaios-governance.org",
-                legacy_explorer: "https://explorer.jaios-governance.org",
+                explorer: "https://explorer.jaios-governance.org",
+                scan_redirect: "https://scan.jaios-governance.org",
                 health: "https://health.jaios-governance.org"
               },
               health: $health[0],

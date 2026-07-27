@@ -10,7 +10,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#071827">
   <meta name="description" content="Finalized-only public explorer for the JUNCA Social Ecosystem Chain Public Testnet.">
-  <link rel="canonical" href="https://scan.jaios-governance.org/">
+  <link rel="canonical" href="https://explorer.jaios-governance.org/">
   <title>JUNCA Social Ecosystem Chain — Public Testnet Explorer</title>
   <style>
     :root {

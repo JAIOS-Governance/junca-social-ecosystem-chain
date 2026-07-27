@@ -640,7 +640,28 @@ resource "aws_lb_listener_rule" "explorer" {
   }
   condition {
     host_header {
-      values = [local.explorer_hostname, local.scan_hostname]
+      values = [local.explorer_hostname]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "scan_redirect" {
+  count = var.enable_public_services ? 1 : 0
+
+  listener_arn = aws_lb_listener.https[0].arn
+  priority     = 21
+  action {
+    type = "redirect"
+    redirect {
+      host        = local.explorer_hostname
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+  condition {
+    host_header {
+      values = [local.scan_hostname]
     }
   }
 }

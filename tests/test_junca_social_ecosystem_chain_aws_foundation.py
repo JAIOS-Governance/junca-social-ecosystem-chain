@@ -138,6 +138,9 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn(
             'resource "aws_lb_listener_certificate" "scan"', self.runtime
         )
+        self.assertIn(
+            'resource "aws_lb_listener_rule" "scan_redirect"', self.runtime
+        )
         self.assertIn('output "scan_certificate"', self.runtime_outputs)
         self.assertIn(
             'output "validator_alert_topic_arn"', self.runtime_outputs
