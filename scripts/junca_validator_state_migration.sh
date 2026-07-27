@@ -282,15 +282,23 @@ for validator_index in 0 1 2; do
     >"$artifact_dir/readback/attachment-${validator_index}-instance.json"
   jq -e \
     --arg instance_id "$instance_id" \
-    --arg expected_az "$expected_az" '
+    --arg expected_az "$expected_az" \
+    --arg volume_id "$volume_id" '
     [.Reservations[].Instances[]] as $instances
+    | [
+        $instances[0].BlockDeviceMappings[]?
+        | select(.DeviceName == "/dev/sdf")
+      ] as $state_devices
     | ($instances | length) == 1 and
       $instances[0].InstanceId == $instance_id and
       $instances[0].State.Name == "running" and
       $instances[0].Placement.AvailabilityZone == $expected_az and
-      all(
-        $instances[0].BlockDeviceMappings[];
-        .DeviceName != "/dev/sdf"
+      (
+        ($state_devices | length) == 0 or
+        (
+          ($state_devices | length) == 1 and
+          $state_devices[0].Ebs.VolumeId == $volume_id
+        )
       )
   ' "$artifact_dir/readback/attachment-${validator_index}-instance.json" \
     >/dev/null
