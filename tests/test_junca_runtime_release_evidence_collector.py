@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import hashlib
 import json
@@ -270,6 +271,7 @@ def fixture():
         "snapshots": snapshots,
         "endpoints": endpoints,
         "private_validator_health": None,
+        "public_endpoint_outage": None,
     }
     values["migration_evidence"] = migration_evidence(values)
     return values
@@ -412,8 +414,54 @@ def private_health(values):
     return {
         "schema_version": "junca-private-ssm-validator-baseline/v1",
         "status": "PASS",
-        "scope": "Public Testnet Runtime Acceptance / Private SSM Read-only",
+        "scope": "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
         "validators": validators,
+    }
+
+
+def public_endpoint_outage():
+    observations = []
+    for name, method, url in (
+        (
+            "health",
+            "GET",
+            "https://health.jaios-governance.org/health",
+        ),
+        (
+            "explorer",
+            "GET",
+            "https://explorer.jaios-governance.org/explorer.json",
+        ),
+        ("rpc", "POST", "https://rpc.jaios-governance.org/"),
+    ):
+        body = b"<html><body>502 Bad Gateway</body></html>"
+        observations.append(
+            {
+                "name": name,
+                "method": method,
+                "url": url,
+                "curl_exit_code": 0,
+                "http_status": 502,
+                "body_sha256": hashlib.sha256(body).hexdigest(),
+                "body_base64": base64.b64encode(body).decode("ascii"),
+                "stderr": "",
+            }
+        )
+    return {
+        "schema_version": "junca-public-endpoint-outage/v1",
+        "status": "PUBLIC_ENDPOINTS_UNAVAILABLE",
+        "public_services_enabled": True,
+        "public_endpoint_acceptance": False,
+        "observed_at": "2026-07-27T00:00:00Z",
+        "endpoint_test_exit_code": 1,
+        "endpoint_test": {
+            "status": "FAIL",
+            "error": "health endpoint unavailable",
+        },
+        "observations": observations,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
     }
 
 
@@ -516,38 +564,26 @@ class EvidenceCollectorTests(unittest.TestCase):
         )
         self.assertTrue(decision["accepted"], decision["failures"])
 
-    def test_private_ssm_readback_recovers_a_public_endpoint_outage(self):
+    def test_public_endpoint_outage_falls_back_to_private_pre_rollout_only(self):
         values = fixture()
-        values["endpoints"] = {
-            "status": "FAIL",
-            "scope": "Public Testnet Runtime Acceptance / Read-only",
-            "observed_at": "2026-07-27T20:21:32+00:00",
-            "endpoints": {
-                "health": "https://health.jaios-governance.org/health",
-                "explorer": (
-                    "https://explorer.jaios-governance.org/explorer.json"
-                ),
-                "rpc": "https://rpc.jaios-governance.org/",
-            },
-            "error": (
-                "https://health.jaios-governance.org/health: "
-                "endpoint unavailable"
-            ),
-        }
+        values["endpoints"] = None
         values["private_validator_health"] = private_health(values)
+        values["public_endpoint_outage"] = public_endpoint_outage()
         _, paths = self.collect(values)
         manifest, runtime, ebs = (
             json.loads(path.read_text(encoding="utf-8")) for path in paths
         )
         self.assertEqual(manifest["baseline_mode"], "private_ssm")
-        self.assertEqual(runtime["baseline_mode"], "private_ssm")
+        self.assertTrue(manifest["public_services_enabled"])
+        self.assertFalse(manifest["public_endpoint_acceptance"])
         self.assertEqual(
-            runtime["readback"]["public_endpoint_outage"]["status"],
-            "FAIL",
+            manifest["public_endpoint_outage"]["status"],
+            "PUBLIC_ENDPOINTS_UNAVAILABLE",
         )
+        self.assertFalse(runtime["public_endpoint_acceptance"])
         self.assertEqual(
-            runtime["readback"]["public_endpoint_outage"]["error"],
-            values["endpoints"]["error"],
+            runtime["readback"]["scope"],
+            "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
         )
         decision = gate.evaluate(
             manifest,
@@ -560,25 +596,109 @@ class EvidenceCollectorTests(unittest.TestCase):
             expected_genesis_sha256=GENESIS,
         )
         self.assertTrue(decision["accepted"], decision["failures"])
+        self.assertEqual(decision["phase"], "PREDEPLOYMENT_READINESS")
+        self.assertFalse(decision["public_endpoint_acceptance"])
+        self.assertEqual(
+            decision["public_endpoint_outage_status"],
+            "PUBLIC_ENDPOINTS_UNAVAILABLE",
+        )
 
-    def test_public_endpoint_outage_requires_private_ssm_readback(self):
+    def test_public_endpoint_outage_requires_both_private_and_outage_evidence(
+        self,
+    ):
         values = fixture()
-        values["endpoints"] = {
-            "status": "FAIL",
-            "scope": "Public Testnet Runtime Acceptance / Read-only",
-            "observed_at": "2026-07-27T20:21:32+00:00",
-            "endpoints": {
-                "health": "https://health.jaios-governance.org/health",
-                "explorer": (
-                    "https://explorer.jaios-governance.org/explorer.json"
-                ),
-                "rpc": "https://rpc.jaios-governance.org/",
-            },
-            "error": "health endpoint unavailable",
-        }
+        values["endpoints"] = None
+        values["private_validator_health"] = private_health(values)
+        with self.assertRaisesRegex(
+            collector.EvidenceError,
+            "public_outage:required_for_private_fallback",
+        ):
+            self.collect(values)
+
+        values = fixture()
+        values["endpoints"] = None
+        values["public_endpoint_outage"] = public_endpoint_outage()
         with self.assertRaisesRegex(
             collector.EvidenceError,
             "private_ssm:required_for_public_endpoint_outage",
+        ):
+            self.collect(values)
+
+    def test_public_endpoint_outage_tamper_fails_closed(self):
+        mutations = (
+            (
+                "acceptance_true",
+                lambda outage: outage.update(
+                    {"public_endpoint_acceptance": True}
+                ),
+                "status:invalid",
+            ),
+            (
+                "endpoint_exit_zero",
+                lambda outage: outage.update(
+                    {"endpoint_test_exit_code": 0}
+                ),
+                "endpoint_test:invalid",
+            ),
+            (
+                "endpoint_pass",
+                lambda outage: outage["endpoint_test"].update(
+                    {"status": "PASS"}
+                ),
+                "endpoint_test:invalid",
+            ),
+            (
+                "wrong_url",
+                lambda outage: outage["observations"][0].update(
+                    {"url": "https://example.invalid/health"}
+                ),
+                "health:identity_mismatch",
+            ),
+            (
+                "body_digest",
+                lambda outage: outage["observations"][1].update(
+                    {
+                        "body_base64": base64.b64encode(
+                            b"tampered"
+                        ).decode("ascii")
+                    }
+                ),
+                "explorer:body_digest_mismatch",
+            ),
+            (
+                "all_success",
+                lambda outage: [
+                    item.update({"curl_exit_code": 0, "http_status": 200})
+                    for item in outage["observations"]
+                ],
+                "no_failed_observation",
+            ),
+            (
+                "boundary",
+                lambda outage: outage.update({"bridge_activated": True}),
+                "bridge_activated:not_false",
+            ),
+        )
+        for name, mutate, error in mutations:
+            with self.subTest(name=name):
+                values = fixture()
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                values["public_endpoint_outage"] = public_endpoint_outage()
+                mutate(values["public_endpoint_outage"])
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    error,
+                ):
+                    self.collect(values)
+
+    def test_public_endpoint_pass_rejects_private_or_outage_conflict(self):
+        values = fixture()
+        values["private_validator_health"] = private_health(values)
+        values["public_endpoint_outage"] = public_endpoint_outage()
+        with self.assertRaisesRegex(
+            collector.EvidenceError,
+            "conflicting_runtime_readback",
         ):
             self.collect(values)
 
@@ -1038,6 +1158,51 @@ class EvidenceCollectorTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("--private-validator-health", workflow)
+        self.assertIn("--public-endpoint-outage", workflow)
+        self.assertIn("private_ssm_public_outage", workflow)
+        self.assertIn("public_endpoint_acceptance: false", workflow)
+        self.assertIn(
+            '"method":"eth_chainId","params":[]',
+            workflow,
+        )
+        self.assertIn(
+            'test "$(wc -c <"$body")" -le 65536',
+            workflow,
+        )
+        self.assertIn("InvocationDoesNotExist", workflow)
+        self.assertIn(
+            "private-health-invocation-${index}.poll-errors.log",
+            workflow,
+        )
+        self.assertIn("Preserve failed readback diagnostics", workflow)
+        polling_block = workflow[
+            workflow.find("for attempt in $(seq 1 60)") :
+            workflow.find(
+                "jq -er '.StandardOutputContent | fromjson'",
+                workflow.find("for attempt in $(seq 1 60)"),
+            )
+        ]
+        self.assertIn("set +e", polling_block)
+        self.assertIn("grep -q 'InvocationDoesNotExist'", polling_block)
+        self.assertIn('mv "$invocation_attempt" "$invocation"', polling_block)
+        self.assertIn('cat "$invocation" >&2', polling_block)
+        self.assertEqual(
+            polling_block.count("aws ssm get-command-invocation"),
+            1,
+        )
+        self.assertIn(
+            "evidence/readback/private-health-invocation-*.json",
+            workflow,
+        )
+        outage_block = workflow[
+            workflow.find("outage_probe()") :
+            workflow.find(
+                "echo private_ssm_public_outage",
+                workflow.find("outage_probe()"),
+            )
+        ]
+        self.assertNotIn("eth_send", outage_block)
+        self.assertNotIn("junca_", outage_block)
         self.assertIn("test \"$(find evidence/release -type f | wc -l)\" = 3", workflow)
         self.assertIn("path: evidence/release/", workflow)
 
