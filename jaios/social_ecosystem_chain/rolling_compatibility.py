@@ -10,20 +10,266 @@ from typing import Any, Mapping, Sequence
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
+COMMIT = re.compile(r"[0-9a-f]{40}")
 HASH = re.compile(r"0x[0-9a-f]{64}")
 VOLUME = re.compile(r"vol-[0-9a-f]{8,17}")
 SNAPSHOT = re.compile(r"snap-[0-9a-f]{8,17}")
 AMI = re.compile(r"ami-[0-9a-f]{8,17}")
+INSTANCE = re.compile(r"i-[0-9a-f]{8,17}")
 BOUNDARIES = ("mainnet_changed", "assets_moved", "bridge_activated")
 VALIDATOR_IDS = ("validator-01", "validator-02", "validator-03")
 CHAIN_ID = 20260723
 NETWORK_LABEL = "Public Testnet / No Monetary Value"
 MINIMUM_SLOT_EPOCH_REMAINING_SECONDS = 900
 MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS = 7230
+RECOVERY_FILE_ALLOWLIST = frozenset(
+    {
+        ".github/workflows/junca-validator-foundation-release.yml",
+        "jaios/social_ecosystem_chain/rolling_compatibility.py",
+        "scripts/junca_public_testnet_foundation.sh",
+        "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
+        "tests/test_junca_validator_rolling_compatibility.py",
+    }
+)
 
 
 class RollingCompatibilityError(ValueError):
     """Raised when a rollout observation cannot safely advance."""
+
+
+def evaluate_recovery_head_compare(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Prove a workflow-only recovery head is a narrowly changed descendant."""
+
+    expected_base = _text(evidence.get("expected_base"), "expected_base")
+    expected_head = _text(evidence.get("expected_head"), "expected_head")
+    if not COMMIT.fullmatch(expected_base) or not COMMIT.fullmatch(expected_head):
+        raise RollingCompatibilityError("expected compare heads are invalid")
+    comparison = evidence.get("comparison")
+    if not isinstance(comparison, Mapping):
+        raise RollingCompatibilityError("GitHub comparison evidence is required")
+    status = comparison.get("status")
+    if status not in ("ahead", "identical"):
+        raise RollingCompatibilityError(
+            "current workflow head must be ahead of or identical to candidate"
+        )
+    if comparison.get("base_commit", {}).get("sha") != expected_base:
+        raise RollingCompatibilityError("comparison base commit differs")
+    if comparison.get("merge_base_commit", {}).get("sha") != expected_base:
+        raise RollingCompatibilityError(
+            "candidate is not the exact merge base of current workflow head"
+        )
+    if comparison.get("head_commit", {}).get("sha") != expected_head:
+        raise RollingCompatibilityError("comparison head commit differs")
+    ahead_by = comparison.get("ahead_by")
+    behind_by = comparison.get("behind_by")
+    total_commits = comparison.get("total_commits")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in (ahead_by, behind_by, total_commits)
+    ):
+        raise RollingCompatibilityError("comparison commit counts are invalid")
+    if behind_by != 0 or total_commits != ahead_by:
+        raise RollingCompatibilityError(
+            "current workflow head is behind or diverged from candidate"
+        )
+    files = comparison.get("files")
+    if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
+        raise RollingCompatibilityError("comparison file list is required")
+    filenames = [item.get("filename") for item in files if isinstance(item, Mapping)]
+    if (
+        len(filenames) != len(files)
+        or len(set(filenames)) != len(filenames)
+        or any(name not in RECOVERY_FILE_ALLOWLIST for name in filenames)
+        or any(
+            item.get("status") != "modified"
+            or item.get("previous_filename") is not None
+            for item in files
+        )
+    ):
+        raise RollingCompatibilityError(
+            "cross-head recovery contains a file outside the recovery allowlist"
+        )
+    if status == "identical":
+        if ahead_by != 0 or filenames or expected_base != expected_head:
+            raise RollingCompatibilityError(
+                "identical recovery comparison contains unexpected changes"
+            )
+    elif ahead_by < 1 or not filenames or expected_base == expected_head:
+        raise RollingCompatibilityError(
+            "ahead recovery comparison must contain an allowlisted change"
+        )
+    return {
+        "schema_version": "junca-validator-recovery-head/v1",
+        "state": "RECOVERY_HEAD_ACCEPTED",
+        "candidate_head": expected_base,
+        "current_head": expected_head,
+        "changed_files": sorted(filenames),
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
+
+
+def evaluate_live_rollout_prefix(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Recover one fully observable but not-yet-checkpointed replacement.
+
+    A failed targeted Terraform apply can replace exactly one validator before
+    the rolling resume artifact is rewritten.  The artifact count is therefore
+    a committed lower bound, not a statement that the live prefix is unchanged.
+    This read-only gate accepts at most the one next contiguous replacement and
+    requires every unaffected instance to retain its evidence-bound identity.
+    """
+
+    target = _text(evidence.get("target_version"), "target_version")
+    previous = _text(evidence.get("previous_version"), "previous_version")
+    if target == previous:
+        raise RollingCompatibilityError(
+            "target and previous runtime versions must differ"
+        )
+    target_ami = _text(evidence.get("target_ami_id"), "target_ami_id")
+    previous_ami = _text(evidence.get("previous_ami_id"), "previous_ami_id")
+    if (
+        not AMI.fullmatch(target_ami)
+        or not AMI.fullmatch(previous_ami)
+        or target_ami == previous_ami
+    ):
+        raise RollingCompatibilityError("target/previous AMI binding is invalid")
+    _, rollback_previous, rollback_ami, rollback_by_id = _rollback(
+        evidence.get("rollback"), target, target_ami
+    )
+    if rollback_previous != previous or rollback_ami != previous_ami:
+        raise RollingCompatibilityError(
+            "rollback runtime and AMI differ from previous binding"
+        )
+    order = _three_unique(evidence.get("update_order"), "update_order")
+    validators = _ordered_validators(evidence.get("validators"), order)
+    baseline = _ordered_validators(
+        evidence.get("evidence_validators"), order
+    )
+    evidence_count = evidence.get("evidence_updated_count")
+    if (
+        isinstance(evidence_count, bool)
+        or not isinstance(evidence_count, int)
+        or evidence_count < 0
+        or evidence_count > 3
+    ):
+        raise RollingCompatibilityError(
+            "evidence_updated_count must be between zero and three"
+        )
+    for boundary in BOUNDARIES:
+        if evidence.get(boundary) is not False:
+            raise RollingCompatibilityError(f"{boundary} must be false")
+
+    requested_epoch = evidence.get("requested_slot_epoch_seconds")
+    now = evidence.get("observed_unix_time")
+    if (
+        isinstance(requested_epoch, bool)
+        or not isinstance(requested_epoch, int)
+        or isinstance(now, bool)
+        or not isinstance(now, int)
+        or requested_epoch <= now
+    ):
+        raise RollingCompatibilityError("future canonical slot epoch is required")
+    remaining = requested_epoch - now
+    if (
+        remaining < MINIMUM_SLOT_EPOCH_REMAINING_SECONDS
+        or remaining > MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS
+    ):
+        raise RollingCompatibilityError(
+            "canonical slot epoch is outside the bounded safety window"
+        )
+
+    updated: list[bool] = []
+    heads: set[tuple[int, str, str]] = set()
+    for index, validator_id in enumerate(order):
+        current = validators[index]
+        prior = baseline[index]
+        if not INSTANCE.fullmatch(str(current.get("instance_id", ""))):
+            raise RollingCompatibilityError(
+                f"{validator_id} live instance id is invalid"
+            )
+        if not INSTANCE.fullmatch(str(prior.get("instance_id", ""))):
+            raise RollingCompatibilityError(
+                f"{validator_id} evidence instance id is invalid"
+            )
+        _validator_health(current, rollback_by_id[validator_id])
+        if current.get("volume_id") != rollback_by_id[validator_id].get(
+            "volume_id"
+        ):
+            raise RollingCompatibilityError(
+                f"{validator_id} rollback volume binding mismatch"
+            )
+        heads.add(_head(current))
+        runtime = current.get("runtime_version")
+        if runtime not in (previous, target):
+            raise RollingCompatibilityError(
+                f"{validator_id} has an unexpected runtime version"
+            )
+        is_target = runtime == target
+        expected_ami = target_ami if is_target else previous_ami
+        if current.get("ami_id") != expected_ami:
+            raise RollingCompatibilityError(
+                f"{validator_id} runtime and AMI binding mismatch"
+            )
+        _finality_provenance(current, target_runtime=is_target)
+        if is_target and current.get("automatic_finality_enabled") is True:
+            if (
+                current.get("block_interval_seconds") != 30
+                or current.get("slot_epoch_seconds") != requested_epoch
+            ):
+                raise RollingCompatibilityError(
+                    f"{validator_id} candidate finality epoch drifted"
+                )
+        elif (
+            current.get("automatic_finality_enabled") is not False
+            or current.get("block_interval_seconds") != 0
+            or current.get("slot_epoch_seconds") not in (None, 0)
+        ):
+            raise RollingCompatibilityError(
+                f"{validator_id} is not fail-closed before recovery"
+            )
+        updated.append(is_target)
+
+    if len(heads) != 1:
+        raise RollingCompatibilityError(
+            "validators disagree on finalized head or certificate"
+        )
+    if updated != sorted(updated, reverse=True):
+        raise RollingCompatibilityError("validator update order is not contiguous")
+    live_count = sum(updated)
+    if live_count < evidence_count or live_count > min(evidence_count + 1, 3):
+        raise RollingCompatibilityError(
+            "live prefix must equal the evidence prefix or its one next validator"
+        )
+
+    for index, validator_id in enumerate(order):
+        current_id = validators[index]["instance_id"]
+        prior_id = baseline[index]["instance_id"]
+        if index < evidence_count or index >= live_count:
+            if current_id != prior_id:
+                raise RollingCompatibilityError(
+                    f"{validator_id} changed outside the recoverable live prefix"
+                )
+        elif current_id == prior_id:
+            raise RollingCompatibilityError(
+                f"{validator_id} target runtime did not replace its bound instance"
+            )
+
+    return {
+        "schema_version": "junca-validator-live-prefix/v1",
+        "evidence_updated_count": evidence_count,
+        "live_updated_count": live_count,
+        "recovered_uncommitted_count": live_count - evidence_count,
+        "updated_validator_ids": list(order[:live_count]),
+        "next_validator": order[live_count] if live_count < 3 else None,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
 
 
 def evaluate_rolling_compatibility(evidence: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -294,6 +540,24 @@ def _finality_provenance(
         )
 
 
+def _ordered_validators(
+    value: object, order: tuple[str, str, str]
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or len(value) != 3
+        or any(not isinstance(item, Mapping) for item in value)
+    ):
+        raise RollingCompatibilityError(
+            "validators must contain exactly three entries"
+        )
+    by_id = {item.get("validator_id"): item for item in value}
+    if set(by_id) != set(order) or len(by_id) != 3:
+        raise RollingCompatibilityError("validator identity/order mismatch")
+    return by_id[order[0]], by_id[order[1]], by_id[order[2]]
+
+
 def _head(
     item: Mapping[str, Any], *, prefix: str = ""
 ) -> tuple[int, str, str]:
@@ -369,11 +633,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("compatibility", "live-prefix", "recovery-head"),
+        default="compatibility",
+    )
     args = parser.parse_args(argv)
     evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
     if not isinstance(evidence, Mapping):
         raise RollingCompatibilityError("evidence must be an object")
-    decision = evaluate_rolling_compatibility(evidence)
+    if args.mode == "live-prefix":
+        decision = evaluate_live_rollout_prefix(evidence)
+    elif args.mode == "recovery-head":
+        decision = evaluate_recovery_head_compare(evidence)
+    else:
+        decision = evaluate_rolling_compatibility(evidence)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

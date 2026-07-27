@@ -3,6 +3,8 @@ import unittest
 
 from jaios.social_ecosystem_chain.rolling_compatibility import (
     RollingCompatibilityError,
+    evaluate_live_rollout_prefix,
+    evaluate_recovery_head_compare,
     evaluate_rolling_compatibility,
 )
 
@@ -114,6 +116,222 @@ def evidence():
 
 
 class RollingCompatibilityTests(unittest.TestCase):
+    def live_prefix_evidence(self):
+        value = evidence()
+        validators = value["validators"]
+        for index, validator in enumerate(validators, start=1):
+            validator["instance_id"] = f"i-{index:017x}"
+            validator["volume_id"] = value["rollback"]["validators"][
+                index - 1
+            ]["volume_id"]
+        return {
+            "target_version": value["target_version"],
+            "target_ami_id": value["target_ami_id"],
+            "previous_version": value["rollback"]["target_version"],
+            "previous_ami_id": value["rollback"]["ami_id"],
+            "update_order": value["update_order"],
+            "evidence_updated_count": 0,
+            "validators": validators,
+            "evidence_validators": copy.deepcopy(validators),
+            "rollback": value["rollback"],
+            "requested_slot_epoch_seconds": value[
+                "requested_slot_epoch_seconds"
+            ],
+            "observed_unix_time": value["observed_unix_time"],
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+
+    def recovery_head_evidence(self):
+        base = "a" * 40
+        head = "b" * 40
+        return {
+            "expected_base": base,
+            "expected_head": head,
+            "comparison": {
+                "status": "ahead",
+                "ahead_by": 1,
+                "behind_by": 0,
+                "total_commits": 1,
+                "base_commit": {"sha": base},
+                "merge_base_commit": {"sha": base},
+                "head_commit": {"sha": head},
+                "files": [
+                    {
+                        "filename": (
+                            "scripts/junca_public_testnet_foundation.sh"
+                        ),
+                        "status": "modified",
+                        "previous_filename": None,
+                    }
+                ],
+            },
+        }
+
+    def test_recovery_head_accepts_only_allowlisted_descendant(self):
+        value = self.recovery_head_evidence()
+        decision = evaluate_recovery_head_compare(value)
+        self.assertEqual(decision["state"], "RECOVERY_HEAD_ACCEPTED")
+        self.assertEqual(
+            decision["changed_files"],
+            ["scripts/junca_public_testnet_foundation.sh"],
+        )
+
+        value["comparison"].update(
+            {
+                "status": "identical",
+                "ahead_by": 0,
+                "total_commits": 0,
+                "head_commit": {"sha": value["expected_base"]},
+                "files": [],
+            }
+        )
+        value["expected_head"] = value["expected_base"]
+        self.assertEqual(
+            evaluate_recovery_head_compare(value)["state"],
+            "RECOVERY_HEAD_ACCEPTED",
+        )
+
+    def test_recovery_head_rejects_divergence_and_unexpected_files(self):
+        cases = (
+            ("status", "diverged", "ahead of or identical"),
+            ("behind_by", 1, "behind or diverged"),
+            (
+                "merge_base_commit",
+                {"sha": "c" * 40},
+                "exact merge base",
+            ),
+            (
+                "files",
+                [
+                    {
+                        "filename": "infra/aws/public-testnet/main.tf",
+                        "status": "modified",
+                        "previous_filename": None,
+                    }
+                ],
+                "outside the recovery allowlist",
+            ),
+            (
+                "files",
+                [
+                    {
+                        "filename": (
+                            "scripts/junca_public_testnet_foundation.sh"
+                        ),
+                        "status": "renamed",
+                        "previous_filename": "infra/aws/public-testnet/main.tf",
+                    }
+                ],
+                "outside the recovery allowlist",
+            ),
+        )
+        for field, invalid, message in cases:
+            with self.subTest(field=field):
+                value = self.recovery_head_evidence()
+                value["comparison"][field] = invalid
+                with self.assertRaisesRegex(RollingCompatibilityError, message):
+                    evaluate_recovery_head_compare(value)
+
+    def test_live_prefix_recovers_only_one_fully_bound_replacement(self):
+        value = self.live_prefix_evidence()
+        unchanged = evaluate_live_rollout_prefix(value)
+        self.assertEqual(unchanged["live_updated_count"], 0)
+        self.assertEqual(unchanged["recovered_uncommitted_count"], 0)
+
+        validator = value["validators"][0]
+        validator.update(
+            {
+                "instance_id": "i-0000000000000000a",
+                "runtime_version": value["target_version"],
+                "ami_id": value["target_ami_id"],
+                "automatic_finality_enabled": True,
+                "block_interval_seconds": 30,
+                "slot_epoch_seconds": value["requested_slot_epoch_seconds"],
+            }
+        )
+        for source in ("runtime_env", "health"):
+            validator["finality_readback"][source].update(
+                {
+                    "automatic_finality_enabled": True,
+                    "block_interval_seconds": 30,
+                    "slot_epoch_seconds": value[
+                        "requested_slot_epoch_seconds"
+                    ],
+                }
+            )
+        recovered = evaluate_live_rollout_prefix(value)
+        self.assertEqual(recovered["evidence_updated_count"], 0)
+        self.assertEqual(recovered["live_updated_count"], 1)
+        self.assertEqual(recovered["recovered_uncommitted_count"], 1)
+        self.assertEqual(recovered["next_validator"], "validator-02")
+
+    def test_live_prefix_rejects_gap_two_ahead_and_suffix_drift(self):
+        value = self.live_prefix_evidence()
+        for index in (0, 1):
+            validator = value["validators"][index]
+            validator["instance_id"] = f"i-{index + 10:017x}"
+            validator["runtime_version"] = value["target_version"]
+            validator["ami_id"] = value["target_ami_id"]
+        with self.assertRaisesRegex(RollingCompatibilityError, "one next"):
+            evaluate_live_rollout_prefix(value)
+
+        value = self.live_prefix_evidence()
+        value["validators"][1]["instance_id"] = "i-0000000000000000f"
+        with self.assertRaisesRegex(
+            RollingCompatibilityError, "outside the recoverable"
+        ):
+            evaluate_live_rollout_prefix(value)
+
+        value = self.live_prefix_evidence()
+        value["validators"][1]["runtime_version"] = value["target_version"]
+        value["validators"][1]["ami_id"] = value["target_ami_id"]
+        value["validators"][1]["instance_id"] = "i-0000000000000000f"
+        with self.assertRaisesRegex(RollingCompatibilityError, "order"):
+            evaluate_live_rollout_prefix(value)
+
+    def test_live_prefix_requires_exact_candidate_epoch_and_provenance(self):
+        value = self.live_prefix_evidence()
+        validator = value["validators"][0]
+        validator.update(
+            {
+                "instance_id": "i-0000000000000000a",
+                "runtime_version": value["target_version"],
+                "ami_id": value["target_ami_id"],
+                "automatic_finality_enabled": True,
+                "block_interval_seconds": 30,
+                "slot_epoch_seconds": value["requested_slot_epoch_seconds"] + 30,
+            }
+        )
+        validator["finality_readback"]["runtime_env"].update(
+            {
+                "automatic_finality_enabled": True,
+                "block_interval_seconds": 30,
+                "slot_epoch_seconds": value["requested_slot_epoch_seconds"] + 30,
+            }
+        )
+        validator["finality_readback"]["health"].update(
+            {
+                "automatic_finality_enabled": True,
+                "block_interval_seconds": 30,
+                "slot_epoch_seconds": value["requested_slot_epoch_seconds"] + 30,
+            }
+        )
+        with self.assertRaisesRegex(RollingCompatibilityError, "epoch drifted"):
+            evaluate_live_rollout_prefix(value)
+
+        value = self.live_prefix_evidence()
+        value["validators"][0]["volume_id"] = "vol-0000000000000000f"
+        with self.assertRaisesRegex(RollingCompatibilityError, "volume binding"):
+            evaluate_live_rollout_prefix(value)
+
+        value = self.live_prefix_evidence()
+        value["rollback"]["validators"][0]["head_height"] = 8
+        value["rollback"]["validators"][0]["certificate_height"] = 8
+        with self.assertRaisesRegex(RollingCompatibilityError, "rewind"):
+            evaluate_live_rollout_prefix(value)
+
     def test_resumable_prefixes_zero_one_two_three_are_exact(self):
         expected = (
             ("READY_FOR_NEXT_VALIDATOR", "validator-01"),
