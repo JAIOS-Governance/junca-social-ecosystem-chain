@@ -1,0 +1,194 @@
+name: JUNCA Public Explorer Scan Publication
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-scan-publication.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 45
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      DOMAIN_NAME: jaios-governance.org
+      ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+      AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-scan-publication-${{ github.run_id }}
+
+      - name: Bind current accepted immutable runtime
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/bootstrap.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true"
+          terraform -chdir=infra/aws/bootstrap output -json > artifacts/bootstrap-outputs.json
+          state_kms_key_arn="$(jq -er .state_kms_key_arn.value artifacts/bootstrap-outputs.json)"
+          lock_table="$(jq -er .lock_table.value artifacts/bootstrap-outputs.json)"
+          terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$lock_table" \
+            -backend-config="encrypt=true" \
+            -backend-config="kms_key_id=$state_kms_key_arn"
+          terraform -chdir=infra/aws/public-testnet output -json > artifacts/before-outputs.json
+          jq -e '
+            .deployment_stage.value == "public-services" and
+            .public_services_acceptance_readback.value.enabled == true and
+            .runtime_boundary.value.mainnet_changed == false and
+            .runtime_boundary.value.assets_moved == false and
+            .runtime_boundary.value.bridge_activated == false
+          ' artifacts/before-outputs.json
+          {
+            echo "NODE_AMI_ID=$(jq -er .approved_node_ami_readback.value.id artifacts/before-outputs.json)"
+            echo "NODE_ARTIFACT_SHA256=$(jq -er .approved_node_ami_readback.value.node_sha256 artifacts/before-outputs.json)"
+            echo "GENESIS_SHA256=$(jq -er .approved_node_ami_readback.value.genesis_sha256 artifacts/before-outputs.json)"
+            echo "SOURCE_COMMIT=$(jq -er .approved_node_ami_readback.value.source_commit artifacts/before-outputs.json)"
+            echo "QUORUM_ACCEPTANCE_SHA256=$(jq -er .public_services_acceptance_readback.value.quorum_evidence_sha256 artifacts/before-outputs.json)"
+            echo "RUNTIME_ACCEPTANCE_SHA256=$(jq -er .public_services_acceptance_readback.value.runtime_evidence_sha256 artifacts/before-outputs.json)"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish scan DNS, TLS and ALB route
+        run: bash scripts/junca_public_testnet_release.sh
+
+      - name: Deploy approved Explorer surface with rollback
+        run: |
+          set -euo pipefail
+          mapfile -t instances < <(jq -r '.validator_instance_ids.value[]' artifacts/public-release-outputs.json)
+          test "${#instances[@]}" = 3
+
+          run_ssm() {
+            local label="$1"
+            local command="$2"
+            local request="artifacts/ssm-${label}.json"
+            jq -n --arg command "$command" '{commands: [$command]}' > "$request"
+            local command_id
+            command_id="$(aws ssm send-command \
+              --instance-ids "${instances[@]}" \
+              --document-name AWS-RunShellScript \
+              --parameters "file://${request}" \
+              --comment "JUNCA Explorer ${label}" \
+              --query Command.CommandId --output text)"
+            for instance in "${instances[@]}"; do
+              aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance" || true
+              aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+                > "artifacts/${label}-${instance}.json"
+              jq -e '.Status == "Success"' "artifacts/${label}-${instance}.json"
+            done
+          }
+
+          base=/usr/local/lib/junca/jaios/social_ecosystem_chain
+          run_ssm prepare "set -euo pipefail; install -d -m 0755 ${base}/assets /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}; cp -a ${base}/explorer_page.py ${base}/public_gateway.py ${base}/assets/junca-chain-logo-gold-on-navy.png /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}/ 2>/dev/null || true"
+
+          files=(
+            "jaios/social_ecosystem_chain/explorer_page.py:${base}/explorer_page.py"
+            "jaios/social_ecosystem_chain/public_gateway.py:${base}/public_gateway.py"
+            "jaios/social_ecosystem_chain/assets/junca-chain-logo-gold-on-navy.png:${base}/assets/junca-chain-logo-gold-on-navy.png"
+          )
+          index=0
+          for mapping in "${files[@]}"; do
+            source="${mapping%%:*}"
+            destination="${mapping#*:}"
+            key="scan-${index}"
+            run_ssm "${key}-start" "set -euo pipefail; : > /tmp/${key}.b64"
+            chunk_index=0
+            while IFS= read -r chunk; do
+              run_ssm "${key}-chunk-${chunk_index}" "set -euo pipefail; printf '%s' '${chunk}' >> /tmp/${key}.b64"
+              chunk_index=$((chunk_index + 1))
+            done < <(base64 -w0 "$source" | fold -w 8000)
+            digest="$(sha256sum "$source" | cut -d' ' -f1)"
+            run_ssm "${key}-install" "set -euo pipefail; base64 -d /tmp/${key}.b64 > /tmp/${key}; echo '${digest}  /tmp/${key}' | sha256sum -c -; install -m 0644 /tmp/${key} '${destination}'; rm -f /tmp/${key} /tmp/${key}.b64"
+            index=$((index + 1))
+          done
+
+          run_ssm restart "set -euo pipefail; systemctl restart junca-public-explorer.service junca-public-rpc.service; curl -fsS http://127.0.0.1:3000/explorer.json | jq -e '.status == \"ready\" and .finalized_only == true and .read_only == true'; curl -fsS http://127.0.0.1:8546/health | jq -e '.status == \"healthy\" and .read_only == true'"
+
+      - name: Production readback
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 10 https://scan.jaios-governance.org/ \
+              > artifacts/scan-index.html; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 10
+          done
+          curl -fsS --max-time 10 https://scan.jaios-governance.org/explorer.json \
+            > artifacts/scan-explorer.json
+          curl -fsS --max-time 10 https://scan.jaios-governance.org/junca-chain-logo.png \
+            > artifacts/scan-logo.png
+          curl -fsS --max-time 10 https://health.jaios-governance.org/health \
+            > artifacts/public-health.json
+          grep -F 'https://scan.jaios-governance.org/' artifacts/scan-index.html
+          grep -F '/junca-chain-logo.png' artifacts/scan-index.html
+          test "$(sha256sum jaios/social_ecosystem_chain/assets/junca-chain-logo-gold-on-navy.png | cut -d' ' -f1)" = \
+            "$(sha256sum artifacts/scan-logo.png | cut -d' ' -f1)"
+          jq -e '
+            .status == "ready" and .finalized_only == true and .read_only == true and
+            .head.height >= 1 and .head.signed_power == 3 and .head.total_power == 3 and
+            .mainnet_changed == false and .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/scan-explorer.json
+          jq -e '
+            .status == "healthy" and .read_only == true and
+            .mainnet_changed == false and .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/public-health.json
+          openssl s_client -connect scan.jaios-governance.org:443 \
+            -servername scan.jaios-governance.org </dev/null 2>/dev/null |
+            openssl x509 -noout -checkhost scan.jaios-governance.org
+          jq -n \
+            --arg url "https://scan.jaios-governance.org/" \
+            --arg commit "$GITHUB_SHA" \
+            --arg run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg rollback "/var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}" \
+            --slurpfile explorer artifacts/scan-explorer.json '{
+              status: "PRODUCTION",
+              url: $url,
+              exact_commit: $commit,
+              workflow: $run,
+              rollback_point: $rollback,
+              explorer: $explorer[0],
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/scan-publication.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-scan-publication-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
