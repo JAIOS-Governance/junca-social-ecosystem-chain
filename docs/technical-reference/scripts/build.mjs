@@ -113,6 +113,7 @@ for (const route of routes) {
       .replaceAll("Pending Live Acceptance", "Live Acceptance Verified")
       .replaceAll("Pending Runtime Binding", "Read-only Endpoint Active")
       .replaceAll("Runtime Unverified", "Runtime Verified")
+      .replaceAll("Runtime unverified", "Runtime verified")
       .replaceAll("Public endpoint pending", "Public endpoint active"),
     "utf8",
   );
