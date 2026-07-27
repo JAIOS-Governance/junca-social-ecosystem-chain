@@ -1,0 +1,208 @@
+name: JUNCA Runtime Release Evidence Collector
+
+on:
+  workflow_dispatch:
+    inputs:
+      ami_run_id:
+        description: Exact successful JUNCA Validator Immutable AMI Build run ID
+        required: true
+        type: string
+      source_commit:
+        description: Exact 40-character source commit bound to the immutable AMI
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-runtime-release-evidence-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 20
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      AMI_RUN_ID: ${{ inputs.ami_run_id }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+    steps:
+      - name: Verify immutable AMI workflow provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          run_json="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${AMI_RUN_ID}")"
+          jq -e \
+            --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Immutable AMI Build" and
+            .path == ".github/workflows/junca-validator-ami-build.yml" and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run_json"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: junca-validator-ami-build-${{ env.AMI_RUN_ID }}
+          path: evidence/ami
+          github-token: ${{ github.token }}
+          run-id: ${{ env.AMI_RUN_ID }}
+
+      - name: Verify exact immutable AMI artifact shape
+        run: |
+          set -euo pipefail
+          test "$(find evidence/ami -type f | wc -l)" = 2
+          test -f evidence/ami/junca-validator-ami-build.json
+          test -f evidence/ami/SHA256SUMS
+          (
+            cd evidence/ami
+            sha256sum --check SHA256SUMS
+          )
+          jq -e --arg source_commit "$SOURCE_COMMIT" '
+            .schema_version == "junca-validator-ami-build/v1" and
+            .state == "AMI_VERIFIED" and
+            .network == "Public Testnet" and
+            .notice == "Public Testnet / No Monetary Value" and
+            .source_commit == $source_commit and
+            (.request_sha256 | test("^[0-9a-f]{64}$")) and
+            .terraform_state_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' evidence/ami/junca-validator-ami-build.json
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-release-evidence-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Read canonical Terraform outputs without state mutation
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/readback
+          test "$(aws sts get-caller-identity --query Account --output text)" \
+            = "$AWS_ACCOUNT_ID"
+          terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/bootstrap.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true"
+          terraform -chdir=infra/aws/bootstrap output -json \
+            > evidence/readback/bootstrap-outputs.json
+          state_kms_key_arn="$(
+            jq -er .state_kms_key_arn.value \
+              evidence/readback/bootstrap-outputs.json
+          )"
+          lock_table="$(
+            jq -er .lock_table.value evidence/readback/bootstrap-outputs.json
+          )"
+          terraform -chdir=infra/aws/public-testnet init \
+            -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$lock_table" \
+            -backend-config="encrypt=true" \
+            -backend-config="kms_key_id=$state_kms_key_arn"
+          terraform -chdir=infra/aws/public-testnet output -json \
+            > evidence/readback/public-testnet-outputs.json
+
+      - name: Read exact AWS runtime resources
+        run: |
+          set -euo pipefail
+          candidate_ami="$(
+            jq -er .ami_id evidence/ami/junca-validator-ami-build.json
+          )"
+          mapfile -t instances < <(
+            jq -er '.validator_instance_ids.value[]' \
+              evidence/readback/public-testnet-outputs.json
+          )
+          mapfile -t volumes < <(
+            jq -er '.validator_state_volume_readback.value[].volume_id' \
+              evidence/readback/public-testnet-outputs.json
+          )
+          test "${#instances[@]}" = 3
+          test "${#volumes[@]}" = 3
+          aws ec2 describe-images --image-ids "$candidate_ami" \
+            > evidence/readback/images.json
+          aws ec2 describe-instances --instance-ids "${instances[@]}" \
+            > evidence/readback/instances.json
+          aws ec2 describe-volumes --volume-ids "${volumes[@]}" \
+            > evidence/readback/volumes.json
+          mapfile -t snapshots < <(
+            jq -er '
+              .Volumes[] |
+              [.Tags[] | select(.Key == "JuncaRollbackSnapshotId") | .Value] |
+              if length == 1 then .[0] else error("missing exact rollback snapshot") end
+            ' evidence/readback/volumes.json
+          )
+          test "${#snapshots[@]}" = 3
+          test "$(printf '%s\n' "${snapshots[@]}" | sort -u | wc -l)" = 3
+          aws ec2 describe-snapshots --snapshot-ids "${snapshots[@]}" \
+            > evidence/readback/snapshots.json
+
+      - name: Read Public Testnet endpoints
+        run: |
+          set -euo pipefail
+          python scripts/junca_public_testnet_endpoint_test.py \
+            > evidence/readback/endpoint-acceptance.json
+          jq -e '
+            .status == "PASS" and
+            .scope == "Public Testnet Runtime Acceptance / Read-only" and
+            .checks.health == "PASS" and
+            .checks.explorer.result == "PASS" and
+            .checks.safe_rpc.result == "PASS" and
+            .checks.unsafe_rpc_rejection.result == "PASS"
+          ' evidence/readback/endpoint-acceptance.json
+
+      - name: Build exact fail-closed release evidence
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/release
+          python scripts/junca_runtime_release_evidence_collector.py \
+            --candidate-ami evidence/ami/junca-validator-ami-build.json \
+            --bootstrap-outputs evidence/readback/bootstrap-outputs.json \
+            --public-testnet-outputs evidence/readback/public-testnet-outputs.json \
+            --images evidence/readback/images.json \
+            --instances evidence/readback/instances.json \
+            --volumes evidence/readback/volumes.json \
+            --snapshots evidence/readback/snapshots.json \
+            --endpoint-acceptance evidence/readback/endpoint-acceptance.json \
+            --expected-source-commit "$SOURCE_COMMIT" \
+            --output-dir evidence/release
+          test "$(find evidence/release -type f | wc -l)" = 3
+          test -f evidence/release/junca-runtime-pre-rollout-baseline.json
+          test -f evidence/release/junca-public-explorer-pre-rollout-baseline.json
+          test -f evidence/release/junca-validator-ebs-pre-rollout-baseline.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-runtime-release-evidence-${{ github.run_id }}
+          path: evidence/release/
+          if-no-files-found: error
+          retention-days: 90
