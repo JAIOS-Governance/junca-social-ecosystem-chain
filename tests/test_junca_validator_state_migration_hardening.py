@@ -106,6 +106,10 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             'rmdir "$temporary_mount/lost+found"',
             'if [[ -f "$temporary_mount/state.sqlite" ]]',
             'local rollback_status="$1"',
+            'local rollback_line="${2:-unknown}"',
+            'local rollback_command="${3:-unknown}"',
+            "JUNCA_MIGRATION_FAILURE",
+            'trap \'rollback "$?" "$LINENO" "$BASH_COMMAND"\' ERR EXIT',
             "trap 'rollback 130' INT",
             "trap 'rollback 143' TERM",
         ):

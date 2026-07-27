@@ -433,8 +433,9 @@ class ValidatorStateMigrationResumeTests(unittest.TestCase):
             + extract_shell_function("rollback")
             + "root_path_moved=false\n"
             + "service_stopped=true\n"
+            + "phase=verify\n"
             + f"temporary_mount={temporary_mount!s}\n"
-            + "trap 'rollback \"$?\"' ERR EXIT\n"
+            + "trap 'rollback \"$?\" \"$LINENO\" \"$BASH_COMMAND\"' ERR EXIT\n"
             + "false\n"
             + "service_stopped=false\n"
         )
@@ -455,6 +456,12 @@ class ValidatorStateMigrationResumeTests(unittest.TestCase):
             call_log.read_text(encoding="utf-8"),
             "start junca-validator\n",
         )
+        self.assertIn(
+            "JUNCA_MIGRATION_FAILURE phase=verify",
+            completed.stderr,
+        )
+        self.assertIn("status=1", completed.stderr)
+        self.assertIn("command=false", completed.stderr)
 
 
 if __name__ == "__main__":
