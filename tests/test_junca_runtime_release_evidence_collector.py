@@ -116,6 +116,7 @@ def fixture():
                         "SourceCommit": COMMIT,
                         "NodeArtifactSHA256": NODE,
                         "GenesisSHA256": GENESIS,
+                        "RequestDigest": REQUEST,
                         "MainnetChanged": "false",
                         "AssetsMoved": "false",
                         "BridgeActivated": "false",
