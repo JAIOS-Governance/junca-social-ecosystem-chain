@@ -8,7 +8,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#071827">
+  <meta name="theme-color" content="#071827">\n  <meta name="application-name" content="JUNCA Explorer">\n  <meta name="apple-mobile-web-app-capable" content="yes">\n  <meta name="apple-mobile-web-app-title" content="JUNCA Explorer">
   <meta name="description" content="Finalized-only public explorer for the JUNCA Social Ecosystem Chain Public Testnet.">
   <link rel="icon" type="image/png" href="/explorer-icon.png">
   <link rel="apple-touch-icon" href="/explorer-icon.png">
