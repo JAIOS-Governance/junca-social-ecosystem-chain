@@ -13,7 +13,7 @@ on:
       ami_run_id:
         description: "Verified immutable AMI workflow run ID"
         required: false
-        default: "30233435029"
+        default: "30235669265"
 
 permissions:
   actions: read
@@ -41,7 +41,7 @@ jobs:
       DOMAIN_NAME: jaios-governance.org
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
-      AMI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ami_run_id || '30233435029' }}
+      AMI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ami_run_id || '30235669265' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +64,7 @@ jobs:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-validator-release-${{ github.run_id }}
+          retry-max-attempts: 3
 
       - name: Bind verified immutable AMI inputs
         run: |
