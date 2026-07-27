@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -64,6 +66,9 @@ def evidence():
         "request_sha256": REQUEST,
         "migration_evidence_sha256": MIGRATION_DIGEST,
         "baseline_mode": "public_endpoints",
+        "public_services_enabled": True,
+        "public_endpoint_acceptance": True,
+        "public_endpoint_outage": None,
         "network": "Public Testnet",
         "notice": "Public Testnet / No Monetary Value",
         "ami_provenance": {
@@ -92,6 +97,9 @@ def evidence():
     explorer = binding() | {
         "schema_version": "junca-public-explorer-pre-rollout-baseline/v1",
         "baseline_mode": "public_endpoints",
+        "public_services_enabled": True,
+        "public_endpoint_acceptance": True,
+        "public_endpoint_outage": None,
         "candidate_accepted": False,
         "status": "BASELINE_VERIFIED",
         "request_sha256": REQUEST,
@@ -141,6 +149,51 @@ def evaluate(manifest, explorer, ebs):
         expected_artifact_sha256=ARTIFACT,
         expected_genesis_sha256=GENESIS,
     )
+
+
+def endpoint_outage():
+    body = b"<html><body>502 Bad Gateway</body></html>"
+    observations = [
+        {
+            "name": name,
+            "method": method,
+            "url": url,
+            "curl_exit_code": 0,
+            "http_status": 502,
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "body_base64": base64.b64encode(body).decode("ascii"),
+            "stderr": "",
+        }
+        for name, method, url in (
+            (
+                "health",
+                "GET",
+                "https://health.jaios-governance.org/health",
+            ),
+            (
+                "explorer",
+                "GET",
+                "https://explorer.jaios-governance.org/explorer.json",
+            ),
+            ("rpc", "POST", "https://rpc.jaios-governance.org/"),
+        )
+    ]
+    return {
+        "schema_version": "junca-public-endpoint-outage/v1",
+        "status": "PUBLIC_ENDPOINTS_UNAVAILABLE",
+        "public_services_enabled": True,
+        "public_endpoint_acceptance": False,
+        "observed_at": "2026-07-27T00:00:00Z",
+        "endpoint_test_exit_code": 1,
+        "endpoint_test": {
+            "status": "FAIL",
+            "error": "health endpoint unavailable",
+        },
+        "observations": observations,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
 
 
 class RuntimeReleaseManifestGateTests(unittest.TestCase):
@@ -209,16 +262,20 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
     def test_private_ssm_baseline_passes_without_public_endpoint_assertions(self):
         manifest, explorer, ebs = evidence()
         manifest["baseline_mode"] = "private_ssm"
+        manifest["public_services_enabled"] = False
+        manifest["public_endpoint_acceptance"] = False
         explorer.update(
             {
                 "schema_version":
                     "junca-private-ssm-pre-rollout-baseline/v1",
                 "baseline_mode": "private_ssm",
+                "public_services_enabled": False,
+                "public_endpoint_acceptance": False,
                 "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
                 "readback": {
                     "mode": "private_ssm",
                     "scope": (
-                        "Public Testnet Runtime Acceptance / "
+                        "Public Testnet Pre-rollout Baseline / "
                         "Private SSM Read-only"
                     ),
                     "validator_count": 3,
@@ -255,16 +312,20 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
     def test_private_ssm_baseline_rejects_identity_head_and_quorum_drift(self):
         manifest, explorer, ebs = evidence()
         manifest["baseline_mode"] = "private_ssm"
+        manifest["public_services_enabled"] = False
+        manifest["public_endpoint_acceptance"] = False
         explorer.update(
             {
                 "schema_version":
                     "junca-private-ssm-pre-rollout-baseline/v1",
                 "baseline_mode": "private_ssm",
+                "public_services_enabled": False,
+                "public_endpoint_acceptance": False,
                 "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
                 "readback": {
                     "mode": "private_ssm",
                     "scope": (
-                        "Public Testnet Runtime Acceptance / "
+                        "Public Testnet Pre-rollout Baseline / "
                         "Private SSM Read-only"
                     ),
                     "validator_count": 3,
@@ -301,6 +362,138 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         )
         self.assertIn(
             "private_ssm.quorum:not_exact_three", decision["failures"]
+        )
+
+    def test_public_outage_private_ssm_is_not_public_endpoint_acceptance(self):
+        manifest, explorer, ebs = evidence()
+        outage = endpoint_outage()
+        manifest.update(
+            {
+                "baseline_mode": "private_ssm",
+                "public_services_enabled": True,
+                "public_endpoint_acceptance": False,
+                "public_endpoint_outage": outage,
+            }
+        )
+        explorer.update(
+            {
+                "schema_version":
+                    "junca-private-ssm-pre-rollout-baseline/v1",
+                "baseline_mode": "private_ssm",
+                "public_services_enabled": True,
+                "public_endpoint_acceptance": False,
+                "public_endpoint_outage": outage,
+                "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
+                "readback": {
+                    "mode": "private_ssm",
+                    "scope": (
+                        "Public Testnet Pre-rollout Baseline / "
+                        "Private SSM Read-only"
+                    ),
+                    "validator_count": 3,
+                    "chain_id": 20260723,
+                    "validators": [
+                        {
+                            "validator_id": f"validator-0{index}",
+                            "instance_id": f"i-{index:017x}",
+                            "signer_resource_digest": f"{index}" * 64,
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "finalized_head": {
+                        "height": 100,
+                        "hash": "0x" + "a" * 64,
+                        "timestamp": 2_000_000_000,
+                        "certificate_hash": "0x" + "b" * 64,
+                    },
+                    "quorum": {
+                        "signed_power": 3,
+                        "total_power": 3,
+                        "validator_ids": list(gate.VALIDATOR_IDS),
+                    },
+                },
+            }
+        )
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertTrue(decision["accepted"], decision["failures"])
+        self.assertEqual(decision["baseline_mode"], "private_ssm")
+        self.assertFalse(decision["public_endpoint_acceptance"])
+        self.assertEqual(
+            decision["public_endpoint_outage_status"],
+            "PUBLIC_ENDPOINTS_UNAVAILABLE",
+        )
+        self.assertFalse(manifest["public_endpoint_acceptance"])
+
+    def test_public_outage_binding_and_digest_tamper_fail_closed(self):
+        manifest, explorer, ebs = evidence()
+        outage = endpoint_outage()
+        manifest.update(
+            {
+                "baseline_mode": "private_ssm",
+                "public_services_enabled": True,
+                "public_endpoint_acceptance": False,
+                "public_endpoint_outage": outage,
+            }
+        )
+        explorer.update(
+            {
+                "schema_version":
+                    "junca-private-ssm-pre-rollout-baseline/v1",
+                "baseline_mode": "private_ssm",
+                "public_services_enabled": True,
+                "public_endpoint_acceptance": False,
+                "public_endpoint_outage": outage,
+                "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
+                "readback": {
+                    "mode": "private_ssm",
+                    "scope": (
+                        "Public Testnet Pre-rollout Baseline / "
+                        "Private SSM Read-only"
+                    ),
+                    "validator_count": 3,
+                    "validators": [
+                        {
+                            "validator_id": f"validator-0{index}",
+                            "instance_id": f"i-{index:017x}",
+                            "signer_resource_digest": f"{index}" * 64,
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "finalized_head": {
+                        "height": 100,
+                        "hash": "0x" + "a" * 64,
+                        "certificate_hash": "0x" + "b" * 64,
+                    },
+                    "quorum": {
+                        "signed_power": 3,
+                        "total_power": 3,
+                        "validator_ids": list(gate.VALIDATOR_IDS),
+                    },
+                },
+            }
+        )
+        manifest["public_endpoint_outage"] = dict(outage)
+        manifest["public_endpoint_outage"]["observations"] = [
+            dict(item) for item in outage["observations"]
+        ]
+        manifest["public_endpoint_outage"]["observations"][0][
+            "body_base64"
+        ] = base64.b64encode(b"tampered").decode("ascii")
+        explorer["public_endpoint_outage"] = manifest[
+            "public_endpoint_outage"
+        ]
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertIn(
+            "public_outage.health:body_digest_mismatch",
+            decision["failures"],
+        )
+
+        manifest["public_endpoint_acceptance"] = True
+        explorer["public_endpoint_acceptance"] = True
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertIn(
+            "private_ssm.public_endpoint_acceptance:not_false",
+            decision["failures"],
         )
 
     def test_ebs_requires_three_durable_verified_volumes(self):
