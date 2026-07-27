@@ -54,6 +54,9 @@ resource "aws_ebs_volume" "validator_state" {
       StatePath         = "/var/lib/junca"
       MigrationRequired = var.validator_state_migration_accepted ? "false" : "true"
       PublicTestnetOnly = "true"
+      MainnetChanged    = "false"
+      AssetsMoved       = "false"
+      BridgeActivated   = "false"
     },
     var.validator_state_migration_accepted ? {
       JuncaMigrationState                = "VERIFIED_PASS"

@@ -99,6 +99,9 @@ class ValidatorStateMigrationTests(unittest.TestCase):
             "prevent_destroy = true",
             'MigrationRequired = var.validator_state_migration_accepted ? "false" : "true"',
             'PublicTestnetOnly = "true"',
+            'MainnetChanged    = "false"',
+            'AssetsMoved       = "false"',
+            'BridgeActivated   = "false"',
         ):
             self.assertIn(required, volume)
         for required in (

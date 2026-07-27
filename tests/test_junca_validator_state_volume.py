@@ -41,6 +41,9 @@ class ValidatorStateVolumeTests(unittest.TestCase):
             "prevent_destroy = true",
             'StatePath         = "/var/lib/junca"',
             'MigrationRequired = var.validator_state_migration_accepted ? "false" : "true"',
+            'MainnetChanged    = "false"',
+            'AssetsMoved       = "false"',
+            'BridgeActivated   = "false"',
             "var.validator_state_volume_iops / 4",
         ):
             self.assertIn(required, self.volume)
