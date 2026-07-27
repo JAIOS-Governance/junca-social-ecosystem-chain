@@ -102,7 +102,7 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn("default     = false", self.runtime_variables)
         for required in (
             "count = var.enable_public_services ? 1 : 0",
-            "count = var.enable_public_services ? 2 : 0",
+            "count            = var.enable_public_services ? 3 : 0",
             "var.enable_public_services ? toset([",
         ):
             self.assertIn(required, self.runtime)
