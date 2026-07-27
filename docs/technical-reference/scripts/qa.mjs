@@ -1,3 +1,4 @@
+// R22 publication marker: JAIOS institutional link accepted for production.
 import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
