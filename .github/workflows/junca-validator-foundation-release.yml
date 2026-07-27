@@ -187,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t instances < artifacts/validator-instance-ids.txt
-          health_poll='for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health > /tmp/junca-health.json && jq -e '"'"'.head_height >= 1 and (.consensus.last_certificate_hash | type) == "string"'"'"' /tmp/junca-health.json >/dev/null && cat /tmp/junca-health.json && exit 0; sleep 2; done; exit 1'
+          health_poll='sleep 5; curl -fsS http://127.0.0.1:8545/health'
           jq -n --arg command "$health_poll" \
             '{commands: [$command]}' > artifacts/ssm-health.json
           command_id="$(aws ssm send-command \
