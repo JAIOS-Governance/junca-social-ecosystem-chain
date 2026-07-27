@@ -54,7 +54,48 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 
+cat >/etc/systemd/system/junca-public-rpc.service <<'EOF'
+[Unit]
+Description=JUNCA Public Testnet Read-only RPC Gateway
+After=junca-validator.service
+Requires=junca-validator.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 8546
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/junca-public-explorer.service <<'EOF'
+[Unit]
+Description=JUNCA Public Testnet Finalized-only Explorer
+After=junca-validator.service
+Requires=junca-validator.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 3000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable --now junca-validator.service
+systemctl enable --now junca-public-rpc.service junca-public-explorer.service
 
 logger -t junca-bootstrap "validator=${validator_id} governance=JAIOS_Institutional_Governance log_group=${cloudwatch_log_name} state=started"
