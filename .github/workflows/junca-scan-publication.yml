@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/junca-scan-publication.yml"
+      - "jaios/social_ecosystem_chain/explorer_page.py"
+      - "jaios/social_ecosystem_chain/public_gateway.py"
+      - "jaios/social_ecosystem_chain/assets/junca-chain-logo-gold-on-navy.png"
 
 permissions:
   contents: read
