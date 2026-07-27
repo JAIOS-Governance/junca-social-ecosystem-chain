@@ -6,6 +6,9 @@ volume_id="${JUNCA_STATE_VOLUME_ID:-}"
 rollback_token="${JUNCA_MIGRATION_TOKEN:-}"
 phase="${JUNCA_MIGRATION_PHASE:-migrate}"
 expected_signer_arn="${JUNCA_EXPECTED_SIGNER_ARN:-}"
+backfill_tool="${JUNCA_FINALITY_BACKFILL_TOOL:-}"
+backfill_request="${JUNCA_FINALITY_BACKFILL_REQUEST:-}"
+backfill_request_sha256="${JUNCA_FINALITY_BACKFILL_REQUEST_SHA256:-}"
 [[ "$volume_id" =~ ^vol-[0-9a-f]{8,17}$ ]]
 [[ "$rollback_token" =~ ^[0-9]+-[0-9]+$ ]]
 case "$phase" in
@@ -13,6 +16,29 @@ case "$phase" in
   *) echo "JUNCA_MIGRATION_PHASE must be prepare, migrate, or verify" >&2; exit 2 ;;
 esac
 [[ "$expected_signer_arn" =~ ^arn:aws:kms:us-east-1:595710543956:key/.+ ]]
+test -f "$backfill_tool"
+test ! -L "$backfill_tool"
+test -f "$backfill_request"
+test ! -L "$backfill_request"
+[[ "$backfill_request_sha256" =~ ^[0-9a-f]{64}$ ]]
+actual_backfill_request_sha256="$(
+  python3 - "$backfill_request" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    value = json.load(source)
+canonical = json.dumps(
+    value,
+    sort_keys=True,
+    separators=(",", ":"),
+    allow_nan=False,
+).encode("utf-8")
+print(hashlib.sha256(canonical).hexdigest())
+PY
+)"
+test "$actual_backfill_request_sha256" = "$backfill_request_sha256"
 runtime_signer_arn="$(
   sed -n 's/^SIGNER_RESOURCE_ARN=//p' /etc/junca/runtime.env
 )"
@@ -27,6 +53,7 @@ before_health="/tmp/junca-health-before-${rollback_token}.json"
 after_health="/tmp/junca-health-after-${rollback_token}.json"
 source_manifest="/tmp/junca-state-source-${rollback_token}.metadata.json"
 target_manifest="/tmp/junca-state-target-${rollback_token}.metadata.json"
+backfill_result="/tmp/junca-finality-backfill-${rollback_token}.json"
 switched=false
 root_path_moved=false
 service_stopped=false
@@ -78,8 +105,125 @@ if result != ("ok",):
 PY
 }
 
-write_metadata_manifest() {
+verify_backfill_binding() {
+  python3 - "$1" "$backfill_request" <<'PY'
+import json
+import sqlite3
+import sys
+
+database, request_path = sys.argv[1:]
+with open(request_path, encoding="utf-8") as source:
+    request = json.load(source)
+connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+connection.row_factory = sqlite3.Row
+try:
+    row = connection.execute(
+        """
+        SELECT height,block_hash,finalized,certificate_hash
+        FROM blocks ORDER BY height DESC LIMIT 1
+        """
+    ).fetchone()
+finally:
+    connection.close()
+if (
+    row is None
+    or row["height"] != request.get("head_height")
+    or row["block_hash"] != request.get("head_hash")
+    or row["finalized"] != 1
+    or row["certificate_hash"] != request.get("certificate_hash")
+):
+    raise SystemExit("durable head does not bind finality backfill request")
+PY
+}
+
+verify_legacy_sqlite_equivalence() {
   python3 - "$1" "$2" <<'PY'
+import sqlite3
+import sys
+
+source_path, target_path = sys.argv[1:]
+source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+target = sqlite3.connect(f"file:{target_path}?mode=ro", uri=True)
+try:
+    source_tables = {
+        row[0]
+        for row in source.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            """
+        )
+    }
+    target_tables = {
+        row[0]
+        for row in target.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            """
+        )
+    }
+    if source_tables != {"metadata", "blocks"}:
+        raise SystemExit("legacy source state schema is unexpected")
+    if target_tables != {
+        "metadata",
+        "blocks",
+        "finality_certificates",
+    }:
+        raise SystemExit("backfilled target state schema is unexpected")
+    source_objects = list(
+        source.execute(
+            """
+            SELECT type,name,tbl_name,sql FROM sqlite_master
+            WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type,name
+            """
+        )
+    )
+    target_objects = list(
+        target.execute(
+            """
+            SELECT type,name,tbl_name,sql FROM sqlite_master
+            WHERE name NOT LIKE 'sqlite_%'
+              AND name != 'finality_certificates'
+            ORDER BY type,name
+            """
+        )
+    )
+    if source_objects != target_objects:
+        raise SystemExit("target SQLite objects differ from legacy source")
+    finality_objects = list(
+        target.execute(
+            """
+            SELECT type,name,tbl_name FROM sqlite_master
+            WHERE name='finality_certificates'
+            """
+        )
+    )
+    if finality_objects != [
+        ("table", "finality_certificates", "finality_certificates")
+    ]:
+        raise SystemExit("finality certificate schema scope is invalid")
+    for table, order in (
+        ("metadata", "key"),
+        ("blocks", "height"),
+    ):
+        source_columns = list(source.execute(f"PRAGMA table_info({table})"))
+        target_columns = list(target.execute(f"PRAGMA table_info({table})"))
+        if source_columns != target_columns:
+            raise SystemExit(f"{table} schema changed during backfill")
+        source_rows = list(source.execute(f"SELECT * FROM {table} ORDER BY {order}"))
+        target_rows = list(target.execute(f"SELECT * FROM {table} ORDER BY {order}"))
+        if source_rows != target_rows:
+            raise SystemExit(f"{table} rows changed during backfill")
+finally:
+    source.close()
+    target.close()
+PY
+}
+
+write_metadata_manifest() {
+  python3 - "$1" "$2" "${3:-include-state}" <<'PY'
 import base64
 import hashlib
 import json
@@ -89,6 +233,7 @@ import sys
 
 root = os.path.abspath(sys.argv[1])
 output = sys.argv[2]
+exclude_state = sys.argv[3] == "exclude-state"
 paths = [root]
 for directory, names, filenames in os.walk(
     root, topdown=True, followlinks=False
@@ -98,6 +243,13 @@ for directory, names, filenames in os.walk(
     paths.extend(os.path.join(directory, name) for name in names)
     paths.extend(os.path.join(directory, name) for name in filenames)
 paths = sorted(set(paths), key=lambda path: os.path.relpath(path, root))
+if exclude_state:
+    paths = [
+        path
+        for path in paths
+        if os.path.relpath(path, root)
+        not in {"state.sqlite", "state.sqlite-shm", "state.sqlite-wal"}
+    ]
 
 hardlinks = {}
 for path in paths:
@@ -121,6 +273,12 @@ for path in paths:
         "nlink": value.st_nlink,
         "xattrs": {},
     }
+    if exclude_state and relative == ".":
+        # SQLite WAL/SHM creation and cleanup changes only the containing
+        # directory timestamps/link bookkeeping. Compare its ownership,
+        # permissions and xattrs while the database is checked semantically.
+        entry.pop("mtime_ns")
+        entry.pop("nlink")
     for name in sorted(os.listxattr(path, follow_symlinks=False)):
         entry["xattrs"][name] = base64.b64encode(
             os.getxattr(path, name, follow_symlinks=False)
@@ -158,14 +316,60 @@ wait_for_health() {
   done
 }
 
+wait_for_basic_health() {
+  output="$1"
+  for attempt in $(seq 1 90); do
+    if curl -fsS http://127.0.0.1:8545/health >"$output" &&
+      python3 - "$output" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    value = json.load(source)
+consensus = value.get("consensus", {})
+if (
+    value.get("status") != "healthy"
+    or value.get("network") != "Public Testnet / No Monetary Value"
+    or value.get("chain_id") != 20260723
+    or value.get("genesis_hash")
+    != "0xdc8200c498d28d23ec834fde6559d5b14f0b05a4ed5178c4b90642310b8660a6"
+    or not isinstance(value.get("head_height"), int)
+    or isinstance(value.get("head_height"), bool)
+    or value["head_height"] < 0
+    or re.fullmatch(r"0x[0-9a-f]{64}", value.get("head_hash", "")) is None
+    or value.get("private_key_material_accepted") is not False
+    or value.get("mainnet_changed") is not False
+    or value.get("assets_moved") is not False
+    or value.get("bridge_activated") is not False
+    or consensus.get("chain_id") != 20260723
+    or consensus.get("pending_height") is not None
+    or consensus.get("required_vote_count") != 3
+    or consensus.get("quorum_rule") != "strictly-greater-than-two-thirds"
+    or consensus.get("private_key_material_accepted") is not False
+    or consensus.get("mainnet_changed") is not False
+    or consensus.get("assets_moved") is not False
+    or consensus.get("bridge_activated") is not False
+):
+    raise SystemExit("basic Public Testnet health validation failed")
+PY
+    then
+      return 0
+    fi
+    test "$attempt" -lt 90
+    sleep 2
+  done
+}
+
 if [[ "$phase" == prepare ]]; then
   test -d "$state_path"
   test ! -L "$state_path"
   test -f "$state_path/state.sqlite"
   test ! -L "$state_path/state.sqlite"
-  wait_for_health "$before_health"
-  before_certificate="$(certificate_hash "$before_health")"
+  wait_for_basic_health "$before_health"
+  before_certificate="$(jq -er '.certificate_hash' "$backfill_request")"
   verify_sqlite "$state_path/state.sqlite"
+  verify_backfill_binding "$state_path/state.sqlite"
   systemctl stop junca-validator
   systemctl is-active --quiet junca-validator && exit 1
   sync
@@ -220,12 +424,29 @@ if [[ "$phase" == verify ]]; then
   test -f "$state_path/state.sqlite"
   test ! -L "$state_path/state.sqlite"
   verify_sqlite "$state_path/state.sqlite"
-  systemctl is-active --quiet junca-validator
-  wait_for_health "$after_health"
+  systemctl stop junca-validator
+  service_stopped=true
+  systemctl is-active --quiet junca-validator && exit 1
+  python3 "$backfill_tool" \
+    --database "$state_path/state.sqlite" \
+    --request "$backfill_request" \
+    --result "$backfill_result"
+  jq -e \
+    --arg request "$backfill_request_sha256" '
+    (.state == "BACKFILLED" or .state == "ALREADY_BACKFILLED") and
+    .request_sha256 == $request and
+    .write_scope == "finality_certificate_schema_and_head_body_only" and
+    .mainnet_changed == false and
+    .assets_moved == false and
+    .bridge_activated == false
+  ' "$backfill_result" >/dev/null
+  systemctl start junca-validator
+  service_stopped=false
+  wait_for_basic_health "$after_health"
   printf '{"state":"VERIFIED_PASS","volume_id":"%s","device":"%s","state_sha256":"%s","certificate_hash":"%s","head_height":%s,"head_hash":"%s"}\n' \
     "$volume_id" "$resolved_device" \
     "$(sha256sum "$state_path/state.sqlite" | cut -d' ' -f1)" \
-    "$(certificate_hash "$after_health")" \
+    "$(jq -er '.certificate_hash' "$backfill_result")" \
     "$(head_field "$after_health" head_height)" \
     "$(head_field "$after_health" head_hash)"
   trap - ERR EXIT INT TERM
@@ -237,12 +458,22 @@ if mountpoint -q "$state_path"; then
   test -f "$state_path/state.sqlite"
   test ! -L "$state_path/state.sqlite"
   verify_sqlite "$state_path/state.sqlite"
-  if ! systemctl is-active --quiet junca-validator; then
-    service_stopped=true
-    systemctl start junca-validator
-    service_stopped=false
-  fi
-  wait_for_health "$after_health"
+  systemctl stop junca-validator
+  service_stopped=true
+  systemctl is-active --quiet junca-validator && exit 1
+  python3 "$backfill_tool" \
+    --database "$state_path/state.sqlite" \
+    --request "$backfill_request" \
+    --result "$backfill_result"
+  jq -e \
+    --arg request "$backfill_request_sha256" '
+    (.state == "BACKFILLED" or .state == "ALREADY_BACKFILLED") and
+    .request_sha256 == $request and
+    .write_scope == "finality_certificate_schema_and_head_body_only"
+  ' "$backfill_result" >/dev/null
+  systemctl start junca-validator
+  service_stopped=false
+  wait_for_basic_health "$after_health"
   if [[ -s "$before_health" ]]; then
     before_height="$(head_field "$before_health" head_height)"
     after_height="$(head_field "$after_health" head_height)"
@@ -250,14 +481,11 @@ if mountpoint -q "$state_path"; then
     if [[ "$after_height" == "$before_height" ]]; then
       test "$(head_field "$after_health" head_hash)" = \
         "$(head_field "$before_health" head_hash)"
-      test "$(certificate_hash "$after_health")" = \
-        "$(certificate_hash "$before_health")"
     fi
   fi
-  printf '{"state":"ALREADY_MIGRATED","volume_id":"%s","device":"%s","state_sha256":"%s","certificate_hash":"%s","head_height":%s,"head_hash":"%s"}\n' \
+  printf '{"state":"MOUNT_ACTIVATED_PENDING_FINALITY","volume_id":"%s","device":"%s","state_sha256":"%s","head_height":%s,"head_hash":"%s"}\n' \
     "$volume_id" "$resolved_device" \
     "$(sha256sum "$state_path/state.sqlite" | cut -d' ' -f1)" \
-    "$(certificate_hash "$after_health")" \
     "$(head_field "$after_health" head_height)" \
     "$(head_field "$after_health" head_hash)"
   trap - ERR EXIT INT TERM
@@ -270,11 +498,12 @@ test -f "$state_path/state.sqlite"
 test ! -L "$state_path/state.sqlite"
 test ! -e "$rollback_path"
 test -s "$before_health"
-before_certificate="$(certificate_hash "$before_health")"
+before_certificate="$(jq -er '.certificate_hash' "$backfill_request")"
 service_stopped=true
 systemctl is-active --quiet junca-validator && exit 1
 sync
 verify_sqlite "$state_path/state.sqlite"
+verify_backfill_binding "$state_path/state.sqlite"
 
 filesystem="$(blkid -o value -s TYPE "$device" 2>/dev/null || true)"
 test "$(lsblk -nrpo NAME "$device" | wc -l)" = 1
@@ -320,11 +549,32 @@ test ! -L "$temporary_mount/state.sqlite"
 verify_sqlite "$temporary_mount/state.sqlite"
 write_metadata_manifest "$state_path" "$source_manifest"
 write_metadata_manifest "$temporary_mount" "$target_manifest"
-cmp "$source_manifest" "$target_manifest"
-copy_manifest_sha256="$(sha256sum "$source_manifest" | cut -d' ' -f1)"
 source_state_sha256="$(sha256sum "$state_path/state.sqlite" | cut -d' ' -f1)"
 target_state_sha256="$(sha256sum "$temporary_mount/state.sqlite" | cut -d' ' -f1)"
-test "$source_state_sha256" = "$target_state_sha256"
+if cmp -s "$source_manifest" "$target_manifest"; then
+  test "$source_state_sha256" = "$target_state_sha256"
+fi
+python3 "$backfill_tool" \
+  --database "$temporary_mount/state.sqlite" \
+  --request "$backfill_request" \
+  --result "$backfill_result"
+jq -e \
+  --arg request "$backfill_request_sha256" '
+  (.state == "BACKFILLED" or .state == "ALREADY_BACKFILLED") and
+  .request_sha256 == $request and
+  .write_scope == "finality_certificate_schema_and_head_body_only" and
+  .mainnet_changed == false and
+  .assets_moved == false and
+  .bridge_activated == false
+' "$backfill_result" >/dev/null
+verify_sqlite "$temporary_mount/state.sqlite"
+verify_legacy_sqlite_equivalence \
+  "$state_path/state.sqlite" "$temporary_mount/state.sqlite"
+write_metadata_manifest "$state_path" "$source_manifest" exclude-state
+write_metadata_manifest "$temporary_mount" "$target_manifest" exclude-state
+cmp "$source_manifest" "$target_manifest"
+copy_manifest_sha256="$(sha256sum "$target_manifest" | cut -d' ' -f1)"
+target_state_sha256="$(sha256sum "$temporary_mount/state.sqlite" | cut -d' ' -f1)"
 
 umount "$temporary_mount"
 mv "$state_path" "$rollback_path"
@@ -380,21 +630,19 @@ systemctl daemon-reload
 systemctl enable junca-validator-state.service
 systemctl start junca-validator
 service_stopped=false
-wait_for_health "$after_health"
-after_certificate="$(certificate_hash "$after_health")"
+wait_for_basic_health "$after_health"
 before_height="$(head_field "$before_health" head_height)"
 after_height="$(head_field "$after_health" head_height)"
 test "$after_height" -ge "$before_height"
 if [[ "$after_height" == "$before_height" ]]; then
   test "$(head_field "$after_health" head_hash)" = \
     "$(head_field "$before_health" head_hash)"
-  test "$after_certificate" = "$before_certificate"
 fi
 verify_sqlite "$state_path/state.sqlite"
 
-printf '{"state":"VERIFIED_PASS","volume_id":"%s","device":"%s","state_sha256":"%s","copy_manifest_sha256":"%s","certificate_hash":"%s","before_height":%s,"before_head_hash":"%s","after_height":%s,"after_head_hash":"%s","rollback_path":"%s"}\n' \
+printf '{"state":"MOUNT_ACTIVATED_PENDING_FINALITY","volume_id":"%s","device":"%s","state_sha256":"%s","copy_manifest_sha256":"%s","before_certificate_hash":"%s","before_height":%s,"before_head_hash":"%s","after_height":%s,"after_head_hash":"%s","rollback_path":"%s"}\n' \
   "$volume_id" "$resolved_device" "$source_state_sha256" \
-  "$copy_manifest_sha256" "$after_certificate" "$before_height" \
+  "$copy_manifest_sha256" "$before_certificate" "$before_height" \
   "$(head_field "$before_health" head_hash)" "$after_height" \
   "$(head_field "$after_health" head_hash)" "$rollback_path"
 trap - ERR EXIT INT TERM
