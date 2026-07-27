@@ -11,6 +11,8 @@ markers or mismatched runtime identity reject collection.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -690,37 +692,115 @@ def verify_endpoint_acceptance(report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def verify_endpoint_outage(report: Mapping[str, Any]) -> dict[str, Any]:
-    require(report.get("status") == "FAIL", "endpoint_outage.status:not_fail")
+def verify_public_endpoint_outage(
+    report: Mapping[str, Any],
+) -> dict[str, Any]:
     require(
-        report.get("scope")
-        == "Public Testnet Runtime Acceptance / Read-only",
-        "endpoint_outage.scope:mismatch",
-    )
-    observed_at = report.get("observed_at")
-    require(
-        isinstance(observed_at, str) and bool(observed_at),
-        "endpoint_outage.observed_at:missing",
+        report.get("schema_version")
+        == "junca-public-endpoint-outage/v1",
+        "public_outage.schema_version:mismatch",
     )
     require(
-        report.get("endpoints")
-        == {
-            "health": "https://health.jaios-governance.org/health",
-            "explorer": "https://explorer.jaios-governance.org/explorer.json",
-            "rpc": "https://rpc.jaios-governance.org/",
-        },
-        "endpoint_outage.endpoints:mismatch",
+        report.get("status") == "PUBLIC_ENDPOINTS_UNAVAILABLE"
+        and report.get("public_services_enabled") is True
+        and report.get("public_endpoint_acceptance") is False,
+        "public_outage.status:invalid",
     )
-    error = report.get("error")
     require(
-        isinstance(error, str) and bool(error),
-        "endpoint_outage.error:missing",
+        isinstance(report.get("observed_at"), str)
+        and bool(report["observed_at"]),
+        "public_outage.observed_at:invalid",
     )
+    exit_code = report.get("endpoint_test_exit_code")
+    endpoint_test = report.get("endpoint_test")
+    require(
+        isinstance(exit_code, int)
+        and not isinstance(exit_code, bool)
+        and 1 <= exit_code <= 255
+        and isinstance(endpoint_test, Mapping)
+        and endpoint_test.get("status") == "FAIL"
+        and isinstance(endpoint_test.get("error"), str)
+        and bool(endpoint_test["error"]),
+        "public_outage.endpoint_test:invalid",
+    )
+    observations = report.get("observations")
+    expected = (
+        (
+            "health",
+            "GET",
+            "https://health.jaios-governance.org/health",
+        ),
+        (
+            "explorer",
+            "GET",
+            "https://explorer.jaios-governance.org/explorer.json",
+        ),
+        ("rpc", "POST", "https://rpc.jaios-governance.org/"),
+    )
+    require(
+        isinstance(observations, list)
+        and len(observations) == 3
+        and all(isinstance(item, Mapping) for item in observations),
+        "public_outage.observations:not_exact_three",
+    )
+    failures = 0
+    normalized: list[dict[str, Any]] = []
+    for item, (name, method, url) in zip(
+        observations, expected, strict=True
+    ):
+        require(
+            item.get("name") == name
+            and item.get("method") == method
+            and item.get("url") == url,
+            f"public_outage.{name}:identity_mismatch",
+        )
+        curl_exit = item.get("curl_exit_code")
+        http_status = item.get("http_status")
+        body_sha256 = item.get("body_sha256")
+        body_base64 = item.get("body_base64")
+        stderr = item.get("stderr")
+        require(
+            isinstance(curl_exit, int)
+            and not isinstance(curl_exit, bool)
+            and 0 <= curl_exit <= 255
+            and isinstance(http_status, int)
+            and not isinstance(http_status, bool)
+            and 0 <= http_status <= 599
+            and SHA256.fullmatch(str(body_sha256)) is not None
+            and isinstance(body_base64, str)
+            and isinstance(stderr, str),
+            f"public_outage.{name}:observation_invalid",
+        )
+        try:
+            body = base64.b64decode(body_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise EvidenceError(
+                f"public_outage.{name}:body_base64_invalid"
+            ) from exc
+        require(
+            len(body) <= 65536
+            and hashlib.sha256(body).hexdigest() == body_sha256,
+            f"public_outage.{name}:body_digest_mismatch",
+        )
+        if curl_exit != 0 or http_status != 200:
+            failures += 1
+        normalized.append(dict(item))
+    require(failures >= 1, "public_outage:no_failed_observation")
+    for field in BOUNDARY:
+        require(
+            report.get(field) is False,
+            f"public_outage.{field}:not_false",
+        )
     return {
-        "status": "FAIL",
-        "observed_at": observed_at,
-        "endpoints": report["endpoints"],
-        "error": error,
+        "schema_version": report["schema_version"],
+        "status": report["status"],
+        "public_services_enabled": True,
+        "public_endpoint_acceptance": False,
+        "observed_at": report["observed_at"],
+        "endpoint_test_exit_code": exit_code,
+        "endpoint_test": dict(endpoint_test),
+        "observations": normalized,
+        **BOUNDARY,
     }
 
 
@@ -738,7 +818,7 @@ def verify_private_validator_health(
     require(report.get("status") == "PASS", "private_ssm.status:not_pass")
     require(
         report.get("scope")
-        == "Public Testnet Runtime Acceptance / Private SSM Read-only",
+        == "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
         "private_ssm.scope:mismatch",
     )
     validators = report.get("validators")
@@ -981,6 +1061,7 @@ def collect(
     snapshots: Mapping[str, Any],
     endpoints: Mapping[str, Any] | None,
     private_validator_health: Mapping[str, Any] | None,
+    public_endpoint_outage: Mapping[str, Any] | None,
     migration_evidence: Mapping[str, Any],
     migration_evidence_sha256: str,
     expected_migration_run_id: str,
@@ -1022,21 +1103,29 @@ def collect(
         instance_root_volumes=instance_root_volumes,
         snapshot_root_volumes=snapshot_root_volumes,
     )
-    if public_services_enabled and isinstance(endpoints, Mapping):
-        if endpoints.get("status") == "PASS":
+    if public_services_enabled:
+        if isinstance(endpoints, Mapping):
             require(
-                private_validator_health is None,
-                "private_ssm:unexpected_with_healthy_public_services",
+                private_validator_health is None
+                and public_endpoint_outage is None,
+                "endpoints:conflicting_runtime_readback",
             )
             endpoint_readback = verify_endpoint_acceptance(endpoints)
             baseline_mode = "public_endpoints"
-            baseline_schema = "junca-public-explorer-pre-rollout-baseline/v1"
+            baseline_schema = (
+                "junca-public-explorer-pre-rollout-baseline/v1"
+            )
             unsafe_rpc_rejection: bool | str = True
+            endpoint_outage = None
+            public_endpoint_acceptance = True
         else:
-            outage_readback = verify_endpoint_outage(endpoints)
             require(
                 isinstance(private_validator_health, Mapping),
                 "private_ssm:required_for_public_endpoint_outage",
+            )
+            require(
+                isinstance(public_endpoint_outage, Mapping),
+                "public_outage:required_for_private_fallback",
             )
             endpoint_readback = verify_private_validator_health(
                 private_validator_health,
@@ -1044,17 +1133,20 @@ def collect(
                 signers,
                 migration_finality,
             )
-            endpoint_readback["public_endpoint_outage"] = outage_readback
+            endpoint_outage = verify_public_endpoint_outage(
+                public_endpoint_outage
+            )
             baseline_mode = "private_ssm"
-            baseline_schema = "junca-private-ssm-pre-rollout-baseline/v1"
+            baseline_schema = (
+                "junca-private-ssm-pre-rollout-baseline/v1"
+            )
             unsafe_rpc_rejection = "NOT_APPLICABLE_PRIVATE_SSM"
-    elif public_services_enabled:
-        require(
-            False,
-            "endpoints:required_for_public_services",
-        )
+            public_endpoint_acceptance = False
     else:
-        require(endpoints is None, "endpoints:unexpected_when_public_services_disabled")
+        require(
+            endpoints is None and public_endpoint_outage is None,
+            "private_ssm:unexpected_public_endpoint_evidence",
+        )
         require(
             isinstance(private_validator_health, Mapping),
             "private_ssm:required_when_public_services_disabled",
@@ -1068,6 +1160,8 @@ def collect(
         baseline_mode = "private_ssm"
         baseline_schema = "junca-private-ssm-pre-rollout-baseline/v1"
         unsafe_rpc_rejection = "NOT_APPLICABLE_PRIVATE_SSM"
+        endpoint_outage = None
+        public_endpoint_acceptance = False
 
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
@@ -1081,6 +1175,9 @@ def collect(
         "finalized_only": True,
         "read_only": True,
         "unsafe_rpc_rejection": unsafe_rpc_rejection,
+        "public_services_enabled": public_services_enabled,
+        "public_endpoint_acceptance": public_endpoint_acceptance,
+        "public_endpoint_outage": endpoint_outage,
         **binding,
         "observed_runtime": previous,
         "readback": endpoint_readback,
@@ -1126,6 +1223,9 @@ def collect(
         "network": "Public Testnet",
         "notice": "Public Testnet / No Monetary Value",
         "baseline_mode": baseline_mode,
+        "public_services_enabled": public_services_enabled,
+        "public_endpoint_acceptance": public_endpoint_acceptance,
+        "public_endpoint_outage": endpoint_outage,
         **binding,
         "ami_provenance": provenance,
         "signer_bindings": signers,
@@ -1153,6 +1253,7 @@ def main() -> int:
     runtime_readback = parser.add_mutually_exclusive_group(required=True)
     runtime_readback.add_argument("--endpoint-acceptance")
     runtime_readback.add_argument("--private-validator-health")
+    parser.add_argument("--public-endpoint-outage")
     parser.add_argument("--migration-evidence", required=True)
     parser.add_argument("--expected-migration-run-id", required=True)
     parser.add_argument("--expected-migration-head-sha", required=True)
@@ -1177,6 +1278,11 @@ def main() -> int:
             private_validator_health=(
                 read_object(args.private_validator_health)
                 if args.private_validator_health
+                else None
+            ),
+            public_endpoint_outage=(
+                read_object(args.public_endpoint_outage)
+                if args.public_endpoint_outage
                 else None
             ),
             migration_evidence=read_object(args.migration_evidence),
