@@ -20,10 +20,10 @@ import signal
 import socket
 import struct
 import threading
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .consensus_signing_journal import ConsensusSigningJournal
-from .finality import FinalityVote, Validator
+from .finality import FinalityCertificate, FinalityVote, Validator
 from .mempool import TransactionPool
 from .node_pipeline import ExecutedProposal, NodeExecutionPipeline
 from .protocol_kernel import AccountState, ProtocolConfig
@@ -245,6 +245,7 @@ class PublicTestnetConsensus:
         signer_resources: Mapping[str, str],
         consensus_verifier: ConsensusVerifier,
         peer_verifier: PeerVerifier,
+        consensus_signer: Callable[[str, bytes], bytes] | None = None,
     ) -> None:
         if not callable(consensus_verifier) or not callable(peer_verifier):
             raise ValidatorNodeError("consensus and peer verifiers are required")
@@ -280,18 +281,35 @@ class PublicTestnetConsensus:
         self._consensus_verifier = consensus_verifier
         self._peer_verifier = peer_verifier
         self._journal = journal
+        if consensus_signer is None:
+            runtime_signer = lambda *_: (_ for _ in ()).throw(
+                ValidatorNodeError("local consensus signer is not configured")
+            )
+        else:
+            if not callable(consensus_signer):
+                journal.close()
+                raise ValidatorNodeError("consensus signer must be callable")
+
+            def runtime_signer(key_resource: str, payload: bytes) -> bytes:
+                prefix = "kms://"
+                if not key_resource.startswith(prefix):
+                    raise ValidatorNodeError(
+                        "local consensus signer requires an AWS KMS binding"
+                    )
+                return consensus_signer(key_resource[len(prefix):], payload)
+
         self.runtime = LiveValidatorRuntime(
             pipeline=pipeline,
             schedule=schedule,
             signer_bindings=bindings,
-            signer=lambda *_: (_ for _ in ()).throw(
-                ValidatorNodeError("remote peer votes must be submitted explicitly")
-            ),
+            signer=runtime_signer,
             signature_verifier=self._verify_consensus,
             signing_journal=journal,
         )
         self._accepted_peer_votes: set[str] = set()
-        self._last_finalized: FinalizedProposal | None = None
+        self._last_certificate: FinalityCertificate | None = (
+            store.latest_finality_certificate()
+        )
 
     def close(self) -> None:
         self._journal.close()
@@ -324,12 +342,12 @@ class PublicTestnetConsensus:
         result = self.runtime.accept_vote(vote)
         self._accepted_peer_votes.add(packet.validator_id)
         if result is not None:
-            self._last_finalized = result
+            self._last_certificate = result.certificate
         return result
 
     def evidence(self) -> dict[str, Any]:
         runtime = self.runtime.evidence()
-        last = self._last_finalized
+        last = self._last_certificate
         return {
             "schema_version": "junca-public-testnet-consensus-runtime/v1",
             "chain_id": runtime["chain_id"],
@@ -339,10 +357,10 @@ class PublicTestnetConsensus:
             "required_vote_count": 3,
             "quorum_rule": "strictly-greater-than-two-thirds",
             "last_certificate_hash": (
-                None if last is None else last.certificate.certificate_hash
+                None if last is None else last.certificate_hash
             ),
             "last_certificate": (
-                None if last is None else last.certificate.as_evidence()
+                None if last is None else last.as_evidence()
             ),
             "signer_bindings": [
                 {
@@ -540,24 +558,14 @@ class NodeState:
                 proposal = self.consensus.runtime.pending_proposal
                 if proposal is None:
                     proposal = self.consensus.propose()
-                unsigned = FinalityVote(
-                    chain_id=self.chain_id,
-                    height=proposal.height,
-                    round=self.consensus.runtime.current_round,
-                    block_hash=proposal.block_hash,
-                    validator_id=self.validator_id,
-                    signature=b"",
-                )
-                signature = self.kms.sign(
-                    self.signer_resource, unsigned.signing_payload
-                )
+                vote = self.consensus.runtime.sign_vote(self.validator_id)
                 pending = AuthenticatedVote(
-                    chain_id=unsigned.chain_id,
-                    height=unsigned.height,
-                    round=unsigned.round,
-                    block_hash=unsigned.block_hash,
-                    validator_id=unsigned.validator_id,
-                    signature=signature,
+                    chain_id=vote.chain_id,
+                    height=vote.height,
+                    round=vote.round,
+                    block_hash=vote.block_hash,
+                    validator_id=vote.validator_id,
+                    signature=vote.signature,
                     peer_signature=b"pending",
                 )
                 packet = AuthenticatedVote(
@@ -708,6 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             peer_verifier=lambda validator_id, payload, signature: kms.verify(
                 resources[validator_id], payload, signature
             ),
+            consensus_signer=kms.sign,
         )
 
         def receive(packet: AuthenticatedVote) -> None:
