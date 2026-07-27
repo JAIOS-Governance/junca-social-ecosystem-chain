@@ -22,21 +22,30 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
     ) -> None:
         for required in (
             "0|1|2)",
-            "($changes | length) <= 6",
+            "($changes | length) <= 3",
             '.change.actions == ["create"]',
             '.change.after.encrypted == true',
             '.change.after.type == "gp3"',
             ".change.after.size == 200",
             ".change.after.iops == 6000",
             ".change.after.throughput == 250",
-            '.change.after.device_name == "/dev/sdf"',
-            ".change.after.force_detach == false",
-            ".change.after.stop_instance_before_detaching == true",
+            "-target=aws_ebs_volume.validator_state",
+            "aws ec2 attach-volume",
+            'attachment_identity="/dev/sdf:${volume_id}:${instance_id}"',
+            'grep -Fxq "$attachment_address"',
+            'terraform -chdir="$runtime_dir" import',
+            "-lock-timeout=5m",
+            'state show -no-color',
+            "terraform-version.json",
+            '.DeviceName != "/dev/sdf"',
+            "describe-instance-status",
             "validator-state-preflight.tfplan",
             "validator-state-preflight-plan.json",
             "] | length == 0",
         ):
             self.assertIn(required, CONTROLLER)
+        for prohibited in ("aws ec2 detach-volume", "--force-detach"):
+            self.assertNotIn(prohibited, CONTROLLER)
 
     def test_acceptance_plan_allows_only_exact_tag_updates(self) -> None:
         for required in (
