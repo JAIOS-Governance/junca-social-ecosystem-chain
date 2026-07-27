@@ -138,6 +138,11 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("Not Available Yet", document)
         self.assertIn("Public Testnet / No Monetary Value", document)
         self.assertIn("https://explorer.jaios-governance.org/", document)
+        self.assertIn('href="https://jaios-governance.org/"', document)
+        self.assertIn('href="https://chain.jaios-governance.org/"', document)
+        self.assertIn("JAIOS Institutional Governance", document)
+        self.assertIn("JUNCA Social Ecosystem Chain", document)
+        self.assertIn("footer-destinations", document)
         self.assertIn("/junca-chain-logo.png", document)
         self.assertNotIn("private", document.lower())
 

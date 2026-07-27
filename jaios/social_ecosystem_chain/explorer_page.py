@@ -25,6 +25,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
       --line-soft: rgba(255, 255, 255, .08);
       --gold: #dec997;
       --gold-deep: #a98e59;
+      --cyan: #65b9c7;
       --green: #84c6a1;
       --amber: #d6b86c;
       --red: #d5968e;
@@ -39,7 +40,9 @@ EXPLORER_DOCUMENT = """<!doctype html>
       margin: 0;
       color: var(--ink);
       background:
-        linear-gradient(180deg, rgba(255,255,255,.025), transparent 28rem),
+        radial-gradient(circle at 78% 4%, rgba(36, 101, 132, .18), transparent 29rem),
+        radial-gradient(circle at 12% 18%, rgba(198, 169, 107, .08), transparent 25rem),
+        linear-gradient(180deg, rgba(255,255,255,.025), transparent 34rem),
         var(--navy);
       font-family: var(--sans);
       font-size: 15px;
@@ -52,12 +55,12 @@ EXPLORER_DOCUMENT = """<!doctype html>
       position: sticky;
       top: 0;
       z-index: 20;
-      border-bottom: 1px solid var(--line-soft);
+      border-bottom: 1px solid rgba(222, 201, 151, .16);
       background: rgba(7, 24, 39, .94);
       backdrop-filter: blur(18px);
     }
     .header-row {
-      min-height: 72px;
+      min-height: 78px;
       display: grid;
       grid-template-columns: minmax(280px, 1fr) auto;
       gap: 28px;
@@ -89,16 +92,23 @@ EXPLORER_DOCUMENT = """<!doctype html>
     }
     nav { display: flex; gap: 8px; align-items: center; }
     nav a {
-      padding: 9px 12px;
+      padding: 9px 13px;
+      border: 1px solid transparent;
+      border-radius: 999px;
       color: var(--muted);
       font-size: 12px;
       letter-spacing: .08em;
       text-transform: uppercase;
     }
-    nav a:hover, nav a:focus-visible { color: var(--gold); }
+    nav a:hover, nav a:focus-visible {
+      border-color: var(--line);
+      color: var(--gold);
+      background: rgba(255,255,255,.035);
+      outline: none;
+    }
     .status-band {
       border-bottom: 1px solid var(--line-soft);
-      background: #091d2f;
+      background: linear-gradient(90deg, #091d2f, #0a2236 55%, #091d2f);
     }
     .status-row {
       min-height: 38px;
@@ -129,7 +139,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
       70%, 100% { box-shadow: 0 0 0 8px rgba(132, 198, 161, 0); }
     }
     .notice { color: var(--gold); }
-    main { padding: 34px 0 76px; }
+    main { padding: 30px 0 82px; }
     .eyebrow {
       margin: 0 0 9px;
       color: var(--gold);
@@ -169,13 +179,16 @@ EXPLORER_DOCUMENT = """<!doctype html>
       grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
       gap: 28px;
       align-items: end;
-      padding: 34px 0 28px;
+      min-height: 300px;
+      padding: 38px 0 34px;
+      border-bottom: 1px solid var(--line-soft);
     }
     .search-panel {
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: rgba(16, 43, 67, .58);
-      padding: 19px;
+      background: linear-gradient(145deg, rgba(19, 51, 77, .88), rgba(8, 26, 42, .84));
+      box-shadow: 0 22px 60px rgba(0, 0, 0, .18);
+      padding: 22px;
     }
     .search-panel label {
       display: block;
@@ -214,9 +227,18 @@ EXPLORER_DOCUMENT = """<!doctype html>
     .metric, .panel {
       border: 1px solid var(--line-soft);
       border-radius: var(--radius);
-      background: rgba(11, 34, 54, .82);
+      background: linear-gradient(150deg, rgba(16, 43, 67, .86), rgba(8, 26, 42, .88));
+      box-shadow: 0 16px 42px rgba(0, 0, 0, .12);
     }
-    .metric { min-height: 126px; padding: 19px; }
+    .metric { position: relative; min-height: 132px; overflow: hidden; padding: 20px; }
+    .metric::before {
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 2px;
+      background: linear-gradient(90deg, var(--gold), rgba(222,201,151,0));
+      content: "";
+    }
     .metric-label {
       display: block;
       margin-bottom: 20px;
@@ -244,7 +266,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
       min-height: 94px;
       padding: 15px 16px;
       border-top: 1px solid var(--line);
-      background: rgba(11, 34, 54, .58);
+      background: linear-gradient(150deg, rgba(11, 34, 54, .76), rgba(8, 26, 42, .66));
     }
     .operation span {
       display: block;
@@ -267,18 +289,18 @@ EXPLORER_DOCUMENT = """<!doctype html>
       justify-content: space-between;
       gap: 20px;
       align-items: end;
-      margin: 34px 0 13px;
+      margin: 38px 0 14px;
     }
     .section-head p { margin: 0; color: var(--muted); font-size: 12px; }
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .panel { padding: 22px; min-width: 0; }
+    .panel { padding: 24px; min-width: 0; }
     .data-list { margin: 18px 0 0; }
     .data-row {
       display: grid;
       grid-template-columns: minmax(150px, .7fr) minmax(0, 1.3fr);
       gap: 18px;
       align-items: start;
-      padding: 13px 0;
+      padding: 14px 0;
       border-top: 1px solid var(--line-soft);
     }
     .data-row dt { color: var(--muted); font-size: 12px; }
@@ -308,7 +330,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
     .boundary {
       padding: 17px;
       border-top: 1px solid var(--line);
-      background: rgba(11, 34, 54, .58);
+      background: linear-gradient(150deg, rgba(11, 34, 54, .72), rgba(8, 26, 42, .64));
     }
     .boundary span { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; }
     .boundary strong { display: block; margin-top: 6px; color: var(--ink); font-size: 13px; }
@@ -323,6 +345,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
       border: 1px solid var(--line-soft);
       border-radius: 10px;
       background: rgba(8, 26, 42, .62);
+      opacity: .88;
     }
     .unavailable span { display: block; margin-top: 14px; color: var(--quiet); font-size: 11px; }
     .evidence-links { display: grid; gap: 9px; margin-top: 16px; }
@@ -345,10 +368,58 @@ EXPLORER_DOCUMENT = """<!doctype html>
     }
     footer {
       border-top: 1px solid var(--line-soft);
-      padding: 28px 0 40px;
+      padding: 32px 0 40px;
       color: var(--quiet);
       font-size: 11px;
     }
+    .footer-destinations {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 26px;
+    }
+    .footer-destination {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      min-height: 112px;
+      padding: 20px 22px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      color: inherit;
+      background: rgba(11, 34, 54, .58);
+      transition: border-color .2s ease, background .2s ease, transform .2s ease;
+    }
+    .footer-destination:hover, .footer-destination:focus-visible {
+      border-color: var(--gold);
+      background: rgba(16, 43, 67, .8);
+      transform: translateY(-2px);
+      outline: none;
+    }
+    .footer-destination span { min-width: 0; }
+    .footer-destination small {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--gold);
+      font-size: 9px;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+    .footer-destination strong {
+      display: block;
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.35;
+    }
+    .footer-destination em {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 10px;
+      font-style: normal;
+    }
+    .footer-destination b { color: var(--gold); font-size: 20px; font-weight: 400; }
     .footer-row { display: flex; justify-content: space-between; gap: 22px; flex-wrap: wrap; }
     .footer-links { display: flex; gap: 18px; flex-wrap: wrap; }
     .footer-links a:hover, .footer-links a:focus-visible { color: var(--gold); }
@@ -365,7 +436,8 @@ EXPLORER_DOCUMENT = """<!doctype html>
       nav { overflow-x: auto; padding-bottom: 3px; }
       nav a { padding-left: 0; padding-right: 18px; white-space: nowrap; }
       .hero, .two-col { grid-template-columns: 1fr; }
-      .hero { padding-top: 26px; }
+      .footer-destinations { grid-template-columns: 1fr; }
+      .hero { min-height: 0; padding-top: 26px; }
       .metric-grid, .boundary-grid, .unavailable-grid, .operations-grid { grid-template-columns: 1fr 1fr; }
       .data-row { grid-template-columns: 1fr; gap: 5px; }
       .data-row dd { text-align: left; }
@@ -562,9 +634,19 @@ EXPLORER_DOCUMENT = """<!doctype html>
   </main>
 
   <footer>
-    <div class="shell footer-row">
-      <span>Issued and operated by JAIOS Institutional Governance</span>
-      <span class="footer-links"><a href="/explorer.json">Explorer JSON</a><a href="https://health.jaios-governance.org/health">Health</a><a href="https://docs.jaios-governance.org/">Documentation</a></span>
+    <div class="shell">
+      <div class="footer-destinations" aria-label="Official destinations">
+        <a class="footer-destination" href="https://jaios-governance.org/" aria-label="Open the JAIOS Institutional Governance official website">
+          <span><small>Governance</small><strong>JAIOS Institutional Governance</strong><em>Official institutional website</em></span><b aria-hidden="true">↗</b>
+        </a>
+        <a class="footer-destination" href="https://chain.jaios-governance.org/" aria-label="Open the JUNCA Social Ecosystem Chain official website">
+          <span><small>Chain Overview</small><strong>JUNCA Social Ecosystem Chain</strong><em>Network concept, structure and public information</em></span><b aria-hidden="true">↗</b>
+        </a>
+      </div>
+      <div class="footer-row">
+        <span>Issued and operated by JAIOS Institutional Governance</span>
+        <span class="footer-links"><a href="/explorer.json">Explorer JSON</a><a href="https://health.jaios-governance.org/health">Health</a><a href="https://docs.jaios-governance.org/">Technical Reference</a></span>
+      </div>
     </div>
   </footer>
 
