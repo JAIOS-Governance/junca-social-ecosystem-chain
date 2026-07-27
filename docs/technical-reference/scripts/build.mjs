@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.27";
-const revision = "R28";
+const revision = "R29";
 const chainSource = "372b4e1fc5967f50e037323c62513a1c2875e819";
 const officialWordmarkSource = join(root, "..", "..", "jaios", "social_ecosystem_chain", "assets", "junca-chain-logo-gold-on-navy.png");
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
@@ -112,9 +112,9 @@ for (const route of routes) {
   await writeFile(
     path,
     source
-      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260727-r28" alt="JUNCA" width="190" height="57"></a>')
-      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260727-r28" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
-      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260727-r28" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
+      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260727-r29" alt="JUNCA" width="190" height="57"></a>')
+      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260727-r29" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
+      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260727-r29" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
       .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs">${governanceLinkStyle}</head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
@@ -124,7 +124,7 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R28")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R29")
       .replaceAll("Runtime Deployment in Progress", "Public Testnet Endpoints Active")
       .replaceAll("Pending Live Acceptance", "Runtime Acceptance Pending")
       .replaceAll("Pending Runtime Binding", "Read-only Endpoint Active")
