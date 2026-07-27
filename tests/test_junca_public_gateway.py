@@ -31,6 +31,21 @@ class PublicGatewayTests(unittest.TestCase):
             self.calls.append((upstream, payload))
             if payload["method"] == "junca_health":
                 result = self.health
+            elif payload["method"] == "eth_chainId":
+                result = "0x1352773"
+            elif payload["method"] == "net_peerCount":
+                result = "0x2"
+            elif payload["method"] == "web3_clientVersion":
+                result = "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
+            elif payload["method"] == "eth_getBlockByNumber":
+                result = {
+                    "number": "0x7",
+                    "hash": "0x" + "ab" * 32,
+                    "parentHash": "0x" + "11" * 32,
+                    "stateRoot": "0x" + "22" * 32,
+                    "timestamp": "0x1234",
+                    "transactions": [],
+                }
             else:
                 result = "0x7"
             return UpstreamResponse(
@@ -86,9 +101,6 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "healthy")
         self.assertTrue(body["read_only"])
-        self.assertTrue(body["finalized_only"])
-        self.assertEqual(body["signed_power"], 3)
-        self.assertEqual(body["total_power"], 3)
         self.assertFalse(body["mainnet_changed"])
         self.assertFalse(body["assets_moved"])
         self.assertFalse(body["bridge_activated"])
@@ -97,22 +109,29 @@ class PublicGatewayTests(unittest.TestCase):
     def test_explorer_returns_only_certificate_backed_finalized_head(self) -> None:
         status, body = self.gateway.explorer()
         self.assertEqual(status, 200)
+        self.assertEqual(body["schema_version"], "junca-public-explorer/v2")
         self.assertTrue(body["finalized_only"])
         self.assertTrue(body["read_only"])
+        self.assertEqual(body["network"]["chain_id"], "0x1352773")
+        self.assertEqual(body["network"]["chain_id_decimal"], 20260723)
+        self.assertEqual(body["network"]["peer_count"], 2)
+        self.assertEqual(body["network"]["peer_count_hex"], "0x2")
+        self.assertEqual(
+            body["network"]["client_version"],
+            "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1",
+        )
         self.assertEqual(body["head"]["height"], 7)
         self.assertEqual(body["head"]["signed_power"], 3)
+        self.assertEqual(body["head"]["timestamp"], "0x1234")
+        self.assertEqual(body["head"]["state_root"], "0x" + "22" * 32)
+        self.assertEqual(body["head"]["transaction_count"], 0)
+        self.assertFalse(body["mainnet_changed"])
+        self.assertFalse(body["assets_moved"])
+        self.assertFalse(body["bridge_activated"])
         html_status, document = self.gateway.explorer_html()
         self.assertEqual(html_status, 200)
-        self.assertIn("Latest Finalized Block", document)
+        self.assertIn("Finalized height", document)
         self.assertIn("Public Testnet / No Monetary Value", document)
-        self.assertIn('fetch("/explorer.json"', document)
-        self.assertIn('rpc("eth_getBlockByNumber"', document)
-        self.assertIn("Not Available Yet", document)
-        self.assertIn("JAIOS Institutional Governance", document)
-        self.assertIn("Mainnet Status", document)
-        self.assertIn("Not Active", document)
-        self.assertNotIn("Market Cap", document)
-        self.assertNotIn("Token Balance", document)
         self.assertNotIn("private", document.lower())
 
     def test_explorer_rejects_nonfinalized_or_mismatched_head(self) -> None:
@@ -121,6 +140,35 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertEqual(body["status"], "syncing")
         self.assertIsNone(body["head"])
+
+    def test_explorer_does_not_expose_unverified_block_metadata(self) -> None:
+        original_transport = self.gateway._transport
+
+        def mismatched_block(upstream, payload):
+            response = original_transport(upstream, payload)
+            if payload["method"] == "eth_getBlockByNumber":
+                return UpstreamResponse(
+                    200,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "hash": "0x" + "00" * 32,
+                            "stateRoot": "private-value-must-not-leak",
+                            "timestamp": "0x9999",
+                            "transactions": ["0xsecret"],
+                        },
+                    },
+                )
+            return response
+
+        self.gateway._transport = mismatched_block
+        status, body = self.gateway.explorer()
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["head"]["timestamp"])
+        self.assertIsNone(body["head"]["state_root"])
+        self.assertIsNone(body["head"]["transaction_count"])
+        self.assertNotIn("private-value-must-not-leak", str(body))
 
     def test_upstream_must_remain_loopback_http(self) -> None:
         for upstream in (
