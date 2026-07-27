@@ -124,6 +124,7 @@ def verify_image(image: Mapping[str, Any], binding: Mapping[str, str]) -> dict[s
         "SourceCommit": binding["source_commit"],
         "NodeArtifactSHA256": binding["node_artifact_sha256"],
         "GenesisSHA256": binding["genesis_sha256"],
+        "RequestDigest": binding["request_sha256"],
         "MainnetChanged": "false",
         "AssetsMoved": "false",
         "BridgeActivated": "false",
