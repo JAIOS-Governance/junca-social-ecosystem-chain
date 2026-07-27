@@ -64,23 +64,29 @@ jobs:
             "repos/${{ github.repository }}/actions/runs/${AMI_RUN_ID}")"
           manifest_run="$(gh api \
             "repos/${{ github.repository }}/actions/runs/${MANIFEST_GATE_RUN_ID}")"
-          jq -e --arg repository "${{ github.repository }}" '
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg head "$GITHUB_SHA" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Validator Immutable AMI Build" and
             .path == ".github/workflows/junca-validator-ami-build.yml" and
             .event == "workflow_dispatch" and
             .head_branch == "main" and
+            .head_sha == $head and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
           ' <<<"$ami_run"
-          jq -e --arg repository "${{ github.repository }}" '
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg head "$GITHUB_SHA" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Manifest Gate" and
             .path == ".github/workflows/junca-runtime-release-manifest-gate.yml" and
             .event == "workflow_dispatch" and
             .head_branch == "main" and
+            .head_sha == $head and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
           ' <<<"$manifest_run"
@@ -117,6 +123,7 @@ jobs:
             echo "NODE_ARTIFACT_SHA256=$(jq -er .node_artifact_sha256 "$evidence")"
             echo "GENESIS_SHA256=$(jq -er .genesis_sha256 "$evidence")"
             echo "SOURCE_COMMIT=$(jq -er .source_commit "$evidence")"
+            echo "REQUEST_SHA256=$(jq -er .request_sha256 "$evidence")"
           } >> "$GITHUB_ENV"
 
           decision=artifacts/manifest/junca-runtime-release-manifest-decision.json
@@ -125,7 +132,8 @@ jobs:
             --arg source_commit "$(jq -er .source_commit "$evidence")" \
             --arg node_sha256 "$(jq -er .node_artifact_sha256 "$evidence")" \
             --arg genesis_sha256 "$(jq -er .genesis_sha256 "$evidence")" \
-            --arg ami_id "$(jq -er .ami_id "$evidence")" '
+            --arg ami_id "$(jq -er .ami_id "$evidence")" \
+            --arg request_sha256 "$(jq -er .request_sha256 "$evidence")" '
             .schema_version == "junca-runtime-release-manifest-decision/v1" and
             .accepted == true and
             .decision == "PROMOTION_GATE_PASS" and
@@ -133,6 +141,7 @@ jobs:
             .candidate.node_artifact_sha256 == $node_sha256 and
             .candidate.genesis_sha256 == $genesis_sha256 and
             .candidate.ami_id == $ami_id and
+            .candidate.request_sha256 == $request_sha256 and
             .release_boundary.mainnet_changed == false and
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
