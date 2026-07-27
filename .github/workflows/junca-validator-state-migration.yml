@@ -111,6 +111,7 @@ jobs:
             .terraform_canonicalized == true and
             .runtime_mount_verified == true and
             .immutable_runtime_mount_activation_pending == true and
+            .immutable_runtime_certificate_activation_pending == true and
             .bootstrap_changed == false and
             .mainnet_changed == false and
             .assets_moved == false and

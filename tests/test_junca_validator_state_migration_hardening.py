@@ -162,6 +162,85 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
                 capture_output=True,
             )
 
+    def run_snapshot_binding(
+        self,
+        *,
+        omit_snapshot: int | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]] | None]:
+        mappings = []
+        snapshots = []
+        for index in range(3):
+            snapshot_id = f"snap-{index + 1:017x}"
+            mappings.append(
+                {
+                    "validator_id": f"validator-0{index + 1}",
+                    "rollback_snapshot_id": snapshot_id,
+                }
+            )
+            if index != omit_snapshot:
+                snapshots.append(
+                    {
+                        "SnapshotId": snapshot_id,
+                        "Tags": [
+                            {
+                                "Key": "MigrationToken",
+                                "Value": "30300760118-1",
+                            },
+                            {"Key": "GitHubRunId", "Value": "30300760118"},
+                            {"Key": "GitHubRunAttempt", "Value": "1"},
+                            {
+                                "Key": "HeadCommit",
+                                "Value": "9" * 40,
+                            },
+                            {
+                                "Key": "MigrationRequestSHA256",
+                                "Value": "a" * 64,
+                            },
+                            {
+                                "Key": "GitHubEventSHA256",
+                                "Value": "b" * 64,
+                            },
+                        ],
+                    }
+                )
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mappings_path = root / "mappings.json"
+            snapshots_path = root / "snapshots.json"
+            output_path = root / "bound.json"
+            mappings_path.write_text(json.dumps(mappings), encoding="utf-8")
+            snapshots_path.write_text(
+                json.dumps({"Snapshots": snapshots}),
+                encoding="utf-8",
+            )
+            program = (
+                "set -euo pipefail\n"
+                + extract_controller_function(
+                    "bind_validator_snapshot_evidence"
+                )
+                + 'bind_validator_snapshot_evidence "$1" "$2" "$3"\n'
+            )
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    program,
+                    "snapshot-binding",
+                    str(mappings_path),
+                    str(snapshots_path),
+                    str(output_path),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            output = (
+                json.loads(output_path.read_text(encoding="utf-8"))
+                if output_path.exists() and output_path.stat().st_size > 0
+                else None
+            )
+            return completed, output
+
     def test_attachment_readback_accepts_only_pending_or_verified_state(
         self,
     ) -> None:
@@ -260,6 +339,34 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
                     ).returncode,
                     0,
                 )
+
+    def test_snapshot_binding_emits_exact_three_complete_mappings(self) -> None:
+        completed, output = self.run_snapshot_binding()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIsNotNone(output)
+        assert output is not None
+        self.assertEqual(len(output), 3)
+        for index, mapping in enumerate(output, start=1):
+            with self.subTest(index=index):
+                self.assertEqual(
+                    mapping["validator_id"],
+                    f"validator-0{index}",
+                )
+                self.assertEqual(
+                    mapping["snapshot_binding"],
+                    {
+                        "migration_token": "30300760118-1",
+                        "run_id": "30300760118",
+                        "run_attempt": 1,
+                        "head_sha": "9" * 40,
+                        "migration_request_sha256": "a" * 64,
+                        "github_event_sha256": "b" * 64,
+                    },
+                )
+
+        missing, missing_output = self.run_snapshot_binding(omit_snapshot=2)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertEqual(len(missing_output or []), 2)
 
     def test_evidence_array_lengths_are_parenthesized_before_boolean_gates(
         self,
@@ -479,6 +586,7 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             ".execution_binding.migration_request_sha256 == $request",
             ".runtime_mount_verified == true",
             ".immutable_runtime_mount_activation_pending == true",
+            ".immutable_runtime_certificate_activation_pending == true",
         ):
             self.assertIn(required, WORKFLOW)
 
