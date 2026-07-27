@@ -23,9 +23,22 @@ import threading
 from typing import Any, Callable, Mapping, Sequence
 
 from .consensus_signing_journal import ConsensusSigningJournal
-from .finality import FinalityCertificate, FinalityVote, Validator
+from .finality import (
+    FinalityCertificate,
+    FinalityStateMachine,
+    FinalityVote,
+    Validator,
+)
 from .mempool import TransactionPool
 from .node_pipeline import ExecutedProposal, NodeExecutionPipeline
+from .peer_sync import (
+    PeerAdvertisement,
+    PeerRegistry,
+    PeerSyncError,
+    RecoveryAction,
+    RecoveryJournal,
+    SynchronizedBlockImporter,
+)
 from .protocol_kernel import AccountState, ProtocolConfig
 from .state_store import PersistentStateStore
 from .sync_finality import ValidatorSet, ValidatorSetSchedule
@@ -211,6 +224,7 @@ class AuthenticatedVote:
     validator_id: str
     signature: bytes
     peer_signature: bytes
+    block_timestamp: int | None = None
 
     @property
     def peer_signing_payload(self) -> bytes:
@@ -222,6 +236,11 @@ class AuthenticatedVote:
             "signature": self.signature.hex(),
             "validator_id": self.validator_id,
         }
+        # Preserve the existing manual-vote wire contract while the automatic
+        # slot runtime is disabled. Timestamped votes intentionally use the
+        # extended contract only after every validator has the new runtime.
+        if self.block_timestamp is not None:
+            body["block_timestamp"] = self.block_timestamp
         return (
             b"JUNCA_AUTHENTICATED_PEER_VOTE_V1\x00"
             + json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
@@ -314,9 +333,13 @@ class PublicTestnetConsensus:
     def close(self) -> None:
         self._journal.close()
 
-    def propose(self, *, round: int = 0) -> ExecutedProposal:
+    def propose(
+        self, *, round: int = 0, block_timestamp: int | None = None
+    ) -> ExecutedProposal:
         self._accepted_peer_votes.clear()
-        return self.runtime.propose(round=round)
+        return self.runtime.propose(
+            round=round, block_timestamp=block_timestamp
+        )
 
     def submit(self, packet: AuthenticatedVote) -> FinalizedProposal | None:
         if packet.validator_id not in self._resources:
@@ -394,6 +417,164 @@ class PublicTestnetConsensus:
             return False
 
 
+class ValidatorSyncRecovery:
+    """Authenticates and imports finalized peer state with restart recovery.
+
+    Peer advertisements select a deterministic source, but they never confer
+    trust.  Imported state is accepted only after every certificate vote has
+    passed both the KMS-bound consensus check and peer-session authentication,
+    and after those votes reconstruct the exact supplied finality certificate.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: PersistentStateStore,
+        data_dir: str | Path,
+        genesis_hash: str,
+        signer_resources: Mapping[str, str],
+        consensus_verifier: ConsensusVerifier,
+        peer_verifier: PeerVerifier,
+        pipeline: NodeExecutionPipeline,
+    ) -> None:
+        if len(signer_resources) != 3:
+            raise ValidatorNodeError("sync recovery requires exactly 3 signer bindings")
+        self.store = store
+        self.registry = PeerRegistry(
+            chain_id=store.chain_id,
+            genesis_hash=genesis_hash,
+        )
+        self.journal = RecoveryJournal(
+            Path(data_dir) / "peer-sync-recovery.json",
+            chain_id=store.chain_id,
+        )
+        self.importer = SynchronizedBlockImporter(
+            registry=self.registry,
+            pipeline=pipeline,
+            journal=self.journal,
+        )
+        self._resources = dict(signer_resources)
+        self._consensus_verifier = consensus_verifier
+        self._peer_verifier = peer_verifier
+        self.recovery_action = self.journal.recover(store)
+
+    def observe(self, advertisement: PeerAdvertisement) -> None:
+        self.registry.observe(advertisement)
+
+    def import_authenticated_finalized(
+        self,
+        *,
+        peer_id: str,
+        proposal: ExecutedProposal,
+        certificate: FinalityCertificate,
+        votes: Sequence[AuthenticatedVote],
+    ) -> None:
+        self._authenticate_certificate(proposal, certificate, votes)
+        if self.recovery_action is RecoveryAction.RETRY_REQUIRED:
+            record = self.journal.read()
+            if (
+                record is None
+                or record["peer_id"] != peer_id
+                or record["height"] != proposal.height
+                or record["parent_hash"] != proposal.parent_hash
+                or record["block_hash"] != proposal.block_hash
+                or record["state_root"] != proposal.transition.state_root
+            ):
+                raise PeerSyncError(
+                    "restart candidate diverges from prepared finalized import"
+                )
+            self.journal.clear()
+        elif self.recovery_action is RecoveryAction.COMMIT_CONFIRMED:
+            self.recovery_action = RecoveryAction.CLEAN
+        self.importer.import_finalized(
+            peer_id=peer_id,
+            proposal=proposal,
+            certificate=certificate,
+        )
+        self.recovery_action = RecoveryAction.CLEAN
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            **self.registry.evidence(),
+            "schema_version": "junca-validator-sync-recovery/v1",
+            "recovery_action": self.recovery_action.value,
+            "authenticated_finalized_only": True,
+            "fork_divergence_policy": "fail-closed",
+        }
+
+    def _authenticate_certificate(
+        self,
+        proposal: ExecutedProposal,
+        certificate: FinalityCertificate,
+        packets: Sequence[AuthenticatedVote],
+    ) -> None:
+        if (
+            certificate.chain_id != self.store.chain_id
+            or certificate.height != proposal.height
+            or certificate.block_hash != proposal.block_hash
+        ):
+            raise ValidatorNodeError(
+                "sync certificate does not bind the executed proposal"
+            )
+        expected_ids = tuple(sorted(self._resources))
+        packet_ids = tuple(sorted(packet.validator_id for packet in packets))
+        if (
+            len(packets) != len(expected_ids)
+            or packet_ids != expected_ids
+            or certificate.validator_ids != expected_ids
+        ):
+            raise ValidatorNodeError(
+                "sync certificate requires the exact authenticated validator set"
+            )
+        machine = FinalityStateMachine(
+            chain_id=self.store.chain_id,
+            validators=tuple(Validator(item, 1) for item in expected_ids),
+            initial_finalized_height=proposal.height - 1,
+        )
+        rebuilt: FinalityCertificate | None = None
+        for packet in sorted(packets, key=lambda item: item.validator_id):
+            if (
+                packet.chain_id != certificate.chain_id
+                or packet.height != certificate.height
+                or packet.round != certificate.round
+                or packet.block_hash != certificate.block_hash
+            ):
+                raise ValidatorNodeError("sync vote diverges from finality certificate")
+            resource = self._resources[packet.validator_id]
+            try:
+                peer_ok = self._peer_verifier(
+                    packet.validator_id,
+                    packet.peer_signing_payload,
+                    packet.peer_signature,
+                )
+            except Exception as exc:
+                raise ValidatorNodeError("sync peer authentication failed") from exc
+            vote = FinalityVote(
+                chain_id=packet.chain_id,
+                height=packet.height,
+                round=packet.round,
+                block_hash=packet.block_hash,
+                validator_id=packet.validator_id,
+                signature=packet.signature,
+            )
+            try:
+                consensus_ok = self._consensus_verifier(
+                    packet.validator_id,
+                    resource,
+                    vote.signing_payload,
+                    vote.signature,
+                )
+            except Exception as exc:
+                raise ValidatorNodeError("sync consensus authentication failed") from exc
+            if peer_ok is not True or consensus_ok is not True:
+                raise ValidatorNodeError("sync finalized state authentication failed")
+            rebuilt = machine.add_vote(vote, verifier=lambda _: True)
+        if rebuilt != certificate:
+            raise ValidatorNodeError(
+                "sync votes do not reconstruct the supplied finality certificate"
+            )
+
+
 def canonical_json(value: Mapping[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
@@ -463,9 +644,45 @@ class NodeState:
     consensus: PublicTestnetConsensus | None = None
     kms: AwsKmsSecp256k1Adapter | None = None
     peer_transport: PrivateVpcPeerTransport | None = None
+    sync_recovery: ValidatorSyncRecovery | None = None
     consensus_lock: threading.RLock = field(
         default_factory=threading.RLock, repr=False
     )
+
+    def broadcast_vote(self, *, block_timestamp: int | None = None) -> dict[str, Any]:
+        if self.consensus is None or self.kms is None or self.peer_transport is None:
+            raise ValidatorNodeError("network consensus runtime is not configured")
+        with self.consensus_lock:
+            proposal = self.consensus.runtime.pending_proposal
+            if proposal is None:
+                proposal = self.consensus.propose(
+                    block_timestamp=block_timestamp
+                )
+            elif proposal.block_timestamp != block_timestamp:
+                raise ValidatorNodeError(
+                    "pending proposal timestamp does not match canonical slot"
+                )
+            vote = self.consensus.runtime.sign_vote(self.validator_id)
+            pending = AuthenticatedVote(
+                chain_id=vote.chain_id,
+                height=vote.height,
+                round=vote.round,
+                block_hash=vote.block_hash,
+                validator_id=vote.validator_id,
+                signature=vote.signature,
+                peer_signature=b"pending",
+                block_timestamp=proposal.block_timestamp,
+            )
+            packet = AuthenticatedVote(
+                **{
+                    **pending.__dict__,
+                    "peer_signature": self.kms.sign(
+                        self.signer_resource, pending.peer_signing_payload
+                    ),
+                }
+            )
+            self.peer_transport.broadcast(packet)
+        return {"status": "BROADCAST", "height": proposal.height}
 
     def evidence(self) -> dict[str, Any]:
         # Return one atomic view of the durable head and in-memory certificate.
@@ -491,6 +708,13 @@ class NodeState:
             }
             if self.consensus is not None:
                 evidence["consensus"] = self.consensus.evidence()
+            if self.sync_recovery is not None:
+                evidence["sync_recovery"] = self.sync_recovery.evidence()
+                if (
+                    self.sync_recovery.recovery_action
+                    is RecoveryAction.RETRY_REQUIRED
+                ):
+                    evidence["status"] = "recovery_required"
             return evidence
 
     def rpc(self, method: str, params: Any) -> Any:
@@ -509,12 +733,17 @@ class NodeState:
         if method == "eth_getBlockByNumber":
             if params not in (["latest", False], ["latest", True]):
                 raise ValidatorNodeError("only the latest block is available")
+            stored_timestamp = self.store.block_timestamp(head.height)
             return {
                 "number": hex(head.height),
                 "hash": head.block_hash,
                 "parentHash": head.parent_hash,
                 "stateRoot": head.state_root,
-                "timestamp": hex(self.started_at),
+                "timestamp": hex(
+                    self.started_at
+                    if stored_timestamp is None
+                    else stored_timestamp
+                ),
                 "transactions": [],
             }
         if method == "junca_health":
@@ -550,35 +779,82 @@ class NodeState:
                 or params != []
             ):
                 raise ValidatorNodeError("network consensus runtime is not configured")
-            # Peer receiver threads and the local JSON-RPC thread share one
-            # proposal/finality machine.  Keep proposal selection, KMS signing,
-            # and local delivery atomic so concurrent SSM broadcasts cannot
-            # create competing local proposals or mutate the machine mid-vote.
-            with self.consensus_lock:
-                proposal = self.consensus.runtime.pending_proposal
-                if proposal is None:
-                    proposal = self.consensus.propose()
-                vote = self.consensus.runtime.sign_vote(self.validator_id)
-                pending = AuthenticatedVote(
-                    chain_id=vote.chain_id,
-                    height=vote.height,
-                    round=vote.round,
-                    block_hash=vote.block_hash,
-                    validator_id=vote.validator_id,
-                    signature=vote.signature,
-                    peer_signature=b"pending",
-                )
-                packet = AuthenticatedVote(
-                    **{
-                        **pending.__dict__,
-                        "peer_signature": self.kms.sign(
-                            self.signer_resource, pending.peer_signing_payload
-                        ),
-                    }
-                )
-                self.peer_transport.broadcast(packet)
-            return {"status": "BROADCAST", "height": proposal.height}
+            return self.broadcast_vote()
         raise ValidatorNodeError("method is not allowlisted")
+
+
+class BoundedFinalityLoop:
+    """Advance at most one deterministic height per canonical time slot."""
+
+    def __init__(
+        self,
+        state: NodeState,
+        *,
+        interval_seconds: int,
+        epoch_seconds: int,
+        clock: Callable[[], float] | None = None,
+        wait: Callable[[float], bool] | None = None,
+    ) -> None:
+        if (
+            isinstance(interval_seconds, bool)
+            or not isinstance(interval_seconds, int)
+            or not 5 <= interval_seconds <= 3600
+        ):
+            raise ValidatorNodeError("block interval must be between 5 and 3600 seconds")
+        if (
+            isinstance(epoch_seconds, bool)
+            or not isinstance(epoch_seconds, int)
+            or epoch_seconds <= 0
+        ):
+            raise ValidatorNodeError("canonical slot epoch is required")
+        self.state = state
+        self.interval_seconds = interval_seconds
+        self.epoch_seconds = epoch_seconds
+        self._clock = clock or __import__("time").time
+        self._stop = threading.Event()
+        self._wait = wait or self._stop.wait
+        self._thread: threading.Thread | None = None
+
+    def canonical_timestamp(self, height: int) -> int:
+        if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
+            raise ValidatorNodeError("slot height must be positive")
+        return self.epoch_seconds + (height * self.interval_seconds)
+
+    def run_once(self, now: float | None = None) -> bool:
+        current = self._clock() if now is None else now
+        if current < self.epoch_seconds:
+            return False
+        due_height = int((current - self.epoch_seconds) // self.interval_seconds)
+        next_height = self.state.store.head_height + 1
+        if due_height < next_height:
+            return False
+        timestamp = self.canonical_timestamp(next_height)
+        self.state.broadcast_vote(block_timestamp=timestamp)
+        return True
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise ValidatorNodeError("finality loop is already started")
+        self._thread = threading.Thread(
+            target=self._run, name="junca-finality-loop", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.run_once()
+            except (OSError, ValidatorNodeError, ValueError):
+                # Fail closed for the current slot. The persistent signing
+                # journal makes a later same-slot retry idempotent.
+                pass
+            self._wait(min(1.0, self.interval_seconds / 5))
 
 
 def make_handler(state: NodeState) -> type[BaseHTTPRequestHandler]:
@@ -670,6 +946,16 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--http.api")
     result.add_argument("--mine", action="store_true")
     result.add_argument(
+        "--block-interval-seconds",
+        type=int,
+        default=int(os.getenv("TESTNET_BLOCK_INTERVAL_SECONDS", "0")),
+    )
+    result.add_argument(
+        "--slot-epoch-seconds",
+        type=int,
+        default=int(os.getenv("TESTNET_SLOT_EPOCH_SECONDS", "0")),
+    )
+    result.add_argument(
         "--validator-signer",
         action="append",
         default=_environment_assignments("VALIDATOR_SIGNER_BINDINGS"),
@@ -693,6 +979,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         genesis, args.data_dir, args.validator_id, args.signer_resource
     )
     transport: PrivateVpcPeerTransport | None = None
+    finality_loop: BoundedFinalityLoop | None = None
+    if args.block_interval_seconds and (
+        not args.mine or args.slot_epoch_seconds <= 0
+    ):
+        raise ValidatorNodeError(
+            "automatic finality requires --mine and a canonical slot epoch"
+        )
     if args.validator_signer or args.peer:
         resources = _parse_assignments(args.validator_signer, "validator signer")
         endpoints = _parse_peer_endpoints(args.peer)
@@ -718,11 +1011,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             consensus_signer=kms.sign,
         )
+        sync_recovery = ValidatorSyncRecovery(
+            store=state.store,
+            data_dir=args.data_dir,
+            genesis_hash=state.genesis_hash,
+            signer_resources=resources,
+            consensus_verifier=lambda _id, resource, payload, signature: kms.verify(
+                resource, payload, signature
+            ),
+            peer_verifier=lambda validator_id, payload, signature: kms.verify(
+                resources[validator_id], payload, signature
+            ),
+            pipeline=consensus.runtime.pipeline,
+        )
 
         def receive(packet: AuthenticatedVote) -> None:
             with state.consensus_lock:
                 if consensus.runtime.pending_proposal is None:
-                    consensus.propose(round=packet.round)
+                    consensus.propose(
+                        round=packet.round,
+                        block_timestamp=packet.block_timestamp,
+                    )
                 consensus.submit(packet)
 
         transport = PrivateVpcPeerTransport(
@@ -733,7 +1042,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         state.consensus = consensus
         state.kms = kms
         state.peer_transport = transport
+        state.sync_recovery = sync_recovery
         transport.start()
+        if args.block_interval_seconds:
+            finality_loop = BoundedFinalityLoop(
+                state,
+                interval_seconds=args.block_interval_seconds,
+                epoch_seconds=args.slot_epoch_seconds,
+            )
+            finality_loop.start()
     server = ThreadingHTTPServer((args.http_addr, args.http_port), make_handler(state))
 
     def terminate(*_: object) -> None:
@@ -743,6 +1060,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         server.serve_forever()
     finally:
+        if finality_loop is not None:
+            finality_loop.stop()
         if transport is not None:
             transport.close()
         if state.consensus is not None:
@@ -810,7 +1129,7 @@ def _authenticated_vote(value: Mapping[str, Any]) -> AuthenticatedVote:
         "signature",
         "peer_signature",
     }
-    if set(value) != required:
+    if set(value) not in (required, required | {"block_timestamp"}):
         raise ValidatorNodeError("authenticated vote fields are invalid")
     numeric = (value["chain_id"], value["height"], value["round"])
     if any(
@@ -831,6 +1150,16 @@ def _authenticated_vote(value: Mapping[str, Any]) -> AuthenticatedVote:
         raise ValidatorNodeError("authenticated vote signatures are invalid") from exc
     if not signature or not peer_signature:
         raise ValidatorNodeError("authenticated vote signatures are invalid")
+    block_timestamp = value.get("block_timestamp")
+    if (
+        block_timestamp is not None
+        and (
+            isinstance(block_timestamp, bool)
+            or not isinstance(block_timestamp, int)
+            or block_timestamp <= 0
+        )
+    ):
+        raise ValidatorNodeError("authenticated vote timestamp is invalid")
     return AuthenticatedVote(
         chain_id=value["chain_id"],
         height=value["height"],
@@ -839,21 +1168,23 @@ def _authenticated_vote(value: Mapping[str, Any]) -> AuthenticatedVote:
         validator_id=_validator_id(value["validator_id"]),
         signature=signature,
         peer_signature=peer_signature,
+        block_timestamp=block_timestamp,
     )
 
 
 def _vote_frame(packet: AuthenticatedVote) -> bytes:
-    body = canonical_json(
-        {
-            "chain_id": packet.chain_id,
-            "height": packet.height,
-            "round": packet.round,
-            "block_hash": packet.block_hash,
-            "validator_id": packet.validator_id,
-            "signature": packet.signature.hex(),
-            "peer_signature": packet.peer_signature.hex(),
-        }
-    )
+    payload = {
+        "chain_id": packet.chain_id,
+        "height": packet.height,
+        "round": packet.round,
+        "block_hash": packet.block_hash,
+        "validator_id": packet.validator_id,
+        "signature": packet.signature.hex(),
+        "peer_signature": packet.peer_signature.hex(),
+    }
+    if packet.block_timestamp is not None:
+        payload["block_timestamp"] = packet.block_timestamp
+    body = canonical_json(payload)
     if len(body) > 16_384:
         raise ValidatorNodeError("peer vote frame exceeds size boundary")
     return struct.pack(">I", len(body)) + body
