@@ -110,7 +110,7 @@ jq -e '
          .address == "aws_instance.validator[2]") and
         (.actions | index("create")) != null and
         (.actions | index("delete")) != null and
-        (.replace_paths | index(["ami"])) != null
+        (.replace_paths | any(.[]; . == ["ami"]))
       )
     )
 ' artifacts/foundation-plan.json >/dev/null
@@ -155,7 +155,7 @@ if [[ "$phase" == "foundation-apply" ]]; then
           $deletions[0].address == $address and
           ($deletions[0].actions | index("create")) != null and
           ($deletions[0].actions | index("delete")) != null and
-          ($deletions[0].replace_paths | index(["ami"])) != null
+          ($deletions[0].replace_paths | any(.[]; . == ["ami"]))
       ' "$target_json" >/dev/null
 
       terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
