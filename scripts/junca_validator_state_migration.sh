@@ -272,6 +272,54 @@ test "${#signer_arns[@]}" = 3
 test "$(printf '%s\n' "${instances[@]}" | sort -u | wc -l)" = 3
 test "$(printf '%s\n' "${volumes[@]}" | sort -u | wc -l)" = 3
 
+validate_state_volume_attachment_readback() {
+  local readback_path="$1"
+  local volume_id="$2"
+  local expected_az="$3"
+  jq -e \
+    --arg volume_id "$volume_id" \
+    --arg expected_az "$expected_az" '
+    def tag_values($key):
+      [.Volumes[0].Tags[]? | select(.Key == $key) | .Value];
+    (.Volumes | length) == 1 and
+    .Volumes[0].VolumeId == $volume_id and
+    .Volumes[0].AvailabilityZone == $expected_az and
+    .Volumes[0].Encrypted == true and
+    .Volumes[0].VolumeType == "gp3" and
+    .Volumes[0].Size == 200 and
+    .Volumes[0].Iops == 6000 and
+    .Volumes[0].Throughput == 250 and
+    tag_values("StatePath") == ["/var/lib/junca"] and
+    tag_values("PublicTestnetOnly") == ["true"] and
+    (
+      (
+        tag_values("MigrationRequired") == ["true"] and
+        tag_values("JuncaMigrationState") == [] and
+        tag_values("JuncaFilesystemVerified") == [] and
+        tag_values("JuncaStateStoreIntegrity") == [] and
+        tag_values("JuncaFinalityCertificateBackfilled") == [] and
+        tag_values("JuncaRollbackSnapshotId") == []
+      ) or
+      (
+        tag_values("MigrationRequired") == ["false"] and
+        tag_values("JuncaMigrationState") == ["VERIFIED_PASS"] and
+        tag_values("JuncaFilesystemVerified") == ["true"] and
+        tag_values("JuncaStateStoreIntegrity") == ["true"] and
+        tag_values("JuncaFinalityCertificateBackfilled") == ["true"] and
+        (
+          tag_values("JuncaRollbackSnapshotId") == [
+            tag_values("JuncaRollbackSnapshotId")[0]
+          ] and
+          (
+            tag_values("JuncaRollbackSnapshotId")[0] |
+            test("^snap-[0-9a-f]{8,17}$")
+          )
+        )
+      )
+    )
+  ' "$readback_path" >/dev/null
+}
+
 # The live validators may legitimately have user-data drift from newly merged
 # immutable-runtime source. Planning the attachment resources directly would
 # therefore also schedule validator replacement. Attach only the exact new
@@ -311,34 +359,9 @@ for validator_index in 0 1 2; do
     >/dev/null
   aws ec2 describe-volumes --volume-ids "$volume_id" \
     >"$artifact_dir/readback/attachment-${validator_index}-before.json"
-  jq -e \
-    --arg volume_id "$volume_id" \
-    --arg expected_az "$expected_az" '
-    (.Volumes | length) == 1 and
-    .Volumes[0].VolumeId == $volume_id and
-    .Volumes[0].AvailabilityZone == $expected_az and
-    .Volumes[0].Encrypted == true and
-    .Volumes[0].VolumeType == "gp3" and
-    .Volumes[0].Size == 200 and
-    .Volumes[0].Iops == 6000 and
-    .Volumes[0].Throughput == 250 and
-    (
-      [.Volumes[0].Tags[]? | select(
-        .Key == "StatePath" and .Value == "/var/lib/junca"
-      )] | length
-    ) == 1 and
-    (
-      [.Volumes[0].Tags[]? | select(
-        .Key == "PublicTestnetOnly" and .Value == "true"
-      )] | length
-    ) == 1 and
-    (
-      [.Volumes[0].Tags[]? | select(
-        .Key == "MigrationRequired" and .Value == "true"
-      )] | length
-    ) == 1
-  ' "$artifact_dir/readback/attachment-${validator_index}-before.json" \
-    >/dev/null
+  validate_state_volume_attachment_readback \
+    "$artifact_dir/readback/attachment-${validator_index}-before.json" \
+    "$volume_id" "$expected_az"
   attachment_count="$(
     jq -er '.Volumes[0].Attachments | length' \
       "$artifact_dir/readback/attachment-${validator_index}-before.json"
