@@ -45,7 +45,7 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260727-r27"',
+    'src="/junca-chain-official-wordmark.png?v=20260727-r28"',
     'alt="JUNCA"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
@@ -71,7 +71,7 @@ for (const required of [
   "AWS Runtime",
   "Runtime Acceptance Pending",
   "Assets Moved",
-  "Revision · 2026.07.27 / R27",
+  "Revision · 2026.07.27 / R28",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -141,7 +141,7 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R27") failures.push("release manifest revision must be R27");
+if (releaseManifest.revision !== "R28") failures.push("release manifest revision must be R28");
 if (releaseManifest.runtime_status !== "PENDING") failures.push("release manifest runtime acceptance must remain pending");
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
@@ -173,6 +173,14 @@ if (officialWordmarkDigest !== "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c8
 }
 if (!home.includes('class="official-product-name"')) failures.push("/: official product-name lockup missing");
 if (!home.includes('class="official-brand-lockup"')) failures.push("/: documentation brand lockup missing");
+if (!home.includes('class="footer-brand-lockup"')) failures.push("/: footer brand lockup missing");
+for (const retiredTypedLockup of [
+  '<span>JUNCA Social Ecosystem Chain</span>',
+  '<h1>JUNCA Social Ecosystem Chain</h1>',
+  '<strong>JUNCA Social Ecosystem Chain</strong>',
+]) {
+  if (home.includes(retiredTypedLockup)) failures.push(`/: retired typed lockup remains: ${retiredTypedLockup}`);
+}
 await readFile(join(dist, "junca-j-r21-192.png"));
 await readFile(join(dist, "junca-j-r21-512.png"));
 await readFile(join(dist, "junca-j-r21-maskable-512.png"));
