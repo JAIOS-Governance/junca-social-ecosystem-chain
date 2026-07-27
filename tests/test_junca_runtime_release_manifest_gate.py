@@ -34,6 +34,7 @@ BOUNDARY = {
     "assets_moved": False,
     "bridge_activated": False,
 }
+REQUEST = "9" * 64
 
 
 def binding():
@@ -57,8 +58,9 @@ def evidence():
         for index in range(1, 4)
     ]
     manifest = binding() | {
-        "schema_version": "junca-runtime-release-manifest/v1",
-        "state": "RELEASE_CANDIDATE",
+        "schema_version": "junca-runtime-pre-rollout-baseline/v1",
+        "state": "PRE_ROLLOUT_BASELINE_VERIFIED",
+        "request_sha256": REQUEST,
         "network": "Public Testnet",
         "notice": "Public Testnet / No Monetary Value",
         "ami_provenance": {
@@ -79,14 +81,16 @@ def evidence():
             "genesis_sha256": "3" * 64,
             "ami_id": "ami-11111111111111111",
         },
-        "explorer_acceptance_sha256": EXPLORER_DIGEST,
-        "ebs_migration_sha256": EBS_DIGEST,
+        "explorer_baseline_sha256": EXPLORER_DIGEST,
+        "ebs_baseline_sha256": EBS_DIGEST,
         "release_boundary": dict(BOUNDARY),
     }
     explorer = binding() | {
-        "schema_version": "junca-public-explorer-acceptance/v2",
-        "accepted": True,
-        "status": "PASS",
+        "schema_version": "junca-public-explorer-pre-rollout-baseline/v1",
+        "candidate_accepted": False,
+        "status": "BASELINE_VERIFIED",
+        "request_sha256": REQUEST,
+        "observed_runtime": manifest["previous_runtime"],
         "finalized_only": True,
         "read_only": True,
         "unsafe_rpc_rejection": True,
@@ -107,8 +111,11 @@ def evidence():
         for index in range(1, 4)
     ]
     ebs = binding() | {
-        "schema_version": "junca-validator-ebs-migration/v1",
-        "state": "VERIFIED_PASS",
+        "schema_version": "junca-validator-ebs-pre-rollout-baseline/v1",
+        "candidate_accepted": False,
+        "state": "BASELINE_VERIFIED",
+        "request_sha256": REQUEST,
+        "observed_runtime": manifest["previous_runtime"],
         "migration_complete": True,
         "data_loss": False,
         "validator_volumes": volumes,
@@ -178,7 +185,10 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         explorer["schema_version"] = "junca-public-explorer-acceptance/v1"
         explorer["ami_id"] = "ami-99999999999999999"
         decision = evaluate(manifest, explorer, ebs)
-        self.assertIn("explorer.schema_version:not_v2", decision["failures"])
+        self.assertIn(
+            "explorer.schema_version:not_pre_rollout_baseline",
+            decision["failures"],
+        )
         self.assertIn("explorer.candidate_binding:mismatch", decision["failures"])
 
     def test_ebs_requires_three_durable_verified_volumes(self):
@@ -192,13 +202,13 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
 
     def test_evidence_digest_substitution_is_rejected(self):
         manifest, explorer, ebs = evidence()
-        manifest["explorer_acceptance_sha256"] = "0" * 64
-        manifest["ebs_migration_sha256"] = "0" * 64
+        manifest["explorer_baseline_sha256"] = "0" * 64
+        manifest["ebs_baseline_sha256"] = "0" * 64
         decision = evaluate(manifest, explorer, ebs)
         self.assertIn(
-            "manifest.explorer_acceptance_sha256:mismatch", decision["failures"]
+            "manifest.explorer_baseline_sha256:mismatch", decision["failures"]
         )
-        self.assertIn("manifest.ebs_migration_sha256:mismatch", decision["failures"])
+        self.assertIn("manifest.ebs_baseline_sha256:mismatch", decision["failures"])
 
     def test_boundary_drift_is_rejected(self):
         manifest, explorer, ebs = evidence()
@@ -229,8 +239,9 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
 
     def test_workflow_verifies_evidence_run_provenance(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("evidence_workflow_name:", workflow)
-        self.assertIn("Verify candidate evidence run provenance", workflow)
+        self.assertNotIn("evidence_workflow_name:", workflow)
+        self.assertNotIn("evidence_artifact_name:", workflow)
+        self.assertIn("Verify pre-rollout evidence run provenance", workflow)
         self.assertIn(
             '"repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}"',
             workflow,
@@ -238,13 +249,19 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         for required in (
             '.status == "completed"',
             '.conclusion == "success"',
-            ".name == $workflow",
+            '.name == "JUNCA Runtime Release Evidence Collector"',
+            '.path == ".github/workflows/junca-runtime-release-evidence-collector.yml"',
+            '.event == "workflow_dispatch"',
             '.head_branch == "main"',
-            ".head_sha == $source_commit",
             ".repository.full_name == $repository",
             ".head_repository.full_name == $repository",
         ):
             self.assertIn(required, workflow)
+        self.assertNotIn(".head_sha == $source_commit", workflow)
+        self.assertIn(
+            '--name "junca-runtime-release-evidence-${EVIDENCE_RUN_ID}"',
+            workflow,
+        )
 
     def test_workflow_contains_no_deployment_or_apply_command(self):
         workflow = WORKFLOW.read_text(encoding="utf-8").lower()
