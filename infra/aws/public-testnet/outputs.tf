@@ -63,6 +63,13 @@ output "load_balancer_arn" {
   value = try(aws_lb.public[0].arn, null)
 }
 
+output "public_target_group_arns" {
+  value = var.enable_public_services ? {
+    rpc      = aws_lb_target_group.rpc[0].arn
+    explorer = aws_lb_target_group.explorer[0].arn
+  } : null
+}
+
 output "public_services_certificate" {
   value = {
     arn                  = aws_acm_certificate_validation.public_services.certificate_arn
