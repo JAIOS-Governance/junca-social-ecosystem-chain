@@ -1,0 +1,129 @@
+name: JUNCA Public Testnet Runtime Acceptance Gate
+
+on:
+  workflow_run:
+    workflows:
+      - "JUNCA Public Testnet Live 24h Soak"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      soak_run_id:
+        description: Exact successful JUNCA Public Testnet Live 24h Soak run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: junca-public-testnet-runtime-acceptance
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    if: >-
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      ) ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.name == 'JUNCA Public Testnet Live 24h Soak' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve exact hardcoded evidence chain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          MANUAL_SOAK_RUN_ID: ${{ inputs.soak_run_id || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            soak_run_id="$WORKFLOW_RUN_ID"
+          else
+            soak_run_id="$MANUAL_SOAK_RUN_ID"
+          fi
+          [[ "$soak_run_id" =~ ^[1-9][0-9]*$ ]]
+          soak_run="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${soak_run_id}")"
+          jq -e --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Public Testnet Live 24h Soak" and
+            .path == ".github/workflows/junca-public-testnet-live-soak.yml" and
+            .head_branch == "main" and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$soak_run"
+          mkdir -p evidence/soak
+          gh run download "$soak_run_id" \
+            --repo "${{ github.repository }}" \
+            --name "junca-public-testnet-live-soak-${soak_run_id}" \
+            --dir evidence/soak
+          (
+            cd evidence/soak
+            sha256sum --check junca-public-testnet-live-soak.json.sha256
+          )
+          foundation_run_id="$(
+            jq -er .provenance.foundation_run_id \
+              evidence/soak/junca-public-testnet-live-soak.json
+          )"
+          public_release_run_id="$(
+            jq -er .provenance.public_release_run_id \
+              evidence/soak/junca-public-testnet-live-soak.json
+          )"
+          for specification in \
+            "$foundation_run_id|JUNCA Validator Foundation Release|.github/workflows/junca-validator-foundation-release.yml" \
+            "$public_release_run_id|JUNCA Public Testnet Release|.github/workflows/junca-public-testnet-release.yml"
+          do
+            IFS='|' read -r run_id workflow_name workflow_path <<<"$specification"
+            run="$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}")"
+            jq -e \
+              --arg repository "${{ github.repository }}" \
+              --arg workflow_name "$workflow_name" \
+              --arg workflow_path "$workflow_path" '
+              .status == "completed" and
+              .conclusion == "success" and
+              .name == $workflow_name and
+              .path == $workflow_path and
+              .head_branch == "main" and
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository
+            ' <<<"$run"
+          done
+          gh run download "$foundation_run_id" \
+            --repo "${{ github.repository }}" \
+            --name "junca-validator-foundation-release-${foundation_run_id}" \
+            --dir evidence/foundation
+          gh run download "$public_release_run_id" \
+            --repo "${{ github.repository }}" \
+            --name "junca-public-testnet-release-${public_release_run_id}" \
+            --dir evidence/public-release
+
+      - name: Issue final fail-closed runtime decision
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python scripts/junca_public_testnet_runtime_acceptance_gate.py \
+            --soak evidence/soak/junca-public-testnet-live-soak.json \
+            --final-runtime-readback evidence/soak/final-runtime-readback.json \
+            --foundation-outputs evidence/foundation/foundation-outputs.json \
+            --foundation-acceptance evidence/foundation/public-testnet-runtime-acceptance.json \
+            --publication evidence/public-release/public-testnet-publication.json \
+            --output artifacts/junca-public-testnet-runtime-acceptance-decision.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-testnet-runtime-acceptance-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
