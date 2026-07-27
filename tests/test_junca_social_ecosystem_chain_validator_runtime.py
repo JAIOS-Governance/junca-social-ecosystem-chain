@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import hashlib
@@ -276,6 +277,43 @@ class LiveValidatorRuntimeTests(unittest.TestCase):
         evidence = runtime.evidence()["signing_journal"]
         self.assertEqual(evidence["signature_count"], 1)
         self.assertFalse(evidence["private_key_material_stored"])
+
+    def test_signing_journal_evidence_is_safe_from_worker_thread(self) -> None:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            evidence = executor.submit(self.journal.evidence).result()
+        self.assertEqual(evidence["startup_integrity_check"], "PASS")
+        self.assertEqual(evidence["signature_count"], 0)
+
+    def test_concurrent_same_vote_calls_signer_once(self) -> None:
+        calls: list[None] = []
+        block_hash = "0x" + ("8" * 64)
+        payload = vote_payload(
+            validator_id="validator-1",
+            height=1,
+            round=0,
+            block_hash=block_hash,
+        )
+
+        def sign() -> bytes:
+            calls.append(None)
+            return b"s" * 64
+
+        def get_or_sign() -> bytes:
+            return self.journal.get_or_sign(
+                validator_id="validator-1",
+                height=1,
+                round=0,
+                block_hash=block_hash,
+                signing_payload=payload,
+                signer=sign,
+                signature_verifier=lambda value: value == b"s" * 64,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: get_or_sign(), range(2)))
+        self.assertEqual(results, [b"s" * 64, b"s" * 64])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.journal.evidence()["signature_count"], 1)
 
     def test_signing_journal_survives_restart_and_rejects_conflict(self) -> None:
         self.runtime.propose()
