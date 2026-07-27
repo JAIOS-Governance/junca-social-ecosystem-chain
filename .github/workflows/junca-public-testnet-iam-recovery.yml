@@ -25,6 +25,10 @@ jobs:
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
       STATE_LOCK_TABLE: junca-social-ecosystem-chain-testnet-lock
+      TF_VAR_aws_account_id: "595710543956"
+      TF_VAR_state_bucket_name: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      TF_VAR_lock_table_name: junca-social-ecosystem-chain-testnet-lock
+      TF_VAR_github_oidc_thumbprint: 6938fd4d98bab03faadb97b34396831e3780aea1
 
     steps:
       - uses: actions/checkout@v4
