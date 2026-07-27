@@ -647,10 +647,34 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         ):
             self.assertIn(required, workflow)
         self.assertNotIn(".head_sha == $source_commit", workflow)
+        self.assertEqual(
+            workflow.count("uses: actions/download-artifact@v4"),
+            1,
+        )
+        self.assertEqual(
+            workflow.count(
+                "name: junca-runtime-release-evidence-${{ "
+                "inputs.evidence_run_id }}"
+            ),
+            1,
+        )
+        self.assertIn("repository: ${{ github.repository }}", workflow)
+        self.assertIn("github-token: ${{ github.token }}", workflow)
+        self.assertIn("run-id: ${{ inputs.evidence_run_id }}", workflow)
+        self.assertNotIn("gh run download", workflow)
+        self.assertNotIn("pattern:", workflow)
+        self.assertNotIn("artifact-ids:", workflow)
+        self.assertNotIn("merge-multiple:", workflow)
         self.assertIn(
-            '--name "junca-runtime-release-evidence-${EVIDENCE_RUN_ID}"',
+            'test "$(find evidence -type f | wc -l)" = 3',
             workflow,
         )
+        for evidence_file in (
+            "junca-runtime-pre-rollout-baseline.json",
+            "junca-public-explorer-pre-rollout-baseline.json",
+            "junca-validator-ebs-pre-rollout-baseline.json",
+        ):
+            self.assertIn(f"test -f evidence/{evidence_file}", workflow)
 
     def test_workflow_contains_no_deployment_or_apply_command(self):
         workflow = WORKFLOW.read_text(encoding="utf-8").lower()
