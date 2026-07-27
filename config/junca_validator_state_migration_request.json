@@ -9,11 +9,11 @@
   "terraform_state_bucket": "junca-social-ecosystem-chain-tfstate-595710543956-us-east-1",
   "dynamodb_lock_table": "junca-social-ecosystem-chain-testnet-lock",
   "deployment_role_arn": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "request_sha256": "a80c7abb0fe2291bcc651685136183d69b977b3ca7312ec170c449983dde55e6",
   "boundaries": {
     "bootstrap_changed": false,
     "mainnet_changed": false,
     "assets_moved": false,
     "bridge_activated": false
-  },
-  "request_sha256": "a80c7abb0fe2291bcc651685136183d69b977b3ca7312ec170c449983dde55e6"
+  }
 }
