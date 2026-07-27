@@ -65,6 +65,12 @@ def runtime_finality_binding_functions(script: str) -> str:
     )[0].join(("build_runtime_finality_bindings() {", ""))
 
 
+def ssm_online_function(script: str) -> str:
+    return script.split("wait_for_ssm_online() {", 1)[1].split(
+        "\n}\n\nwrite_post_apply_checkpoint()", 1
+    )[0].join(("wait_for_ssm_online() {", "\n}"))
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -1219,6 +1225,122 @@ class AwsFoundationTests(unittest.TestCase):
             "$after.certificate_hash == $before.certificate_hash",
         ):
             self.assertIn(required, self.foundation_script)
+
+    def test_resume_can_adopt_one_live_prefix_across_a_workflow_head_fix(self) -> None:
+        resolve_head = self.validator_foundation_release.index(
+            "Resolve immutable candidate provenance head"
+        )
+        verify_candidate = self.validator_foundation_release.index(
+            "Verify immutable AMI and manifest workflow provenance"
+        )
+        self.assertLess(resolve_head, verify_candidate)
+        for required in (
+            'candidate_head="$GITHUB_SHA"',
+            ".candidate.provenance_head_sha // .head_sha",
+            ".head_sha == $producer_head",
+            'echo "ROLLING_CANDIDATE_HEAD_SHA=$candidate_head"',
+            '--arg head "$ROLLING_CANDIDATE_HEAD_SHA"',
+            ".candidate.source_commit == $source_commit",
+            ".candidate.node_artifact_sha256 == $node_sha256",
+            ".candidate.genesis_sha256 == $genesis_sha256",
+            ".candidate.ami_id == $ami_id",
+            ".candidate.request_sha256 == $request_sha256",
+            ".candidate.manifest_decision_sha256 ==",
+        ):
+            self.assertIn(required, self.validator_foundation_release)
+        for required in (
+            "ROLLING_CANDIDATE_HEAD_SHA",
+            "candidate_provenance_head_sha",
+            ".candidate.provenance_head_sha // .head_sha",
+            "write_live_rollout_prefix_readback",
+            'jq -er \'.live_updated_count\' '
+            "artifacts/live-prefix-decision.json",
+            'build_pre_rollout_finality_bindings \\\n'
+            '      "$live_updated_count"',
+        ):
+            self.assertIn(required, self.foundation_script)
+
+    def test_post_apply_failures_are_checkpointed_and_ssm_errors_retry(self) -> None:
+        for required in (
+            "wait_for_ssm_online()",
+            "junca-validator-ssm-online-readback/v1",
+            "attempts: .",
+            "accepted: false",
+            "post-apply-validator-${index}-checkpoint.json",
+            "terraform-apply started",
+            "instance-output started",
+            "ssm-online started",
+            "state-volume started",
+            "finality-quiesce started",
+            "post-apply-validator-${index}-instances.json",
+            "post-apply-validator-${index}-volume.json",
+        ):
+            self.assertIn(required, self.foundation_script)
+        self.assertNotIn(
+            'ping_status="$(aws ssm describe-instance-information',
+            self.foundation_script,
+        )
+        helper = self.foundation_script.split("wait_for_ssm_online() {", 1)[
+            1
+        ].split("\n}\n\nwrite_post_apply_checkpoint()", 1)[0]
+        self.assertIn("if ping_status=", helper)
+        self.assertIn("cli_exit=$?", helper)
+        self.assertIn('if [[ "$attempt" -lt 60 ]]', helper)
+        self.assertIn("sleep 10", helper)
+
+    def test_ssm_online_retry_records_transient_cli_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = pathlib.Path(directory)
+            counter = temp / "counter"
+            output = temp / "ssm-online.json"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + ssm_online_function(self.foundation_script)
+                    + textwrap.dedent(
+                        """
+                        aws() {
+                          count=0
+                          if [[ -f "$COUNTER_PATH" ]]; then
+                            count="$(cat "$COUNTER_PATH")"
+                          fi
+                          count="$((count + 1))"
+                          printf '%s' "$count" >"$COUNTER_PATH"
+                          if [[ "$count" == 1 ]]; then
+                            echo "transient describe error" >&2
+                            return 42
+                          fi
+                          printf 'Online\\n'
+                        }
+                        sleep() { :; }
+                        wait_for_ssm_online "$1" "$2"
+                        """
+                    ),
+                    "ssm-retry-test",
+                    "i-00000000000000001",
+                    str(output),
+                ],
+                env={"PATH": "/usr/bin:/bin", "COUNTER_PATH": str(counter)},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            evidence = json.loads(output.read_text(encoding="utf-8"))
+            self.assertTrue(evidence["accepted"])
+            self.assertEqual(evidence["observed_status"], "Online")
+            self.assertEqual(len(evidence["attempts"]), 2)
+            self.assertEqual(evidence["attempts"][0]["cli_exit"], 42)
+            self.assertEqual(
+                evidence["attempts"][0]["ping_status"], "AwsCliError"
+            )
+            self.assertIn(
+                "transient describe error",
+                evidence["attempts"][0]["stderr"],
+            )
+            self.assertEqual(evidence["attempts"][1]["cli_exit"], 0)
 
     def test_resume_reuses_one_bound_unexpired_slot_epoch(self) -> None:
         for required in (
