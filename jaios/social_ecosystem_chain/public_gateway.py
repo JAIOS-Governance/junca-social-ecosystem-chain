@@ -28,6 +28,25 @@ ALLOWED_METHODS = frozenset(
 )
 MAX_REQUEST_BYTES = 1_000_000
 LOGO_PATH = Path(__file__).with_name("assets") / "junca-chain-logo-gold-on-navy.png"
+ICON_PATH = Path(__file__).with_name("assets") / "junca-explorer-icon-gold-on-navy.png"
+EXPLORER_MANIFEST = {
+    "id": "/",
+    "name": "JUNCA Social Ecosystem Chain Public Explorer",
+    "short_name": "JUNCA Explorer",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#071827",
+    "theme_color": "#071827",
+    "icons": [
+        {
+            "src": "/explorer-icon.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable",
+        }
+    ],
+}
 
 
 class PublicGatewayError(ValueError):
@@ -332,6 +351,13 @@ def make_handler(gateway: PublicGateway) -> type[BaseHTTPRequestHandler]:
                     self._send(status, "text/html; charset=utf-8", body.encode())
                 elif self.path == "/junca-chain-logo.png":
                     self._send(200, "image/png", LOGO_PATH.read_bytes(), cache=True)
+                elif self.path == "/explorer-icon.png":
+                    self._send(200, "image/png", ICON_PATH.read_bytes(), cache=True)
+                elif self.path == "/manifest.webmanifest":
+                    encoded = json.dumps(
+                        EXPLORER_MANIFEST, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                    self._send(200, "application/manifest+json", encoded)
                 else:
                     self.send_error(404)
             except PublicGatewayError:

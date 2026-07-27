@@ -144,6 +144,8 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("JUNCA Social Ecosystem Chain", document)
         self.assertIn("footer-destinations", document)
         self.assertIn("/junca-chain-logo.png", document)
+        self.assertIn("/explorer-icon.png", document)
+        self.assertIn("/manifest.webmanifest", document)
         self.assertNotIn("private", document.lower())
 
     def test_explorer_rejects_nonfinalized_or_mismatched_head(self) -> None:
