@@ -1,13 +1,12 @@
 name: JUNCA Validator Runtime Recovery
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - infra/aws/public-testnet/main.tf
-      - infra/aws/public-testnet/templates/validator-user-data.sh.tftpl
-      - .github/workflows/junca-validator-runtime-recovery.yml
   workflow_dispatch:
+    inputs:
+      authorize_rollout:
+        description: "Exact authorization phrase: PUBLIC_TESTNET_RUNTIME_RECOVERY"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +18,7 @@ concurrency:
 
 jobs:
   recover-and-accept:
+    if: inputs.authorize_rollout == 'PUBLIC_TESTNET_RUNTIME_RECOVERY'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 30
