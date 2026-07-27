@@ -1,0 +1,73 @@
+name: JUNCA Candidate Mainnet Readiness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-mainnet-readiness.yml"
+      - "jaios/social_ecosystem_chain/mainnet_readiness.py"
+      - "tests/test_junca_mainnet_readiness.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-candidate-mainnet-readiness
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify fail-closed Candidate Mainnet gate
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_junca_mainnet_readiness -v
+          mkdir -p artifacts
+          python - <<'PY'
+          import json
+          import os
+
+          from jaios.social_ecosystem_chain.mainnet_readiness import (
+              REQUIRED_GATES,
+              SCHEMA_VERSION,
+              evaluate_mainnet_readiness,
+          )
+
+          passed = {
+              "public_testnet_runtime_acceptance",
+              "rpc_boundary",
+              "explorer_parity",
+          }
+          evidence = {
+              "schema_version": SCHEMA_VERSION,
+              "source_commit": os.environ["GITHUB_SHA"],
+              "gates": {name: name in passed for name in REQUIRED_GATES},
+              "mainnet_changed": False,
+              "assets_moved": False,
+              "bridge_activated": False,
+          }
+          result = evaluate_mainnet_readiness(evidence)
+          output = result.as_evidence()
+          assert output["state"] == "blocked"
+          assert output["mainnet_changed"] is False
+          assert output["assets_moved"] is False
+          assert output["bridge_activated"] is False
+          with open("artifacts/mainnet-readiness.json", "w", encoding="utf-8") as stream:
+              json.dump(output, stream, indent=2, sort_keys=True)
+              stream.write("\n")
+          PY
+          sha256sum artifacts/mainnet-readiness.json \
+            > artifacts/mainnet-readiness.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-candidate-mainnet-readiness-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
