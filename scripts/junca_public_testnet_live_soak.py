@@ -75,6 +75,7 @@ def _binding(
     node_artifact_sha256: str,
     genesis_sha256: str,
     ami_id: str,
+    request_sha256: str,
 ) -> dict[str, str]:
     _require(COMMIT.fullmatch(source_commit) is not None, "source_commit:invalid")
     _require(
@@ -86,11 +87,13 @@ def _binding(
         "genesis_sha256:invalid",
     )
     _require(AMI.fullmatch(ami_id) is not None, "ami_id:invalid")
+    _require(SHA256.fullmatch(request_sha256) is not None, "request_sha256:invalid")
     return {
         "source_commit": source_commit,
         "node_artifact_sha256": node_artifact_sha256,
         "genesis_sha256": genesis_sha256,
         "ami_id": ami_id,
+        "request_sha256": request_sha256,
     }
 
 
@@ -123,13 +126,18 @@ def build_segment(
     node_artifact_sha256: str,
     genesis_sha256: str,
     ami_id: str,
+    request_sha256: str,
     duration_seconds: int = SEGMENT_DURATION_SECONDS,
     interval_seconds: int = OBSERVATION_INTERVAL_SECONDS,
 ) -> dict[str, Any]:
     """Bind one live endpoint packet to an immutable runtime segment."""
 
     candidate = _binding(
-        source_commit, node_artifact_sha256, genesis_sha256, ami_id
+        source_commit,
+        node_artifact_sha256,
+        genesis_sha256,
+        ami_id,
+        request_sha256,
     )
     failures: list[str] = []
     if not 1 <= segment_index <= SEGMENT_COUNT:
@@ -212,6 +220,7 @@ def aggregate_segments(
     node_artifact_sha256: str,
     genesis_sha256: str,
     ami_id: str,
+    request_sha256: str,
     foundation_run_id: str = "1",
     public_release_run_id: str = "1",
     final_runtime_readback_sha256: str = "0" * 64,
@@ -219,7 +228,11 @@ def aggregate_segments(
     """Fail-close unless six candidate-identical segments cover 24 hours."""
 
     candidate = _binding(
-        source_commit, node_artifact_sha256, genesis_sha256, ami_id
+        source_commit,
+        node_artifact_sha256,
+        genesis_sha256,
+        ami_id,
+        request_sha256,
     )
     _require(foundation_run_id.isdigit(), "foundation_run_id:invalid")
     _require(public_release_run_id.isdigit(), "public_release_run_id:invalid")
@@ -414,6 +427,7 @@ def _collect_segment(args: argparse.Namespace) -> int:
         node_artifact_sha256=args.node_artifact_sha256,
         genesis_sha256=args.genesis_sha256,
         ami_id=args.ami_id,
+        request_sha256=args.request_sha256,
     )
     _write(args.output, segment)
     print(json.dumps({"status": segment["status"], "output": args.output}))
@@ -428,6 +442,7 @@ def _aggregate(args: argparse.Namespace) -> int:
         node_artifact_sha256=args.node_artifact_sha256,
         genesis_sha256=args.genesis_sha256,
         ami_id=args.ami_id,
+        request_sha256=args.request_sha256,
         foundation_run_id=args.foundation_run_id,
         public_release_run_id=args.public_release_run_id,
         final_runtime_readback_sha256=args.final_runtime_readback_sha256,
@@ -442,6 +457,7 @@ def _binding_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--node-artifact-sha256", required=True)
     parser.add_argument("--genesis-sha256", required=True)
     parser.add_argument("--ami-id", required=True)
+    parser.add_argument("--request-sha256", required=True)
 
 
 def main() -> int:
