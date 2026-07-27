@@ -58,6 +58,11 @@ class AwsFoundationTests(unittest.TestCase):
             / ".github/workflows/"
             "junca-chain-runtime-self-permission-recovery.yml"
         ).read_text(encoding="utf-8")
+        cls.validator_runtime_recovery = (
+            ROOT
+            / ".github/workflows/"
+            "junca-validator-runtime-recovery.yml"
+        ).read_text(encoding="utf-8")
         cls.gates = json.loads(
             (
                 ROOT
@@ -429,10 +434,11 @@ class AwsFoundationTests(unittest.TestCase):
     def test_foundation_generates_once_then_preserves_shared_slot_epoch(self) -> None:
         for required in (
             "Generate one-time shared automatic finality epoch",
-            "activation_delay=3600",
+            "activation_delay=7200",
             "now + activation_delay + interval - 1",
             "VALIDATOR_BLOCK_INTERVAL_SECONDS=$interval",
             "VALIDATOR_SLOT_EPOCH_SECONDS=$slot_epoch",
+            'FOUNDATION_ROLLING_RELEASE: "true"',
             "automatic_finality_readback.value",
             "foundation apply requires automatic finality to be enabled",
             "automatic_finality_enabled: $automatic_finality_enabled",
@@ -494,7 +500,7 @@ class AwsFoundationTests(unittest.TestCase):
             ".block_interval_seconds == 30",
             ".slot_epoch_seconds == $slot_epoch",
             "ready_at=\"$((slot_epoch + 5))\"",
-            "timeout-minutes: 150",
+            "timeout-minutes: 210",
             "consecutive_advances: 2",
             "canonical_timestamp_delta_seconds:",
             "head_advanced: true",
@@ -505,10 +511,147 @@ class AwsFoundationTests(unittest.TestCase):
             "slot_epoch + ((initial_height + 1) * interval) + 5",
             self.validator_foundation_release,
         )
+
+    def test_foundation_rollout_requires_per_validator_compatibility_gate(self) -> None:
+        for required in (
+            "python -m jaios.social_ecosystem_chain.rolling_compatibility",
+            "write_rolling_compatibility_evidence",
+            "READY_FOR_NEXT_VALIDATOR",
+            "READY_FOR_SLOT_EPOCH",
+            "READY_FOR_FINALITY_ENABLE",
+            "ACCEPTED",
+            "describe-instance-information",
+            "systemctl is-active --quiet junca-validator.service",
+            "mountpoint -q /var/lib/junca",
+            "PRAGMA quick_check",
+            "certificate_hash:",
+            "certificate_height:",
+            "certificate_block_hash:",
+            'range($prefix; 3) | "aws_instance.validator[\\(.)]"',
+            '$ARGS.positional == $expected',
+        ):
+            self.assertIn(required, self.foundation_script)
+
+    def test_finality_activation_is_separate_and_manual_vote_is_disabled(self) -> None:
+        disable_index = self.foundation_script.index(
+            'set_runtime_finality 0 0 "${pre_rollout_instances[@]}"'
+        )
+        replacement_index = self.foundation_script.index(
+            'for address in "${validator_replacements[@]}"'
+        )
+        epoch_index = self.foundation_script.index(
+            '0 "$validator_slot_epoch_seconds" "${activated_instances[@]}"'
+        )
+        enable_index = self.foundation_script.index(
+            '30 "$validator_slot_epoch_seconds" "${activated_instances[@]}"'
+        )
+        self.assertLess(disable_index, replacement_index)
+        self.assertLess(replacement_index, epoch_index)
+        self.assertLess(epoch_index, enable_index)
+        for workflow in (
+            self.validator_foundation_release,
+            self.validator_runtime_recovery,
+        ):
+            self.assertNotIn("junca_broadcastVote", workflow)
+            self.assertNotIn("ssm-broadcast", workflow)
+
+    def test_rollback_rehearsal_is_bound_to_no_state_rewind(self) -> None:
+        for required in (
+            "rollback-rehearsal.json",
+            "rollback-snapshot-readback.json",
+            "snapshot_restore_performed: false",
+            "no_state_rewind: true",
+            "durable_volume_reused: true",
+            "state_rewind_permitted: false",
+            "rollback_snapshot_id:",
+            "volume_id:",
+            "certificate_hash:",
+        ):
+            self.assertIn(required, self.foundation_script)
         self.assertNotIn(
             "(map(.head_height) | unique) == [$expected_height]",
             self.validator_foundation_release,
         )
+
+    def test_resumable_rollout_is_run_request_and_evidence_bound(self) -> None:
+        for required in (
+            "resume_run_id:",
+            "Resolve exact resumable rolling evidence",
+            ".conclusion == \"failure\"",
+            "junca-validator-foundation-release-${ROLLING_RESUME_RUN_ID}",
+            "sha256sum -c rolling-resume-evidence.json.sha256",
+            ".producer_run_id == $producer_run_id",
+            ".ami_run_id == $ami_run_id",
+            ".manifest_gate_run_id == $manifest_gate_run_id",
+            ".candidate.request_sha256 == $request_sha256",
+            ".candidate.manifest_decision_sha256 ==",
+        ):
+            self.assertIn(required, self.validator_foundation_release)
+        for required in (
+            "junca-validator-rolling-resume/v1",
+            "ROLLING_RESUME_EVIDENCE_PATH",
+            "ROLLING_RESUME_RUN_ID",
+            "MANIFEST_DECISION_SHA256",
+            "rolling-resume-evidence.json.sha256",
+            "live_updated_count",
+            "prior_updated_count",
+            'test "$live_updated_count" -ge "$prior_updated_count"',
+            'test "$live_updated_count" -le '
+            '"$((prior_updated_count + 1))"',
+            "$before.instance_id == $after.instance_id",
+            "$after.head_height >= $before.head_height",
+            "$after.head_hash == $before.head_hash",
+            "$after.certificate_hash == $before.certificate_hash",
+        ):
+            self.assertIn(required, self.foundation_script)
+
+    def test_resume_reuses_one_bound_unexpired_slot_epoch(self) -> None:
+        for required in (
+            'if [[ -n "${ROLLING_RESUME_EVIDENCE_PATH:-}" ]]',
+            ".automatic_finality.block_interval_seconds",
+            ".automatic_finality.slot_epoch_seconds",
+            'test "$ROLLING_RESUME_RUN_ID" != "0"',
+            'test "$remaining" -ge "$minimum_remaining"',
+            'test "$remaining" -le "$maximum_remaining"',
+            "minimum_remaining=900",
+            "maximum_remaining=7230",
+            "A resume reuses this exact epoch",
+        ):
+            self.assertIn(required, self.validator_foundation_release)
+        for required in (
+            "automatic_finality: {",
+            "block_interval_seconds: 30",
+            "slot_epoch_seconds: $validator_slot_epoch_seconds",
+            "minimum_remaining_seconds: 900",
+            "maximum_remaining_seconds: 7230",
+            'epoch_remaining="$((validator_slot_epoch_seconds - '
+            '$(date +%s)))"',
+            'test "$epoch_remaining" -ge 900',
+            'test "$epoch_remaining" -le 7230',
+            ".automatic_finality == {",
+        ):
+            self.assertIn(required, self.foundation_script)
+        resume_index = self.validator_foundation_release.index(
+            "Resolve exact resumable rolling evidence"
+        )
+        epoch_index = self.validator_foundation_release.index(
+            "Generate one-time shared automatic finality epoch"
+        )
+        apply_index = self.validator_foundation_release.index(
+            "scripts/junca_public_testnet_foundation.sh foundation-apply"
+        )
+        self.assertLess(resume_index, epoch_index)
+        self.assertLess(epoch_index, apply_index)
+
+    def test_resumable_rollout_rejects_gap_and_unknown_ami(self) -> None:
+        for required in (
+            "target_ami_id: $target_ami_id",
+            "ami_id: $ami_id",
+            "expected_replacements=",
+            "READY_FOR_NEXT_VALIDATOR",
+            "READY_FOR_SLOT_EPOCH",
+        ):
+            self.assertIn(required, self.foundation_script)
 
     def test_public_release_requires_consecutive_endpoint_parity(self) -> None:
         for required in (
