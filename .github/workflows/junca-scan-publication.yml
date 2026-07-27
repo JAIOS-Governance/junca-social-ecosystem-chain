@@ -110,26 +110,17 @@ jobs:
           base=/usr/local/lib/junca/jaios/social_ecosystem_chain
           run_ssm prepare "set -euo pipefail; install -d -m 0755 ${base}/assets /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}; cp -a ${base}/explorer_page.py ${base}/public_gateway.py ${base}/assets/junca-chain-logo-gold-on-navy.png /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}/ 2>/dev/null || true"
 
-          files=(
-            "jaios/social_ecosystem_chain/explorer_page.py:${base}/explorer_page.py"
-            "jaios/social_ecosystem_chain/public_gateway.py:${base}/public_gateway.py"
-            "jaios/social_ecosystem_chain/assets/junca-chain-logo-gold-on-navy.png:${base}/assets/junca-chain-logo-gold-on-navy.png"
-          )
-          index=0
-          for mapping in "${files[@]}"; do
-            source="${mapping%%:*}"
-            destination="${mapping#*:}"
-            key="scan-${index}"
-            run_ssm "${key}-start" "set -euo pipefail; : > /tmp/${key}.b64"
-            chunk_index=0
-            while IFS= read -r chunk; do
-              run_ssm "${key}-chunk-${chunk_index}" "set -euo pipefail; printf '%s' '${chunk}' >> /tmp/${key}.b64"
-              chunk_index=$((chunk_index + 1))
-            done < <(base64 -w0 "$source" | fold -w 8000)
-            digest="$(sha256sum "$source" | cut -d' ' -f1)"
-            run_ssm "${key}-install" "set -euo pipefail; base64 -d /tmp/${key}.b64 > /tmp/${key}; echo '${digest}  /tmp/${key}' | sha256sum -c -; install -m 0644 /tmp/${key} '${destination}'; rm -f /tmp/${key} /tmp/${key}.b64"
-            index=$((index + 1))
-          done
+          tar -czf artifacts/scan-surface.tar.gz \
+            -C jaios/social_ecosystem_chain \
+            explorer_page.py public_gateway.py assets/junca-chain-logo-gold-on-navy.png
+          digest="$(sha256sum artifacts/scan-surface.tar.gz | cut -d' ' -f1)"
+          run_ssm surface-start "set -euo pipefail; : > /tmp/junca-scan-surface.b64"
+          chunk_index=0
+          while IFS= read -r chunk || [[ -n "$chunk" ]]; do
+            run_ssm "surface-chunk-${chunk_index}" "set -euo pipefail; printf '%s' '${chunk}' >> /tmp/junca-scan-surface.b64"
+            chunk_index=$((chunk_index + 1))
+          done < <(base64 -w0 artifacts/scan-surface.tar.gz | fold -w 3000)
+          run_ssm surface-install "set -euo pipefail; base64 -d /tmp/junca-scan-surface.b64 > /tmp/junca-scan-surface.tar.gz; echo '${digest}  /tmp/junca-scan-surface.tar.gz' | sha256sum -c -; rm -rf /tmp/junca-scan-surface; install -d -m 0755 /tmp/junca-scan-surface; tar -xzf /tmp/junca-scan-surface.tar.gz -C /tmp/junca-scan-surface; install -m 0644 /tmp/junca-scan-surface/explorer_page.py '${base}/explorer_page.py'; install -m 0644 /tmp/junca-scan-surface/public_gateway.py '${base}/public_gateway.py'; install -m 0644 /tmp/junca-scan-surface/assets/junca-chain-logo-gold-on-navy.png '${base}/assets/junca-chain-logo-gold-on-navy.png'; rm -rf /tmp/junca-scan-surface /tmp/junca-scan-surface.tar.gz /tmp/junca-scan-surface.b64"
 
           run_ssm restart "set -euo pipefail; systemctl restart junca-public-explorer.service junca-public-rpc.service; curl -fsS http://127.0.0.1:3000/explorer.json | jq -e '.status == \"ready\" and .finalized_only == true and .read_only == true'; curl -fsS http://127.0.0.1:8546/health | jq -e '.status == \"healthy\" and .read_only == true'"
 
