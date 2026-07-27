@@ -107,6 +107,18 @@ output "public_services_certificate" {
   }
 }
 
+output "scan_certificate" {
+  value = {
+    arn               = aws_acm_certificate_validation.scan.certificate_arn
+    domain_name       = aws_acm_certificate.scan.domain_name
+    validation_method = aws_acm_certificate.scan.validation_method
+    validation_record_fqdns = [
+      for record in aws_route53_record.scan_certificate_validation :
+      record.fqdn
+    ]
+  }
+}
+
 output "validator_alert_topic_arn" {
   value = aws_sns_topic.validator_alerts.arn
 }

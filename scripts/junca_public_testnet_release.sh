@@ -91,8 +91,12 @@ jq -e '
         (.address | test("^aws_wafv2_web_acl\\.public\\[0\\]$")) or
         (.address | test("^aws_wafv2_web_acl_association\\.public\\[0\\]$")) or
         (.address | test("^aws_lb_listener\\.https\\[0\\]$")) or
+        (.address | test("^aws_lb_listener_certificate\\.scan\\[0\\]$")) or
         (.address | test("^aws_lb_listener_rule\\.(rpc|explorer)\\[0\\]$")) or
-        (.address | test("^aws_route53_record\\.public\\["))
+        (.address | test("^aws_route53_record\\.public\\[")) or
+        (.address | test("^aws_acm_certificate\\.scan$")) or
+        (.address | test("^aws_route53_record\\.scan_certificate_validation\\[")) or
+        (.address | test("^aws_acm_certificate_validation\\.scan$"))
       ) | not)
     | .address
   ] | length == 0
@@ -106,6 +110,7 @@ jq -e --arg quorum "$QUORUM_ACCEPTANCE_SHA256" --arg runtime "$RUNTIME_ACCEPTANC
   .deployment_stage.value == "public-services" and
   .public_rpc_url.value == "https://rpc.jaios-governance.org" and
   .explorer_url.value == "https://explorer.jaios-governance.org" and
+  .scan_url.value == "https://scan.jaios-governance.org" and
   .health_url.value == "https://health.jaios-governance.org" and
   .public_services_acceptance_readback.value.enabled == true and
   .public_services_acceptance_readback.value.quorum_evidence_sha256 == $quorum and
