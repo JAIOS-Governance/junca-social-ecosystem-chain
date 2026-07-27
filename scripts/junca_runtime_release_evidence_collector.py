@@ -3,8 +3,9 @@
 
 The collector never invents identifiers or acceptance results.  It accepts an
 immutable AMI build artifact, canonical Terraform outputs, AWS describe API
-responses, and the existing live endpoint acceptance report.  Missing durable
-state migration markers or mismatched runtime identity reject collection.
+responses, and either the existing live endpoint acceptance report or exact
+three-validator private SSM health readback.  Missing durable state migration
+markers or mismatched runtime identity reject collection.
 """
 
 from __future__ import annotations
@@ -31,6 +32,10 @@ AMI = re.compile(r"ami-[0-9a-f]{8,17}")
 INSTANCE = re.compile(r"i-[0-9a-f]{8,17}")
 VOLUME = re.compile(r"vol-[0-9a-f]{8,17}")
 SNAPSHOT = re.compile(r"snap-[0-9a-f]{8,17}")
+HASH = re.compile(r"0x[0-9a-f]{64}")
+RUN_ID = re.compile(r"[1-9][0-9]*")
+MIGRATION_TOKEN = re.compile(r"[0-9]+-[1-9][0-9]*")
+REPOSITORY = "JAIOS-Governance/junca-social-ecosystem-chain"
 
 
 class EvidenceError(RuntimeError):
@@ -141,7 +146,13 @@ def verify_image(image: Mapping[str, Any], binding: Mapping[str, str]) -> dict[s
 
 def verify_terraform(
     bootstrap: Mapping[str, Any], public: Mapping[str, Any]
-) -> tuple[list[dict[str, str]], dict[str, str], list[str], list[Mapping[str, Any]]]:
+) -> tuple[
+    list[dict[str, str]],
+    dict[str, str],
+    list[str],
+    list[Mapping[str, Any]],
+    bool,
+]:
     require(output_value(bootstrap, "aws_account_id") == ACCOUNT_ID, "bootstrap.account:mismatch")
     require(output_value(bootstrap, "aws_region") == REGION, "bootstrap.region:mismatch")
     signer_arns = output_value(bootstrap, "validator_signer_arns")
@@ -194,12 +205,24 @@ def verify_terraform(
         and all(isinstance(value, Mapping) for value in state_volumes),
         "runtime.state_volumes:not_exact_three",
     )
-    return signers, previous_binding, instance_ids, state_volumes  # type: ignore[return-value]
+    public_services = output_value(public, "public_services_acceptance_readback")
+    require(
+        isinstance(public_services, Mapping)
+        and isinstance(public_services.get("enabled"), bool),
+        "runtime.public_services:missing",
+    )
+    return (  # type: ignore[return-value]
+        signers,
+        previous_binding,
+        instance_ids,
+        state_volumes,
+        public_services["enabled"],
+    )
 
 
 def verify_instances(
     response: Mapping[str, Any], instance_ids: Sequence[str], previous_ami_id: str
-) -> None:
+) -> dict[str, str]:
     reservations = response.get("Reservations")
     require(isinstance(reservations, list), "aws.instances:missing")
     instances: list[Mapping[str, Any]] = []
@@ -211,11 +234,40 @@ def verify_instances(
         instances.extend(values)
     by_id = {item.get("InstanceId"): item for item in instances}
     require(set(by_id) == set(instance_ids), "aws.instances:identity_mismatch")
+    root_volumes: dict[str, str] = {}
     for instance_id in instance_ids:
         instance = by_id[instance_id]
         state = instance.get("State")
         require(isinstance(state, Mapping) and state.get("Name") == "running", f"aws.instances.{instance_id}:not_running")
         require(instance.get("ImageId") == previous_ami_id, f"aws.instances.{instance_id}:unexpected_current_ami")
+        root_device = instance.get("RootDeviceName")
+        mappings = instance.get("BlockDeviceMappings")
+        require(
+            isinstance(root_device, str) and isinstance(mappings, list),
+            f"aws.instances.{instance_id}.root_volume:missing",
+        )
+        matches = [
+            item
+            for item in mappings
+            if isinstance(item, Mapping)
+            and item.get("DeviceName") == root_device
+            and isinstance(item.get("Ebs"), Mapping)
+        ]
+        require(
+            len(matches) == 1,
+            f"aws.instances.{instance_id}.root_volume:not_exact_one",
+        )
+        root_volume_id = matches[0]["Ebs"].get("VolumeId")
+        require(
+            VOLUME.fullmatch(str(root_volume_id)) is not None,
+            f"aws.instances.{instance_id}.root_volume:invalid",
+        )
+        root_volumes[instance_id] = root_volume_id
+    require(
+        len(set(root_volumes.values())) == 3,
+        "aws.instances.root_volumes:not_distinct",
+    )
+    return root_volumes
 
 
 def verify_volumes(
@@ -262,6 +314,12 @@ def verify_volumes(
             require(volume_tags.get(name) == value, f"aws.volumes.{validator_id}.tags.{name}:mismatch")
         snapshot_id = volume_tags.get("JuncaRollbackSnapshotId")
         require(SNAPSHOT.fullmatch(str(snapshot_id)) is not None, f"aws.volumes.{validator_id}.rollback_snapshot:invalid")
+        require(
+            output.get("rollback_snapshot_id") == snapshot_id
+            and output.get("migration_required") is False
+            and output.get("migration_accepted") is True,
+            f"runtime.volumes.{validator_id}.migration_acceptance:mismatch",
+        )
         snapshot_ids.append(snapshot_id)  # type: ignore[arg-type]
         accepted.append(
             {
@@ -280,15 +338,170 @@ def verify_volumes(
     return accepted, snapshot_ids
 
 
-def verify_snapshots(response: Mapping[str, Any], expected_ids: Sequence[str]) -> None:
+def verify_snapshots(
+    response: Mapping[str, Any], expected_ids: Sequence[str]
+) -> dict[str, str]:
     snapshots = exact_items(response, "Snapshots", 3)
     by_id = {item.get("SnapshotId"): item for item in snapshots}
     require(set(by_id) == set(expected_ids), "aws.snapshots:identity_mismatch")
+    root_volumes: dict[str, str] = {}
     for snapshot_id in expected_ids:
         snapshot = by_id[snapshot_id]
         require(snapshot.get("State") == "completed", f"aws.snapshots.{snapshot_id}:not_completed")
         require(snapshot.get("OwnerId") == ACCOUNT_ID, f"aws.snapshots.{snapshot_id}:owner_mismatch")
         require(snapshot.get("Encrypted") is True, f"aws.snapshots.{snapshot_id}:not_encrypted")
+        root_volume_id = snapshot.get("VolumeId")
+        require(
+            VOLUME.fullmatch(str(root_volume_id)) is not None,
+            f"aws.snapshots.{snapshot_id}.root_volume:invalid",
+        )
+        root_volumes[snapshot_id] = root_volume_id
+    require(
+        len(set(root_volumes.values())) == 3,
+        "aws.snapshots.root_volumes:not_distinct",
+    )
+    return root_volumes
+
+
+def verify_migration_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    expected_run_id: str,
+    expected_head_sha: str,
+    expected_request_sha256: str,
+    instance_ids: Sequence[str],
+    signers: Sequence[Mapping[str, str]],
+    state_outputs: Sequence[Mapping[str, Any]],
+    validator_volumes: Sequence[Mapping[str, Any]],
+    instance_root_volumes: Mapping[str, str],
+    snapshot_root_volumes: Mapping[str, str],
+) -> list[dict[str, str]]:
+    require(RUN_ID.fullmatch(expected_run_id) is not None, "migration.expected_run_id:invalid")
+    require(COMMIT.fullmatch(expected_head_sha) is not None, "migration.expected_head_sha:invalid")
+    require(
+        SHA256.fullmatch(expected_request_sha256) is not None,
+        "migration.expected_request_sha256:invalid",
+    )
+    require(
+        evidence.get("schema_version") == "junca-validator-state-migration/v1"
+        and evidence.get("state") == "VERIFIED_PASS"
+        and evidence.get("network") == "Public Testnet",
+        "migration.evidence:invalid",
+    )
+    require(
+        evidence.get("migration_run_id") == expected_run_id
+        and evidence.get("migration_run_head_sha") == expected_head_sha
+        and evidence.get("migration_request_sha256")
+        == expected_request_sha256,
+        "migration.top_level_binding:mismatch",
+    )
+    execution = evidence.get("execution_binding")
+    require(isinstance(execution, Mapping), "migration.execution_binding:missing")
+    require(
+        execution.get("repository") == REPOSITORY
+        and execution.get("run_id") == expected_run_id
+        and isinstance(execution.get("run_attempt"), int)
+        and not isinstance(execution.get("run_attempt"), bool)
+        and execution.get("run_attempt", 0) >= 1
+        and execution.get("head_sha") == expected_head_sha
+        and execution.get("migration_request_sha256")
+        == expected_request_sha256
+        and SHA256.fullmatch(str(execution.get("github_event_sha256")))
+        is not None
+        and MIGRATION_TOKEN.fullmatch(str(execution.get("migration_token")))
+        is not None,
+        "migration.execution_binding:mismatch",
+    )
+    require(
+        evidence.get("runtime_mount_verified") is True,
+        "migration.runtime_mount_verified:not_true",
+    )
+    require(
+        evidence.get("immutable_runtime_mount_activation_pending") is True,
+        "migration.immutable_runtime_mount_activation_pending:not_true",
+    )
+
+    expected_state_volume_ids = [
+        item.get("volume_id") for item in state_outputs
+    ]
+    expected_snapshot_ids = [
+        item.get("rollback_snapshot_id") for item in state_outputs
+    ]
+    for name, expected_values in (
+        ("instance_ids", list(instance_ids)),
+        ("state_volume_ids", expected_state_volume_ids),
+        ("rollback_snapshot_ids", expected_snapshot_ids),
+    ):
+        actual_values = evidence.get(name)
+        require(
+            isinstance(actual_values, list)
+            and actual_values == expected_values,
+            f"migration.{name}:mismatch",
+        )
+    require(
+        [item.get("volume_id") for item in validator_volumes]
+        == expected_state_volume_ids,
+        "migration.live_state_volume_ids:mismatch",
+    )
+    require(
+        [item.get("rollback_snapshot_id") for item in validator_volumes]
+        == expected_snapshot_ids,
+        "migration.live_rollback_snapshot_ids:mismatch",
+    )
+
+    mappings = evidence.get("validator_mappings")
+    require(
+        isinstance(mappings, list)
+        and len(mappings) == 3
+        and all(isinstance(item, Mapping) for item in mappings),
+        "migration.validator_mappings:not_exact_three",
+    )
+    normalized: list[dict[str, str]] = []
+    for index, (validator_id, instance_id, signer, state_output) in enumerate(
+        zip(
+            VALIDATOR_IDS,
+            instance_ids,
+            signers,
+            state_outputs,
+            strict=True,
+        )
+    ):
+        mapping = mappings[index]
+        state_volume_id = state_output.get("volume_id")
+        rollback_snapshot_id = state_output.get("rollback_snapshot_id")
+        root_volume_id = instance_root_volumes.get(instance_id)
+        require(
+            isinstance(state_volume_id, str)
+            and VOLUME.fullmatch(state_volume_id) is not None
+            and isinstance(rollback_snapshot_id, str)
+            and SNAPSHOT.fullmatch(rollback_snapshot_id) is not None
+            and isinstance(root_volume_id, str)
+            and VOLUME.fullmatch(root_volume_id) is not None,
+            f"migration.validator_mappings.{validator_id}:invalid_live_binding",
+        )
+        expected = {
+            "validator_id": validator_id,
+            "instance_id": instance_id,
+            "signer_arn": signer.get("resource_arn"),
+            "state_volume_id": state_volume_id,
+            "rollback_snapshot_id": rollback_snapshot_id,
+            "root_volume_id": root_volume_id,
+        }
+        require(
+            all(mapping.get(field) == value for field, value in expected.items()),
+            f"migration.validator_mappings.{validator_id}:mismatch",
+        )
+        require(
+            snapshot_root_volumes.get(str(rollback_snapshot_id))
+            == root_volume_id,
+            f"migration.validator_mappings.{validator_id}.snapshot_root:mismatch",
+        )
+        normalized.append(expected)  # type: ignore[arg-type]
+    require(
+        len({item["root_volume_id"] for item in normalized}) == 3,
+        "migration.validator_mappings.root_volumes:not_distinct",
+    )
+    return normalized
 
 
 def verify_endpoint_acceptance(report: Mapping[str, Any]) -> dict[str, Any]:
@@ -309,9 +522,178 @@ def verify_endpoint_acceptance(report: Mapping[str, Any]) -> dict[str, Any]:
     require(isinstance(safe, Mapping) and safe.get("result") == "PASS", "endpoints.safe_rpc:not_pass")
     require(isinstance(unsafe, Mapping) and unsafe.get("result") == "PASS", "endpoints.unsafe_rpc:not_rejected")
     return {
+        "mode": "public_endpoints",
         "observed_at": report.get("observed_at"),
         "finalized_head": report.get("finalized_head"),
         "checks": checks,
+    }
+
+
+def verify_private_validator_health(
+    report: Mapping[str, Any],
+    instance_ids: Sequence[str],
+    signers: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    require(
+        report.get("schema_version")
+        == "junca-private-ssm-validator-baseline/v1",
+        "private_ssm.schema_version:mismatch",
+    )
+    require(report.get("status") == "PASS", "private_ssm.status:not_pass")
+    require(
+        report.get("scope")
+        == "Public Testnet Runtime Acceptance / Private SSM Read-only",
+        "private_ssm.scope:mismatch",
+    )
+    validators = report.get("validators")
+    require(
+        isinstance(validators, list)
+        and len(validators) == 3
+        and all(isinstance(item, Mapping) for item in validators),
+        "private_ssm.validators:not_exact_three",
+    )
+    expected_signer_digests = {
+        item["validator_id"]: hashlib.sha256(
+            item["resource_arn"].encode("utf-8")
+        ).hexdigest()
+        for item in signers
+    }
+    normalized: list[dict[str, Any]] = []
+    heads: list[tuple[Any, Any, Any, Any]] = []
+    certificates: list[str] = []
+    chain_ids: list[Any] = []
+    for validator_id, instance_id, item in zip(
+        VALIDATOR_IDS, instance_ids, validators, strict=True
+    ):
+        require(
+            item.get("validator_id") == validator_id
+            and item.get("instance_id") == instance_id,
+            f"private_ssm.{validator_id}:identity_mismatch",
+        )
+        health = item.get("health")
+        require(
+            isinstance(health, Mapping),
+            f"private_ssm.{validator_id}.health:missing",
+        )
+        require(
+            health.get("status") == "healthy",
+            f"private_ssm.{validator_id}.health:not_healthy",
+        )
+        require(
+            health.get("network") == "Public Testnet / No Monetary Value",
+            f"private_ssm.{validator_id}.network:mismatch",
+        )
+        require(
+            health.get("validator_id") == validator_id,
+            f"private_ssm.{validator_id}.runtime_identity:mismatch",
+        )
+        height = health.get("head_height")
+        head_hash = health.get("head_hash")
+        require(
+            isinstance(height, int)
+            and not isinstance(height, bool)
+            and height >= 1,
+            f"private_ssm.{validator_id}.head_height:invalid",
+        )
+        require(
+            HASH.fullmatch(str(head_hash)) is not None,
+            f"private_ssm.{validator_id}.head_hash:invalid",
+        )
+        require(
+            health.get("signer_resource_digest")
+            == expected_signer_digests[validator_id],
+            f"private_ssm.{validator_id}.signer:mismatch",
+        )
+        require(
+            health.get("private_key_material_accepted") is False,
+            f"private_ssm.{validator_id}.private_key_material:not_false",
+        )
+        for field in BOUNDARY:
+            require(
+                health.get(field) is False,
+                f"private_ssm.{validator_id}.{field}:not_false",
+            )
+
+        consensus = health.get("consensus")
+        require(
+            isinstance(consensus, Mapping)
+            and consensus.get("schema_version")
+            == "junca-public-testnet-consensus-runtime/v1",
+            f"private_ssm.{validator_id}.consensus:missing",
+        )
+        require(
+            consensus.get("head_height") == height
+            and consensus.get("required_vote_count") == 3
+            and consensus.get("private_key_material_accepted") is False,
+            f"private_ssm.{validator_id}.consensus:invalid",
+        )
+        for field in BOUNDARY:
+            require(
+                consensus.get(field) is False,
+                f"private_ssm.{validator_id}.consensus.{field}:not_false",
+            )
+        certificate_hash = consensus.get("last_certificate_hash")
+        certificate = consensus.get("last_certificate")
+        require(
+            HASH.fullmatch(str(certificate_hash)) is not None
+            and isinstance(certificate, Mapping),
+            f"private_ssm.{validator_id}.certificate:missing",
+        )
+        require(
+            certificate.get("finality_status") == "FINALIZED"
+            and certificate.get("height") == height
+            and certificate.get("block_hash") == head_hash
+            and certificate.get("signed_power") == 3
+            and certificate.get("total_power") == 3
+            and certificate.get("validator_ids") == list(VALIDATOR_IDS),
+            f"private_ssm.{validator_id}.certificate:invalid",
+        )
+        chain_id = health.get("chain_id")
+        require(
+            isinstance(chain_id, int)
+            and not isinstance(chain_id, bool)
+            and chain_id > 0
+            and consensus.get("chain_id") == chain_id,
+            f"private_ssm.{validator_id}.chain_id:invalid",
+        )
+        serialized_certificate = json.dumps(
+            certificate, sort_keys=True, separators=(",", ":")
+        )
+        chain_ids.append(chain_id)
+        certificates.append(serialized_certificate)
+        heads.append((height, head_hash, health.get("head_timestamp"), certificate_hash))
+        normalized.append(
+            {
+                "validator_id": validator_id,
+                "instance_id": instance_id,
+                "signer_resource_digest": health.get("signer_resource_digest"),
+            }
+        )
+
+    require(len(set(chain_ids)) == 1, "private_ssm.chain_id:mismatch")
+    require(len(set(heads)) == 1, "private_ssm.finalized_head:mismatch")
+    require(
+        len(set(certificates)) == 1,
+        "private_ssm.finality_certificate:mismatch",
+    )
+    height, head_hash, head_timestamp, certificate_hash = heads[0]
+    return {
+        "mode": "private_ssm",
+        "scope": report.get("scope"),
+        "validator_count": 3,
+        "validators": normalized,
+        "chain_id": chain_ids[0],
+        "finalized_head": {
+            "height": height,
+            "hash": head_hash,
+            "timestamp": head_timestamp,
+            "certificate_hash": certificate_hash,
+        },
+        "quorum": {
+            "signed_power": 3,
+            "total_power": 3,
+            "validator_ids": list(VALIDATOR_IDS),
+        },
     }
 
 
@@ -324,32 +706,82 @@ def collect(
     instances: Mapping[str, Any],
     volumes: Mapping[str, Any],
     snapshots: Mapping[str, Any],
-    endpoints: Mapping[str, Any],
+    endpoints: Mapping[str, Any] | None,
+    private_validator_health: Mapping[str, Any] | None,
+    migration_evidence: Mapping[str, Any],
+    migration_evidence_sha256: str,
+    expected_migration_run_id: str,
+    expected_migration_head_sha: str,
+    expected_migration_request_sha256: str,
     expected_source_commit: str,
     output_dir: str | Path,
 ) -> tuple[Path, Path, Path]:
     require(COMMIT.fullmatch(expected_source_commit) is not None, "expected_source_commit:invalid")
+    require(
+        SHA256.fullmatch(migration_evidence_sha256) is not None,
+        "migration_evidence_sha256:invalid",
+    )
     binding = verify_candidate(candidate, expected_source_commit)
     image_items = exact_items(images, "Images", 1)
     provenance = verify_image(image_items[0], binding)
-    signers, previous, instance_ids, state_outputs = verify_terraform(bootstrap, public)
+    (
+        signers,
+        previous,
+        instance_ids,
+        state_outputs,
+        public_services_enabled,
+    ) = verify_terraform(bootstrap, public)
     require(previous != binding, "runtime.previous:equals_candidate")
-    verify_instances(instances, instance_ids, previous["ami_id"])
+    instance_root_volumes = verify_instances(
+        instances, instance_ids, previous["ami_id"]
+    )
     validator_volumes, snapshot_ids = verify_volumes(volumes, state_outputs, instance_ids)
-    verify_snapshots(snapshots, snapshot_ids)
-    endpoint_readback = verify_endpoint_acceptance(endpoints)
+    snapshot_root_volumes = verify_snapshots(snapshots, snapshot_ids)
+    migration_mappings = verify_migration_evidence(
+        migration_evidence,
+        expected_run_id=expected_migration_run_id,
+        expected_head_sha=expected_migration_head_sha,
+        expected_request_sha256=expected_migration_request_sha256,
+        instance_ids=instance_ids,
+        signers=signers,
+        state_outputs=state_outputs,
+        validator_volumes=validator_volumes,
+        instance_root_volumes=instance_root_volumes,
+        snapshot_root_volumes=snapshot_root_volumes,
+    )
+    if public_services_enabled:
+        require(
+            isinstance(endpoints, Mapping),
+            "endpoints:required_for_public_services",
+        )
+        endpoint_readback = verify_endpoint_acceptance(endpoints)
+        baseline_mode = "public_endpoints"
+        baseline_schema = "junca-public-explorer-pre-rollout-baseline/v1"
+        unsafe_rpc_rejection: bool | str = True
+    else:
+        require(
+            isinstance(private_validator_health, Mapping),
+            "private_ssm:required_when_public_services_disabled",
+        )
+        endpoint_readback = verify_private_validator_health(
+            private_validator_health, instance_ids, signers
+        )
+        baseline_mode = "private_ssm"
+        baseline_schema = "junca-private-ssm-pre-rollout-baseline/v1"
+        unsafe_rpc_rejection = "NOT_APPLICABLE_PRIVATE_SSM"
 
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
     require(not any(target.iterdir()), "output_dir:not_empty")
 
     explorer = {
-        "schema_version": "junca-public-explorer-pre-rollout-baseline/v1",
+        "schema_version": baseline_schema,
+        "baseline_mode": baseline_mode,
         "candidate_accepted": False,
         "status": "BASELINE_VERIFIED",
         "finalized_only": True,
         "read_only": True,
-        "unsafe_rpc_rejection": True,
+        "unsafe_rpc_rejection": unsafe_rpc_rejection,
         **binding,
         "observed_runtime": previous,
         "readback": endpoint_readback,
@@ -361,6 +793,15 @@ def collect(
         "state": "BASELINE_VERIFIED",
         "migration_complete": True,
         "data_loss": False,
+        "migration_evidence_sha256": migration_evidence_sha256,
+        "migration_execution_binding": {
+            "repository": REPOSITORY,
+            "run_id": expected_migration_run_id,
+            "head_sha": expected_migration_head_sha,
+            "migration_request_sha256":
+                expected_migration_request_sha256,
+        },
+        "migration_validator_mappings": migration_mappings,
         **binding,
         "observed_runtime": previous,
         "validator_volumes": validator_volumes,
@@ -375,12 +816,14 @@ def collect(
         "state": "PRE_ROLLOUT_BASELINE_VERIFIED",
         "network": "Public Testnet",
         "notice": "Public Testnet / No Monetary Value",
+        "baseline_mode": baseline_mode,
         **binding,
         "ami_provenance": provenance,
         "signer_bindings": signers,
         "previous_runtime": previous,
         "explorer_baseline_sha256": digest(explorer_path),
         "ebs_baseline_sha256": digest(ebs_path),
+        "migration_evidence_sha256": migration_evidence_sha256,
         "release_boundary": dict(BOUNDARY),
     }
     manifest_path = target / "junca-runtime-pre-rollout-baseline.json"
@@ -398,7 +841,13 @@ def main() -> int:
     parser.add_argument("--instances", required=True)
     parser.add_argument("--volumes", required=True)
     parser.add_argument("--snapshots", required=True)
-    parser.add_argument("--endpoint-acceptance", required=True)
+    runtime_readback = parser.add_mutually_exclusive_group(required=True)
+    runtime_readback.add_argument("--endpoint-acceptance")
+    runtime_readback.add_argument("--private-validator-health")
+    parser.add_argument("--migration-evidence", required=True)
+    parser.add_argument("--expected-migration-run-id", required=True)
+    parser.add_argument("--expected-migration-head-sha", required=True)
+    parser.add_argument("--expected-migration-request-sha256", required=True)
     parser.add_argument("--expected-source-commit", required=True)
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
@@ -411,7 +860,23 @@ def main() -> int:
             instances=read_object(args.instances),
             volumes=read_object(args.volumes),
             snapshots=read_object(args.snapshots),
-            endpoints=read_object(args.endpoint_acceptance),
+            endpoints=(
+                read_object(args.endpoint_acceptance)
+                if args.endpoint_acceptance
+                else None
+            ),
+            private_validator_health=(
+                read_object(args.private_validator_health)
+                if args.private_validator_health
+                else None
+            ),
+            migration_evidence=read_object(args.migration_evidence),
+            migration_evidence_sha256=digest(args.migration_evidence),
+            expected_migration_run_id=args.expected_migration_run_id,
+            expected_migration_head_sha=args.expected_migration_head_sha,
+            expected_migration_request_sha256=(
+                args.expected_migration_request_sha256
+            ),
             expected_source_commit=args.expected_source_commit,
             output_dir=args.output_dir,
         )

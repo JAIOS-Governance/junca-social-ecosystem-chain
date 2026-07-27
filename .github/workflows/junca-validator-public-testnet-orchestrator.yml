@@ -43,6 +43,7 @@ jobs:
           ' <<<"$commit_json"
           python scripts/junca_validator_ami_build_request.py \
             --request "$REQUEST_PATH" \
+            --require-migration-binding \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Dispatch and monitor immutable AMI
@@ -150,6 +151,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           AMI_RUN_ID: ${{ steps.ami.outputs.run_id }}
+          MIGRATION_RUN_ID: ${{ steps.request.outputs.migration_run_id }}
+          MIGRATION_EVIDENCE_SHA256: >-
+            ${{ steps.request.outputs.migration_evidence_sha256 }}
           SOURCE_COMMIT: ${{ steps.request.outputs.source_commit }}
         run: |
           set -euo pipefail
@@ -172,6 +176,8 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/dispatches" \
             -f ref=main \
             -f "inputs[ami_run_id]=${AMI_RUN_ID}" \
+            -f "inputs[migration_run_id]=${MIGRATION_RUN_ID}" \
+            -f "inputs[migration_evidence_sha256]=${MIGRATION_EVIDENCE_SHA256}" \
             -f "inputs[source_commit]=${SOURCE_COMMIT}"
 
           run_id=""
@@ -194,10 +200,10 @@ jobs:
             sleep 2
           done
           [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
-          for attempt in $(seq 1 190); do
+          for attempt in $(seq 1 50); do
             run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
             [[ "$(jq -r .status <<<"$run")" == completed ]] && break
-            test "$attempt" -lt 190
+            test "$attempt" -lt 50
             sleep 30
           done
           jq -e \

@@ -92,6 +92,49 @@ class ValidatorAmiBuildRequestTests(unittest.TestCase):
         self.assertEqual(request["request_sha256"], expected)
         self.assertEqual(MODULE.validate_request(request)["request_sha256"], expected)
 
+    def test_completed_migration_binding_preserves_runtime_identity_digest(self):
+        request = canonical_request()
+        runtime_digest = request["request_sha256"]
+        request["migration_run_id"] = "30303030303"
+        request["migration_evidence_sha256"] = "7" * 64
+        self.assertEqual(
+            MODULE.canonical_request_sha256(request),
+            runtime_digest,
+        )
+        outputs = MODULE.validate_request(
+            request,
+            require_migration_binding=True,
+        )
+        self.assertEqual(outputs["request_sha256"], runtime_digest)
+        self.assertEqual(outputs["migration_run_id"], "30303030303")
+        self.assertEqual(outputs["migration_evidence_sha256"], "7" * 64)
+
+    def test_release_phase_requires_complete_valid_migration_binding(self):
+        request = canonical_request()
+        with self.assertRaisesRegex(
+            MODULE.RequestValidationError,
+            "completed migration binding is required",
+        ):
+            MODULE.validate_request(
+                request,
+                require_migration_binding=True,
+            )
+        request["migration_run_id"] = "30303030303"
+        with self.assertRaisesRegex(
+            MODULE.RequestValidationError,
+            "fields do not match",
+        ):
+            MODULE.validate_request(request)
+        request["migration_evidence_sha256"] = "invalid"
+        with self.assertRaisesRegex(
+            MODULE.RequestValidationError,
+            "migration_evidence_sha256",
+        ):
+            MODULE.validate_request(
+                request,
+                require_migration_binding=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,6 +51,7 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertNotIn("workflow_run:", self.workflow)
         self.assertNotIn("github.event.workflow_run", self.workflow)
         self.assertIn("junca_validator_ami_build_request.py", self.orchestrator)
+        self.assertIn("--require-migration-binding", self.orchestrator)
 
     def test_push_request_is_signed_main_only_and_fail_closed(self):
         self.assertIn("refs/heads/main", self.orchestrator)
@@ -84,6 +85,26 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(workflow_path, self.orchestrator)
         self.assertIn("PUBLIC_TESTNET_ROLLOUT", self.orchestrator)
+        self.assertIn(
+            "steps.request.outputs.migration_run_id",
+            self.orchestrator,
+        )
+        self.assertIn(
+            "steps.request.outputs.migration_evidence_sha256",
+            self.orchestrator,
+        )
+        self.assertIn(
+            "inputs[migration_evidence_sha256]",
+            self.orchestrator,
+        )
+        self.assertNotIn(
+            "JUNCA Validator Durable State Migration",
+            self.orchestrator,
+        )
+        self.assertNotIn(
+            "inputs[authorize_migration]",
+            self.orchestrator,
+        )
         self.assertNotIn("terraform apply", self.orchestrator)
         self.assertNotIn("cloudformation", self.orchestrator.lower())
 

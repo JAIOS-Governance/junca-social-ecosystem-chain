@@ -153,9 +153,40 @@ variable "validator_slot_epoch_seconds" {
 }
 
 variable "enable_validator_state_volumes" {
-  description = "Provision and attach retained EBS volumes for /var/lib/junca. This does not format, copy, or mount them; migration is a separate acceptance-gated operation."
+  description = "Require the already-provisioned retained EBS volumes to be mounted at /var/lib/junca by the validator runtime."
   type        = bool
   default     = false
+}
+
+variable "provision_validator_state_volumes" {
+  description = "Provision and attach retained EBS volumes without changing the validator runtime mount until the one-at-a-time migration gate passes."
+  type        = bool
+  default     = false
+}
+
+variable "validator_state_migration_accepted" {
+  description = "Record that all three retained validator volumes passed serial migration, state integrity, finality continuity, and rollback acceptance."
+  type        = bool
+  default     = false
+}
+
+variable "validator_state_rollback_snapshot_ids" {
+  description = "Exact root-volume rollback snapshots captured during accepted serial migration; distinct from volume restore source snapshots."
+  type        = list(string)
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.validator_state_rollback_snapshot_ids == null ? true : (
+      length(var.validator_state_rollback_snapshot_ids) == 3 &&
+      length(toset(var.validator_state_rollback_snapshot_ids)) == 3 &&
+      alltrue([
+        for snapshot_id in var.validator_state_rollback_snapshot_ids :
+        can(regex("^snap-[0-9a-f]{8,17}$", snapshot_id))
+      ])
+    )
+    error_message = "validator_state_rollback_snapshot_ids must be null or three distinct exact EBS snapshot IDs."
+  }
 }
 
 variable "validator_state_volume_size_gib" {

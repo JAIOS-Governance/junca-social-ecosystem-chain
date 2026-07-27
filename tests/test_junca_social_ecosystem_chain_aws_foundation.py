@@ -484,14 +484,16 @@ class AwsFoundationTests(unittest.TestCase):
     def test_foundation_acceptance_requires_automatic_head_advancement(self) -> None:
         for required in (
             "Require two consecutive canonical finality slots",
-            "(map(.head_height) | unique) == [$expected_height]",
+            "(map(.head_height) | unique | length) == 1",
+            "(.[0].head_height > $previous_height)",
+            "observed_height=",
             "(map(.head_timestamp) | unique | length) == 1",
             "(map(.consensus.last_certificate | tojson) | unique | length) == 1",
             ".automatic_finality_enabled == true",
             ".automatic_finality_loop_running == true",
             ".block_interval_seconds == 30",
             ".slot_epoch_seconds == $slot_epoch",
-            "slot_epoch + ((initial_height + 1) * interval) + 5",
+            "ready_at=\"$((slot_epoch + 5))\"",
             "timeout-minutes: 150",
             "consecutive_advances: 2",
             "canonical_timestamp_delta_seconds:",
@@ -499,6 +501,14 @@ class AwsFoundationTests(unittest.TestCase):
             "final_height: $second[0][0].head_height",
         ):
             self.assertIn(required, self.validator_foundation_release)
+        self.assertNotIn(
+            "slot_epoch + ((initial_height + 1) * interval) + 5",
+            self.validator_foundation_release,
+        )
+        self.assertNotIn(
+            "(map(.head_height) | unique) == [$expected_height]",
+            self.validator_foundation_release,
+        )
 
     def test_public_release_requires_consecutive_endpoint_parity(self) -> None:
         for required in (

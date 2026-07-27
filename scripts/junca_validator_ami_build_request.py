@@ -32,7 +32,28 @@ OUTPUT_FIELDS = (
     "node_sha256",
     "genesis_sha256",
     "request_sha256",
+    "migration_run_id",
+    "migration_evidence_sha256",
 )
+RUNTIME_REQUEST_FIELDS = {
+    "schema_version",
+    "state",
+    "network",
+    "environment",
+    "approval_phrase",
+    "source_run_id",
+    "source_commit",
+    "node_artifact_name",
+    "genesis_artifact_name",
+    "node_sha256",
+    "genesis_sha256",
+    "boundaries",
+    "request_sha256",
+}
+MIGRATION_BINDING_FIELDS = {
+    "migration_run_id",
+    "migration_evidence_sha256",
+}
 
 
 class RequestValidationError(ValueError):
@@ -40,8 +61,15 @@ class RequestValidationError(ValueError):
 
 
 def canonical_request_sha256(request: Mapping[str, Any]) -> str:
-    payload = dict(request)
-    payload.pop("request_sha256", None)
+    # The runtime artifact identity is intentionally independent of the
+    # completed durable-state migration.  This preserves the already approved
+    # immutable AMI request digest while a later signed request binds the exact
+    # migration run and evidence into the release phase.
+    payload = {
+        key: value
+        for key, value in request.items()
+        if key not in MIGRATION_BINDING_FIELDS and key != "request_sha256"
+    }
     encoded = json.dumps(
         payload,
         ensure_ascii=True,
@@ -51,23 +79,20 @@ def canonical_request_sha256(request: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def validate_request(request: Mapping[str, Any]) -> dict[str, str]:
-    if set(request) != {
-        "schema_version",
-        "state",
-        "network",
-        "environment",
-        "approval_phrase",
-        "source_run_id",
-        "source_commit",
-        "node_artifact_name",
-        "genesis_artifact_name",
-        "node_sha256",
-        "genesis_sha256",
-        "boundaries",
-        "request_sha256",
-    }:
+def validate_request(
+    request: Mapping[str, Any],
+    *,
+    require_migration_binding: bool = False,
+) -> dict[str, str]:
+    fields = set(request)
+    if fields not in (
+        RUNTIME_REQUEST_FIELDS,
+        RUNTIME_REQUEST_FIELDS | MIGRATION_BINDING_FIELDS,
+    ):
         raise RequestValidationError("request fields do not match the v1 contract")
+    has_migration_binding = MIGRATION_BINDING_FIELDS <= fields
+    if require_migration_binding and not has_migration_binding:
+        raise RequestValidationError("completed migration binding is required")
     if request["schema_version"] != SCHEMA_VERSION:
         raise RequestValidationError("schema_version mismatch")
     if request["state"] != "AUTHORIZED":
@@ -93,6 +118,17 @@ def validate_request(request: Mapping[str, Any]) -> dict[str, str]:
         raise RequestValidationError("node_sha256 must be lowercase SHA-256")
     if not HEX_64.fullmatch(genesis_sha256):
         raise RequestValidationError("genesis_sha256 must be lowercase SHA-256")
+    if has_migration_binding:
+        migration_run_id = str(request["migration_run_id"])
+        migration_evidence_sha256 = str(request["migration_evidence_sha256"])
+        if not RUN_ID.fullmatch(migration_run_id):
+            raise RequestValidationError(
+                "migration_run_id must be a positive integer"
+            )
+        if not HEX_64.fullmatch(migration_evidence_sha256):
+            raise RequestValidationError(
+                "migration_evidence_sha256 must be lowercase SHA-256"
+            )
 
     expected_node_artifact = f"junca-validator-runtime-{source_run_id}"
     expected_genesis_artifact = f"junca-validator-genesis-{source_run_id}"
@@ -105,7 +141,7 @@ def validate_request(request: Mapping[str, Any]) -> dict[str, str]:
     if request["request_sha256"] != expected_digest:
         raise RequestValidationError("request_sha256 mismatch")
 
-    return {field: str(request[field]) for field in OUTPUT_FIELDS}
+    return {field: str(request.get(field, "")) for field in OUTPUT_FIELDS}
 
 
 def main() -> int:
@@ -117,6 +153,11 @@ def main() -> int:
         action="store_true",
         help="Set an empty request_sha256 before validating a manual request.",
     )
+    parser.add_argument(
+        "--require-migration-binding",
+        action="store_true",
+        help="Require an exact completed migration run and evidence digest.",
+    )
     args = parser.parse_args()
 
     raw = json.loads(args.request.read_text(encoding="utf-8"))
@@ -126,7 +167,10 @@ def main() -> int:
         if raw.get("request_sha256") not in ("", None):
             raise RequestValidationError("manual request digest must start empty")
         raw["request_sha256"] = canonical_request_sha256(raw)
-    outputs = validate_request(raw)
+    outputs = validate_request(
+        raw,
+        require_migration_binding=args.require_migration_binding,
+    )
     rendered = "".join(f"{key}={outputs[key]}\n" for key in OUTPUT_FIELDS)
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as handle:

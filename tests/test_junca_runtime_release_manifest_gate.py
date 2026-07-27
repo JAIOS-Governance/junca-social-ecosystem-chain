@@ -35,6 +35,7 @@ BOUNDARY = {
     "bridge_activated": False,
 }
 REQUEST = "9" * 64
+MIGRATION_DIGEST = "7" * 64
 
 
 def binding():
@@ -61,6 +62,8 @@ def evidence():
         "schema_version": "junca-runtime-pre-rollout-baseline/v1",
         "state": "PRE_ROLLOUT_BASELINE_VERIFIED",
         "request_sha256": REQUEST,
+        "migration_evidence_sha256": MIGRATION_DIGEST,
+        "baseline_mode": "public_endpoints",
         "network": "Public Testnet",
         "notice": "Public Testnet / No Monetary Value",
         "ami_provenance": {
@@ -88,6 +91,7 @@ def evidence():
     }
     explorer = binding() | {
         "schema_version": "junca-public-explorer-pre-rollout-baseline/v1",
+        "baseline_mode": "public_endpoints",
         "candidate_accepted": False,
         "status": "BASELINE_VERIFIED",
         "request_sha256": REQUEST,
@@ -116,6 +120,7 @@ def evidence():
         "candidate_accepted": False,
         "state": "BASELINE_VERIFIED",
         "request_sha256": REQUEST,
+        "migration_evidence_sha256": MIGRATION_DIGEST,
         "observed_runtime": manifest["previous_runtime"],
         "migration_complete": True,
         "data_loss": False,
@@ -200,6 +205,103 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             decision["failures"],
         )
         self.assertIn("explorer.candidate_binding:mismatch", decision["failures"])
+
+    def test_private_ssm_baseline_passes_without_public_endpoint_assertions(self):
+        manifest, explorer, ebs = evidence()
+        manifest["baseline_mode"] = "private_ssm"
+        explorer.update(
+            {
+                "schema_version":
+                    "junca-private-ssm-pre-rollout-baseline/v1",
+                "baseline_mode": "private_ssm",
+                "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
+                "readback": {
+                    "mode": "private_ssm",
+                    "scope": (
+                        "Public Testnet Runtime Acceptance / "
+                        "Private SSM Read-only"
+                    ),
+                    "validator_count": 3,
+                    "chain_id": 8453,
+                    "validators": [
+                        {
+                            "validator_id": f"validator-0{index}",
+                            "instance_id": f"i-{index:017x}",
+                            "signer_resource_digest": f"{index}" * 64,
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "finalized_head": {
+                        "height": 100,
+                        "hash": "0x" + "a" * 64,
+                        "timestamp": 2_000_000_000,
+                        "certificate_hash": "0x" + "b" * 64,
+                    },
+                    "quorum": {
+                        "signed_power": 3,
+                        "total_power": 3,
+                        "validator_ids": [
+                            "validator-01",
+                            "validator-02",
+                            "validator-03",
+                        ],
+                    },
+                },
+            }
+        )
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertTrue(decision["accepted"], decision["failures"])
+
+    def test_private_ssm_baseline_rejects_identity_head_and_quorum_drift(self):
+        manifest, explorer, ebs = evidence()
+        manifest["baseline_mode"] = "private_ssm"
+        explorer.update(
+            {
+                "schema_version":
+                    "junca-private-ssm-pre-rollout-baseline/v1",
+                "baseline_mode": "private_ssm",
+                "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
+                "readback": {
+                    "mode": "private_ssm",
+                    "scope": (
+                        "Public Testnet Runtime Acceptance / "
+                        "Private SSM Read-only"
+                    ),
+                    "validator_count": 3,
+                    "validators": [
+                        {
+                            "validator_id": f"validator-0{index}",
+                            "instance_id": "i-00000000000000001",
+                            "signer_resource_digest": f"{index}" * 64,
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "finalized_head": {
+                        "height": 0,
+                        "hash": "bad",
+                        "certificate_hash": "bad",
+                    },
+                    "quorum": {
+                        "signed_power": 2,
+                        "total_power": 3,
+                        "validator_ids": [
+                            "validator-01",
+                            "validator-02",
+                        ],
+                    },
+                },
+            }
+        )
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertIn(
+            "private_ssm.validators:not_exact_three", decision["failures"]
+        )
+        self.assertIn(
+            "private_ssm.finalized_head:invalid", decision["failures"]
+        )
+        self.assertIn(
+            "private_ssm.quorum:not_exact_three", decision["failures"]
+        )
 
     def test_ebs_requires_three_durable_verified_volumes(self):
         manifest, explorer, ebs = evidence()
