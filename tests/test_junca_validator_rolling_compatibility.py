@@ -156,7 +156,7 @@ class RollingCompatibilityTests(unittest.TestCase):
                 "total_commits": 1,
                 "base_commit": {"sha": base},
                 "merge_base_commit": {"sha": base},
-                "head_commit": {"sha": head},
+                "commits": [{"sha": head}],
                 "files": [
                     {
                         "filename": (
@@ -183,7 +183,7 @@ class RollingCompatibilityTests(unittest.TestCase):
                 "status": "identical",
                 "ahead_by": 0,
                 "total_commits": 0,
-                "head_commit": {"sha": value["expected_base"]},
+                "commits": [],
                 "files": [],
             }
         )
@@ -192,6 +192,51 @@ class RollingCompatibilityTests(unittest.TestCase):
             evaluate_recovery_head_compare(value)["state"],
             "RECOVERY_HEAD_ACCEPTED",
         )
+
+    def test_recovery_head_uses_ordered_commits_not_head_commit(self):
+        value = self.recovery_head_evidence()
+        value["comparison"]["head_commit"] = {"sha": "c" * 40}
+        self.assertEqual(
+            evaluate_recovery_head_compare(value)["state"],
+            "RECOVERY_HEAD_ACCEPTED",
+        )
+        del value["comparison"]["head_commit"]
+        self.assertEqual(
+            evaluate_recovery_head_compare(value)["state"],
+            "RECOVERY_HEAD_ACCEPTED",
+        )
+
+    def test_recovery_head_rejects_invalid_ordered_commits(self):
+        cases = (
+            (
+                [{"sha": "c" * 40}],
+                1,
+                "do not reach expected head",
+            ),
+            (
+                [{"sha": "c" * 40}, {"sha": "b" * 40}],
+                1,
+                "do not reach expected head",
+            ),
+            (
+                [{"sha": "b" * 40}, {"sha": "c" * 40}],
+                2,
+                "do not reach expected head",
+            ),
+            (
+                [{"sha": "b" * 40}, {"sha": "b" * 40}],
+                2,
+                "invalid or duplicated",
+            ),
+        )
+        for commits, ahead_by, message in cases:
+            with self.subTest(commits=commits, ahead_by=ahead_by):
+                value = self.recovery_head_evidence()
+                value["comparison"]["commits"] = commits
+                value["comparison"]["ahead_by"] = ahead_by
+                value["comparison"]["total_commits"] = ahead_by
+                with self.assertRaisesRegex(RollingCompatibilityError, message):
+                    evaluate_recovery_head_compare(value)
 
     def test_recovery_head_rejects_divergence_and_unexpected_files(self):
         cases = (

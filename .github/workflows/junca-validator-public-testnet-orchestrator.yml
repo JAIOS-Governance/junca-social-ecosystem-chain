@@ -67,7 +67,7 @@ jobs:
               .files[0].filename == $path and
               .files[0].status == "modified"
             ' <<<"$commit_json"; then
-              jq -e '
+              if jq -e '
                 ([.files[] |
                   select(.status == "modified") |
                   .filename] | sort) ==
@@ -79,10 +79,40 @@ jobs:
                   "tests/test_junca_validator_ami_workflow.py"
                 ] | sort) and
                 (.files | length) == 5
-              ' <<<"$commit_json"
-              git show "${GITHUB_SHA}^:${REQUEST_PATH}" |
-                jq -e '.schema_version ==
-                  "junca-validator-ami-build-request/v1"'
+              ' <<<"$commit_json"; then
+                git show "${GITHUB_SHA}^:${REQUEST_PATH}" |
+                  jq -e '.schema_version ==
+                    "junca-validator-ami-build-request/v1"'
+              else
+                jq -e '
+                  ([.files[] |
+                    select(.status == "modified") |
+                    .filename] | sort) ==
+                  ([
+                    ".github/workflows/junca-validator-public-testnet-orchestrator.yml",
+                    "config/junca_validator_ami_build_request.json",
+                    "jaios/social_ecosystem_chain/rolling_compatibility.py",
+                    "tests/test_junca_validator_ami_workflow.py",
+                    "tests/test_junca_validator_rolling_compatibility.py"
+                  ] | sort) and
+                  (.files | length) == 5
+                ' <<<"$commit_json"
+                git show "${GITHUB_SHA}^:${REQUEST_PATH}" |
+                  jq -e '
+                    .schema_version ==
+                      "junca-validator-foundation-resume-request/v1" and
+                    .one_shot_nonce ==
+                      "foundation-resume-30311386951-20260727" and
+                    .request_sha256 ==
+                      "d143326804e0bea9ac657cb410c277801d2af6d9d08e254c2338d894bb664443"
+                  '
+                jq -e '
+                  .one_shot_nonce ==
+                    "foundation-resume-30311386951-20260727-retry-2" and
+                  .request_sha256 ==
+                    "9fa0cef6329eb55fa7c5180afab8e29df72dd84be4cca4711759e67e960129af"
+                ' "$REQUEST_PATH"
+              fi
             fi
             while IFS= read -r prior_commit; do
               prior_digest="$(git show \

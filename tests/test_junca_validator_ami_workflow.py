@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib.util
+import json
 import unittest
 
 from jaios.social_ecosystem_chain.rolling_compatibility import (
@@ -36,6 +37,7 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         cls.foundation = FOUNDATION.read_text(encoding="utf-8")
         cls.request = REQUEST.read_text(encoding="utf-8")
         cls.live_request = LIVE_REQUEST.read_text(encoding="utf-8")
+        cls.live_request_data = json.loads(cls.live_request)
 
     def test_workflow_binds_all_immutable_inputs(self):
         for field in (
@@ -140,6 +142,14 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         )
         self.assertIn("(.files | length) == 5", self.orchestrator)
         self.assertIn(
+            "foundation-resume-30311386951-20260727-retry-2",
+            self.orchestrator,
+        )
+        self.assertIn(
+            "9fa0cef6329eb55fa7c5180afab8e29df72dd84be4cca4711759e67e960129af",
+            self.orchestrator,
+        )
+        self.assertIn(
             "inputs[resume_run_id]=${RESUME_RUN_ID}",
             self.orchestrator,
         )
@@ -173,10 +183,18 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             "30311368029",
             "30311386951",
             "PUBLIC_TESTNET_ROLLOUT",
-            "d143326804e0bea9ac657cb410c277801d"
-            "2af6d9d08e254c2338d894bb664443",
         ):
             self.assertIn(value, self.live_request)
+        self.assertEqual(
+            self.live_request_data["request_sha256"],
+            REQUEST_VALIDATOR.canonical_request_sha256(
+                self.live_request_data
+            ),
+        )
+        self.assertEqual(
+            self.live_request_data["one_shot_nonce"],
+            "foundation-resume-30311386951-20260727-retry-2",
+        )
 
     def test_exact_foundation_resume_request_is_digest_bound(self):
         request = {

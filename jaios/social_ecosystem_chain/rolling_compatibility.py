@@ -64,8 +64,6 @@ def evaluate_recovery_head_compare(
         raise RollingCompatibilityError(
             "candidate is not the exact merge base of current workflow head"
         )
-    if comparison.get("head_commit", {}).get("sha") != expected_head:
-        raise RollingCompatibilityError("comparison head commit differs")
     ahead_by = comparison.get("ahead_by")
     behind_by = comparison.get("behind_by")
     total_commits = comparison.get("total_commits")
@@ -77,6 +75,22 @@ def evaluate_recovery_head_compare(
     if behind_by != 0 or total_commits != ahead_by:
         raise RollingCompatibilityError(
             "current workflow head is behind or diverged from candidate"
+        )
+    commits = comparison.get("commits")
+    if not isinstance(commits, Sequence) or isinstance(
+        commits, (str, bytes)
+    ):
+        raise RollingCompatibilityError("ordered comparison commits are required")
+    commit_shas = [
+        item.get("sha") for item in commits if isinstance(item, Mapping)
+    ]
+    if (
+        len(commit_shas) != len(commits)
+        or any(not COMMIT.fullmatch(str(sha)) for sha in commit_shas)
+        or len(set(commit_shas)) != len(commit_shas)
+    ):
+        raise RollingCompatibilityError(
+            "ordered comparison commits are invalid or duplicated"
         )
     files = comparison.get("files")
     if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
@@ -96,14 +110,28 @@ def evaluate_recovery_head_compare(
             "cross-head recovery contains a file outside the recovery allowlist"
         )
     if status == "identical":
-        if ahead_by != 0 or filenames or expected_base != expected_head:
+        if (
+            ahead_by != 0
+            or commit_shas
+            or filenames
+            or expected_base != expected_head
+        ):
             raise RollingCompatibilityError(
                 "identical recovery comparison contains unexpected changes"
             )
-    elif ahead_by < 1 or not filenames or expected_base == expected_head:
-        raise RollingCompatibilityError(
-            "ahead recovery comparison must contain an allowlisted change"
-        )
+    else:
+        if (
+            ahead_by < 1
+            or len(commit_shas) != ahead_by
+            or commit_shas[-1] != expected_head
+        ):
+            raise RollingCompatibilityError(
+                "ordered comparison commits do not reach expected head"
+            )
+        if not filenames or expected_base == expected_head:
+            raise RollingCompatibilityError(
+                "ahead recovery comparison must contain an allowlisted change"
+            )
     return {
         "schema_version": "junca-validator-recovery-head/v1",
         "state": "RECOVERY_HEAD_ACCEPTED",
