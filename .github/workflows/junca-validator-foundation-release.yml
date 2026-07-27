@@ -374,7 +374,7 @@ jobs:
           )"
           slot_epoch="$(jq -er .slot_epoch_seconds <<<"$finality")"
           interval="$(jq -er .block_interval_seconds <<<"$finality")"
-          ready_at="$((slot_epoch + ((initial_height + 1) * interval) + 5))"
+          ready_at="$((slot_epoch + 5))"
           now="$(date +%s)"
           if (( ready_at > now )); then
             sleep "$((ready_at - now))"
@@ -385,7 +385,6 @@ jobs:
             '{commands: [$command]}' > artifacts/ssm-automatic-health.json
           observed_height="$initial_height"
           for series in 1 2; do
-            expected_height="$((observed_height + 1))"
             accepted=false
             for observation in $(seq 1 24); do
               command_id="$(aws ssm send-command \
@@ -416,11 +415,12 @@ jobs:
                   > "artifacts/automatic-${series}-health-${instance}.json"
               done
               if jq -s -e \
-                --argjson expected_height "$expected_height" \
+                --argjson previous_height "$observed_height" \
                 --argjson slot_epoch "$slot_epoch" '
                 length == 3 and
                 (map(.status) | unique) == ["healthy"] and
-                (map(.head_height) | unique) == [$expected_height] and
+                (map(.head_height) | unique | length) == 1 and
+                (.[0].head_height > $previous_height) and
                 (map(.head_hash) | unique | length) == 1 and
                 (map(.head_timestamp) | unique | length) == 1 and
                 (map(.consensus.last_certificate_hash) | unique | length) == 1 and
@@ -449,7 +449,10 @@ jobs:
                 )
               ' artifacts/automatic-${series}-health-i-*.json >/dev/null; then
                 accepted=true
-                observed_height="$expected_height"
+                observed_height="$(
+                  jq -s -er 'map(.head_height) | unique | .[0]' \
+                    artifacts/automatic-${series}-health-i-*.json
+                )"
                 break
               fi
               sleep 5

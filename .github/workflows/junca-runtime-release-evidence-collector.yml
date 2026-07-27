@@ -7,6 +7,14 @@ on:
         description: Exact successful JUNCA Validator Immutable AMI Build run ID
         required: true
         type: string
+      migration_run_id:
+        description: Exact successful JUNCA Validator Durable State Migration run ID
+        required: true
+        type: string
+      migration_evidence_sha256:
+        description: SHA-256 of the exact accepted migration evidence JSON
+        required: true
+        type: string
       source_commit:
         description: Exact 40-character source commit bound to the immutable AMI
         required: true
@@ -33,28 +41,51 @@ jobs:
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
       AMI_RUN_ID: ${{ inputs.ami_run_id }}
+      MIGRATION_RUN_ID: ${{ inputs.migration_run_id }}
+      MIGRATION_EVIDENCE_SHA256: ${{ inputs.migration_evidence_sha256 }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
     steps:
-      - name: Verify immutable AMI workflow provenance
+      - name: Verify immutable AMI and state migration workflow provenance
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$MIGRATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$MIGRATION_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          run_json="$(gh api \
+          ami_run_json="$(gh api \
             "repos/${{ github.repository }}/actions/runs/${AMI_RUN_ID}")"
           jq -e \
-            --arg repository "${{ github.repository }}" '
+            --arg repository "${{ github.repository }}" \
+            --arg head "$GITHUB_SHA" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Validator Immutable AMI Build" and
             .path == ".github/workflows/junca-validator-ami-build.yml" and
             .event == "workflow_dispatch" and
             .head_branch == "main" and
+            .head_sha == $head and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
-          ' <<<"$run_json"
+          ' <<<"$ami_run_json"
+          migration_run_json="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${MIGRATION_RUN_ID}")"
+          jq -e \
+            --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Durable State Migration" and
+            .path == ".github/workflows/junca-validator-state-migration.yml" and
+            .event == "push" and
+            .head_branch == "main" and
+            (.head_sha | test("^[0-9a-f]{40}$")) and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$migration_run_json"
+          migration_run_head_sha="$(jq -r .head_sha <<<"$migration_run_json")"
+          echo "MIGRATION_RUN_HEAD_SHA=$migration_run_head_sha" \
+            >>"$GITHUB_ENV"
 
       - uses: actions/checkout@v4
         with:
@@ -66,6 +97,13 @@ jobs:
           path: evidence/ami
           github-token: ${{ github.token }}
           run-id: ${{ env.AMI_RUN_ID }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: junca-validator-state-migration-${{ env.MIGRATION_RUN_ID }}
+          path: evidence/state-migration
+          github-token: ${{ github.token }}
+          run-id: ${{ env.MIGRATION_RUN_ID }}
 
       - name: Verify exact immutable AMI artifact shape
         run: |
@@ -89,6 +127,67 @@ jobs:
             .assets_moved == false and
             .bridge_activated == false
           ' evidence/ami/junca-validator-ami-build.json
+          test -f \
+            evidence/state-migration/junca-validator-state-migration.json
+          test -f \
+            evidence/state-migration/junca-validator-state-migration-binding.json
+          test -f evidence/state-migration/SHA256SUMS
+          (
+            cd evidence/state-migration
+            sha256sum --check SHA256SUMS
+          )
+          printf '%s  %s\n' \
+            "$MIGRATION_EVIDENCE_SHA256" \
+            "evidence/state-migration/junca-validator-state-migration.json" \
+            | sha256sum --check -
+          jq -e \
+            --arg run_id "$MIGRATION_RUN_ID" \
+            --arg head "$MIGRATION_RUN_HEAD_SHA" '
+            .schema_version == "junca-validator-state-migration/v1" and
+            .state == "VERIFIED_PASS" and
+            .network == "Public Testnet" and
+            .migration_run_id == $run_id and
+            .migration_run_head_sha == $head and
+            (.migration_request_sha256 | test("^[0-9a-f]{64}$")) and
+            (.instance_ids | length) == 3 and
+            (.state_volume_ids | length) == 3 and
+            (.rollback_snapshot_ids | length) == 3 and
+            (.validator_mappings | length) == 3 and
+            .serial_migration == true and
+            .terraform_canonicalized == true and
+            .runtime_mount_verified == true and
+            .immutable_runtime_mount_activation_pending == true and
+            .bootstrap_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' evidence/state-migration/junca-validator-state-migration.json
+          migration_request_sha256="$(
+            jq -er .migration_request_sha256 \
+              evidence/state-migration/junca-validator-state-migration.json
+          )"
+          echo "MIGRATION_REQUEST_SHA256=$migration_request_sha256" \
+            >>"$GITHUB_ENV"
+          jq -e \
+            --arg run_id "$MIGRATION_RUN_ID" \
+            --arg head "$MIGRATION_RUN_HEAD_SHA" \
+            --arg request "$migration_request_sha256" \
+            --arg evidence "$MIGRATION_EVIDENCE_SHA256" '
+            .schema_version ==
+              "junca-validator-state-migration-binding/v1" and
+            .state == "MIGRATION_VERIFIED" and
+            .network == "Public Testnet" and
+            .notice == "Public Testnet / No Monetary Value" and
+            .migration_run_id == $run_id and
+            .migration_run_head_sha == $head and
+            .migration_request_sha256 == $request and
+            .migration_evidence_sha256 == $evidence and
+            .bootstrap_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' \
+            evidence/state-migration/junca-validator-state-migration-binding.json
 
       - uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
@@ -166,24 +265,126 @@ jobs:
           aws ec2 describe-snapshots --snapshot-ids "${snapshots[@]}" \
             > evidence/readback/snapshots.json
 
-      - name: Read Public Testnet endpoints
+      - name: Read Public Testnet runtime baseline
         run: |
           set -euo pipefail
-          python scripts/junca_public_testnet_endpoint_test.py \
-            > evidence/readback/endpoint-acceptance.json
-          jq -e '
-            .status == "PASS" and
-            .scope == "Public Testnet Runtime Acceptance / Read-only" and
-            .checks.health == "PASS" and
-            .checks.explorer.result == "PASS" and
-            .checks.safe_rpc.result == "PASS" and
-            .checks.unsafe_rpc_rejection.result == "PASS"
-          ' evidence/readback/endpoint-acceptance.json
+          public_services_enabled="$(
+            jq -r '
+              .public_services_acceptance_readback.value.enabled
+              | if type == "boolean" then .
+                else error("public services readback must be boolean") end
+            ' evidence/readback/public-testnet-outputs.json
+          )"
+          case "$public_services_enabled" in
+            true)
+              python scripts/junca_public_testnet_endpoint_test.py \
+                > evidence/readback/endpoint-acceptance.json
+              jq -e '
+                .status == "PASS" and
+                .scope == "Public Testnet Runtime Acceptance / Read-only" and
+                .checks.health == "PASS" and
+                .checks.explorer.result == "PASS" and
+                .checks.safe_rpc.result == "PASS" and
+                .checks.unsafe_rpc_rejection.result == "PASS"
+              ' evidence/readback/endpoint-acceptance.json
+              ;;
+            false)
+              mapfile -t instances < <(
+                jq -er '.validator_instance_ids.value[]' \
+                  evidence/readback/public-testnet-outputs.json
+              )
+              test "${#instances[@]}" = 3
+              test "$(printf '%s\n' "${instances[@]}" | sort -u | wc -l)" = 3
+              jq -n '{
+                commands: [
+                  "set -euo pipefail",
+                  "curl -fsS http://127.0.0.1:8545/health"
+                ]
+              }' > evidence/readback/private-health-request.json
+              command_id="$(
+                aws ssm send-command \
+                  --instance-ids "${instances[@]}" \
+                  --document-name AWS-RunShellScript \
+                  --parameters \
+                    file://evidence/readback/private-health-request.json \
+                  --comment "JUNCA Private SSM Read-only Baseline" \
+                  --query Command.CommandId --output text
+              )"
+              [[ "$command_id" =~ ^[0-9a-f-]{36}$ ]]
+              for index in 0 1 2; do
+                instance_id="${instances[$index]}"
+                command_status=""
+                for attempt in $(seq 1 60); do
+                  command_status="$(
+                    aws ssm get-command-invocation \
+                      --command-id "$command_id" \
+                      --instance-id "$instance_id" \
+                      --query Status --output text
+                  )"
+                  case "$command_status" in
+                    Success) break ;;
+                    Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+                  esac
+                  test "$attempt" -lt 60
+                  sleep 2
+                done
+                test "$command_status" = "Success"
+                invocation="evidence/readback/private-health-invocation-${index}.json"
+                health="evidence/readback/private-health-${index}.json"
+                item="evidence/readback/private-validator-${index}.json"
+                aws ssm get-command-invocation \
+                  --command-id "$command_id" \
+                  --instance-id "$instance_id" >"$invocation"
+                jq -er '.StandardOutputContent | fromjson' \
+                  "$invocation" >"$health"
+                jq -n \
+                  --arg validator_id \
+                    "$(printf 'validator-%02d' "$((index + 1))")" \
+                  --arg instance_id "$instance_id" \
+                  --slurpfile health "$health" '{
+                    validator_id: $validator_id,
+                    instance_id: $instance_id,
+                    health: $health[0]
+                  }' >"$item"
+              done
+              jq -s '{
+                schema_version: "junca-private-ssm-validator-baseline/v1",
+                status: "PASS",
+                scope:
+                  "Public Testnet Runtime Acceptance / Private SSM Read-only",
+                validators: .
+              }' evidence/readback/private-validator-[0-2].json \
+                > evidence/readback/private-validator-health.json
+              ;;
+            *)
+              echo "public services readback must be boolean" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Build exact fail-closed release evidence
         run: |
           set -euo pipefail
           mkdir -p evidence/release
+          public_services_enabled="$(
+            jq -r '
+              .public_services_acceptance_readback.value.enabled
+              | if type == "boolean" then .
+                else error("public services readback must be boolean") end
+            ' evidence/readback/public-testnet-outputs.json
+          )"
+          runtime_readback=()
+          if [[ "$public_services_enabled" == "true" ]]; then
+            runtime_readback=(
+              --endpoint-acceptance
+              evidence/readback/endpoint-acceptance.json
+            )
+          else
+            runtime_readback=(
+              --private-validator-health
+              evidence/readback/private-validator-health.json
+            )
+          fi
           python scripts/junca_runtime_release_evidence_collector.py \
             --candidate-ami evidence/ami/junca-validator-ami-build.json \
             --bootstrap-outputs evidence/readback/bootstrap-outputs.json \
@@ -192,7 +393,13 @@ jobs:
             --instances evidence/readback/instances.json \
             --volumes evidence/readback/volumes.json \
             --snapshots evidence/readback/snapshots.json \
-            --endpoint-acceptance evidence/readback/endpoint-acceptance.json \
+            "${runtime_readback[@]}" \
+            --migration-evidence \
+              evidence/state-migration/junca-validator-state-migration.json \
+            --expected-migration-run-id "$MIGRATION_RUN_ID" \
+            --expected-migration-head-sha "$MIGRATION_RUN_HEAD_SHA" \
+            --expected-migration-request-sha256 \
+              "$MIGRATION_REQUEST_SHA256" \
             --expected-source-commit "$SOURCE_COMMIT" \
             --output-dir evidence/release
           test "$(find evidence/release -type f | wc -l)" = 3

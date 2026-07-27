@@ -86,7 +86,10 @@ validator_state_readback="$(
 validator_state_count="$(jq -r 'length' <<<"$validator_state_readback")"
 case "$validator_state_count" in
   0)
+    validator_state_provisioned=false
     validator_state_enabled=false
+    validator_state_migration_accepted=false
+    validator_state_rollback_snapshot_ids=null
     validator_state_size_gib=200
     validator_state_iops=6000
     validator_state_throughput_mibps=250
@@ -98,7 +101,8 @@ case "$validator_state_count" in
         ["validator-01", "validator-02", "validator-03"] and
       all(.encrypted == true) and
       all(.type == "gp3") and
-      all(.migration_required == true) and
+      all(.migration_required == false) and
+      all(.migration_accepted == true) and
       all(.state_path == "/var/lib/junca") and
       (map(.volume_id) | unique | length) == 3 and
       all(.volume_id | test("^vol-[0-9a-f]{8,17}$")) and
@@ -107,7 +111,19 @@ case "$validator_state_count" in
       (map(.iops) | unique | length) == 1 and
       (map(.throughput_mibps) | unique | length) == 1
     ' <<<"$validator_state_readback" >/dev/null
+    validator_state_provisioned=true
     validator_state_enabled=true
+    validator_state_migration_accepted=true
+    validator_state_rollback_snapshot_ids="$(
+      jq -ce '
+        map(.rollback_snapshot_id)
+        | select(
+            length == 3 and
+            (unique | length) == 3 and
+            all(.[]; type == "string" and test("^snap-[0-9a-f]{8,17}$"))
+          )
+      ' <<<"$validator_state_readback"
+    )"
     validator_state_size_gib="$(
       jq -er '.[0].size_gib' <<<"$validator_state_readback"
     )"
@@ -204,6 +220,12 @@ jq -n \
   --arg quorum_acceptance_sha256 "$quorum_acceptance_sha256" \
   --arg runtime_acceptance_sha256 "$runtime_acceptance_sha256" \
   --argjson enable_validator_state_volumes "$validator_state_enabled" \
+  --argjson provision_validator_state_volumes \
+    "$validator_state_provisioned" \
+  --argjson validator_state_migration_accepted \
+    "$validator_state_migration_accepted" \
+  --argjson validator_state_rollback_snapshot_ids \
+    "$validator_state_rollback_snapshot_ids" \
   --argjson validator_state_volume_size_gib "$validator_state_size_gib" \
   --argjson validator_state_volume_iops "$validator_state_iops" \
   --argjson validator_state_volume_throughput_mibps \
@@ -229,6 +251,10 @@ jq -n \
     genesis_sha256: $genesis_sha256,
     source_commit: $source_commit,
     enable_validator_state_volumes: $enable_validator_state_volumes,
+    provision_validator_state_volumes: $provision_validator_state_volumes,
+    validator_state_migration_accepted: $validator_state_migration_accepted,
+    validator_state_rollback_snapshot_ids:
+      $validator_state_rollback_snapshot_ids,
     validator_state_volume_size_gib: $validator_state_volume_size_gib,
     validator_state_volume_iops: $validator_state_volume_iops,
     validator_state_volume_throughput_mibps:

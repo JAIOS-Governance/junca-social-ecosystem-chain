@@ -8,7 +8,7 @@
 #
 
 resource "aws_ebs_volume" "validator_state" {
-  count = var.enable_validator_state_volumes ? 3 : 0
+  count = var.provision_validator_state_volumes ? 3 : 0
 
   availability_zone = aws_subnet.private[count.index].availability_zone
   encrypted         = true
@@ -32,20 +32,43 @@ resource "aws_ebs_volume" "validator_state" {
       )
       error_message = "gp3 throughput must not exceed one quarter of provisioned IOPS."
     }
+
+    precondition {
+      condition = (
+        !var.validator_state_migration_accepted ||
+        (
+          var.provision_validator_state_volumes &&
+          var.validator_state_rollback_snapshot_ids != null &&
+          length(var.validator_state_rollback_snapshot_ids) == 3
+        )
+      )
+      error_message = "Accepted validator state requires three provisioned volumes and three exact rollback snapshots."
+    }
   }
 
-  tags = {
-    Name              = format("${local.name}-validator-%02d-state", count.index + 1)
-    Validator         = format("%02d", count.index + 1)
-    FailureDomain     = var.availability_zones[count.index]
-    StatePath         = "/var/lib/junca"
-    MigrationRequired = "true"
-    PublicTestnetOnly = "true"
-  }
+  tags = merge(
+    {
+      Name              = format("${local.name}-validator-%02d-state", count.index + 1)
+      Validator         = format("%02d", count.index + 1)
+      FailureDomain     = var.availability_zones[count.index]
+      StatePath         = "/var/lib/junca"
+      MigrationRequired = var.validator_state_migration_accepted ? "false" : "true"
+      PublicTestnetOnly = "true"
+    },
+    var.validator_state_migration_accepted ? {
+      JuncaMigrationState               = "VERIFIED_PASS"
+      JuncaFilesystemVerified           = "true"
+      JuncaStateStoreIntegrity          = "true"
+      JuncaFinalityCertificateRecovered = "true"
+      JuncaRollbackSnapshotId = (
+        var.validator_state_rollback_snapshot_ids[count.index]
+      )
+    } : {}
+  )
 }
 
 resource "aws_volume_attachment" "validator_state" {
-  count = var.enable_validator_state_volumes ? 3 : 0
+  count = var.provision_validator_state_volumes ? 3 : 0
 
   device_name  = "/dev/sdf"
   volume_id    = aws_ebs_volume.validator_state[count.index].id

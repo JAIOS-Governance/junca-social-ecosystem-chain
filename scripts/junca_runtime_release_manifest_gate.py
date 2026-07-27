@@ -18,8 +18,10 @@ BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 AMI = re.compile(r"ami-[0-9a-f]{8,17}")
+INSTANCE = re.compile(r"i-[0-9a-f]{8,17}")
 VOLUME = re.compile(r"vol-[0-9a-f]{8,17}")
 SNAPSHOT = re.compile(r"snap-[0-9a-f]{8,17}")
+HASH = re.compile(r"0x[0-9a-f]{64}")
 
 
 def read_object(path: str | Path) -> dict[str, Any]:
@@ -55,6 +57,76 @@ def _candidate_binding(source: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
     )
 
 
+def _private_ssm_baseline(
+    explorer: Mapping[str, Any], failures: list[str]
+) -> None:
+    readback = explorer.get("readback")
+    if not isinstance(readback, Mapping):
+        failures.append("private_ssm.readback:missing")
+        return
+    if (
+        readback.get("mode") != "private_ssm"
+        or readback.get("scope")
+        != "Public Testnet Runtime Acceptance / Private SSM Read-only"
+        or readback.get("validator_count") != 3
+    ):
+        failures.append("private_ssm.readback:invalid")
+    validators = readback.get("validators")
+    if not isinstance(validators, list):
+        failures.append("private_ssm.validators:missing")
+    else:
+        identities = [
+            item.get("validator_id")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        instance_ids = [
+            item.get("instance_id")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        signer_digests = [
+            item.get("signer_resource_digest")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        if (
+            len(validators) != 3
+            or identities != list(VALIDATOR_IDS)
+            or len(set(instance_ids)) != 3
+            or any(
+                INSTANCE.fullmatch(str(instance_id)) is None
+                for instance_id in instance_ids
+            )
+            or len(set(signer_digests)) != 3
+            or any(
+                SHA256.fullmatch(str(signer_digest)) is None
+                for signer_digest in signer_digests
+            )
+        ):
+            failures.append("private_ssm.validators:not_exact_three")
+    finalized = readback.get("finalized_head")
+    if not isinstance(finalized, Mapping):
+        failures.append("private_ssm.finalized_head:missing")
+    elif (
+        not isinstance(finalized.get("height"), int)
+        or isinstance(finalized.get("height"), bool)
+        or finalized.get("height", 0) < 1
+        or HASH.fullmatch(str(finalized.get("hash"))) is None
+        or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
+    ):
+        failures.append("private_ssm.finalized_head:invalid")
+    quorum = readback.get("quorum")
+    if not isinstance(quorum, Mapping):
+        failures.append("private_ssm.quorum:missing")
+    elif (
+        quorum.get("signed_power") != 3
+        or quorum.get("total_power") != 3
+        or quorum.get("validator_ids") != list(VALIDATOR_IDS)
+    ):
+        failures.append("private_ssm.quorum:not_exact_three")
+
+
 def evaluate(
     manifest: Mapping[str, Any],
     explorer: Mapping[str, Any],
@@ -74,12 +146,18 @@ def evaluate(
         manifest.get("ami_id"),
     )
     request_sha256 = manifest.get("request_sha256")
+    migration_evidence_sha256 = manifest.get("migration_evidence_sha256")
+    baseline_mode = manifest.get("baseline_mode")
     if not SHA256.fullmatch(str(request_sha256)):
         failures.append("manifest.request_sha256:invalid")
     if explorer.get("request_sha256") != request_sha256:
         failures.append("explorer.request_sha256:mismatch")
     if ebs.get("request_sha256") != request_sha256:
         failures.append("ebs.request_sha256:mismatch")
+    if not SHA256.fullmatch(str(migration_evidence_sha256)):
+        failures.append("manifest.migration_evidence_sha256:invalid")
+    if ebs.get("migration_evidence_sha256") != migration_evidence_sha256:
+        failures.append("ebs.migration_evidence_sha256:mismatch")
 
     if (
         manifest.get("schema_version")
@@ -166,10 +244,16 @@ def evaluate(
     if manifest.get("ebs_baseline_sha256") != ebs_evidence_sha256:
         failures.append("manifest.ebs_baseline_sha256:mismatch")
 
-    if (
-        explorer.get("schema_version")
-        != "junca-public-explorer-pre-rollout-baseline/v1"
-    ):
+    if baseline_mode not in ("public_endpoints", "private_ssm"):
+        failures.append("manifest.baseline_mode:invalid")
+    if explorer.get("baseline_mode") != baseline_mode:
+        failures.append("explorer.baseline_mode:mismatch")
+    expected_explorer_schema = (
+        "junca-public-explorer-pre-rollout-baseline/v1"
+        if baseline_mode == "public_endpoints"
+        else "junca-private-ssm-pre-rollout-baseline/v1"
+    )
+    if explorer.get("schema_version") != expected_explorer_schema:
         failures.append("explorer.schema_version:not_pre_rollout_baseline")
     if (
         explorer.get("candidate_accepted") is not False
@@ -180,8 +264,16 @@ def evaluate(
         failures.append("explorer.finalized_only:not_true")
     if explorer.get("read_only") is not True:
         failures.append("explorer.read_only:not_true")
-    if explorer.get("unsafe_rpc_rejection") is not True:
-        failures.append("explorer.unsafe_rpc_rejection:not_true")
+    if baseline_mode == "public_endpoints":
+        if explorer.get("unsafe_rpc_rejection") is not True:
+            failures.append("explorer.unsafe_rpc_rejection:not_true")
+    elif baseline_mode == "private_ssm":
+        if (
+            explorer.get("unsafe_rpc_rejection")
+            != "NOT_APPLICABLE_PRIVATE_SSM"
+        ):
+            failures.append("private_ssm.unsafe_rpc_rejection:invalid")
+        _private_ssm_baseline(explorer, failures)
     if _candidate_binding(explorer) != expected:
         failures.append("explorer.candidate_binding:mismatch")
     observed_explorer = explorer.get("observed_runtime")
@@ -266,6 +358,7 @@ def evaluate(
             "genesis_sha256": expected_genesis_sha256,
             "ami_id": manifest.get("ami_id"),
             "request_sha256": request_sha256,
+            "migration_evidence_sha256": migration_evidence_sha256,
         },
         "failure_count": len(failures),
         "failures": failures,

@@ -484,7 +484,7 @@ resource "aws_instance" "validator" {
     )
     validator_state_required = var.enable_validator_state_volumes
     validator_state_volume_id = (
-      var.enable_validator_state_volumes
+      var.enable_validator_state_volumes && var.provision_validator_state_volumes
       ? aws_ebs_volume.validator_state[count.index].id
       : ""
     )
@@ -517,6 +517,29 @@ resource "aws_instance" "validator" {
         )
       )
       error_message = "Automatic finality requires a shared positive 30-second-boundary slot epoch."
+    }
+
+    precondition {
+      condition = (
+        !var.enable_validator_state_volumes ||
+        (
+          var.provision_validator_state_volumes &&
+          var.validator_state_migration_accepted
+        )
+      )
+      error_message = "Validator state cannot be mounted before the retained volumes are provisioned and migration-accepted."
+    }
+
+    precondition {
+      condition = (
+        !var.validator_state_migration_accepted ||
+        (
+          var.provision_validator_state_volumes &&
+          var.validator_state_rollback_snapshot_ids != null &&
+          length(var.validator_state_rollback_snapshot_ids) == 3
+        )
+      )
+      error_message = "Accepted validator state requires provisioned volumes and three rollback snapshots."
     }
   }
 

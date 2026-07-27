@@ -20,12 +20,15 @@ class ValidatorStateVolumeTests(unittest.TestCase):
 
     def test_volume_provisioning_is_opt_in_and_three_way(self) -> None:
         self.assertIn('variable "enable_validator_state_volumes"', self.variables)
+        self.assertIn(
+            'variable "provision_validator_state_volumes"', self.variables
+        )
         variable = self.variables.split(
             'variable "enable_validator_state_volumes"', 1
         )[1].split("}", 1)[0]
         self.assertIn("default     = false", variable)
         self.assertIn(
-            "count = var.enable_validator_state_volumes ? 3 : 0", self.volume
+            "count = var.provision_validator_state_volumes ? 3 : 0", self.volume
         )
 
     def test_volumes_are_encrypted_retained_and_az_bound(self) -> None:
@@ -36,7 +39,7 @@ class ValidatorStateVolumeTests(unittest.TestCase):
             'type              = "gp3"',
             "prevent_destroy = true",
             'StatePath         = "/var/lib/junca"',
-            'MigrationRequired = "true"',
+            'MigrationRequired = var.validator_state_migration_accepted ? "false" : "true"',
             "var.validator_state_volume_iops / 4",
         ):
             self.assertIn(required, self.volume)
@@ -76,8 +79,14 @@ class ValidatorStateVolumeTests(unittest.TestCase):
             "encrypted",
             "attachment_device",
             "migration_required",
+            "migration_accepted",
+            "rollback_snapshot_id",
         ):
             self.assertIn(required, self.outputs)
+        self.assertIn(
+            "try(\n        aws_volume_attachment.validator_state[index].device_name",
+            self.outputs,
+        )
 
     def test_runbook_requires_serial_quorum_safe_migration(self) -> None:
         for required in (

@@ -1,0 +1,187 @@
+name: JUNCA Validator Durable State Migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - config/junca_validator_state_migration_request.json
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 150
+    env:
+      REQUEST_PATH: config/junca_validator_state_migration_request.json
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      LOCK_TABLE_NAME: junca-social-ecosystem-chain-testnet-lock
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      DOMAIN_NAME: jaios-governance.org
+      ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+      MIGRATION_AUTHORIZATION: PUBLIC_TESTNET_VALIDATOR_STATE_MIGRATION
+      mainnet_changed: false
+      assets_moved: false
+      bridge_activated: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify signed migration request-only main commit
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "${{ github.event.repository.default_branch }}" = main
+          test "$GITHUB_REPOSITORY" = \
+            JAIOS-Governance/junca-social-ecosystem-chain
+          commit_json="$(
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}"
+          )"
+          jq -e --arg path "$REQUEST_PATH" '
+            .commit.verification.verified == true and
+            .commit.verification.reason == "valid" and
+            (.files | length) == 1 and
+            .files[0].filename == $path and
+            (.files[0].status == "added" or .files[0].status == "modified")
+          ' <<<"$commit_json"
+          python scripts/junca_validator_state_migration_request.py \
+            --request "$REQUEST_PATH" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-state-${{ github.run_id }}
+
+      - name: Provision, migrate, and canonicalize durable validator state
+        env:
+          MIGRATION_REQUEST_SHA256: ${{ steps.request.outputs.request_sha256 }}
+        run: bash scripts/junca_validator_state_migration.sh
+
+      - name: Verify accepted migration evidence
+        env:
+          MIGRATION_REQUEST_SHA256: ${{ steps.request.outputs.request_sha256 }}
+        run: |
+          set -euo pipefail
+          artifact_dir=artifacts/validator-state-migration
+          evidence="$artifact_dir/junca-validator-state-migration.json"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg head_sha "$GITHUB_SHA" \
+            --arg request "$MIGRATION_REQUEST_SHA256" '
+            .schema_version == "junca-validator-state-migration/v1" and
+            .state == "VERIFIED_PASS" and
+            .network == "Public Testnet" and
+            (.instance_ids | length) == 3 and
+            (.state_volume_ids | length) == 3 and
+            (.rollback_snapshot_ids | length) == 3 and
+            (.validator_mappings | length) == 3 and
+            (.quorum_checkpoints | length) >= 3 and
+            .finalized_head.height >= 0 and
+            (.finalized_head.hash | test("^0x[0-9a-f]{64}$")) and
+            (.finalized_head.certificate_hash |
+              test("^0x[0-9a-f]{64}$")) and
+            .execution_binding.repository == $repository and
+            .execution_binding.run_id == $run_id and
+            .execution_binding.run_attempt == $run_attempt and
+            .execution_binding.head_sha == $head_sha and
+            .execution_binding.migration_request_sha256 == $request and
+            .serial_migration == true and
+            .terraform_canonicalized == true and
+            .runtime_mount_verified == true and
+            .immutable_runtime_mount_activation_pending == true and
+            .bootstrap_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' "$evidence"
+          (
+            cd "$artifact_dir"
+            sha256sum --check SHA256SUMS
+          )
+          temporary="$(mktemp)"
+          jq -S \
+            --arg request "$MIGRATION_REQUEST_SHA256" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head "$GITHUB_SHA" '
+            . + {
+              migration_request_sha256: $request,
+              migration_run_id: $run_id,
+              migration_run_head_sha: $head
+            }
+          ' "$evidence" >"$temporary"
+          mv "$temporary" "$evidence"
+          migration_evidence_sha256="$(sha256sum "$evidence" | cut -d" " -f1)"
+          jq -n -S \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head "$GITHUB_SHA" \
+            --arg request "$MIGRATION_REQUEST_SHA256" \
+            --arg evidence "$migration_evidence_sha256" '
+            {
+              schema_version:
+                "junca-validator-state-migration-binding/v1",
+              state: "MIGRATION_VERIFIED",
+              network: "Public Testnet",
+              notice: "Public Testnet / No Monetary Value",
+              migration_run_id: $run_id,
+              migration_run_head_sha: $head,
+              migration_request_sha256: $request,
+              migration_evidence_sha256: $evidence,
+              bootstrap_changed: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }
+          ' >"$artifact_dir/junca-validator-state-migration-binding.json"
+          (
+            cd "$artifact_dir"
+            sha256sum \
+              junca-validator-state-migration.json \
+              junca-validator-state-migration-binding.json \
+              >SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+          jq -e \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head "$GITHUB_SHA" \
+            --arg request "$MIGRATION_REQUEST_SHA256" \
+            --arg evidence "$migration_evidence_sha256" '
+            .state == "MIGRATION_VERIFIED" and
+            .migration_run_id == $run_id and
+            .migration_run_head_sha == $head and
+            .migration_request_sha256 == $request and
+            .migration_evidence_sha256 == $evidence and
+            .bootstrap_changed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' "$artifact_dir/junca-validator-state-migration-binding.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-state-migration-${{ github.run_id }}
+          path: artifacts/validator-state-migration/
+          if-no-files-found: error
+          retention-days: 90
