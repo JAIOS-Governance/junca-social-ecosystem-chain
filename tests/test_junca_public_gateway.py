@@ -130,7 +130,10 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertFalse(body["bridge_activated"])
         html_status, document = self.gateway.explorer_html()
         self.assertEqual(html_status, 200)
-        self.assertIn("Finalized height", document)
+        self.assertIn("Network Overview", document)
+        self.assertIn("Finality Overview", document)
+        self.assertIn("Latest Finalized Block", document)
+        self.assertIn("Not Available Yet", document)
         self.assertIn("Public Testnet / No Monetary Value", document)
         self.assertNotIn("private", document.lower())
 
