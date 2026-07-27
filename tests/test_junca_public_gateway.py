@@ -109,7 +109,8 @@ class PublicGatewayTests(unittest.TestCase):
     def test_explorer_returns_only_certificate_backed_finalized_head(self) -> None:
         status, body = self.gateway.explorer()
         self.assertEqual(status, 200)
-        self.assertEqual(body["schema_version"], "junca-public-explorer/v2")
+        self.assertEqual(body["schema_version"], "junca-public-explorer/v3")
+        self.assertIsInstance(body["observed_at"], str)
         self.assertTrue(body["finalized_only"])
         self.assertTrue(body["read_only"])
         self.assertEqual(body["network"]["chain_id"], "0x1352773")
@@ -123,6 +124,7 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertEqual(body["head"]["height"], 7)
         self.assertEqual(body["head"]["signed_power"], 3)
         self.assertEqual(body["head"]["timestamp"], "0x1234")
+        self.assertEqual(body["head"]["parent_hash"], "0x" + "11" * 32)
         self.assertEqual(body["head"]["state_root"], "0x" + "22" * 32)
         self.assertEqual(body["head"]["transaction_count"], 0)
         self.assertFalse(body["mainnet_changed"])
