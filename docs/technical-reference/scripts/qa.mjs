@@ -9,7 +9,10 @@ const dist = join(root, "dist");
 const repositoryRoot = join(root, "..", "..");
 const origin = "https://docs.jaios-governance.org";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
-const prohibited = ["CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled"];
+const prohibited = [
+  "CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled",
+  "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
+];
 const failures = [];
 
 for (const route of routes) {
@@ -26,7 +29,13 @@ for (const route of routes) {
     "JUNCA Social Ecosystem Chain",
     "JAIOS Institutional Governance",
     "Public Testnet",
-    "Runtime Deployment in Progress",
+    "Public Testnet Runtime Active",
+    "Testing is active. Runtime evidence is public.",
+    "Finality",
+    "Ready · 3 / 3",
+    "Chain ID",
+    "20260723",
+    "Active · PASS",
     'href="https://jaios-governance.org/"',
     'class="jaios-institutional-link"',
     'href="https://explorer.jaios-governance.org/"',
@@ -57,9 +66,9 @@ for (const required of [
   "Chain Core",
   "Implemented / CI Verified",
   "AWS Runtime",
-  "Pending Live Acceptance",
+  "Live Acceptance Verified",
   "Assets Moved",
-  "Revision · 2026.07.27 / R24",
+  "Revision · 2026.07.27 / R25",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -93,7 +102,7 @@ for (const required of [
 const implementation = await readFile(join(dist, "implementation", "index.html"), "utf8");
 for (const required of [
   "Public Testnet Network Configuration",
-  "Pending Runtime Binding",
+  "Read-only Endpoint Active",
   "Getting Started",
   "Smart Contract Deployment",
   "Token Standard",
@@ -124,7 +133,15 @@ for (const route of routes) {
 }
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
-await readFile(join(dist, "release-manifest.json"), "utf8");
+const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
+if (releaseManifest.revision !== "R25") failures.push("release manifest revision must be R25");
+if (releaseManifest.runtime_status !== "VERIFIED") failures.push("release manifest runtime must be verified");
+if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
+if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
+if (releaseManifest.runtime_evidence?.total_power !== 3) failures.push("verified finality quorum is missing");
+if (releaseManifest.runtime_evidence?.mainnet_changed !== false) failures.push("mainnet boundary is missing");
+if (releaseManifest.runtime_evidence?.assets_moved !== false) failures.push("asset movement boundary is missing");
+if (releaseManifest.runtime_evidence?.bridge_activated !== false) failures.push("bridge boundary is missing");
 await readFile(join(dist, "manifest.webmanifest"), "utf8");
 const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanifest"), "utf8"));
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
