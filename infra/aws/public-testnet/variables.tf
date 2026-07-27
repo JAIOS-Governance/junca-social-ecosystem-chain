@@ -167,12 +167,12 @@ variable "validator_state_snapshot_ids" {
 
   validation {
     condition = var.validator_state_snapshot_ids == null ? true : (
-        length(var.validator_state_snapshot_ids) == 3 &&
-        length(toset(var.validator_state_snapshot_ids)) == 3 &&
-        alltrue([
-          for snapshot_id in var.validator_state_snapshot_ids :
-          can(regex("^snap-[0-9a-f]{8,17}$", snapshot_id))
-        ])
+      length(var.validator_state_snapshot_ids) == 3 &&
+      length(toset(var.validator_state_snapshot_ids)) == 3 &&
+      alltrue([
+        for snapshot_id in var.validator_state_snapshot_ids :
+        can(regex("^snap-[0-9a-f]{8,17}$", snapshot_id))
+      ])
     )
     error_message = "validator_state_snapshot_ids must be null or three distinct exact EBS snapshot IDs."
   }

@@ -283,9 +283,16 @@ class AwsFoundationTests(unittest.TestCase):
             "public-testnet/terraform.tfstate",
             "foundation.tfplan",
             'select(index("delete"))',
-            "enable_public_services: false",
+            "enable_public_services: $enable_public_services",
+            "artifacts/pre-foundation-outputs.json",
+            ".public_services_acceptance_readback.value.enabled // false",
+            'if $public_services_enabled then "public-services" else "validators-only" end',
+            "aws_lb_target_group_attachment.rpc",
+            "aws_lb_target_group_attachment.explorer",
+            "aws elbv2 wait target-in-service",
+            '["target_id"]',
             "quorum_verified: false",
-            "public_services_enabled: false",
+            "public_services_enabled: $public_services_enabled",
             "terraform -chdir=infra/aws/public-testnet apply",
         ):
             self.assertIn(required, self.foundation_script)

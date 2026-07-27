@@ -336,37 +336,37 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
           "aws:ResourceTag/Project" = "JUNCA Social Ecosystem Chain"
         }
       }
-    },
-    {
-      Sid      = "CreateTaggedPublicTestnetWebAcl"
-      Effect   = "Allow"
-      Action   = "wafv2:CreateWebACL"
-      Resource = "*"
-      Condition = {
-        StringEquals = {
-          "aws:RequestTag/Project" = "JUNCA Social Ecosystem Chain"
+      },
+      {
+        Sid      = "CreateTaggedPublicTestnetWebAcl"
+        Effect   = "Allow"
+        Action   = "wafv2:CreateWebACL"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/Project" = "JUNCA Social Ecosystem Chain"
+          }
+          "ForAllValues:StringEquals" = {
+            "aws:TagKeys" = [
+              "Governance",
+              "ManagedBy",
+              "MonetaryUse",
+              "Network",
+              "Project"
+            ]
+          }
         }
-        "ForAllValues:StringEquals" = {
-          "aws:TagKeys" = [
-            "Governance",
-            "ManagedBy",
-            "MonetaryUse",
-            "Network",
-            "Project"
-          ]
+      },
+      {
+        Sid      = "CreateElasticLoadBalancingServiceRole"
+        Effect   = "Allow"
+        Action   = "iam:CreateServiceLinkedRole"
+        Resource = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
+        Condition = {
+          StringEquals = {
+            "iam:AWSServiceName" = "elasticloadbalancing.amazonaws.com"
+          }
         }
-      }
-    },
-    {
-      Sid      = "CreateElasticLoadBalancingServiceRole"
-      Effect   = "Allow"
-      Action   = "iam:CreateServiceLinkedRole"
-      Resource = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
-      Condition = {
-        StringEquals = {
-          "iam:AWSServiceName" = "elasticloadbalancing.amazonaws.com"
-        }
-      }
     }]
   })
 }
