@@ -1,19 +1,16 @@
 name: JUNCA Validator Foundation Release
 
 on:
-  workflow_run:
-    workflows: ["JUNCA Validator Immutable AMI Build"]
-    types: [completed]
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-validator-foundation-release.yml"
   workflow_dispatch:
     inputs:
       ami_run_id:
         description: "Verified immutable AMI workflow run ID"
-        required: false
-        default: "30242215399"
+        required: true
+        type: string
+      authorize_rollout:
+        description: "Exact authorization phrase: PUBLIC_TESTNET_ROLLOUT"
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -21,7 +18,6 @@ permissions:
   id-token: write
 
 concurrency:
-  # Recovery trigger: apply the least-privilege cross-validator KMS verification policy.
   # Shared with the manual/auto foundation workflow because both can acquire
   # the canonical public-testnet Terraform state lock.
   group: junca-public-testnet-aws-foundation
@@ -29,7 +25,7 @@ concurrency:
 
 jobs:
   deploy-and-accept:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 45
@@ -41,12 +37,9 @@ jobs:
       DOMAIN_NAME: jaios-governance.org
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
-      # Verified AMI containing the finalized-only Explorer v1 gateway.
-      AMI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ami_run_id || '30242215399' }}
+      AMI_RUN_ID: ${{ inputs.ami_run_id }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -65,7 +58,6 @@ jobs:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-validator-release-${{ github.run_id }}
-          retry-max-attempts: 3
 
       - name: Bind verified immutable AMI inputs
         run: |
