@@ -115,6 +115,35 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
         ):
             self.assertIn(required, NODE)
 
+    def test_ext4_label_repair_is_limited_to_exact_empty_label(self) -> None:
+        unmounted = 'test -z "$(findmnt -rn -S "$resolved_device" -o TARGET)"'
+        read_label = (
+            'filesystem_label="$(blkid -o value -s LABEL "$device" '
+            '2>/dev/null || true)"'
+        )
+        empty_label = 'if [[ -z "$filesystem_label" ]]; then'
+        relabel = 'e2label "$device" JUNCA_VALIDATOR_STATE'
+        readback = (
+            'filesystem_label="$(blkid -o value -s LABEL "$device")"'
+        )
+        final_gate = (
+            'test "$filesystem_label" = JUNCA_VALIDATOR_STATE'
+        )
+        for required in (
+            unmounted,
+            'test "$filesystem" = ext4',
+            read_label,
+            empty_label,
+            relabel,
+            readback,
+            final_gate,
+        ):
+            self.assertIn(required, NODE)
+        self.assertLess(NODE.index(unmounted), NODE.index(read_label))
+        self.assertLess(NODE.index(empty_label), NODE.index(relabel))
+        self.assertLess(NODE.index(relabel), NODE.index(readback))
+        self.assertLess(NODE.index(readback), NODE.index(final_gate))
+
     def test_quorum_checkpoints_bind_canonical_finality_continuity(
         self,
     ) -> None:

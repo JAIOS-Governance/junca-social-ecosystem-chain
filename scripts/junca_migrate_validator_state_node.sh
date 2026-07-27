@@ -523,7 +523,17 @@ if [[ -z "$filesystem" ]]; then
   mkfs.ext4 -m 0 -L JUNCA_VALIDATOR_STATE "$device"
 else
   test "$filesystem" = ext4
-  test "$(blkid -o value -s LABEL "$device")" = JUNCA_VALIDATOR_STATE
+  filesystem_label="$(blkid -o value -s LABEL "$device" 2>/dev/null || true)"
+  if [[ -z "$filesystem_label" ]]; then
+    # An earlier fail-closed attempt may have created the exact dedicated
+    # ext4 filesystem before assigning its identity label. Repair only that
+    # empty-label condition on the Terraform-bound, unmounted volume; never
+    # relabel a differently identified filesystem.
+    e2label "$device" JUNCA_VALIDATOR_STATE
+    sync
+    filesystem_label="$(blkid -o value -s LABEL "$device")"
+  fi
+  test "$filesystem_label" = JUNCA_VALIDATOR_STATE
 fi
 install -d -m 0750 "$temporary_mount"
 mount -o noatime,nosuid,nodev "$device" "$temporary_mount"
