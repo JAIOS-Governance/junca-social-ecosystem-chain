@@ -112,12 +112,12 @@ write_tfvars() {
     *) echo "public services readback must be boolean" >&2; exit 1 ;;
   esac
   quorum_sha256="$(
-    jq -cr '
+    jq -c '
       .public_services_acceptance_readback.value.quorum_evidence_sha256
     ' "$outputs"
   )"
   runtime_sha256="$(
-    jq -cr '
+    jq -c '
       .public_services_acceptance_readback.value.runtime_evidence_sha256
     ' "$outputs"
   )"
@@ -140,7 +140,9 @@ write_tfvars() {
     --arg source_commit \
       "$(jq -er '.approved_node_ami_readback.value.source_commit' "$outputs")" \
     --argjson automatic_finality_enabled \
-      "$(jq -c '.automatic_finality_readback.value.enabled' "$outputs")" \
+      "$(jq -c '
+        .automatic_finality_readback.value.enabled // false
+      ' "$outputs")" \
     --argjson validator_block_interval_seconds \
       "$(jq -c '
         if .automatic_finality_readback.value.enabled
