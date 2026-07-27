@@ -8,6 +8,7 @@ import unittest
 from jaios.social_ecosystem_chain.validator_node import (
     AuthenticatedVote,
     AwsKmsSecp256k1Adapter,
+    BoundedFinalityLoop,
     PublicTestnetConsensus,
     ValidatorNodeError,
     build_genesis,
@@ -17,6 +18,7 @@ from jaios.social_ecosystem_chain.validator_node import (
 )
 from jaios.social_ecosystem_chain.finality import FinalityVote
 import hashlib
+import time
 
 
 class ValidatorNodeTests(unittest.TestCase):
@@ -48,6 +50,34 @@ class ValidatorNodeTests(unittest.TestCase):
             path.write_text(json.dumps(tampered))
             with self.assertRaisesRegex(ValidatorNodeError, "genesis_hash"):
                 load_genesis(path)
+
+    def test_manual_vote_keeps_legacy_peer_authentication_contract(self) -> None:
+        packet = AuthenticatedVote(
+            chain_id=20260723,
+            height=1,
+            round=0,
+            block_hash="0x" + ("1" * 64),
+            validator_id="validator-1",
+            signature=b"consensus",
+            peer_signature=b"peer",
+        )
+        expected = (
+            b"JUNCA_AUTHENTICATED_PEER_VOTE_V1\x00"
+            + json.dumps(
+                {
+                    "block_hash": packet.block_hash,
+                    "chain_id": packet.chain_id,
+                    "height": packet.height,
+                    "round": packet.round,
+                    "signature": packet.signature.hex(),
+                    "validator_id": packet.validator_id,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        self.assertEqual(packet.peer_signing_payload, expected)
+        self.assertNotIn(b"block_timestamp", packet.peer_signing_payload)
 
     def test_runtime_binds_identity_and_read_only_rpc(self) -> None:
         with TemporaryDirectory() as directory:
@@ -184,6 +214,7 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             validator_id=validator_id,
             signature=consensus_signature,
             peer_signature=b"pending",
+            block_timestamp=proposal.block_timestamp,
         )
         peer_signature = self.signature(
             "peer:" + validator_id, packet.peer_signing_payload
@@ -317,6 +348,28 @@ class PublicTestnetConsensusTests(unittest.TestCase):
         self.assertEqual(journal["signature_count"], 1)
         self.assertEqual(journal["latest_height"], 1)
 
+    def test_canonical_timestamp_is_bound_persisted_and_read_after_restart(self) -> None:
+        self.node.consensus = self.consensus
+        proposal = self.consensus.propose(block_timestamp=1_800_000_030)
+        for validator_id in ("validator-1", "validator-2", "validator-3"):
+            self.consensus.submit(self.packet(validator_id, proposal))
+        self.assertEqual(self.node.store.block_timestamp(1), 1_800_000_030)
+        self.assertEqual(
+            self.node.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"],
+            hex(1_800_000_030),
+        )
+
+        restarted = PublicTestnetConsensus(
+            store=self.node.store,
+            data_dir=self.directory.name,
+            signer_resources=self.resources,
+            consensus_verifier=self.verify_consensus,
+            peer_verifier=self.verify_peer,
+        )
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.evidence()["head_height"], 1)
+        self.assertEqual(self.node.store.block_timestamp(1), 1_800_000_030)
+
     def test_peer_auth_and_assigned_kms_binding_fail_closed(self) -> None:
         proposal = self.consensus.propose()
         with self.assertRaisesRegex(ValidatorNodeError, "authentication"):
@@ -352,6 +405,48 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             self.consensus.submit(forged)
         self.assertEqual(self.node.store.head_height, 0)
 
+
+class BoundedFinalityLoopTests(unittest.TestCase):
+    class Store:
+        head_height = 0
+
+    class State:
+        def __init__(self) -> None:
+            self.store = BoundedFinalityLoopTests.Store()
+            self.timestamps: list[int | None] = []
+
+        def broadcast_vote(self, *, block_timestamp=None):
+            self.timestamps.append(block_timestamp)
+            return {"status": "BROADCAST", "height": self.store.head_height + 1}
+
+    def test_slot_is_bounded_and_same_slot_retry_is_canonical(self) -> None:
+        state = self.State()
+        loop = BoundedFinalityLoop(
+            state, interval_seconds=30, epoch_seconds=1_800_000_000
+        )
+        self.assertFalse(loop.run_once(1_800_000_029))
+        self.assertTrue(loop.run_once(1_800_000_030))
+        self.assertTrue(loop.run_once(1_800_000_059))
+        self.assertEqual(state.timestamps, [1_800_000_030, 1_800_000_030])
+        state.store.head_height = 1
+        self.assertFalse(loop.run_once(1_800_000_059))
+        self.assertTrue(loop.run_once(1_800_000_060))
+        self.assertEqual(state.timestamps[-1], 1_800_000_060)
+
+    def test_loop_stops_cleanly(self) -> None:
+        state = self.State()
+        loop = BoundedFinalityLoop(
+            state,
+            interval_seconds=5,
+            epoch_seconds=1,
+            clock=lambda: 31,
+        )
+        loop.start()
+        time.sleep(0.02)
+        loop.stop()
+        count = len(state.timestamps)
+        time.sleep(0.02)
+        self.assertEqual(len(state.timestamps), count)
 
 if __name__ == "__main__":
     unittest.main()
