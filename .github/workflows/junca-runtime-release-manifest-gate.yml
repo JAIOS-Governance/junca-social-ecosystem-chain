@@ -59,17 +59,18 @@ jobs:
           ' <<<"$evidence_run_json"
 
       - name: Download exact pre-rollout evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+        uses: actions/download-artifact@v4
+        with:
+          name: junca-runtime-release-evidence-${{ inputs.evidence_run_id }}
+          path: evidence
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run_id }}
+
+      - name: Verify exact pre-rollout evidence files
         run: |
           set -euo pipefail
-          mkdir -p evidence artifacts
-          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          gh run download "$EVIDENCE_RUN_ID" \
-            --repo "${{ github.repository }}" \
-            --name "junca-runtime-release-evidence-${EVIDENCE_RUN_ID}" \
-            --dir evidence
+          mkdir -p artifacts
           test "$(find evidence -type f | wc -l)" = 3
           test -f evidence/junca-runtime-pre-rollout-baseline.json
           test -f evidence/junca-public-explorer-pre-rollout-baseline.json
