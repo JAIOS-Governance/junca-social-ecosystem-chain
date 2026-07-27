@@ -26,6 +26,7 @@ class ExecutedProposal:
     height: int
     parent_hash: str
     block_hash: str
+    block_timestamp: int | None
     candidate: BlockCandidate
     transition: BlockTransition
 
@@ -35,6 +36,7 @@ class ExecutedProposal:
             "height": self.height,
             "parent_hash": self.parent_hash,
             "block_hash": self.block_hash,
+            "timestamp": self.block_timestamp,
             "candidate_digest": self.candidate.candidate_digest,
             "state_root": self.transition.state_root,
             "transaction_count": len(self.candidate.transactions),
@@ -63,7 +65,18 @@ class NodeExecutionPipeline:
         self.store = store
         self.signature_verifier = signature_verifier
 
-    def execute_candidate(self) -> ExecutedProposal:
+    def execute_candidate(
+        self, *, block_timestamp: int | None = None
+    ) -> ExecutedProposal:
+        if (
+            block_timestamp is not None
+            and (
+                isinstance(block_timestamp, bool)
+                or not isinstance(block_timestamp, int)
+                or block_timestamp <= 0
+            )
+        ):
+            raise NodePipelineError("block timestamp must be a positive integer")
         head = self.store.head()
         accounts = self.store.accounts_at()
         candidate = self.pool.build_candidate(
@@ -86,6 +99,8 @@ class NodeExecutionPipeline:
             "parent_hash": head.block_hash,
             "state_root": transition.state_root,
         }
+        if block_timestamp is not None:
+            header["timestamp"] = block_timestamp
         block_hash = "0x" + hashlib.sha256(
             b"JUNCA_BLOCK_HEADER_V1\x00"
             + json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -94,6 +109,7 @@ class NodeExecutionPipeline:
             height=height,
             parent_hash=head.block_hash,
             block_hash=block_hash,
+            block_timestamp=block_timestamp,
             candidate=candidate,
             transition=transition,
         )
@@ -114,6 +130,7 @@ class NodeExecutionPipeline:
             parent_hash=proposal.parent_hash,
             transition=proposal.transition,
             certificate=certificate,
+            block_timestamp=proposal.block_timestamp,
         )
         self.pool.remove_included(proposal.candidate.transactions)
         return stored
