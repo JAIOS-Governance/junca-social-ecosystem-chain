@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -183,10 +184,11 @@ class PublicGateway:
             else None
         )
         body = {
-            "schema_version": "junca-public-explorer/v2",
+            "schema_version": "junca-public-explorer/v3",
             "notice": NOTICE,
             "finalized_only": True,
             "status": "ready" if finalized else "syncing",
+            "observed_at": datetime.now(UTC).isoformat(),
             "network": network,
             "head": (
                 {
@@ -198,6 +200,7 @@ class PublicGateway:
                     "signed_power": certificate.get("signed_power"),
                     "total_power": certificate.get("total_power"),
                     "timestamp": block.get("timestamp") if block else None,
+                    "parent_hash": block.get("parent_hash") if block else None,
                     "state_root": block.get("state_root") if block else None,
                     "transaction_count": (
                         block.get("transaction_count") if block else None
@@ -265,6 +268,7 @@ class PublicGateway:
         transactions = block.get("transactions")
         return {
             "timestamp": block.get("timestamp") if isinstance(block.get("timestamp"), str) else None,
+            "parent_hash": block.get("parentHash") if isinstance(block.get("parentHash"), str) else None,
             "state_root": block.get("stateRoot") if isinstance(block.get("stateRoot"), str) else None,
             "transaction_count": (
                 len(transactions) if isinstance(transactions, Sequence)

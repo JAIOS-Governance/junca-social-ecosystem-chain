@@ -120,6 +120,14 @@ EXPLORER_DOCUMENT = """<!doctype html>
       background: var(--amber);
     }
     .status-dot.ready { background: var(--green); }
+    .status-dot.live {
+      box-shadow: 0 0 0 0 rgba(132, 198, 161, .58);
+      animation: live-pulse 1.8s ease-out infinite;
+    }
+    @keyframes live-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(132, 198, 161, .58); }
+      70%, 100% { box-shadow: 0 0 0 8px rgba(132, 198, 161, 0); }
+    }
     .notice { color: var(--gold); }
     main { padding: 34px 0 76px; }
     .eyebrow {
@@ -226,6 +234,34 @@ EXPLORER_DOCUMENT = """<!doctype html>
       text-overflow: ellipsis;
     }
     .metric-sub { display: block; margin-top: 7px; color: var(--quiet); font-size: 11px; }
+    .operations-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+    .operation {
+      min-height: 94px;
+      padding: 15px 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(11, 34, 54, .58);
+    }
+    .operation span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .operation strong {
+      display: block;
+      margin-top: 9px;
+      color: var(--ink);
+      font-size: 14px;
+    }
+    .operation small { display: block; margin-top: 4px; color: var(--quiet); font-size: 10px; }
+    .operation strong.good { color: var(--green); }
+    .operation strong.warn { color: var(--amber); }
     .section-head {
       display: flex;
       justify-content: space-between;
@@ -319,7 +355,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
     .skeleton { color: var(--quiet); }
     .error { color: var(--red); }
     @media (max-width: 1040px) {
-      .metric-grid, .boundary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric-grid, .boundary-grid, .operations-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .unavailable-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 760px) {
@@ -330,12 +366,12 @@ EXPLORER_DOCUMENT = """<!doctype html>
       nav a { padding-left: 0; padding-right: 18px; white-space: nowrap; }
       .hero, .two-col { grid-template-columns: 1fr; }
       .hero { padding-top: 26px; }
-      .metric-grid, .boundary-grid, .unavailable-grid { grid-template-columns: 1fr 1fr; }
+      .metric-grid, .boundary-grid, .unavailable-grid, .operations-grid { grid-template-columns: 1fr 1fr; }
       .data-row { grid-template-columns: 1fr; gap: 5px; }
       .data-row dd { text-align: left; }
     }
     @media (max-width: 480px) {
-      .metric-grid, .boundary-grid, .unavailable-grid { grid-template-columns: 1fr; }
+      .metric-grid, .boundary-grid, .unavailable-grid, .operations-grid { grid-template-columns: 1fr; }
       .wordmark { font-size: 15px; }
       h1 { font-size: 37px; }
     }
@@ -366,6 +402,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
   <div class="status-band">
     <div class="shell status-row">
       <span><i id="status-dot" class="status-dot" aria-hidden="true"></i><span id="network-status">Connecting</span></span>
+      <span id="live-mode">Live readback starting</span>
       <span>Finalized-only</span>
       <span>Read-only</span>
       <span class="notice">Public Testnet / No Monetary Value</span>
@@ -399,6 +436,18 @@ EXPLORER_DOCUMENT = """<!doctype html>
         <article class="metric"><span class="metric-label">Quorum</span><strong id="quorum" class="metric-value skeleton">—</strong><span class="metric-sub">Signed power / total power</span></article>
         <article class="metric"><span class="metric-label">Transactions</span><strong id="transactions" class="metric-value skeleton">—</strong><span class="metric-sub">Latest finalized block</span></article>
         <article class="metric"><span class="metric-label">Peer Count</span><strong id="peers" class="metric-value skeleton">—</strong><span class="metric-sub">Public RPC observation</span></article>
+      </div>
+
+      <div class="section-head">
+        <div><p class="eyebrow">Continuous observation</p><h2>Live Operations Monitor</h2></div>
+        <p>Automatic public readback every 5 seconds</p>
+      </div>
+      <div class="operations-grid" aria-live="polite">
+        <div class="operation"><span>Gateway</span><strong id="gateway-state">Connecting</strong><small id="gateway-latency">Latency —</small></div>
+        <div class="operation"><span>Finality</span><strong id="finality-live">Checking</strong><small>Certificate-backed</small></div>
+        <div class="operation"><span>Head Movement</span><strong id="head-movement">Observing</strong><small id="head-age">Block age —</small></div>
+        <div class="operation"><span>Successful Samples</span><strong id="sample-count">0</strong><small id="failure-count">Failures 0</small></div>
+        <div class="operation"><span>Next Readback</span><strong id="next-readback">5s</strong><small id="last-success">Last success —</small></div>
       </div>
 
       <div class="two-col">
@@ -526,38 +575,53 @@ EXPLORER_DOCUMENT = """<!doctype html>
       const set = (id, value, className) => {
         const node = byId(id);
         node.textContent = value ?? "Not Available Yet";
-        node.classList.remove("skeleton", "error");
+        node.classList.remove("skeleton", "error", "good", "warn");
         if (className) node.classList.add(className);
       };
-      const rpc = async (method, params = []) => {
-        const response = await fetch("/", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({jsonrpc: "2.0", id: method, method, params}),
-          cache: "no-store"
-        });
-        if (!response.ok) throw new Error(`${method} unavailable`);
-        const data = await response.json();
-        if (data.error || !Object.prototype.hasOwnProperty.call(data, "result")) {
-          throw new Error(`${method} unavailable`);
-        }
-        return data.result;
-      };
-      const decimal = (hex) => Number.parseInt(hex, 16).toString(10);
+      const REFRESH_SECONDS = 5;
+      let nextRefreshAt = Date.now();
+      let loading = false;
+      let samples = 0;
+      let failures = 0;
+      let previousHeight = null;
       const blockTimestamp = (value) => {
         if (typeof value !== "string") return "Not Available Yet";
         const date = new Date(Number.parseInt(value, 16) * 1000);
         return Number.isNaN(date.valueOf()) ? "Not Available Yet" : date.toISOString();
       };
+      const blockAge = (value) => {
+        if (typeof value !== "string") return "Block age unavailable";
+        const seconds = Math.max(0, Math.floor(Date.now() / 1000 - Number.parseInt(value, 16)));
+        if (!Number.isFinite(seconds)) return "Block age unavailable";
+        if (seconds < 60) return `Block age ${seconds}s`;
+        if (seconds < 3600) return `Block age ${Math.floor(seconds / 60)}m`;
+        if (seconds < 86400) return `Block age ${Math.floor(seconds / 3600)}h`;
+        return `Block age ${Math.floor(seconds / 86400)}d`;
+      };
+      const scheduleNext = () => {
+        nextRefreshAt = Date.now() + REFRESH_SECONDS * 1000;
+      };
+      const updateCountdown = () => {
+        const remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+        set("next-readback", loading ? "Reading…" : `${remaining}s`);
+      };
       const load = async () => {
+        if (loading) return;
+        loading = true;
+        updateCountdown();
+        const startedAt = performance.now();
         try {
           const explorerResponse = await fetch("/explorer.json", {cache: "no-store"});
           if (!explorerResponse.ok) throw new Error("Explorer data unavailable");
           const explorer = await explorerResponse.json();
           const head = explorer.head;
           if (!head || explorer.finalized_only !== true) throw new Error("Finalized data unavailable");
+          const latency = Math.max(0, Math.round(performance.now() - startedAt));
+          samples += 1;
           set("network-status", explorer.status);
+          set("live-mode", `LIVE · ${REFRESH_SECONDS}s`);
           byId("status-dot").classList.toggle("ready", explorer.status === "ready");
+          byId("status-dot").classList.toggle("live", explorer.status === "ready");
           set("height", String(head.height));
           set("quorum", `${head.signed_power} / ${head.total_power}`);
           set("finality-status", explorer.finalized_only ? "Finalized-only" : "Unavailable", "pill");
@@ -566,34 +630,60 @@ EXPLORER_DOCUMENT = """<!doctype html>
           set("certificate-hash", head.certificate_hash);
           set("signed-power", String(head.signed_power));
           set("total-power", String(head.total_power));
-
-          const [chainId, peerCount, client, block] = await Promise.all([
-            rpc("eth_chainId"),
-            rpc("net_peerCount"),
-            rpc("web3_clientVersion"),
-            rpc("eth_getBlockByNumber", ["latest", false])
-          ]);
-          set("chain-id", `${decimal(chainId)} (${chainId})`);
-          set("peers", decimal(peerCount));
-          set("client-version", client);
-          set("block-number", block?.number ? `${decimal(block.number)} (${block.number})` : "Not Available Yet");
-          set("block-hash", block?.hash);
-          set("parent-hash", block?.parentHash);
-          set("state-root", block?.stateRoot);
-          set("block-time", blockTimestamp(block?.timestamp));
-          const count = Array.isArray(block?.transactions) ? block.transactions.length : "Not Available Yet";
+          set("chain-id", `${explorer.network.chain_id_decimal} (${explorer.network.chain_id})`);
+          set("peers", String(explorer.network.peer_count));
+          set("client-version", explorer.network.client_version);
+          set("block-number", `${head.height} (${`0x${Number(head.height).toString(16)}`})`);
+          set("block-hash", head.hash);
+          set("parent-hash", head.parent_hash);
+          set("state-root", head.state_root);
+          set("block-time", blockTimestamp(head.timestamp));
+          const count = Number.isInteger(head.transaction_count)
+            ? head.transaction_count
+            : "Not Available Yet";
           set("transactions", String(count));
           set("block-transactions", String(count));
-          set("updated-at", `Last updated ${new Date().toISOString()}`);
+          set("gateway-state", "ONLINE", "good");
+          set("gateway-latency", `Latency ${latency} ms`);
+          set("finality-live", head.signed_power === head.total_power ? "VERIFIED" : "PARTIAL", head.signed_power === head.total_power ? "good" : "warn");
+          if (previousHeight === null) {
+            set("head-movement", "BASELINE", "good");
+          } else if (head.height > previousHeight) {
+            set("head-movement", `+${head.height - previousHeight} BLOCK`, "good");
+          } else {
+            set("head-movement", "UNCHANGED", "warn");
+          }
+          previousHeight = head.height;
+          set("head-age", blockAge(head.timestamp));
+          set("sample-count", String(samples));
+          set("failure-count", `Failures ${failures}`);
+          const observedAt = explorer.observed_at || new Date().toISOString();
+          set("updated-at", `Live observation ${observedAt}`);
+          set("last-success", `Last success ${new Date().toLocaleTimeString()}`);
         } catch (error) {
+          failures += 1;
           set("network-status", "Data unavailable", "error");
+          set("live-mode", "RETRYING", "error");
           byId("status-dot").classList.remove("ready");
+          byId("status-dot").classList.remove("live");
           ["height", "quorum", "transactions", "peers"].forEach((id) => set(id, "—", "error"));
+          set("gateway-state", "RETRYING", "error");
+          set("gateway-latency", "No public response", "error");
+          set("failure-count", `Failures ${failures}`, "error");
           set("updated-at", "Live readback unavailable", "error");
+        } finally {
+          loading = false;
+          scheduleNext();
+          updateCountdown();
         }
       };
       load();
-      window.setInterval(load, 30000);
+      window.setInterval(load, REFRESH_SECONDS * 1000);
+      window.setInterval(updateCountdown, 250);
+      window.addEventListener("online", load);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") load();
+      });
     })();
   </script>
 </body>
