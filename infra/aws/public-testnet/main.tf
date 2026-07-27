@@ -388,8 +388,14 @@ resource "aws_iam_role_policy" "validator_signer_boundary" {
       {
         Sid      = "UseOnlyAssignedSigner"
         Effect   = "Allow"
-        Action   = ["kms:GetPublicKey", "kms:Sign", "kms:Verify", "kms:DescribeKey"]
+        Action   = ["kms:Sign"]
         Resource = var.validator_signer_arns[count.index]
+      },
+      {
+        Sid      = "VerifyValidatorQuorum"
+        Effect   = "Allow"
+        Action   = ["kms:GetPublicKey", "kms:Verify", "kms:DescribeKey"]
+        Resource = var.validator_signer_arns
       },
       {
         Sid      = "WriteOperationalTelemetry"
