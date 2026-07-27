@@ -99,7 +99,7 @@ write_tfvars() {
       jq -ce '
         .validator_state_volume_readback.value
         | map(.restored_snapshot) as $values
-        | if all($values[]; . == null) then null else $values end
+        | if all($values[]; . == null or . == "") then null else $values end
       ' "$outputs"
     )"
   else
