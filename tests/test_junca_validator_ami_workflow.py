@@ -149,6 +149,19 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertIn("if: always()", self.workflow)
         self.assertIn("if-no-files-found: error", self.workflow)
 
+    def test_checksum_manifest_is_portable_after_artifact_download(self):
+        self.assertEqual(
+            self.workflow.count(
+                "sha256sum junca-validator-ami-build.json > SHA256SUMS"
+            ),
+            2,
+        )
+        self.assertNotIn(
+            "sha256sum artifacts/junca-validator-ami-build.json "
+            "> artifacts/SHA256SUMS",
+            self.workflow,
+        )
+
     def test_component_verifies_installed_runtime(self):
         self.assertIn("__NODE_SHA256__", self.component)
         self.assertIn("__GENESIS_SHA256__", self.component)
