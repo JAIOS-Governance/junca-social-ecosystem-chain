@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import html
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +10,8 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+
+from .explorer_page import EXPLORER_DOCUMENT
 
 
 NOTICE = "Public Testnet / No Monetary Value"
@@ -143,6 +144,17 @@ class PublicGateway:
     def health(self) -> tuple[int, Mapping[str, Any]]:
         evidence = self._validator_health()
         healthy = evidence.get("status") == "healthy"
+        certificate = (
+            evidence.get("consensus", {}).get("last_certificate")
+            if isinstance(evidence.get("consensus"), Mapping)
+            else None
+        )
+        finalized = (
+            isinstance(certificate, Mapping)
+            and certificate.get("finality_status") == "FINALIZED"
+            and certificate.get("height") == evidence.get("head_height")
+            and certificate.get("block_hash") == evidence.get("head_hash")
+        )
         body = {
             "schema_version": "junca-public-gateway-health/v1",
             "status": "healthy" if healthy else "unhealthy",
@@ -152,6 +164,9 @@ class PublicGateway:
                 "head_hash": evidence.get("head_hash"),
             },
             "read_only": True,
+            "finalized_only": True,
+            "signed_power": certificate.get("signed_power") if finalized else None,
+            "total_power": certificate.get("total_power") if finalized else None,
             "mainnet_changed": False,
             "assets_moved": False,
             "bridge_activated": False,
@@ -175,6 +190,7 @@ class PublicGateway:
             "schema_version": "junca-public-explorer/v1",
             "notice": NOTICE,
             "finalized_only": True,
+            "read_only": True,
             "status": "ready" if finalized else "syncing",
             "head": (
                 {
@@ -196,28 +212,8 @@ class PublicGateway:
         return (200 if finalized else 503), body
 
     def explorer_html(self) -> tuple[int, str]:
-        status, evidence = self.explorer()
-        head = evidence.get("head")
-        if isinstance(head, Mapping):
-            detail = (
-                f"<dl><dt>Finalized height</dt><dd>{html.escape(str(head['height']))}</dd>"
-                f"<dt>Finalized hash</dt><dd><code>{html.escape(str(head['hash']))}</code></dd>"
-                f"<dt>Certificate</dt><dd><code>{html.escape(str(head['certificate_hash']))}</code></dd>"
-                f"<dt>Quorum</dt><dd>{html.escape(str(head['signed_power']))}/"
-                f"{html.escape(str(head['total_power']))}</dd></dl>"
-            )
-        else:
-            detail = "<p>Finalized chain data is synchronizing.</p>"
-        document = (
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            "<title>JUNCA Public Testnet Explorer</title></head><body>"
-            "<main><h1>JUNCA Social Ecosystem Chain</h1>"
-            f"<p>{html.escape(NOTICE)}</p>{detail}"
-            "<p>Finalized blocks only. Mainnet and asset movement are not active.</p>"
-            "</main></body></html>"
-        )
-        return status, document
+        status, _evidence = self.explorer()
+        return status, EXPLORER_DOCUMENT
 
     def _validator_health(self) -> Mapping[str, Any]:
         response = self._transport(
@@ -301,6 +297,19 @@ def make_handler(gateway: PublicGateway) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Permissions-Policy",
+                "camera=(), microphone=(), geolocation=(), payment=()",
+            )
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; base-uri 'none'; form-action 'none'; "
+                "frame-ancestors 'none'; img-src 'self' data:; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; connect-src 'self'",
+            )
             self.end_headers()
             self.wfile.write(body)
 
