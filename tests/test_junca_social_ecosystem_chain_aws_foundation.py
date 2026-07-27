@@ -71,6 +71,12 @@ def ssm_online_function(script: str) -> str:
     )[0].join(("wait_for_ssm_online() {", "\n}"))
 
 
+def rollback_snapshot_function(script: str) -> str:
+    return script.split("verify_rollback_snapshots() {", 1)[1].split(
+        "\n}\n\nwait_for_ssm_command()", 1
+    )[0].join(("verify_rollback_snapshots() {", "\n}"))
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -1257,6 +1263,8 @@ class AwsFoundationTests(unittest.TestCase):
             ".candidate.provenance_head_sha // .head_sha",
             "write_live_rollout_prefix_readback",
             "live-prefix-volume-$((index + 1)).json",
+            "live-prefix-rollback-snapshots.json",
+            "verify_rollback_snapshots",
             ".[0].VolumeId == $volume_id",
             "rollback: $rollback[0]",
             'jq -er \'.live_updated_count\' '
@@ -1281,7 +1289,11 @@ class AwsFoundationTests(unittest.TestCase):
         rollback_floor = self.foundation_script.index(
             "--slurpfile rollback", live_readback_definition
         )
+        snapshot_readback = self.foundation_script.index(
+            "verify_rollback_snapshots \\", live_readback_definition
+        )
         self.assertLess(volume_readback, first_mutation)
+        self.assertLess(snapshot_readback, first_mutation)
         self.assertLess(rollback_floor, first_mutation)
 
     def test_post_apply_failures_are_checkpointed_and_ssm_errors_retry(self) -> None:
@@ -1370,6 +1382,80 @@ class AwsFoundationTests(unittest.TestCase):
                 evidence["attempts"][0]["stderr"],
             )
             self.assertEqual(evidence["attempts"][1]["cli_exit"], 0)
+
+    def test_pre_mutation_snapshot_readback_rejects_aws_drift(self) -> None:
+        state = [
+            {"rollback_snapshot_id": f"snap-{index:017x}"}
+            for index in range(1, 4)
+        ]
+        snapshots = [
+            {
+                "SnapshotId": item["rollback_snapshot_id"],
+                "State": "completed",
+                "Encrypted": True,
+                "OwnerId": "595710543956",
+            }
+            for item in state
+        ]
+
+        def execute(response: dict) -> subprocess.CompletedProcess:
+            with tempfile.TemporaryDirectory() as directory:
+                return subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        "set -euo pipefail\n"
+                        + rollback_snapshot_function(self.foundation_script)
+                        + textwrap.dedent(
+                            """
+                            aws() { printf '%s\\n' "$SNAPSHOT_RESPONSE"; }
+                            verify_rollback_snapshots "$1" "$2"
+                            """
+                        ),
+                        "snapshot-readback-test",
+                        json.dumps(state),
+                        str(pathlib.Path(directory) / "snapshots.json"),
+                    ],
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "AWS_ACCOUNT_ID": "595710543956",
+                        "SNAPSHOT_RESPONSE": json.dumps(response),
+                    },
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+        accepted = execute({"Snapshots": snapshots})
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        invalid = []
+        for field, value in (
+            ("State", "pending"),
+            ("Encrypted", False),
+            ("OwnerId", "000000000000"),
+        ):
+            changed = json.loads(json.dumps(snapshots))
+            changed[0][field] = value
+            invalid.append({"Snapshots": changed})
+        invalid.extend(
+            (
+                {"Snapshots": snapshots[:2]},
+                {
+                    "Snapshots": snapshots[:2]
+                    + [
+                        {
+                            **snapshots[2],
+                            "SnapshotId": "snap-0000000000000000f",
+                        }
+                    ]
+                },
+            )
+        )
+        for response in invalid:
+            with self.subTest(response=response):
+                rejected = execute(response)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
 
     def test_resume_reuses_one_bound_unexpired_slot_epoch(self) -> None:
         for required in (
