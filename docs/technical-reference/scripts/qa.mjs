@@ -45,7 +45,8 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260727-r28"',
+    'src="/junca-chain-official-wordmark.png?v=20260727-r29"',
+    'src="/official-brand-lockup-r29.js?v=20260727-r29"',
     'alt="JUNCA"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
@@ -71,7 +72,7 @@ for (const required of [
   "AWS Runtime",
   "Runtime Acceptance Pending",
   "Assets Moved",
-  "Revision · 2026.07.27 / R28",
+  "Revision · 2026.07.27 / R29",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -141,7 +142,7 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R28") failures.push("release manifest revision must be R28");
+if (releaseManifest.revision !== "R29") failures.push("release manifest revision must be R29");
 if (releaseManifest.runtime_status !== "PENDING") failures.push("release manifest runtime acceptance must remain pending");
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
@@ -170,6 +171,15 @@ const officialWordmark = await readFile(join(dist, "junca-chain-official-wordmar
 const officialWordmarkDigest = createHash("sha256").update(officialWordmark).digest("hex");
 if (officialWordmarkDigest !== "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c89226e086049728ac") {
   failures.push("official flattened JUNCA wordmark digest mismatch");
+}
+const brandRuntime = await readFile(join(dist, "official-brand-lockup-r29.js"), "utf8");
+for (const required of [
+  "data-official-junca-wordmark",
+  "MutationObserver",
+  ".official-product-name",
+  ".footer-brand-lockup",
+]) {
+  if (!brandRuntime.includes(required)) failures.push(`official brand hydration guard missing ${required}`);
 }
 if (!home.includes('class="official-product-name"')) failures.push("/: official product-name lockup missing");
 if (!home.includes('class="official-brand-lockup"')) failures.push("/: documentation brand lockup missing");
