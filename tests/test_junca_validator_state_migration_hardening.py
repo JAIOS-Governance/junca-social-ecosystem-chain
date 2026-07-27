@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -16,7 +20,122 @@ WORKFLOW = (
 ).read_text(encoding="utf-8")
 
 
+def extract_controller_function(name: str) -> str:
+    lines = CONTROLLER.splitlines(keepends=True)
+    start = lines.index(f"{name}() {{\n")
+    for end in range(start + 1, len(lines)):
+        if lines[end] == "}\n":
+            return "".join(lines[start : end + 1])
+    raise AssertionError(f"unterminated shell function: {name}")
+
+
 class ValidatorStateMigrationHardeningTests(unittest.TestCase):
+    @staticmethod
+    def attachment_readback(tags: list[dict[str, str]]) -> dict[str, object]:
+        return {
+            "Volumes": [
+                {
+                    "VolumeId": "vol-0123456789abcdef0",
+                    "AvailabilityZone": "us-east-1a",
+                    "Encrypted": True,
+                    "VolumeType": "gp3",
+                    "Size": 200,
+                    "Iops": 6000,
+                    "Throughput": 250,
+                    "Tags": tags,
+                }
+            ]
+        }
+
+    def run_attachment_readback(
+        self,
+        tags: list[dict[str, str]],
+    ) -> subprocess.CompletedProcess[str]:
+        with TemporaryDirectory() as temporary:
+            readback = Path(temporary) / "volume.json"
+            readback.write_text(
+                json.dumps(self.attachment_readback(tags)),
+                encoding="utf-8",
+            )
+            program = (
+                "set -euo pipefail\n"
+                + extract_controller_function(
+                    "validate_state_volume_attachment_readback"
+                )
+                + 'validate_state_volume_attachment_readback "$1" '
+                + '"vol-0123456789abcdef0" "us-east-1a"\n'
+            )
+            return subprocess.run(
+                ["bash", "-c", program, "attachment-readback", str(readback)],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+    def test_attachment_readback_accepts_only_pending_or_verified_state(
+        self,
+    ) -> None:
+        base_tags = [
+            {"Key": "StatePath", "Value": "/var/lib/junca"},
+            {"Key": "PublicTestnetOnly", "Value": "true"},
+        ]
+        pending = [
+            *base_tags,
+            {"Key": "MigrationRequired", "Value": "true"},
+        ]
+        accepted = [
+            *base_tags,
+            {"Key": "MigrationRequired", "Value": "false"},
+            {"Key": "JuncaMigrationState", "Value": "VERIFIED_PASS"},
+            {"Key": "JuncaFilesystemVerified", "Value": "true"},
+            {"Key": "JuncaStateStoreIntegrity", "Value": "true"},
+            {
+                "Key": "JuncaFinalityCertificateBackfilled",
+                "Value": "true",
+            },
+            {
+                "Key": "JuncaRollbackSnapshotId",
+                "Value": "snap-0123456789abcdef0",
+            },
+        ]
+        self.assertEqual(self.run_attachment_readback(pending).returncode, 0)
+        self.assertEqual(self.run_attachment_readback(accepted).returncode, 0)
+
+        rejected = [
+            [
+                *pending,
+                {"Key": "JuncaMigrationState", "Value": "VERIFIED_PASS"},
+            ],
+            [
+                *pending,
+                {"Key": "JuncaFilesystemVerified", "Value": "true"},
+            ],
+            [
+                tag
+                for tag in accepted
+                if tag["Key"] != "JuncaStateStoreIntegrity"
+            ],
+            [
+                {
+                    **tag,
+                    "Value": "snapshot-not-canonical",
+                }
+                if tag["Key"] == "JuncaRollbackSnapshotId"
+                else tag
+                for tag in accepted
+            ],
+            [
+                *accepted,
+                {"Key": "JuncaMigrationState", "Value": "VERIFIED_PASS"},
+            ],
+        ]
+        for tags in rejected:
+            with self.subTest(tags=tags):
+                self.assertNotEqual(
+                    self.run_attachment_readback(copy.deepcopy(tags)).returncode,
+                    0,
+                )
+
     def test_evidence_array_lengths_are_parenthesized_before_boolean_gates(
         self,
     ) -> None:
