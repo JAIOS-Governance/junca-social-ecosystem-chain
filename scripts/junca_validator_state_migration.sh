@@ -9,6 +9,7 @@ LOCK_TABLE_NAME="${LOCK_TABLE_NAME:-junca-social-ecosystem-chain-testnet-lock}"
 DEPLOYMENT_ROLE_ARN="${DEPLOYMENT_ROLE_ARN:-arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment}"
 DOMAIN_NAME="${DOMAIN_NAME:-jaios-governance.org}"
 ROUTE53_ZONE_ID="${ROUTE53_ZONE_ID:-Z0336017285464TX0NT1G}"
+EXPECTED_GENESIS_HASH="${EXPECTED_GENESIS_HASH:-0xdc8200c498d28d23ec834fde6559d5b14f0b05a4ed5178c4b90642310b8660a6}"
 MIGRATION_AUTHORIZATION="${MIGRATION_AUTHORIZATION:-}"
 MIGRATION_REQUEST_SHA256="${MIGRATION_REQUEST_SHA256:-}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
@@ -24,6 +25,8 @@ test "$STATE_BUCKET_NAME" = \
 test "$LOCK_TABLE_NAME" = "junca-social-ecosystem-chain-testnet-lock"
 test "$DEPLOYMENT_ROLE_ARN" = \
   "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment"
+test "$EXPECTED_GENESIS_HASH" = \
+  "0xdc8200c498d28d23ec834fde6559d5b14f0b05a4ed5178c4b90642310b8660a6"
 test "$MIGRATION_AUTHORIZATION" = \
   "PUBLIC_TESTNET_VALIDATOR_STATE_MIGRATION"
 [[ "$MIGRATION_REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -38,9 +41,13 @@ test "$(aws sts get-caller-identity --query Account --output text)" = \
 
 artifact_dir="${GITHUB_WORKSPACE:-$PWD}/artifacts/validator-state-migration"
 mkdir -p "$artifact_dir/readback" "$artifact_dir/ssm"
+backfill_request_path="$artifact_dir/finality-certificate-backfill-request.json"
+backfill_request_sha256=""
 runtime_dir=infra/aws/public-testnet
 node_script=scripts/junca_migrate_validator_state_node.sh
+backfill_script=scripts/junca_finality_certificate_backfill.py
 test -f "$node_script"
+test -f "$backfill_script"
 github_event_sha256="$(sha256sum "$GITHUB_EVENT_PATH" | cut -d' ' -f1)"
 [[ "$github_event_sha256" =~ ^[0-9a-f]{64}$ ]]
 
@@ -559,9 +566,14 @@ run_node_phase() {
     local signer_arn="$3"
     local phase="$4"
     local output_path="$5"
-    local encoded command request_sha256 command_id wait_status submission_path
-    encoded="$(base64 -w0 "$node_script")"
-    command="printf '%s' '$encoded' | base64 -d > /tmp/junca-migrate-validator-state; chmod 0750 /tmp/junca-migrate-validator-state; JUNCA_STATE_VOLUME_ID='$volume_id' JUNCA_EXPECTED_SIGNER_ARN='$signer_arn' JUNCA_MIGRATION_TOKEN='$migration_token' JUNCA_MIGRATION_PHASE='$phase' /tmp/junca-migrate-validator-state"
+    local encoded backfill_encoded backfill_request_encoded
+    local command request_sha256 command_id wait_status submission_path
+    encoded="$(gzip -c "$node_script" | base64 -w0)"
+    backfill_encoded="$(gzip -c "$backfill_script" | base64 -w0)"
+    backfill_request_encoded="$(
+      gzip -c "$backfill_request_path" | base64 -w0
+    )"
+    command="printf '%s' '$encoded' | base64 -d | gzip -d > /tmp/junca-migrate-validator-state; printf '%s' '$backfill_encoded' | base64 -d | gzip -d > /tmp/junca-finality-certificate-backfill.py; printf '%s' '$backfill_request_encoded' | base64 -d | gzip -d > /tmp/junca-finality-certificate-backfill-request.json; chmod 0750 /tmp/junca-migrate-validator-state /tmp/junca-finality-certificate-backfill.py; JUNCA_STATE_VOLUME_ID='$volume_id' JUNCA_EXPECTED_SIGNER_ARN='$signer_arn' JUNCA_MIGRATION_TOKEN='$migration_token' JUNCA_MIGRATION_PHASE='$phase' JUNCA_FINALITY_BACKFILL_TOOL=/tmp/junca-finality-certificate-backfill.py JUNCA_FINALITY_BACKFILL_REQUEST=/tmp/junca-finality-certificate-backfill-request.json JUNCA_FINALITY_BACKFILL_REQUEST_SHA256='$backfill_request_sha256' /tmp/junca-migrate-validator-state"
     jq -n --arg command "$command" '{commands: [$command]}' \
       >"$artifact_dir/ssm/request-${instance_id}-${phase}.json"
     request_sha256="$(
@@ -592,6 +604,7 @@ run_node_phase() {
       --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
       --arg head_sha "$GITHUB_SHA" \
       --arg migration_request_sha256 "$MIGRATION_REQUEST_SHA256" \
+      --arg finality_backfill_request_sha256 "$backfill_request_sha256" \
       --arg github_event_sha256 "$github_event_sha256" '{
         command_id: $command_id,
         instance_id: $instance_id,
@@ -604,6 +617,8 @@ run_node_phase() {
         run_attempt: $run_attempt,
         head_sha: $head_sha,
         migration_request_sha256: $migration_request_sha256,
+        finality_backfill_request_sha256:
+          $finality_backfill_request_sha256,
         github_event_sha256: $github_event_sha256
       }' >"$submission_path"
     active_command_id="$command_id"
@@ -652,6 +667,9 @@ record_validator_evidence() {
     --arg rollback_snapshot_id "$snapshot_id" \
     --arg root_volume_id "$root_volume_id" \
     --arg disposition "$disposition" \
+    --arg finality_backfill_request_sha256 "$backfill_request_sha256" \
+    --arg certificate_hash \
+      "$(jq -er '.certificate_hash' "$backfill_request_path")" \
     --slurpfile invocation "$invocation_path" \
     --slurpfile binding "$binding_path" '
     ($invocation[0].StandardOutputContent | fromjson) as $result
@@ -661,9 +679,11 @@ record_validator_evidence() {
         $binding | length == 1 and
         $request.instance_id == $instance_id and
         $request.state_volume_id == $state_volume_id and
+        $request.finality_backfill_request_sha256 ==
+          $finality_backfill_request_sha256 and
         $result.volume_id == $state_volume_id and
-        ($result.state == "VERIFIED_PASS" or
-         $result.state == "ALREADY_MIGRATED")
+        $result.certificate_hash == $certificate_hash and
+        $result.state == "VERIFIED_PASS"
       )
       then {
         validator_id: $validator_id,
@@ -706,47 +726,47 @@ read_snapshot_root_volume() {
   printf '%s\n' "$root_volume_id"
 }
 
-require_peer_health() {
-  excluded="$1"
-  checkpoint="$2"
-  [[ "$checkpoint" =~ ^[a-z0-9-]+$ ]]
-  invocation_paths=()
+capture_peer_health_set() {
+  local checkpoint="$1"
+  local output_path="$2"
+  local peer request invocation command_id
+  local -a invocation_paths=()
+  [[ "$checkpoint" =~ ^[a-z0-9-]+$ ]] || return 1
   for peer in "${instances[@]}"; do
-    [[ "$peer" == "$excluded" ]] && continue
-    request="$artifact_dir/ssm/health-${checkpoint}-${peer}.json"
-    invocation="$artifact_dir/ssm/health-${checkpoint}-${peer}-invocation.json"
-    jq -n '{
+    request="$artifact_dir/ssm/health-set-${checkpoint}-${peer}.json"
+    invocation="$artifact_dir/ssm/health-set-${checkpoint}-${peer}-invocation.json"
+    if ! jq -n '{
       commands: [
         "set -euo pipefail",
         "curl -fsS http://127.0.0.1:8545/health",
         "systemctl is-active --quiet junca-validator"
       ]
-    }' >"$request"
-    command_id="$(
+    }' >"$request"; then
+      return 1
+    fi
+    if ! command_id="$(
       aws ssm send-command --instance-ids "$peer" \
         --document-name AWS-RunShellScript \
         --parameters "file://$request" \
-        --comment "JUNCA migration peer quorum readback ${checkpoint}" \
+        --comment "JUNCA exact runtime health readback ${checkpoint}" \
         --timeout-seconds 300 \
         --query Command.CommandId --output text
-    )"
-    wait_ssm_command "$command_id" "$peer" 30
-    aws ssm get-command-invocation \
-      --command-id "$command_id" --instance-id "$peer" >"$invocation"
-    jq -e '.Status == "Success"' "$invocation" >/dev/null
+    )"; then
+      return 1
+    fi
+    if ! wait_ssm_command "$command_id" "$peer" 30; then
+      return 1
+    fi
+    if ! aws ssm get-command-invocation \
+      --command-id "$command_id" --instance-id "$peer" >"$invocation"; then
+      return 1
+    fi
+    if ! jq -e '.Status == "Success"' "$invocation" >/dev/null; then
+      return 1
+    fi
     invocation_paths+=("$invocation")
   done
-  expected_peer_count=3
-  [[ -n "$excluded" ]] && expected_peer_count=2
-  checkpoint_path="$artifact_dir/readback/quorum-${checkpoint}.json"
-  jq -s \
-    --arg checkpoint "$checkpoint" \
-    --arg excluded "$excluded" \
-    --argjson expected_peer_count "$expected_peer_count" \
-    --argjson previous_height "$last_quorum_height" \
-    --arg previous_hash "$last_quorum_hash" \
-    --arg previous_certificate "$last_quorum_certificate" \
-    --argjson health_bindings "$health_bindings" '
+  if ! jq -s '
     map({
       instance_id: .InstanceId,
       command_id: .CommandId,
@@ -755,28 +775,161 @@ require_peer_health() {
         | sub("[\r\n]+$"; "")
         | fromjson
       )
-    }) as $peers
-    | ($peers | map(.health.head_height) | unique) as $heights
-    | ($peers | map(.health.head_hash) | unique) as $hashes
+    })
+  ' "${invocation_paths[@]}" >"$output_path"; then
+    return 1
+  fi
+  return 0
+}
+
+capture_peer_state_heads() {
+  local checkpoint="$1"
+  local output_path="$2"
+  local peer request invocation command_id state_read_command
+  local -a invocation_paths=()
+  [[ "$checkpoint" =~ ^[a-z0-9-]+$ ]] || return 1
+  state_read_command="python3 -c 'import json,sqlite3; db=sqlite3.connect(\"file:/var/lib/junca/state.sqlite?mode=ro\",uri=True); db.row_factory=sqlite3.Row; check=db.execute(\"PRAGMA quick_check\").fetchone()[0]; row=db.execute(\"SELECT height,block_hash,parent_hash,state_root,base_fee_per_gas,gas_used,finalized,certificate_hash FROM blocks ORDER BY height DESC LIMIT 1\").fetchone(); table=db.execute(\"SELECT 1 FROM sqlite_master WHERE type=\\\"table\\\" AND name=\\\"finality_certificates\\\"\").fetchone(); cert=None if table is None else db.execute(\"SELECT certificate_json FROM finality_certificates WHERE height=?\",(row[\"height\"],)).fetchone(); print(json.dumps({\"quick_check\":check,\"head\":dict(row),\"certificate\":None if cert is None else json.loads(cert[\"certificate_json\"])},sort_keys=True,separators=(\",\",\":\")))'"
+  for peer in "${instances[@]}"; do
+    request="$artifact_dir/ssm/state-head-${checkpoint}-${peer}.json"
+    invocation="$artifact_dir/ssm/state-head-${checkpoint}-${peer}-invocation.json"
+    if ! jq -n --arg command "$state_read_command" '{
+      commands: [
+        "set -euo pipefail",
+        $command
+      ]
+    }' >"$request"; then
+      return 1
+    fi
+    if ! command_id="$(
+      aws ssm send-command --instance-ids "$peer" \
+        --document-name AWS-RunShellScript \
+        --parameters "file://$request" \
+        --comment "JUNCA read-only durable state head ${checkpoint}" \
+        --timeout-seconds 300 \
+        --query Command.CommandId --output text
+    )"; then
+      return 1
+    fi
+    if ! wait_ssm_command "$command_id" "$peer" 30; then
+      return 1
+    fi
+    if ! aws ssm get-command-invocation \
+      --command-id "$command_id" --instance-id "$peer" >"$invocation"; then
+      return 1
+    fi
+    if ! jq -e '.Status == "Success"' "$invocation" >/dev/null; then
+      return 1
+    fi
+    invocation_paths+=("$invocation")
+  done
+  if ! jq -s '
+    map({
+      instance_id: .InstanceId,
+      command_id: .CommandId,
+      state: (
+        .StandardOutputContent
+        | sub("[\r\n]+$"; "")
+        | fromjson
+      )
+    })
+  ' "${invocation_paths[@]}" >"$output_path"; then
+    return 1
+  fi
+  return 0
+}
+
+prepare_finality_backfill_request() {
+  local health_path state_path
+  jq -e '
+    .automatic_finality_readback.value.enabled == false and
+    .runtime_boundary.value.mainnet_changed == false and
+    .runtime_boundary.value.assets_moved == false and
+    .runtime_boundary.value.bridge_activated == false
+  ' "$outputs" >/dev/null
+  health_path="$artifact_dir/readback/finality-backfill-source-health.json"
+  state_path="$artifact_dir/readback/finality-backfill-source-state.json"
+  capture_peer_health_set "finality-backfill-source" "$health_path"
+  capture_peer_state_heads "finality-backfill-source" "$state_path"
+  jq -n -e \
+    --arg expected_genesis_hash "$EXPECTED_GENESIS_HASH" \
+    --argjson health_bindings "$health_bindings" \
+    --slurpfile health "$health_path" \
+    --slurpfile states "$state_path" '
+    ($health[0]) as $peers
+    | ($states[0]) as $durable
     | (
-        $peers
-        | map(.health.consensus.last_certificate_hash)
+        [
+          $peers[]
+          | select(.health.consensus.last_certificate != null)
+          | {
+              instance_id,
+              validator_id: .health.validator_id,
+              head_height: .health.head_height,
+              head_hash: .health.head_hash,
+              certificate_hash:
+                .health.consensus.last_certificate_hash,
+              certificate: .health.consensus.last_certificate
+            }
+        ] + [
+          $durable[]
+          | select(.state.certificate != null)
+          | . as $state
+          | (
+              $health_bindings[]
+              | select(.instance_id == $state.instance_id)
+            ) as $binding
+          | {
+              instance_id,
+              validator_id: $binding.validator_id,
+              head_height: .state.head.height,
+              head_hash: .state.head.block_hash,
+              certificate_hash: .state.head.certificate_hash,
+              certificate: .state.certificate
+            }
+        ]
+        | sort_by(.instance_id)
+        | group_by(.instance_id)
+        | map(
+            if (map(.certificate | tojson) | unique | length) == 1
+            then .[0]
+            else error("certificate sources disagree for one validator")
+            end
+          )
+      ) as $observations
+    | (
+        $observations
+        | map(.certificate | tojson)
         | unique
-      ) as $certificates
+      ) as $certificate_bodies
+    | (
+        $observations
+        | map(.certificate_hash)
+        | unique
+      ) as $certificate_hashes
+    | (
+        $observations
+        | map(.head_height)
+        | unique
+      ) as $heights
+    | (
+        $observations
+        | map(.head_hash)
+        | unique
+      ) as $head_hashes
     | if (
-        ($peers | length) == $expected_peer_count and
-        ($peers | map(.instance_id) | unique | length) ==
-          $expected_peer_count and
-        all(
-          $peers[];
-          .instance_id as $peer_instance
-          | any(
-              $health_bindings[];
-              .instance_id == $peer_instance
-            )
-        ) and
-        ($peers | map(.health.validator_id) | unique | length) ==
-          $expected_peer_count and
+        ($peers | length) == 3 and
+        ($durable | length) == 3 and
+        ($peers | map(.instance_id) | sort) ==
+          ($health_bindings | map(.instance_id) | sort) and
+        ($durable | map(.instance_id) | sort) ==
+          ($health_bindings | map(.instance_id) | sort) and
+        ($observations | length) >= 2 and
+        ($observations | map(.instance_id) | unique | length) >= 2 and
+        ($observations | map(.validator_id) | unique | length) >= 2 and
+        ($certificate_bodies | length) == 1 and
+        ($certificate_hashes | length) == 1 and
+        ($heights | length) == 1 and
+        ($head_hashes | length) == 1 and
         all(
           $peers[];
           . as $peer
@@ -786,67 +939,236 @@ require_peer_health() {
             ) as $binding
           | $peer.health.status == "healthy" and
             $peer.health.network == "Public Testnet / No Monetary Value" and
+            $peer.health.chain_id == 20260723 and
+            $peer.health.genesis_hash == $expected_genesis_hash and
             $peer.health.validator_id == $binding.validator_id and
             $peer.health.signer_resource_digest ==
               $binding.signer_resource_digest and
             $peer.health.private_key_material_accepted == false and
+            $peer.health.head_height == $heights[0] and
+            $peer.health.head_hash == $head_hashes[0] and
+            $peer.health.consensus.chain_id == 20260723 and
+            $peer.health.consensus.pending_height == null and
+            $peer.health.consensus.required_vote_count == 3 and
+            $peer.health.consensus.quorum_rule ==
+              "strictly-greater-than-two-thirds" and
+            $peer.health.consensus.private_key_material_accepted == false and
+            $peer.health.consensus.mainnet_changed == false and
+            $peer.health.consensus.assets_moved == false and
+            $peer.health.consensus.bridge_activated == false and
+            (
+              $peer.health.consensus.signer_bindings
+              | map({
+                  validator_id,
+                  kms_resource_digest
+                })
+              | sort_by(.validator_id)
+            ) == (
+              $health_bindings
+              | map({
+                  validator_id,
+                  kms_resource_digest: .signer_resource_digest
+                })
+              | sort_by(.validator_id)
+            ) and
+            (
+              (
+                $peer.health.consensus.last_certificate == null and
+                $peer.health.consensus.last_certificate_hash == null and
+                $peer.health.consensus.authenticated_vote_count == 0
+              ) or (
+                ($peer.health.consensus.last_certificate | tojson) ==
+                  $certificate_bodies[0] and
+                $peer.health.consensus.last_certificate_hash ==
+                  $certificate_hashes[0] and
+                $peer.health.consensus.authenticated_vote_count == 3
+              )
+            ) and
             $peer.health.mainnet_changed == false and
             $peer.health.assets_moved == false and
-            $peer.health.bridge_activated == false and
-            ($peer.health.head_height | type) == "number" and
-            ($peer.health.head_height | floor) ==
-              $peer.health.head_height and
-            $peer.health.head_height >= 0 and
-            ($peer.health.head_hash | test("^0x[0-9a-f]{64}$")) and
-            ($peer.health.consensus.last_certificate_hash |
-              test("^0x[0-9a-f]{64}$")) and
-            $peer.health.consensus.last_certificate.finality_status ==
-              "FINALIZED" and
-            $peer.health.consensus.last_certificate.signed_power == 3 and
-            $peer.health.consensus.last_certificate.total_power == 3 and
-            $peer.health.consensus.last_certificate.validator_ids == [
-              "validator-01",
-              "validator-02",
-              "validator-03"
-            ] and
-            $peer.health.consensus.last_certificate.mainnet_changed ==
-              false and
-            $peer.health.consensus.last_certificate.assets_moved == false and
-            $peer.health.consensus.last_certificate.bridge_activated ==
-              false and
-            $peer.health.consensus.last_certificate.height ==
-              $peer.health.head_height and
-            $peer.health.consensus.last_certificate.block_hash ==
-              $peer.health.head_hash
+            $peer.health.bridge_activated == false
         ) and
-        ($heights | length) == 1 and
-        ($hashes | length) == 1 and
-        ($certificates | length) == 1 and
-        $heights[0] >= $previous_height and
-        (
-          $previous_height < 0 or
-          $heights[0] > $previous_height or
+        all(
+          $durable[];
+          .state.quick_check == "ok" and
+          .state.head.height == $heights[0] and
+          .state.head.block_hash == $head_hashes[0] and
+          .state.head.finalized == 1 and
+          .state.head.certificate_hash == $certificate_hashes[0] and
           (
-            $hashes[0] == $previous_hash and
-            $certificates[0] == $previous_certificate
+            .state.certificate == null or
+            (.state.certificate | tojson) == $certificate_bodies[0]
+          )
+        )
+      )
+      then {
+        schema_version:
+          "junca-finality-certificate-backfill-request/v1",
+        network: "Public Testnet / No Monetary Value",
+        chain_id: 20260723,
+        head_height: $heights[0],
+        head_hash: $head_hashes[0],
+        certificate_hash: $certificate_hashes[0],
+        certificate: ($certificate_bodies[0] | fromjson),
+        corroborating_observations: $observations,
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }
+      else error("durable finality backfill evidence is insufficient")
+      end
+  ' >"$backfill_request_path"
+  python3 - "$backfill_script" "$backfill_request_path" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("junca_backfill", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load certificate backfill validator")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.load_request(Path(sys.argv[2]))
+PY
+  backfill_request_sha256="$(
+    python3 - "$backfill_request_path" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    value = json.load(source)
+canonical = json.dumps(
+    value,
+    sort_keys=True,
+    separators=(",", ":"),
+    allow_nan=False,
+).encode("utf-8")
+print(hashlib.sha256(canonical).hexdigest())
+PY
+  )"
+  [[ "$backfill_request_sha256" =~ ^[0-9a-f]{64}$ ]]
+}
+
+require_migration_continuity() {
+  local checkpoint="$1"
+  local health_path state_path checkpoint_path
+  health_path="$artifact_dir/readback/continuity-${checkpoint}-health.json"
+  state_path="$artifact_dir/readback/continuity-${checkpoint}-state.json"
+  checkpoint_path="$artifact_dir/readback/quorum-${checkpoint}.json"
+  capture_peer_health_set "continuity-${checkpoint}" "$health_path"
+  capture_peer_state_heads "continuity-${checkpoint}" "$state_path"
+  jq -n -e \
+    --arg checkpoint "$checkpoint" \
+    --arg expected_genesis_hash "$EXPECTED_GENESIS_HASH" \
+    --argjson health_bindings "$health_bindings" \
+    --slurpfile request "$backfill_request_path" \
+    --slurpfile health "$health_path" \
+    --slurpfile states "$state_path" '
+    ($request[0]) as $expected
+    | ($health[0]) as $peers
+    | ($states[0]) as $durable
+    | if (
+        ($peers | length) == 3 and
+        ($durable | length) == 3 and
+        ($peers | map(.instance_id) | sort) ==
+          ($health_bindings | map(.instance_id) | sort) and
+        ($durable | map(.instance_id) | sort) ==
+          ($health_bindings | map(.instance_id) | sort) and
+        all(
+          $peers[];
+          . as $peer
+          | (
+              $health_bindings[]
+              | select(.instance_id == $peer.instance_id)
+            ) as $binding
+          | $peer.health.status == "healthy" and
+            $peer.health.network == "Public Testnet / No Monetary Value" and
+            $peer.health.chain_id == 20260723 and
+            $peer.health.genesis_hash == $expected_genesis_hash and
+            $peer.health.validator_id == $binding.validator_id and
+            $peer.health.signer_resource_digest ==
+              $binding.signer_resource_digest and
+            $peer.health.private_key_material_accepted == false and
+            $peer.health.head_height == $expected.head_height and
+            $peer.health.head_hash == $expected.head_hash and
+            $peer.health.consensus.chain_id == 20260723 and
+            $peer.health.consensus.pending_height == null and
+            $peer.health.consensus.required_vote_count == 3 and
+            $peer.health.consensus.quorum_rule ==
+              "strictly-greater-than-two-thirds" and
+            $peer.health.consensus.private_key_material_accepted == false and
+            $peer.health.consensus.mainnet_changed == false and
+            $peer.health.consensus.assets_moved == false and
+            $peer.health.consensus.bridge_activated == false and
+            (
+              $peer.health.consensus.signer_bindings
+              | map({
+                  validator_id,
+                  kms_resource_digest
+                })
+              | sort_by(.validator_id)
+            ) == (
+              $health_bindings
+              | map({
+                  validator_id,
+                  kms_resource_digest: .signer_resource_digest
+                })
+              | sort_by(.validator_id)
+            ) and
+            (
+              (
+                $peer.health.consensus.last_certificate == null and
+                $peer.health.consensus.last_certificate_hash == null and
+                $peer.health.consensus.authenticated_vote_count == 0
+              ) or (
+                $peer.health.consensus.last_certificate ==
+                  $expected.certificate and
+                $peer.health.consensus.last_certificate_hash ==
+                  $expected.certificate_hash and
+                $peer.health.consensus.authenticated_vote_count == 3
+              )
+            ) and
+            $peer.health.mainnet_changed == false and
+            $peer.health.assets_moved == false and
+            $peer.health.bridge_activated == false
+        ) and
+        all(
+          $durable[];
+          .state.quick_check == "ok" and
+          .state.head.height == $expected.head_height and
+          .state.head.block_hash == $expected.head_hash and
+          .state.head.finalized == 1 and
+          .state.head.certificate_hash == $expected.certificate_hash and
+          (
+            .state.certificate == null or
+            .state.certificate == $expected.certificate
           )
         )
       )
       then {
         checkpoint: $checkpoint,
-        excluded_instance_id: (
-          if $excluded == "" then null else $excluded end
+        peer_count: 3,
+        quorum: "durable-certificate-3/3",
+        head_height: $expected.head_height,
+        head_hash: $expected.head_hash,
+        certificate_hash: $expected.certificate_hash,
+        certificate_backfilled_instance_ids: (
+          [
+            $durable[]
+            | select(.state.certificate == $expected.certificate)
+            | .instance_id
+          ] | sort
         ),
-        peer_count: ($peers | length),
-        quorum: "3/3",
-        head_height: $heights[0],
-        head_hash: $hashes[0],
-        certificate_hash: $certificates[0],
-        peers: $peers
+        peers: $peers,
+        durable_state: $durable,
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
       }
-      else error("validator quorum/finality continuity check failed")
+      else error("durable migration continuity check failed")
       end
-  ' "${invocation_paths[@]}" >"$checkpoint_path"
+  ' >"$checkpoint_path"
   jq -c . "$checkpoint_path" >>"$quorum_evidence_jsonl"
   last_quorum_height="$(jq -er '.head_height' "$checkpoint_path")"
   last_quorum_hash="$(jq -er '.head_hash' "$checkpoint_path")"
@@ -882,7 +1204,10 @@ restart_on_controller_error() {
   exit "$controller_status"
 }
 
+prepare_finality_backfill_request
+
 if [[ "$already_accepted" == true ]]; then
+  require_migration_continuity "accepted-start"
   mapfile -t rollback_snapshots < <(
     jq -er '.validator_state_volume_readback.value[].rollback_snapshot_id' \
       "$outputs"
@@ -909,12 +1234,13 @@ if [[ "$already_accepted" == true ]]; then
       "$artifact_dir/ssm/verify-${validator_index}.json" \
       "$last_node_binding" \
       accepted-rerun
-    require_peer_health "" "accepted-verify-${validator_index}"
+    require_migration_continuity "accepted-verify-${validator_index}"
   done
 else
   trap 'restart_on_controller_error "$?"' ERR EXIT
   trap 'restart_on_controller_error 130' INT
   trap 'restart_on_controller_error 143' TERM
+  require_migration_continuity "migration-start"
 
   for validator_index in 0 1 2; do
     instance_id="${instances[$validator_index]}"
@@ -962,7 +1288,7 @@ else
           .JuncaMigrationState == "VERIFIED_PASS" and
           .JuncaFilesystemVerified == "true" and
           .JuncaStateStoreIntegrity == "true" and
-          .JuncaFinalityCertificateRecovered == "true"
+          .JuncaFinalityCertificateBackfilled == "true"
       ' "$artifact_dir/readback/volumes-before.json" >/dev/null
       run_node_phase "$instance_id" "$volume_id" "$signer_arn" verify \
         "$artifact_dir/ssm/verify-${validator_index}.json"
@@ -978,11 +1304,11 @@ else
         "$last_node_binding" partial-apply-resume
       rollback_snapshots+=("$existing_snapshot")
       current_instance=""
-      require_peer_health "" "resume-${validator_index}-after"
+      require_migration_continuity "resume-${validator_index}-after"
       continue
     fi
     test -z "$existing_migration_state"
-    require_peer_health "$instance_id" "validator-${validator_index}-before"
+    require_migration_continuity "validator-${validator_index}-preflight"
     run_node_phase "$instance_id" "$volume_id" "$signer_arn" prepare \
       "$artifact_dir/ssm/prepare-${validator_index}.json"
 
@@ -1066,26 +1392,35 @@ else
     jq -e '
       .StandardOutputContent
       | fromjson
-      | .state == "VERIFIED_PASS" or .state == "ALREADY_MIGRATED"
+      | .state == "MOUNT_ACTIVATED_PENDING_FINALITY"
     ' "$artifact_dir/ssm/migrate-${validator_index}.json" >/dev/null
+    current_instance=""
+    require_migration_continuity "validator-${validator_index}-after"
+    current_instance="$instance_id"
+    run_node_phase "$instance_id" "$volume_id" "$signer_arn" verify \
+      "$artifact_dir/ssm/verify-${validator_index}.json"
+    jq -e '
+      .StandardOutputContent
+      | fromjson
+      | .state == "VERIFIED_PASS"
+    ' "$artifact_dir/ssm/verify-${validator_index}.json" >/dev/null
     record_validator_evidence \
       "$validator_index" "$instance_id" "$volume_id" "$signer_arn" \
       "$snapshot_id" "$root_volume" \
-      "$artifact_dir/ssm/migrate-${validator_index}.json" \
-      "$last_node_binding" migrated
+      "$artifact_dir/ssm/verify-${validator_index}.json" \
+      "$last_node_binding" migrated-and-finality-backfilled
+    current_instance=""
     aws ec2 create-tags --resources "$volume_id" --tags \
       Key=MigrationRequired,Value=false \
       Key=JuncaMigrationState,Value=VERIFIED_PASS \
       Key=JuncaFilesystemVerified,Value=true \
       Key=JuncaStateStoreIntegrity,Value=true \
-      Key=JuncaFinalityCertificateRecovered,Value=true \
+      Key=JuncaFinalityCertificateBackfilled,Value=true \
       Key=JuncaRollbackSnapshotId,Value="$snapshot_id" \
       Key=MainnetChanged,Value=false \
       Key=AssetsMoved,Value=false \
       Key=BridgeActivated,Value=false
     rollback_snapshots+=("$snapshot_id")
-    current_instance=""
-    require_peer_health "" "validator-${validator_index}-after"
   done
   trap - ERR EXIT INT TERM
 fi
@@ -1139,7 +1474,7 @@ jq -e --argjson snapshot_ids "$rollback_json" '
           .change.after.tags.JuncaMigrationState == "VERIFIED_PASS" and
           .change.after.tags.JuncaFilesystemVerified == "true" and
           .change.after.tags.JuncaStateStoreIntegrity == "true" and
-          .change.after.tags.JuncaFinalityCertificateRecovered == "true" and
+          .change.after.tags.JuncaFinalityCertificateBackfilled == "true" and
           .change.after.tags.JuncaRollbackSnapshotId ==
             $snapshot_ids[$index] and
           (
@@ -1148,7 +1483,7 @@ jq -e --argjson snapshot_ids "$rollback_json" '
             [
               "FailureDomain",
               "JuncaFilesystemVerified",
-              "JuncaFinalityCertificateRecovered",
+              "JuncaFinalityCertificateBackfilled",
               "JuncaMigrationState",
               "JuncaRollbackSnapshotId",
               "JuncaStateStoreIntegrity",
@@ -1229,7 +1564,7 @@ jq -e \
     ) and
     (
       [.Tags[]
-       | select(.Key == "JuncaFinalityCertificateRecovered")
+       | select(.Key == "JuncaFinalityCertificateBackfilled")
        | .Value] == ["true"]
     ) and
     (
@@ -1313,6 +1648,7 @@ jq -e \
   --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
   --arg head_sha "$GITHUB_SHA" \
   --arg migration_request_sha256 "$MIGRATION_REQUEST_SHA256" \
+  --arg finality_backfill_request_sha256 "$backfill_request_sha256" \
   --arg github_event_sha256 "$github_event_sha256" \
   --slurpfile quorum "$artifact_dir/readback/quorum-checkpoints.json" '
   length == 3 and
@@ -1323,12 +1659,15 @@ jq -e \
     .request_binding.head_sha == $head_sha and
     .request_binding.migration_request_sha256 ==
       $migration_request_sha256 and
+    .request_binding.finality_backfill_request_sha256 ==
+      $finality_backfill_request_sha256 and
     .request_binding.github_event_sha256 == $github_event_sha256 and
     (.request_binding.ssm_request_sha256 |
       test("^[0-9a-f]{64}$")) and
     (.request_binding.command_id | length) > 0 and
-    (.node_result.state == "VERIFIED_PASS" or
-     .node_result.state == "ALREADY_MIGRATED") and
+    .node_result.state == "VERIFIED_PASS" and
+    .node_result.certificate_hash ==
+      $quorum[0][-1].certificate_hash and
     (.node_result.state_sha256 | test("^[0-9a-f]{64}$")) and
     (
       (.node_result.after_height // .node_result.head_height)
@@ -1337,7 +1676,7 @@ jq -e \
   ) and
   ($quorum[0] | length) >= 3 and
   $quorum[0][-1].peer_count == 3 and
-  $quorum[0][-1].quorum == "3/3"
+  $quorum[0][-1].quorum == "durable-certificate-3/3"
 ' "$artifact_dir/readback/validator-mapping.json" >/dev/null
 
 jq \
@@ -1376,6 +1715,7 @@ jq -n \
   --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
   --arg head_sha "$GITHUB_SHA" \
   --arg migration_request_sha256 "$MIGRATION_REQUEST_SHA256" \
+  --arg finality_backfill_request_sha256 "$backfill_request_sha256" \
   --arg github_event_sha256 "$github_event_sha256" \
   --arg migration_token "$migration_token" \
   --argjson instance_ids \
@@ -1406,6 +1746,8 @@ jq -n \
       run_attempt: $run_attempt,
       head_sha: $head_sha,
       migration_request_sha256: $migration_request_sha256,
+      finality_backfill_request_sha256:
+        $finality_backfill_request_sha256,
       github_event_sha256: $github_event_sha256,
       migration_token: $migration_token
     },
@@ -1421,6 +1763,7 @@ jq -n \
     terraform_canonicalized: true,
     runtime_mount_verified: true,
     immutable_runtime_mount_activation_pending: true,
+    immutable_runtime_certificate_activation_pending: true,
     bootstrap_changed: false,
     mainnet_changed: false,
     assets_moved: false,

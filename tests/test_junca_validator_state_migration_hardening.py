@@ -116,10 +116,8 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
     ) -> None:
         for required in (
             "quorum-checkpoints.json",
-            ".consensus.last_certificate.signed_power == 3",
-            ".consensus.last_certificate.total_power == 3",
-            ".consensus.last_certificate.validator_ids == [",
-            ".consensus.last_certificate.finality_status ==",
+            ".certificate == $expected.certificate",
+            ".certificate_hash == $expected.certificate_hash",
             ".signer_resource_digest ==",
             ".private_key_material_accepted == false",
             '.network == "Public Testnet / No Monetary Value"',
@@ -127,12 +125,9 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             ".assets_moved == false",
             ".bridge_activated == false",
             "health_bindings",
-            "$heights[0] >= $previous_height",
-            "$hashes[0] == $previous_hash",
-            "$certificates[0] == $previous_certificate",
-            'quorum: "3/3"',
-            'require_peer_health "$instance_id"',
-            'require_peer_health ""',
+            ".state.head.certificate_hash ==",
+            ".state.certificate == null or",
+            'quorum: "durable-certificate-3/3"',
             'local controller_status="$1"',
             "local attempt status",
             'exit "$controller_status"',
@@ -140,6 +135,14 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             "trap 'restart_on_controller_error 130' INT",
             "trap 'restart_on_controller_error 143' TERM",
             "trap - ERR EXIT INT TERM",
+            "prepare_finality_backfill_request",
+            "require_migration_continuity",
+            "junca-finality-certificate-backfill-request/v1",
+            "durable-certificate-3/3",
+            "JuncaFinalityCertificateBackfilled",
+            "MOUNT_ACTIVATED_PENDING_FINALITY",
+            'require_migration_continuity "migration-start"',
+            'require_migration_continuity "validator-${validator_index}-after"',
         ):
             self.assertIn(required, CONTROLLER)
 
