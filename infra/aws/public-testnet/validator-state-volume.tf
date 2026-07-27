@@ -56,9 +56,9 @@ resource "aws_ebs_volume" "validator_state" {
       PublicTestnetOnly = "true"
     },
     var.validator_state_migration_accepted ? {
-      JuncaMigrationState               = "VERIFIED_PASS"
-      JuncaFilesystemVerified           = "true"
-      JuncaStateStoreIntegrity          = "true"
+      JuncaMigrationState                = "VERIFIED_PASS"
+      JuncaFilesystemVerified            = "true"
+      JuncaStateStoreIntegrity           = "true"
       JuncaFinalityCertificateBackfilled = "true"
       JuncaRollbackSnapshotId = (
         var.validator_state_rollback_snapshot_ids[count.index]
