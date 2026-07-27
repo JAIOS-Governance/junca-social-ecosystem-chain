@@ -283,16 +283,9 @@ class AwsFoundationTests(unittest.TestCase):
             "public-testnet/terraform.tfstate",
             "foundation.tfplan",
             'select(index("delete"))',
-            "enable_public_services: $enable_public_services",
-            "artifacts/pre-foundation-outputs.json",
-            ".public_services_acceptance_readback.value.enabled // false",
-            'if $public_services_enabled then "public-services" else "validators-only" end',
-            "aws_lb_target_group_attachment.rpc",
-            "aws_lb_target_group_attachment.explorer",
-            "aws elbv2 wait target-in-service",
-            '["target_id"]',
+            "enable_public_services: false",
             "quorum_verified: false",
-            "public_services_enabled: $public_services_enabled",
+            "public_services_enabled: false",
             "terraform -chdir=infra/aws/public-testnet apply",
         ):
             self.assertIn(required, self.foundation_script)
@@ -328,6 +321,18 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn(
             "cancel-in-progress: false", self.validator_foundation_release
         )
+        self.assertNotIn("workflow_run:", self.validator_foundation_release)
+        self.assertIn(
+            "if: inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'",
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "required: true",
+            self.validator_foundation_release.split("ami_run_id:", 1)[1].split(
+                "authorize_rollout:", 1
+            )[0],
+        )
+        self.assertNotIn("30233435029", self.validator_foundation_release)
 
     def test_deployment_role_can_refresh_and_update_validator_iam_roles(self) -> None:
         for action in (
