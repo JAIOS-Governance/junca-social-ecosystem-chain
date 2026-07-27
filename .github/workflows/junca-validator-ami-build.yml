@@ -257,7 +257,10 @@ jobs:
                 assets_moved: false,
                 bridge_activated: false
               }' > artifacts/junca-validator-ami-build.json
-            sha256sum artifacts/junca-validator-ami-build.json > artifacts/SHA256SUMS
+            (
+              cd artifacts
+              sha256sum junca-validator-ami-build.json > SHA256SUMS
+            )
           }
 
           existing_images="$(aws ec2 describe-images \
@@ -498,7 +501,10 @@ jobs:
               assets_moved: false,
               bridge_activated: false
             }' > artifacts/junca-validator-ami-build.json
-          sha256sum artifacts/junca-validator-ami-build.json > artifacts/SHA256SUMS
+          (
+            cd artifacts
+            sha256sum junca-validator-ami-build.json > SHA256SUMS
+          )
 
       - uses: actions/upload-artifact@v4
         if: always()
