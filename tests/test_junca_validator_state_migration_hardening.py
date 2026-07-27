@@ -51,6 +51,12 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             'all($values[]; . == null or . == "")',
             CONTROLLER,
         )
+        restored_readback = CONTROLLER.split(
+            'restored_snapshot_ids="$(',
+            1,
+        )[1].split(')"', 1)[0]
+        self.assertIn("jq -c '", restored_readback)
+        self.assertNotIn("jq -ce '", restored_readback)
 
     def test_acceptance_plan_allows_only_exact_tag_updates(self) -> None:
         for required in (
