@@ -1,9 +1,6 @@
 name: JUNCA Validator Immutable AMI Build
 
 on:
-  workflow_run:
-    workflows: ["JUNCA Validator Runtime Artifacts"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       source_run_id:
@@ -42,9 +39,6 @@ concurrency:
 
 jobs:
   build:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 90
@@ -56,10 +50,10 @@ jobs:
       GOVERNANCE: JAIOS Institutional Governance
       NOTICE: Public Testnet / No Monetary Value
       IMAGE_BUILDER_INSTANCE_PROFILE: JuncaChainPublicTestnetImageBuilder
-      SOURCE_RUN_ID: ${{ inputs.source_run_id || github.event.workflow_run.id }}
-      SOURCE_COMMIT: ${{ inputs.source_commit || github.event.workflow_run.head_sha }}
-      NODE_ARTIFACT_NAME: ${{ inputs.node_artifact_name || format('junca-validator-runtime-{0}', github.event.workflow_run.id) }}
-      GENESIS_ARTIFACT_NAME: ${{ inputs.genesis_artifact_name || format('junca-validator-genesis-{0}', github.event.workflow_run.id) }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      NODE_ARTIFACT_NAME: ${{ inputs.node_artifact_name }}
+      GENESIS_ARTIFACT_NAME: ${{ inputs.genesis_artifact_name }}
     steps:
       - name: Initialize failure-safe build evidence
         run: |
