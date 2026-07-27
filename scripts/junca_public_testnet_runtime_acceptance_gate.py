@@ -7,10 +7,12 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _read(path: str) -> dict[str, Any]:
@@ -39,6 +41,8 @@ def evaluate(
     if not isinstance(candidate, Mapping):
         failures.append("soak.candidate_binding:missing")
         candidate = {}
+    if SHA256.fullmatch(str(candidate.get("request_sha256", ""))) is None:
+        failures.append("soak.candidate_binding.request_sha256:invalid")
     if not isinstance(provenance, Mapping):
         failures.append("soak.provenance:missing")
         provenance = {}
