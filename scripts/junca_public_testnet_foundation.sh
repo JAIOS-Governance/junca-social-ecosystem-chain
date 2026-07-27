@@ -57,18 +57,229 @@ wait_for_ssm_command() {
   jq -e '.Status == "Success"' "$output_path" >/dev/null
 }
 
+wait_for_ssm_command_result() {
+  local command_id="$1"
+  local instance_id="$2"
+  local output_path="$3"
+  local status=""
+  for attempt in $(seq 1 90); do
+    status="$(
+      aws ssm get-command-invocation \
+        --command-id "$command_id" \
+        --instance-id "$instance_id" \
+        --query Status \
+        --output text
+    )"
+    case "$status" in
+      Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+    esac
+    if [[ "$attempt" == 90 ]]; then
+      status=TimedOut
+      break
+    fi
+    sleep 2
+  done
+  aws ssm get-command-invocation \
+    --command-id "$command_id" \
+    --instance-id "$instance_id" >"$output_path"
+}
+
+render_runtime_finality_preflight() {
+  local finality_enabled="$1"
+  local block_interval="$2"
+  local slot_epoch="$3"
+  local expected_artifact_sha256="$4"
+  local allow_missing_finality_keys="$5"
+  cat <<EOF
+set -euo pipefail
+# BEGIN_FINALITY_REMOTE_PREFLIGHT
+test -f /etc/junca/runtime.env
+test ! -L /etc/junca/runtime.env
+test "\$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+grep -Fxq 'NODE_ARTIFACT_SHA256=${expected_artifact_sha256}' /etc/junca/runtime.env
+automatic_finality_count="\$(awk '/^AUTOMATIC_FINALITY_ENABLED=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+block_interval_count="\$(awk '/^TESTNET_BLOCK_INTERVAL_SECONDS=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+slot_epoch_count="\$(awk '/^TESTNET_SLOT_EPOCH_SECONDS=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+if [[ '${allow_missing_finality_keys}' == true ]]; then
+  test '${finality_enabled}' = false
+  test '${block_interval}' = 0
+  test '${slot_epoch}' = 0
+  if [[ "\$automatic_finality_count" == 0 &&
+        "\$block_interval_count" == 0 &&
+        "\$slot_epoch_count" == 0 ]]; then
+    :
+  else
+    test "\$automatic_finality_count" = 1
+    test "\$block_interval_count" = 1
+    test "\$slot_epoch_count" = 1
+  fi
+else
+  test "\$automatic_finality_count" = 1
+  test "\$block_interval_count" = 1
+  test "\$slot_epoch_count" = 1
+fi
+sha256sum /etc/junca/runtime.env
+# END_FINALITY_REMOTE_PREFLIGHT
+EOF
+}
+
+render_runtime_finality_mutation() {
+  local finality_enabled="$1"
+  local block_interval="$2"
+  local slot_epoch="$3"
+  local expected_artifact_sha256="$4"
+  local allow_missing_finality_keys="$5"
+  cat <<EOF
+set -euo pipefail
+# BEGIN_FINALITY_REMOTE_MUTATION
+runtime_env=/etc/junca/runtime.env
+test -f "\$runtime_env"
+test ! -L "\$runtime_env"
+test "\$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' "\$runtime_env")" = 1
+grep -Fxq 'NODE_ARTIFACT_SHA256=${expected_artifact_sha256}' "\$runtime_env"
+automatic_finality_count="\$(awk '/^AUTOMATIC_FINALITY_ENABLED=/{count++} END{print count+0}' "\$runtime_env")"
+block_interval_count="\$(awk '/^TESTNET_BLOCK_INTERVAL_SECONDS=/{count++} END{print count+0}' "\$runtime_env")"
+slot_epoch_count="\$(awk '/^TESTNET_SLOT_EPOCH_SECONDS=/{count++} END{print count+0}' "\$runtime_env")"
+if [[ '${allow_missing_finality_keys}' == true ]]; then
+  test '${finality_enabled}' = false
+  test '${block_interval}' = 0
+  test '${slot_epoch}' = 0
+  if [[ "\$automatic_finality_count" == 0 &&
+        "\$block_interval_count" == 0 &&
+        "\$slot_epoch_count" == 0 ]]; then
+    initialize_finality_keys=true
+  else
+    test "\$automatic_finality_count" = 1
+    test "\$block_interval_count" = 1
+    test "\$slot_epoch_count" = 1
+    initialize_finality_keys=false
+  fi
+else
+  test "\$automatic_finality_count" = 1
+  test "\$block_interval_count" = 1
+  test "\$slot_epoch_count" = 1
+  initialize_finality_keys=false
+fi
+runtime_env_tmp="\$(mktemp /etc/junca/.runtime.env.XXXXXX)"
+trap 'rm -f "\$runtime_env_tmp"' EXIT
+cp -p "\$runtime_env" "\$runtime_env_tmp"
+if [[ "\$initialize_finality_keys" == true ]]; then
+  test "\$(tail -c 1 "\$runtime_env" | wc -l)" = 1
+  printf '%s\n' \
+    'AUTOMATIC_FINALITY_ENABLED=false' \
+    'TESTNET_BLOCK_INTERVAL_SECONDS=0' \
+    'TESTNET_SLOT_EPOCH_SECONDS=0' >> "\$runtime_env_tmp"
+fi
+sed -i -E 's/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=${finality_enabled}/' "\$runtime_env_tmp"
+sed -i -E 's/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}/' "\$runtime_env_tmp"
+sed -i -E 's/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}/' "\$runtime_env_tmp"
+assert_runtime_finality() {
+  local path="\$1"
+  test "\$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' "\$path")" = 1
+  grep -Fxq 'NODE_ARTIFACT_SHA256=${expected_artifact_sha256}' "\$path"
+  test "\$(awk '/^AUTOMATIC_FINALITY_ENABLED=/{count++} END{print count+0}' "\$path")" = 1
+  test "\$(awk '/^TESTNET_BLOCK_INTERVAL_SECONDS=/{count++} END{print count+0}' "\$path")" = 1
+  test "\$(awk '/^TESTNET_SLOT_EPOCH_SECONDS=/{count++} END{print count+0}' "\$path")" = 1
+  grep -Fxq 'AUTOMATIC_FINALITY_ENABLED=${finality_enabled}' "\$path"
+  grep -Fxq 'TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}' "\$path"
+  grep -Fxq 'TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}' "\$path"
+}
+assert_runtime_finality "\$runtime_env_tmp"
+chown --reference="\$runtime_env" "\$runtime_env_tmp"
+chmod --reference="\$runtime_env" "\$runtime_env_tmp"
+mv -f "\$runtime_env_tmp" "\$runtime_env"
+trap - EXIT
+assert_runtime_finality "\$runtime_env"
+systemctl restart junca-validator.service
+for attempt in \$(seq 1 60); do
+  systemctl is-active --quiet junca-validator.service &&
+    curl -fsS http://127.0.0.1:8545/health >/dev/null &&
+    assert_runtime_finality "\$runtime_env" &&
+    exit 0
+  sleep 2
+done
+systemctl status junca-validator.service --no-pager -l || true
+journalctl -u junca-validator.service --no-pager -n 100 || true
+exit 1
+# END_FINALITY_REMOTE_MUTATION
+EOF
+}
+
+render_runtime_finality_readback() {
+  local finality_enabled="$1"
+  local block_interval="$2"
+  local slot_epoch="$3"
+  local expected_artifact_sha256="$4"
+  cat <<EOF
+set -euo pipefail
+systemctl is-active --quiet junca-validator.service
+curl -fsS http://127.0.0.1:8545/health >/dev/null
+# BEGIN_FINALITY_EXACT_READBACK
+test -f /etc/junca/runtime.env
+test ! -L /etc/junca/runtime.env
+test "\$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+grep -Fxq 'NODE_ARTIFACT_SHA256=${expected_artifact_sha256}' /etc/junca/runtime.env
+test "\$(awk '/^AUTOMATIC_FINALITY_ENABLED=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+test "\$(awk '/^TESTNET_BLOCK_INTERVAL_SECONDS=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+test "\$(awk '/^TESTNET_SLOT_EPOCH_SECONDS=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+grep -Fxq 'AUTOMATIC_FINALITY_ENABLED=${finality_enabled}' /etc/junca/runtime.env
+grep -Fxq 'TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}' /etc/junca/runtime.env
+grep -Fxq 'TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}' /etc/junca/runtime.env
+sha256sum /etc/junca/runtime.env
+# END_FINALITY_EXACT_READBACK
+EOF
+}
+
+build_runtime_finality_bindings() {
+  local expected_artifact_sha256="$1"
+  local allow_missing_finality_keys="$2"
+  shift 2
+  jq -cn \
+    --arg expected_artifact_sha256 "$expected_artifact_sha256" \
+    --argjson allow_missing_finality_keys "$allow_missing_finality_keys" \
+    --args "$@" '
+      [
+        $ARGS.positional[] |
+        {
+          instance_id: .,
+          expected_artifact_sha256: $expected_artifact_sha256,
+          allow_missing_finality_keys: $allow_missing_finality_keys
+        }
+      ]
+    '
+}
+
 set_runtime_finality() {
   local block_interval="$1"
   local slot_epoch="$2"
-  shift 2
-  local instances=("$@")
+  local bindings_json="$3"
   local finality_enabled
   local command
   local command_id
   local instance_id
-  test "${#instances[@]}" -ge 1
+  local expected_artifact_sha256
+  local allow_missing_finality_keys
+  local compensation_summary
+  local compensation_status
+  local readback_status
+  local index
+  local mutation_failed=false
+  local -a instances=()
+  local -a mutation_command_ids=()
   [[ "$block_interval" =~ ^(0|30)$ ]]
   [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]]
+  jq -e '
+    type == "array" and length >= 1 and length <= 3 and
+    (map(.instance_id) | unique | length) == length and
+    all(
+      .[];
+      (.instance_id | type == "string" and test("^i-[0-9a-f]{8,17}$")) and
+      (.expected_artifact_sha256 |
+        type == "string" and test("^[0-9a-f]{64}$")) and
+      (.allow_missing_finality_keys | type == "boolean")
+    )
+  ' <<<"$bindings_json" >/dev/null
+  mapfile -t instances < <(jq -er '.[].instance_id' <<<"$bindings_json")
   if [[ "$slot_epoch" != "0" ]]; then
     test "$slot_epoch" -gt "$(date +%s)"
     test "$((slot_epoch % 30))" -eq 0
@@ -79,56 +290,198 @@ set_runtime_finality() {
   else
     finality_enabled=false
   fi
-  command="$(
-    cat <<EOF
-set -euo pipefail
-test -f /etc/junca/runtime.env
-test ! -L /etc/junca/runtime.env
-test "\$(grep -c '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env)" = 1
-test "\$(grep -c '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env)" = 1
-test "\$(grep -c '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env)" = 1
-sed -i -E 's/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=${finality_enabled}/' /etc/junca/runtime.env
-sed -i -E 's/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}/' /etc/junca/runtime.env
-sed -i -E 's/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}/' /etc/junca/runtime.env
-assert_runtime_finality() {
-  test "\$(grep -c '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env)" = 1
-  test "\$(grep -c '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env)" = 1
-  test "\$(grep -c '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env)" = 1
-  grep -Fxq 'AUTOMATIC_FINALITY_ENABLED=${finality_enabled}' /etc/junca/runtime.env
-  grep -Fxq 'TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}' /etc/junca/runtime.env
-  grep -Fxq 'TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}' /etc/junca/runtime.env
-}
-assert_runtime_finality
-systemctl restart junca-validator.service
-for attempt in \$(seq 1 60); do
-  systemctl is-active --quiet junca-validator.service &&
-    curl -fsS http://127.0.0.1:8545/health >/dev/null &&
-    assert_runtime_finality &&
-    exit 0
-  sleep 2
-done
-systemctl status junca-validator.service --no-pager -l || true
-journalctl -u junca-validator.service --no-pager -n 100 || true
-exit 1
-EOF
-  )"
-  jq -n --arg command "$command" '{commands: [$command]}' \
-    > artifacts/ssm-set-finality.json
-  command_id="$(
-    aws ssm send-command \
-      --instance-ids "${instances[@]}" \
-      --document-name AWS-RunShellScript \
-      --parameters file://artifacts/ssm-set-finality.json \
-      --comment "JUNCA Public Testnet fail-closed finality configuration" \
-      --query Command.CommandId \
-      --output text
-  )"
-  for instance_id in "${instances[@]}"; do
+
+  # Complete every read-only preflight before any runtime.env mutation.
+  for index in "${!instances[@]}"; do
+    instance_id="${instances[$index]}"
+    expected_artifact_sha256="$(
+      jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
+    )"
+    allow_missing_finality_keys="$(
+      jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+    )"
+    command="$(
+      render_runtime_finality_preflight \
+        "$finality_enabled" "$block_interval" "$slot_epoch" \
+        "$expected_artifact_sha256" "$allow_missing_finality_keys"
+    )"
+    jq -n --arg command "$command" '{commands: [$command]}' \
+      >"artifacts/ssm-finality-preflight-${index}.json"
+    command_id="$(
+      aws ssm send-command \
+        --instance-ids "$instance_id" \
+        --document-name AWS-RunShellScript \
+        --parameters "file://artifacts/ssm-finality-preflight-${index}.json" \
+        --comment "JUNCA Public Testnet finality read-only preflight" \
+        --query Command.CommandId \
+        --output text
+    )"
     wait_for_ssm_command \
-      "$command_id" \
-      "$instance_id" \
-      "artifacts/finality-${block_interval}-${slot_epoch}-${instance_id}.json"
+      "$command_id" "$instance_id" \
+      "artifacts/finality-preflight-${block_interval}-${slot_epoch}-${instance_id}.json"
   done
+
+  # Dispatch every mutation before collecting any result, preventing an early
+  # failed invocation from hiding a partial multi-node write.
+  for index in "${!instances[@]}"; do
+    instance_id="${instances[$index]}"
+    expected_artifact_sha256="$(
+      jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
+    )"
+    allow_missing_finality_keys="$(
+      jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+    )"
+    command="$(
+      render_runtime_finality_mutation \
+        "$finality_enabled" "$block_interval" "$slot_epoch" \
+        "$expected_artifact_sha256" "$allow_missing_finality_keys"
+    )"
+    jq -n --arg command "$command" '{commands: [$command]}' \
+      >"artifacts/ssm-set-finality-${index}.json"
+    if command_id="$(
+      aws ssm send-command \
+        --instance-ids "$instance_id" \
+        --document-name AWS-RunShellScript \
+        --parameters "file://artifacts/ssm-set-finality-${index}.json" \
+        --comment "JUNCA Public Testnet fail-closed finality configuration" \
+        --query Command.CommandId \
+        --output text
+    )"; then
+      mutation_command_ids+=("$command_id")
+    else
+      mutation_command_ids+=("")
+      mutation_failed=true
+    fi
+  done
+  for index in "${!instances[@]}"; do
+    instance_id="${instances[$index]}"
+    if [[ -z "${mutation_command_ids[$index]}" ]] ||
+      ! wait_for_ssm_command_result \
+        "${mutation_command_ids[$index]}" "$instance_id" \
+        "artifacts/finality-${block_interval}-${slot_epoch}-${instance_id}.json"
+    then
+      mutation_failed=true
+      continue
+    fi
+    if ! jq -e '.Status == "Success"' \
+      "artifacts/finality-${block_interval}-${slot_epoch}-${instance_id}.json" \
+      >/dev/null; then
+      mutation_failed=true
+    fi
+  done
+  if [[ "$mutation_failed" == "true" ]]; then
+    # Best-effort compensation always returns every reachable node to disabled
+    # false/0/0 before the still-future canonical epoch.
+    local -a compensation_command_ids=()
+    for index in "${!instances[@]}"; do
+      instance_id="${instances[$index]}"
+      expected_artifact_sha256="$(
+        jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
+      )"
+      allow_missing_finality_keys="$(
+        jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+      )"
+      command="$(
+        render_runtime_finality_mutation \
+          false 0 0 "$expected_artifact_sha256" \
+          "$allow_missing_finality_keys"
+      )"
+      jq -n --arg command "$command" '{commands: [$command]}' \
+        >"artifacts/ssm-finality-compensate-${index}.json"
+      if command_id="$(
+        aws ssm send-command \
+          --instance-ids "$instance_id" \
+          --document-name AWS-RunShellScript \
+          --parameters "file://artifacts/ssm-finality-compensate-${index}.json" \
+          --comment "JUNCA Public Testnet finality failure compensation" \
+          --query Command.CommandId \
+          --output text
+      )"; then
+        compensation_command_ids+=("$command_id")
+      else
+        compensation_command_ids+=("")
+      fi
+    done
+    for index in "${!instances[@]}"; do
+      instance_id="${instances[$index]}"
+      if [[ -n "${compensation_command_ids[$index]}" ]]; then
+        wait_for_ssm_command_result \
+          "${compensation_command_ids[$index]}" "$instance_id" \
+          "artifacts/finality-compensation-${instance_id}.json" || true
+      fi
+      expected_artifact_sha256="$(
+        jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
+      )"
+      command="$(
+        render_runtime_finality_readback \
+          false 0 0 "$expected_artifact_sha256"
+      )"
+      jq -n --arg command "$command" '{commands: [$command]}' \
+        >"artifacts/ssm-finality-compensation-readback-${index}.json"
+      if command_id="$(
+        aws ssm send-command \
+          --instance-ids "$instance_id" \
+          --document-name AWS-RunShellScript \
+          --parameters \
+            "file://artifacts/ssm-finality-compensation-readback-${index}.json" \
+          --comment "JUNCA Public Testnet finality compensation readback" \
+          --query Command.CommandId \
+          --output text
+      )"; then
+        wait_for_ssm_command_result \
+          "$command_id" "$instance_id" \
+          "artifacts/finality-compensation-readback-${instance_id}.json" || true
+      fi
+    done
+    compensation_summary='[]'
+    for instance_id in "${instances[@]}"; do
+      compensation_status=SubmissionFailed
+      readback_status=SubmissionFailed
+      if [[ -f "artifacts/finality-compensation-${instance_id}.json" ]]; then
+        compensation_status="$(
+          jq -r '.Status // "Unknown"' \
+            "artifacts/finality-compensation-${instance_id}.json"
+        )"
+      fi
+      if [[ -f \
+        "artifacts/finality-compensation-readback-${instance_id}.json" ]]; then
+        readback_status="$(
+          jq -r '.Status // "Unknown"' \
+            "artifacts/finality-compensation-readback-${instance_id}.json"
+        )"
+      fi
+      compensation_summary="$(
+        jq -cn \
+          --argjson current "$compensation_summary" \
+          --arg instance_id "$instance_id" \
+          --arg compensation_status "$compensation_status" \
+          --arg readback_status "$readback_status" '
+            $current + [{
+              instance_id: $instance_id,
+              compensation_status: $compensation_status,
+              exact_disabled_readback_status: $readback_status
+            }]
+          '
+      )"
+    done
+    jq -n \
+      --argjson validators "$compensation_summary" \
+      --argjson requested_block_interval "$block_interval" \
+      --argjson requested_slot_epoch "$slot_epoch" '{
+        schema_version: "junca-finality-compensation/v1",
+        original_mutation_failed: true,
+        requested_block_interval: $requested_block_interval,
+        requested_slot_epoch: $requested_slot_epoch,
+        compensation_target: {
+          automatic_finality_enabled: false,
+          block_interval_seconds: 0,
+          slot_epoch_seconds: 0
+        },
+        validators: $validators,
+        accepted: false
+      }' > artifacts/finality-compensation-summary.json
+    return 1
+  fi
 }
 
 capture_validator_observation() {
@@ -879,6 +1232,7 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   )
   test "${#pre_rollout_instances[@]}" = 3
   resume_path="${ROLLING_RESUME_EVIDENCE_PATH:-}"
+  resume_updated_count=0
   if [[ "$ROLLING_RESUME_RUN_ID" == "0" ]]; then
     test -z "$resume_path"
     test "${#validator_replacements[@]}" = 3
@@ -964,12 +1318,35 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
         (.rollback.validators | length) == 3
       ' "$resume_path" >/dev/null
     jq '.rollback' "$resume_path" > artifacts/rollback-rehearsal.json
+    resume_updated_count="$(jq -er '.updated_count' "$resume_path")"
   fi
 
-  # Stop the automatic-finality loop on all three old-version validators
-  # before the first replacement. The Terraform-canonical future epoch remains
-  # bound to the release, but cannot execute while runtime versions are mixed.
-  set_runtime_finality 0 0 "${pre_rollout_instances[@]}"
+  # Stop automatic finality before the next replacement. A resumed target
+  # prefix is bound strictly to the candidate artifact; only the remaining
+  # legacy suffix may initialize all-absent false/0/0 keys.
+  pre_rollout_finality_bindings="$(
+    jq -cn \
+      --argjson updated_count "$resume_updated_count" \
+      --arg target_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
+      --arg previous_artifact_sha256 "$previous_artifact_sha256" \
+      --args "${pre_rollout_instances[@]}" '
+        [
+          range(0; ($ARGS.positional | length)) as $index |
+          {
+            instance_id: $ARGS.positional[$index],
+            expected_artifact_sha256:
+              (if $index < $updated_count then
+                 $target_artifact_sha256
+               else
+                 $previous_artifact_sha256
+               end),
+            allow_missing_finality_keys: ($index >= $updated_count)
+          }
+        ]
+      '
+  )"
+  set_runtime_finality \
+    0 0 "$pre_rollout_finality_bindings"
   for index in 0 1 2; do
     capture_validator_observation \
       "validator-0$((index + 1))" \
@@ -1241,7 +1618,12 @@ if [[ "$phase" == "foundation-apply" ]]; then
       # in the future, so no automatic-finality slot can execute during this
       # bounded transition.
       test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
-      set_runtime_finality 0 0 "$new_instance"
+      new_instance_finality_bindings="$(
+        build_runtime_finality_bindings \
+          "$NODE_ARTIFACT_SHA256" false "$new_instance"
+      )"
+      set_runtime_finality \
+        0 0 "$new_instance_finality_bindings"
 
       if [[ "$public_services_enabled" == "true" ]]; then
         current_outputs="$(
@@ -1295,13 +1677,17 @@ if [[ "$phase" == "foundation-apply" ]]; then
         jq -er '.[]'
     )
     test "${#activated_instances[@]}" = 3
+    activated_finality_bindings="$(
+      build_runtime_finality_bindings \
+        "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"
+    )"
     test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
     set_runtime_finality \
-      0 "$validator_slot_epoch_seconds" "${activated_instances[@]}"
+      0 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
     write_rolling_compatibility_evidence READY_FOR_FINALITY_ENABLE
     test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
     set_runtime_finality \
-      30 "$validator_slot_epoch_seconds" "${activated_instances[@]}"
+      30 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
     write_rolling_compatibility_evidence ACCEPTED
   fi
 
