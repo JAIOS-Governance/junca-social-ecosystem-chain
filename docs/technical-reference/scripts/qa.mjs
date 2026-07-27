@@ -25,7 +25,10 @@ for (const route of routes) {
     "JUNCA Social Ecosystem Chain",
     "JAIOS Institutional Governance",
     "Public Testnet",
-    "Runtime Deployment in Progress"
+    "Runtime Deployment in Progress",
+    'href="https://jaios-governance.org/"',
+    'class="jaios-institutional-link"',
+    'src="/junca-j-r21.svg"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
   }
@@ -50,7 +53,7 @@ for (const required of [
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.27 / R21",
+  "Revision · 2026.07.27 / R22",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
