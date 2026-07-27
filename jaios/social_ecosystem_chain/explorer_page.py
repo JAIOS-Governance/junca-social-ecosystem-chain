@@ -10,6 +10,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#071827">
   <meta name="description" content="Finalized-only public explorer for the JUNCA Social Ecosystem Chain Public Testnet.">
+  <link rel="canonical" href="https://scan.jaios-governance.org/">
   <title>JUNCA Social Ecosystem Chain — Public Testnet Explorer</title>
   <style>
     :root {
@@ -62,7 +63,14 @@ EXPLORER_DOCUMENT = """<!doctype html>
       gap: 28px;
       align-items: center;
     }
-    .identity { min-width: 0; }
+    .identity { min-width: 0; display: flex; align-items: center; gap: 16px; }
+    .identity-logo {
+      display: block;
+      width: 188px;
+      height: auto;
+      flex: 0 0 auto;
+    }
+    .identity-copy { min-width: 0; }
     .wordmark {
       font-family: var(--wordmark);
       font-weight: 700;
@@ -317,6 +325,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
     @media (max-width: 760px) {
       .shell { width: min(100% - 24px, 1480px); }
       .header-row { grid-template-columns: 1fr; gap: 8px; padding: 14px 0; }
+      .identity-logo { width: 150px; }
       nav { overflow-x: auto; padding-bottom: 3px; }
       nav a { padding-left: 0; padding-right: 18px; white-space: nowrap; }
       .hero, .two-col { grid-template-columns: 1fr; }
@@ -339,8 +348,11 @@ EXPLORER_DOCUMENT = """<!doctype html>
   <header class="site-header">
     <div class="shell header-row">
       <a class="identity" href="/" aria-label="JUNCA Social Ecosystem Chain Explorer home">
-        <span class="wordmark">JUNCA Social Ecosystem Chain</span>
-        <small>Public Testnet Explorer</small>
+        <img class="identity-logo" src="/junca-chain-logo.png" width="900" height="271" alt="JUNCA">
+        <span class="identity-copy">
+          <span class="wordmark">Social Ecosystem Chain</span>
+          <small>Public Testnet Explorer</small>
+        </span>
       </a>
       <nav aria-label="Primary">
         <a href="#network">Network</a>

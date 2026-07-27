@@ -131,6 +131,9 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn(
             'output "public_services_certificate"', self.runtime_outputs
         )
+        self.assertIn('scan_hostname         = "scan.${var.domain_name}"', self.runtime)
+        self.assertIn("local.scan_hostname", self.runtime)
+        self.assertIn('output "scan_url"', self.runtime_outputs)
         self.assertIn(
             'output "validator_alert_topic_arn"', self.runtime_outputs
         )

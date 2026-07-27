@@ -11,9 +11,13 @@ install -d -m 0755 "${output_dir}/usr/local/bin"
 install -d -m 0755 "${output_dir}/usr/local/lib/junca/jaios"
 install -d -m 0755 "${output_dir}/etc/systemd/system"
 install -d -m 0755 "${output_dir}/usr/local/lib/junca/jaios/social_ecosystem_chain"
+install -d -m 0755 "${output_dir}/usr/local/lib/junca/jaios/social_ecosystem_chain/assets"
 find "${repo_root}/jaios/social_ecosystem_chain" -maxdepth 1 -type f -name '*.py' \
   -exec install -m 0644 {} \
   "${output_dir}/usr/local/lib/junca/jaios/social_ecosystem_chain/" \;
+find "${repo_root}/jaios/social_ecosystem_chain/assets" -maxdepth 1 -type f -name '*.png' \
+  -exec install -m 0644 {} \
+  "${output_dir}/usr/local/lib/junca/jaios/social_ecosystem_chain/assets/" \;
 install -m 0755 "${repo_root}/scripts/junca-chain-node" \
   "${output_dir}/usr/local/bin/junca-chain-node"
 install -m 0755 "${repo_root}/scripts/junca-public-gateway" \
