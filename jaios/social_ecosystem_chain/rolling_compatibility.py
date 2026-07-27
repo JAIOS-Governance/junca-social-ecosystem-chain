@@ -17,6 +17,7 @@ AMI = re.compile(r"ami-[0-9a-f]{8,17}")
 BOUNDARIES = ("mainnet_changed", "assets_moved", "bridge_activated")
 VALIDATOR_IDS = ("validator-01", "validator-02", "validator-03")
 CHAIN_ID = 20260723
+NETWORK_LABEL = "Public Testnet / No Monetary Value"
 MINIMUM_SLOT_EPOCH_REMAINING_SECONDS = 900
 MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS = 7230
 
@@ -55,6 +56,17 @@ def evaluate_rolling_compatibility(evidence: Mapping[str, Any]) -> Mapping[str, 
         raise RollingCompatibilityError("automatic finality readback is invalid")
     if any(enabled) and not all(enabled):
         raise RollingCompatibilityError("mixed automatic finality state is prohibited")
+    intervals = [item.get("block_interval_seconds") for item in validators]
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in intervals
+    ):
+        raise RollingCompatibilityError("block interval readback is invalid")
+    expected_interval = 30 if all(enabled) else 0
+    if any(value != expected_interval for value in intervals):
+        raise RollingCompatibilityError(
+            "block interval does not match automatic finality state"
+        )
 
     for validator_id in order:
         _validator_health(by_id[validator_id], rollback_by_id[validator_id])
@@ -86,6 +98,9 @@ def evaluate_rolling_compatibility(evidence: Mapping[str, Any]) -> Mapping[str, 
             raise RollingCompatibilityError(
                 f"{validator_id} runtime and AMI binding mismatch"
             )
+        _finality_provenance(
+            by_id[validator_id], target_runtime=is_updated
+        )
 
     requested_epoch = evidence.get("requested_slot_epoch_seconds")
     now = evidence.get("observed_unix_time")
@@ -206,7 +221,7 @@ def _validator_health(
             )
     if item.get("healthy") is not True or item.get("health_status") != "healthy":
         raise RollingCompatibilityError(f"{validator_id} is not healthy")
-    if item.get("network") != "Public Testnet" or item.get("chain_id") != CHAIN_ID:
+    if item.get("network") != NETWORK_LABEL or item.get("chain_id") != CHAIN_ID:
         raise RollingCompatibilityError(
             f"{validator_id} Public Testnet binding is invalid"
         )
@@ -230,6 +245,52 @@ def _validator_health(
     ):
         raise RollingCompatibilityError(
             f"{validator_id} durable head changed at rollback floor"
+        )
+
+
+def _finality_provenance(
+    item: Mapping[str, Any], *, target_runtime: bool
+) -> None:
+    validator_id = item.get("validator_id")
+    readback = item.get("finality_readback")
+    if not isinstance(readback, Mapping):
+        raise RollingCompatibilityError(
+            f"{validator_id} finality readback provenance is required"
+        )
+    runtime_env = readback.get("runtime_env")
+    health = readback.get("health")
+    if not isinstance(runtime_env, Mapping) or not isinstance(health, Mapping):
+        raise RollingCompatibilityError(
+            f"{validator_id} finality readback provenance is invalid"
+        )
+    fields = (
+        "automatic_finality_enabled",
+        "block_interval_seconds",
+        "slot_epoch_seconds",
+    )
+    observed = {field: item.get(field) for field in fields}
+    if any(runtime_env.get(field) != observed[field] for field in fields):
+        raise RollingCompatibilityError(
+            f"{validator_id} runtime.env finality provenance differs"
+        )
+    health_supported = readback.get("health_supported")
+    if health_supported is True:
+        if any(health.get(field) != observed[field] for field in fields):
+            raise RollingCompatibilityError(
+                f"{validator_id} health finality provenance differs"
+            )
+    elif health_supported is False:
+        if any(health.get(field) is not None for field in fields):
+            raise RollingCompatibilityError(
+                f"{validator_id} legacy health provenance is invalid"
+            )
+        if target_runtime:
+            raise RollingCompatibilityError(
+                f"{validator_id} target runtime finality health readback is required"
+            )
+    else:
+        raise RollingCompatibilityError(
+            f"{validator_id} finality health support is invalid"
         )
 
 
