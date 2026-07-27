@@ -102,6 +102,8 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             '.path == ".github/workflows/junca-runtime-release-manifest-gate.yml"',
             self.foundation,
         )
+        self.assertGreaterEqual(self.foundation.count(".head_sha == $head"), 2)
+        self.assertIn(".candidate.request_sha256 == $request_sha256", self.foundation)
 
     def test_canonical_request_binds_exact_six_runtime_inputs(self):
         for value in (
