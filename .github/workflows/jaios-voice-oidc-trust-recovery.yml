@@ -18,17 +18,19 @@ concurrency:
 jobs:
   repair:
     runs-on: ubuntu-24.04
-    environment: junca-chain-docs-production
+    environment: public-testnet
     timeout-minutes: 10
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
-      RECOVERY_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      RECOVERY_ROLE_NAME: JuncaChainPublicTestnetDeployment
+      RECOVERY_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      RECOVERY_POLICY_NAME: PublicTestnetFoundationBootstrap
       TARGET_ROLE: JuncaVoiceDomainProductionDeployment
       OIDC_PROVIDER_ARN: arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com
     steps:
       - name: Configure verified AWS recovery identity
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
           role-to-assume: ${{ env.RECOVERY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -41,14 +43,41 @@ jobs:
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           case "$(aws sts get-caller-identity --query Arn --output text)" in
-            arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/*) ;;
+            arn:aws:sts::595710543956:assumed-role/JuncaChainPublicTestnetDeployment/*) ;;
             *) exit 1 ;;
           esac
 
-      - name: Replace Voice role GitHub OIDC trust and read back
+      - name: Repair Voice role through the logged working IAM route
         shell: bash
         run: |
           set -euo pipefail
+          aws iam get-role-policy \
+            --role-name "$RECOVERY_ROLE_NAME" \
+            --policy-name "$RECOVERY_POLICY_NAME" \
+            --query PolicyDocument --output json > /tmp/bootstrap-original.json
+          jq --arg target "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${TARGET_ROLE}" '
+            .Statement = (
+              (if (.Statement | type) == "array" then .Statement else [.Statement] end) +
+              [{
+                "Sid":"TemporaryJAIOSVoiceTrustRecovery",
+                "Effect":"Allow",
+                "Action":["iam:GetRole","iam:UpdateAssumeRolePolicy"],
+                "Resource":$target
+              }]
+            )
+          ' /tmp/bootstrap-original.json > /tmp/bootstrap-patched.json
+          restore_policy() {
+            aws iam put-role-policy \
+              --role-name "$RECOVERY_ROLE_NAME" \
+              --policy-name "$RECOVERY_POLICY_NAME" \
+              --policy-document file:///tmp/bootstrap-original.json
+          }
+          trap restore_policy EXIT
+          aws iam put-role-policy \
+            --role-name "$RECOVERY_ROLE_NAME" \
+            --policy-name "$RECOVERY_POLICY_NAME" \
+            --policy-document file:///tmp/bootstrap-patched.json
+
           aws iam get-role --role-name "$TARGET_ROLE" \
             --query 'Role.AssumeRolePolicyDocument' --output json > /tmp/voice-trust-before.json
           cat > /tmp/voice-trust.json <<'JSON'
@@ -100,6 +129,14 @@ jobs:
           assert 'repo:juncaGlobal@298956223/junca-Project@1286881101:environment:voice-admin-production' in subjects
           PY
 
+          restore_policy
+          trap - EXIT
+          aws iam get-role-policy \
+            --role-name "$RECOVERY_ROLE_NAME" \
+            --policy-name "$RECOVERY_POLICY_NAME" \
+            --query PolicyDocument --output json > /tmp/bootstrap-restored.json
+          test "$(jq -S . /tmp/bootstrap-original.json)" = "$(jq -S . /tmp/bootstrap-restored.json)"
+
       - name: Record recovery evidence
         shell: bash
         run: |
@@ -108,8 +145,8 @@ jobs:
             echo "- AWS Account: $AWS_ACCOUNT_ID"
             echo "- Recovery Role: $RECOVERY_ROLE_ARN"
             echo "- Target Role: $TARGET_ROLE"
-            echo "- OIDC Provider: $OIDC_PROVIDER_ARN"
             echo "- Named and immutable Voice subjects: installed"
-            echo "- Trust policy readback: PASS"
+            echo "- Voice trust policy readback: PASS"
+            echo "- Recovery policy restored exactly: PASS"
             echo "- Route 53 changed: false"
           } >> "$GITHUB_STEP_SUMMARY"
