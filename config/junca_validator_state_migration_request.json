@@ -1,9 +1,9 @@
 {
   "schema_version": "junca-validator-state-migration-request/v1",
+  "approval_phrase": "PUBLIC_TESTNET_VALIDATOR_STATE_MIGRATION",
   "state": "AUTHORIZED",
   "network": "Public Testnet",
   "environment": "public-testnet",
-  "approval_phrase": "PUBLIC_TESTNET_VALIDATOR_STATE_MIGRATION",
   "aws_account_id": "595710543956",
   "aws_region": "us-east-1",
   "terraform_state_bucket": "junca-social-ecosystem-chain-tfstate-595710543956-us-east-1",
