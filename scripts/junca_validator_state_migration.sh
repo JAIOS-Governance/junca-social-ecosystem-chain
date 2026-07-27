@@ -1737,32 +1737,60 @@ jq -e \
   $quorum[0][-1].quorum == "durable-certificate-3/3"
 ' "$artifact_dir/readback/validator-mapping.json" >/dev/null
 
-jq \
-  --slurpfile mappings "$artifact_dir/readback/validator-mapping.json" \
-  --slurpfile snapshots "$artifact_dir/readback/rollback-snapshots.json" '
-  def tags:
-    .Tags | map({(.Key): .Value}) | add;
-  $mappings[0]
-  | map(
-      . as $mapping
-      | (
-          $snapshots[0].Snapshots[]
-          | select(.SnapshotId == $mapping.rollback_snapshot_id)
-          | tags
-        ) as $snapshot_tags
-      | . + {
-          snapshot_binding: {
-            migration_token: $snapshot_tags.MigrationToken,
-            run_id: $snapshot_tags.GitHubRunId,
-            run_attempt: ($snapshot_tags.GitHubRunAttempt | tonumber),
-            head_sha: $snapshot_tags.HeadCommit,
-            migration_request_sha256:
-              $snapshot_tags.MigrationRequestSHA256,
-            github_event_sha256: $snapshot_tags.GitHubEventSHA256
+bind_validator_snapshot_evidence() {
+  local mappings_path="$1"
+  local snapshots_path="$2"
+  local output_path="$3"
+  jq -n \
+    --slurpfile mappings "$mappings_path" \
+    --slurpfile snapshots "$snapshots_path" '
+    def tags:
+      .Tags | map({(.Key): .Value}) | add;
+    $mappings[0]
+    | map(
+        . as $mapping
+        | (
+            $snapshots[0].Snapshots[]
+            | select(.SnapshotId == $mapping.rollback_snapshot_id)
+            | tags
+          ) as $snapshot_tags
+        | . + {
+            snapshot_binding: {
+              migration_token: $snapshot_tags.MigrationToken,
+              run_id: $snapshot_tags.GitHubRunId,
+              run_attempt: ($snapshot_tags.GitHubRunAttempt | tonumber),
+              head_sha: $snapshot_tags.HeadCommit,
+              migration_request_sha256:
+                $snapshot_tags.MigrationRequestSHA256,
+              github_event_sha256: $snapshot_tags.GitHubEventSHA256
+            }
           }
-        }
+      )
+    ' >"$output_path"
+  jq -e '
+    length == 3 and
+    all(
+      .[];
+      (.snapshot_binding.migration_token | length) > 0 and
+      (.snapshot_binding.run_id | length) > 0 and
+      .snapshot_binding.run_attempt >= 1 and
+      (.snapshot_binding.head_sha | test("^[0-9a-f]{40}$")) and
+      (
+        .snapshot_binding.migration_request_sha256 |
+        test("^[0-9a-f]{64}$")
+      ) and
+      (
+        .snapshot_binding.github_event_sha256 |
+        test("^[0-9a-f]{64}$")
+      )
     )
-' >"$artifact_dir/readback/validator-mapping-bound.json"
+  ' "$output_path" >/dev/null
+}
+
+bind_validator_snapshot_evidence \
+  "$artifact_dir/readback/validator-mapping.json" \
+  "$artifact_dir/readback/rollback-snapshots.json" \
+  "$artifact_dir/readback/validator-mapping-bound.json"
 
 jq -n \
   --arg account_id "$AWS_ACCOUNT_ID" \
