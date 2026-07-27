@@ -26,6 +26,7 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             return endpoint_test.HttpResponse(
                 200,
                 {
+                    "schema_version": "junca-public-gateway-health/v1",
                     "status": "healthy",
                     "read_only": True,
                     "mainnet_changed": False,
@@ -37,13 +38,28 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             return endpoint_test.HttpResponse(
                 200,
                 {
+                    "schema_version": "junca-public-explorer/v2",
                     "status": "ready",
                     "finalized_only": True,
+                    "read_only": True,
+                    "network": {
+                        "chain_id": "0x1352773",
+                        "chain_id_decimal": 20260723,
+                        "client_version": (
+                            "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
+                        ),
+                        "peer_count": 2,
+                        "peer_count_hex": "0x2",
+                    },
                     "head": {
                         "height": 7,
                         "hash": "0x" + "ab" * 32,
+                        "certificate_hash": "0x" + "cd" * 32,
                         "signed_power": 3,
                         "total_power": 3,
+                        "timestamp": "0x1234",
+                        "state_root": "0x" + "22" * 32,
+                        "transaction_count": 0,
                     },
                     "mainnet_changed": False,
                     "assets_moved": False,
@@ -59,9 +75,28 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
                     "error": {"code": -32601, "message": "method not found"},
                 },
             )
+        safe_results = {
+            "eth_chainId": "0x1352773",
+            "eth_blockNumber": "0x7",
+            "eth_getBlockByNumber": {
+                "number": "0x7",
+                "hash": "0x" + "ab" * 32,
+                "timestamp": "0x1234",
+                "stateRoot": "0x" + "22" * 32,
+                "transactions": [],
+            },
+            "net_peerCount": "0x2",
+            "web3_clientVersion": (
+                "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
+            ),
+        }
         return endpoint_test.HttpResponse(
             200,
-            {"jsonrpc": "2.0", "id": payload["id"], "result": "0x1"},
+            {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": safe_results[payload["method"]],
+            },
         )
 
     def test_complete_contract_passes_without_external_network(self):
@@ -107,6 +142,46 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(endpoint_test.AcceptanceError, "expected HTTP 200"):
             endpoint_test.run_acceptance(syncing_transport)
         self.assertEqual(len(self.calls), 2)
+
+    def test_legacy_database_without_certificate_body_fails_closed(self):
+        def legacy_transport(method, url, payload):
+            response = self.transport(method, url, payload)
+            if url == endpoint_test.EXPLORER_URL:
+                body = dict(response.body)
+                body.update({"status": "syncing", "head": None})
+                return endpoint_test.HttpResponse(503, body)
+            return response
+
+        with self.assertRaisesRegex(endpoint_test.AcceptanceError, "expected HTTP 200"):
+            endpoint_test.run_acceptance(legacy_transport)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_explorer_v1_cannot_pass_v2_rollout_gate(self):
+        def v1_transport(method, url, payload):
+            response = self.transport(method, url, payload)
+            if url == endpoint_test.EXPLORER_URL:
+                body = dict(response.body)
+                body["schema_version"] = "junca-public-explorer/v1"
+                return endpoint_test.HttpResponse(response.status, body)
+            return response
+
+        with self.assertRaisesRegex(endpoint_test.AcceptanceError, "v2 schema is required"):
+            endpoint_test.run_acceptance(v1_transport)
+
+    def test_missing_certificate_body_projection_fails_closed(self):
+        def incomplete_transport(method, url, payload):
+            response = self.transport(method, url, payload)
+            if url == endpoint_test.EXPLORER_URL:
+                body = dict(response.body)
+                body["head"] = dict(body["head"])
+                body["head"]["certificate_hash"] = None
+                return endpoint_test.HttpResponse(response.status, body)
+            return response
+
+        with self.assertRaisesRegex(
+            endpoint_test.AcceptanceError, "finalized certificate is missing"
+        ):
+            endpoint_test.run_acceptance(incomplete_transport)
 
     def test_unsafe_method_must_be_rejected_with_exact_contract(self):
         def permissive_transport(method, url, payload):
