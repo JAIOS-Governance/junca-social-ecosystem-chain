@@ -882,13 +882,15 @@ def verify_private_validator_health(
             HASH.fullmatch(str(head_hash)) is not None,
             f"private_ssm.{validator_id}.head_hash:invalid",
         )
-        head_timestamp = health.get("head_timestamp")
-        require(
-            isinstance(head_timestamp, int)
-            and not isinstance(head_timestamp, bool)
-            and head_timestamp >= 0,
-            f"private_ssm.{validator_id}.head_timestamp:invalid",
-        )
+        health_has_head_timestamp = "head_timestamp" in health
+        health_head_timestamp = health.get("head_timestamp")
+        if health_has_head_timestamp:
+            require(
+                isinstance(health_head_timestamp, int)
+                and not isinstance(health_head_timestamp, bool)
+                and health_head_timestamp >= 0,
+                f"private_ssm.{validator_id}.head_timestamp:invalid",
+            )
         require(
             height == migration_height and head_hash == migration_hash,
             f"private_ssm.{validator_id}.migration_head:mismatch",
@@ -979,6 +981,19 @@ def verify_private_validator_health(
             == migration_certificate_hash,
             f"private_ssm.{validator_id}.durable_head:mismatch",
         )
+        durable_head_timestamp = durable_head.get("timestamp")
+        require(
+            isinstance(durable_head_timestamp, int)
+            and not isinstance(durable_head_timestamp, bool)
+            and durable_head_timestamp >= 0,
+            f"private_ssm.{validator_id}.durable_head_timestamp:invalid",
+        )
+        if health_has_head_timestamp:
+            require(
+                health_head_timestamp == durable_head_timestamp,
+                f"private_ssm.{validator_id}.head_timestamp:"
+                "durable_mismatch",
+            )
         serialized_certificate = verify_finality_certificate(
             durable_state.get("certificate"),
             height=height,
@@ -1001,7 +1016,7 @@ def verify_private_validator_health(
             )
         chain_ids.append(chain_id)
         certificates.append(serialized_certificate)
-        heads.append((height, head_hash, head_timestamp))
+        heads.append((height, head_hash, durable_head_timestamp))
         normalized.append(
             {
                 "validator_id": validator_id,
@@ -1020,7 +1035,7 @@ def verify_private_validator_health(
         len(set(certificates)) == 1,
         "private_ssm.finality_certificate:mismatch",
     )
-    height, head_hash, head_timestamp = heads[0]
+    height, head_hash, durable_head_timestamp = heads[0]
     return {
         "mode": "private_ssm",
         "scope": report.get("scope"),
@@ -1030,7 +1045,7 @@ def verify_private_validator_health(
         "finalized_head": {
             "height": height,
             "hash": head_hash,
-            "timestamp": head_timestamp,
+            "timestamp": durable_head_timestamp,
             "certificate_hash": migration_certificate_hash,
         },
         "immutable_runtime_certificate_activation_pending":

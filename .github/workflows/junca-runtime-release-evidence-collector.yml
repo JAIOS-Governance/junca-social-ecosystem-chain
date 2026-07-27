@@ -438,6 +438,16 @@ jobs:
           ).fetchone()
           if head is None:
               raise RuntimeError("durable finalized head is absent")
+          timestamp_row = connection.execute(
+              """
+              SELECT timestamp
+              FROM block_timestamps
+              WHERE height=?
+              """,
+              (head["height"],),
+          ).fetchone()
+          if timestamp_row is None:
+              raise RuntimeError("durable finalized head timestamp is absent")
           certificate_row = connection.execute(
               """
               SELECT certificate_json
@@ -456,7 +466,10 @@ jobs:
                       "health": health,
                       "durable_state": {
                           "quick_check": quick_check,
-                          "head": dict(head),
+                          "head": {
+                              **dict(head),
+                              "timestamp": timestamp_row["timestamp"],
+                          },
                           "certificate": certificate,
                       },
                   },

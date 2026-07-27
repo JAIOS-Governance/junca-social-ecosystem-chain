@@ -53,6 +53,7 @@ MIGRATION_REQUEST = "7" * 64
 CHAIN_ID = 20260723
 FINALIZED_HEIGHT = 100
 FINALIZED_HASH = "0x" + "1" * 64
+FINALIZED_TIMESTAMP = 2_000_000_000
 
 
 def finality_certificate():
@@ -376,6 +377,7 @@ def private_health(values):
                         "block_hash": FINALIZED_HASH,
                         "finalized": 1,
                         "certificate_hash": certificate_hash,
+                        "timestamp": FINALIZED_TIMESTAMP,
                     },
                     "certificate": dict(certificate),
                 },
@@ -386,7 +388,7 @@ def private_health(values):
                     "validator_id": validator_id,
                     "head_height": FINALIZED_HEIGHT,
                     "head_hash": FINALIZED_HASH,
-                    "head_timestamp": 2_000_000_000,
+                    "head_timestamp": FINALIZED_TIMESTAMP,
                     "signer_resource_digest": hashlib.sha256(
                         signer_arn.encode("utf-8")
                     ).hexdigest(),
@@ -731,6 +733,43 @@ class EvidenceCollectorTests(unittest.TestCase):
         ):
             self.collect(values)
 
+    def test_missing_legacy_health_timestamp_uses_durable_canonical_value(self):
+        values = fixture()
+        values["public"]["public_services_acceptance_readback"]["value"][
+            "enabled"
+        ] = False
+        values["endpoints"] = None
+        values["private_validator_health"] = private_health(values)
+        for item in values["private_validator_health"]["validators"]:
+            item["health"].pop("head_timestamp")
+        _, paths = self.collect(values)
+        runtime = json.loads(paths[1].read_text(encoding="utf-8"))
+        self.assertEqual(
+            runtime["readback"]["finalized_head"]["timestamp"],
+            FINALIZED_TIMESTAMP,
+        )
+
+    def test_present_health_timestamp_must_match_durable_timestamp(self):
+        for value, error in (
+            (None, "head_timestamp:invalid"),
+            (FINALIZED_TIMESTAMP + 1, "head_timestamp:durable_mismatch"),
+        ):
+            with self.subTest(value=value):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                values["private_validator_health"]["validators"][0][
+                    "health"
+                ]["head_timestamp"] = value
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    error,
+                ):
+                    self.collect(values)
+
     def test_null_live_certificate_requires_validated_activation_transition(self):
         mutations = (
             (
@@ -880,6 +919,31 @@ class EvidenceCollectorTests(unittest.TestCase):
                     {"finalized": True}
                 ),
                 "durable_head:mismatch",
+            ),
+            (
+                "missing_timestamp",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][0]["durable_state"]["head"].pop("timestamp"),
+                "durable_head_timestamp:invalid",
+            ),
+            (
+                "boolean_timestamp",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][1]["durable_state"]["head"].update(
+                    {"timestamp": True}
+                ),
+                "durable_head_timestamp:invalid",
+            ),
+            (
+                "durable_timestamp_drift",
+                lambda values: values["private_validator_health"][
+                    "validators"
+                ][2]["durable_state"]["head"].update(
+                    {"timestamp": FINALIZED_TIMESTAMP + 1}
+                ),
+                "head_timestamp:durable_mismatch",
             ),
             (
                 "certificate_body",
@@ -1150,6 +1214,14 @@ class EvidenceCollectorTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
+            "FROM block_timestamps",
+            workflow,
+        )
+        self.assertIn(
+            '(head["height"],)',
+            workflow,
+        )
+        self.assertIn(
             "durable_state: $readback[0].durable_state",
             workflow,
         )
@@ -1230,6 +1302,10 @@ class EvidenceCollectorTests(unittest.TestCase):
                   height INTEGER PRIMARY KEY,
                   certificate_json TEXT NOT NULL
                 );
+                CREATE TABLE block_timestamps(
+                  height INTEGER PRIMARY KEY,
+                  timestamp INTEGER NOT NULL
+                );
                 """
             )
             certificate = finality_certificate()
@@ -1248,6 +1324,10 @@ class EvidenceCollectorTests(unittest.TestCase):
                     FINALIZED_HEIGHT,
                     json.dumps(certificate),
                 ),
+            )
+            connection.execute(
+                "INSERT INTO block_timestamps VALUES(?,?)",
+                (FINALIZED_HEIGHT, FINALIZED_TIMESTAMP),
             )
             connection.commit()
             connection.close()
@@ -1275,6 +1355,7 @@ class EvidenceCollectorTests(unittest.TestCase):
                 "block_hash": FINALIZED_HASH,
                 "finalized": 1,
                 "certificate_hash": certificate["certificate_hash"],
+                "timestamp": FINALIZED_TIMESTAMP,
             },
         )
         self.assertEqual(
@@ -1284,6 +1365,73 @@ class EvidenceCollectorTests(unittest.TestCase):
         self.assertEqual(
             readback["durable_state"]["quick_check"],
             "ok",
+        )
+
+    def test_workflow_durable_reader_rejects_missing_head_timestamp(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        match = re.search(
+            r"base64 -w0 <<'PY'\n(?P<script>.*?)\n          PY",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        script = textwrap.dedent(match.group("script"))
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "state.sqlite"
+            connection = sqlite3.connect(state_path)
+            connection.executescript(
+                """
+                CREATE TABLE blocks(
+                  height INTEGER PRIMARY KEY,
+                  block_hash TEXT,
+                  finalized INTEGER,
+                  certificate_hash TEXT
+                );
+                CREATE TABLE finality_certificates(
+                  height INTEGER PRIMARY KEY,
+                  certificate_json TEXT NOT NULL
+                );
+                CREATE TABLE block_timestamps(
+                  height INTEGER PRIMARY KEY,
+                  timestamp INTEGER NOT NULL
+                );
+                """
+            )
+            certificate = finality_certificate()
+            connection.execute(
+                "INSERT INTO blocks VALUES(?,?,?,?)",
+                (
+                    FINALIZED_HEIGHT,
+                    FINALIZED_HASH,
+                    1,
+                    certificate["certificate_hash"],
+                ),
+            )
+            connection.execute(
+                "INSERT INTO finality_certificates VALUES(?,?)",
+                (FINALIZED_HEIGHT, json.dumps(certificate)),
+            )
+            connection.commit()
+            connection.close()
+            script = script.replace(
+                "/var/lib/junca/state.sqlite",
+                str(state_path),
+            )
+            environment = dict(os.environ)
+            environment["JUNCA_HEALTH_JSON"] = json.dumps(
+                {"status": "healthy"}
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "durable finalized head timestamp is absent",
+            result.stderr,
         )
 
 
