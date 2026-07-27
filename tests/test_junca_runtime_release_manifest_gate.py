@@ -70,6 +70,7 @@ def evidence():
             "SourceCommit": COMMIT,
             "NodeArtifactSHA256": ARTIFACT,
             "GenesisSHA256": GENESIS,
+            "RequestDigest": REQUEST,
             "MainnetChanged": "false",
             "AssetsMoved": "false",
             "BridgeActivated": "false",
@@ -169,6 +170,15 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         )
         self.assertIn(
             "manifest.ami_provenance.GenesisSHA256:mismatch",
+            decision["failures"],
+        )
+
+    def test_ami_provenance_must_bind_request_digest(self):
+        manifest, explorer, ebs = evidence()
+        manifest["ami_provenance"]["RequestDigest"] = "0" * 64
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertIn(
+            "manifest.ami_provenance.RequestDigest:mismatch",
             decision["failures"],
         )
 
