@@ -205,20 +205,20 @@ jobs:
               --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
             test "${code}" = "200"
           done
-          for asset in junca-j-r21.svg junca-j-r21-192.png junca-j-r21-512.png junca-j-r21-maskable-512.png junca-j-r21-apple-touch.png junca-j-r21.webmanifest; do
+          for asset in favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png; do
             curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
               --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
             cmp "docs/technical-reference/dist/${asset}" "/tmp/${asset//\//-}"
           done
           grep -F 'rel="canonical" href="https://docs.jaios-governance.org/"' /tmp/home.html
-          grep -F 'rel="manifest" href="https://docs.jaios-governance.org/junca-j-r21.webmanifest"' /tmp/home.html
-          grep -F 'rel="apple-touch-icon" href="https://docs.jaios-governance.org/junca-j-r21-apple-touch.png"' /tmp/home.html
+          grep -F 'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest"' /tmp/home.html
+          grep -F 'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png"' /tmp/home.html
           manifest_headers="$(curl --fail --silent --show-error --head \
-            "https://docs.jaios-governance.org/junca-j-r21.webmanifest")"
+            "https://docs.jaios-governance.org/manifest.webmanifest")"
           grep -i '^content-type: application/manifest+json' <<< "${manifest_headers}"
           grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${manifest_headers}"
           icon_headers="$(curl --fail --silent --show-error --head \
-            "https://docs.jaios-governance.org/junca-j-r21-192.png")"
+            "https://docs.jaios-governance.org/icon-192.png")"
           grep -i '^content-type: image/png' <<< "${icon_headers}"
           grep -i '^cache-control: public,max-age=31536000,immutable' <<< "${icon_headers}"
           grep -F 'Public Testnet' /tmp/home.html
