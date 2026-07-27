@@ -225,12 +225,24 @@ jobs:
 
           jq -n \
             --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg foundation_run_id "${{ steps.foundation.outputs.run_id }}" \
             --arg acceptance_sha256 "$RUNTIME_ACCEPTANCE_SHA256" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            --arg ami_id "$NODE_AMI_ID" \
             --slurpfile observations artifacts/public-endpoint-observations.json '{
               schema_version: "junca-public-testnet-publication/v1",
               result: "PASS",
               release_run_url: $run_url,
+              foundation_run_id: $foundation_run_id,
               validator_acceptance_sha256: $acceptance_sha256,
+              candidate_binding: {
+                source_commit: $source_commit,
+                node_artifact_sha256: $node_artifact_sha256,
+                genesis_sha256: $genesis_sha256,
+                ami_id: $ami_id
+              },
               endpoints: {
                 rpc: "https://rpc.jaios-governance.org",
                 explorer: "https://explorer.jaios-governance.org",
