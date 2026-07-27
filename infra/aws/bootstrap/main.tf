@@ -269,6 +269,18 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
       Action = [
         "ec2:*",
         "elasticloadbalancing:*",
+        "wafv2:AssociateWebACL",
+        "wafv2:CreateWebACL",
+        "wafv2:DeleteWebACL",
+        "wafv2:DisassociateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:GetWebACLForResource",
+        "wafv2:ListResourcesForWebACL",
+        "wafv2:ListTagsForResource",
+        "wafv2:ListWebACLs",
+        "wafv2:TagResource",
+        "wafv2:UntagResource",
+        "wafv2:UpdateWebACL",
         "route53:ChangeResourceRecordSets",
         "route53:GetChange",
         "route53:GetHostedZone",
@@ -323,6 +335,17 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
       Condition = {
         StringEqualsIfExists = {
           "aws:ResourceTag/Project" = "JUNCA Social Ecosystem Chain"
+        }
+      }
+    },
+    {
+      Sid      = "CreateElasticLoadBalancingServiceRole"
+      Effect   = "Allow"
+      Action   = "iam:CreateServiceLinkedRole"
+      Resource = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
+      Condition = {
+        StringEquals = {
+          "iam:AWSServiceName" = "elasticloadbalancing.amazonaws.com"
         }
       }
     }]
