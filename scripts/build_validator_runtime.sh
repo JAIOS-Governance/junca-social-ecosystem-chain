@@ -14,6 +14,8 @@ find "${repo_root}/jaios/social_ecosystem_chain" -maxdepth 1 -type f -name '*.py
   "${output_dir}/usr/local/lib/junca/jaios/social_ecosystem_chain/" \;
 install -m 0755 "${repo_root}/scripts/junca-chain-node" \
   "${output_dir}/usr/local/bin/junca-chain-node"
+install -m 0755 "${repo_root}/scripts/junca-public-gateway" \
+  "${output_dir}/usr/local/bin/junca-public-gateway"
 install -m 0644 "${repo_root}/packaging/systemd/junca-validator.service" \
   "${output_dir}/etc/systemd/system/junca-validator.service"
 
@@ -25,6 +27,17 @@ path.write_text(text.replace(
     "from jaios.social_ecosystem_chain.validator_node import main",
     "import sys\nsys.path.insert(0, '/usr/local/lib/junca')\n"
     "from jaios.social_ecosystem_chain.validator_node import main",
+))
+PY
+
+python3 - "${output_dir}/usr/local/bin/junca-public-gateway" <<'PY'
+from pathlib import Path
+path = Path(__import__("sys").argv[1])
+text = path.read_text()
+path.write_text(text.replace(
+    "from jaios.social_ecosystem_chain.public_gateway import main",
+    "import sys\nsys.path.insert(0, '/usr/local/lib/junca')\n"
+    "from jaios.social_ecosystem_chain.public_gateway import main",
 ))
 PY
 
