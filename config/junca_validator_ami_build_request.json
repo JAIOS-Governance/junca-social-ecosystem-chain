@@ -10,11 +10,11 @@
   "genesis_artifact_name": "junca-validator-genesis-30273062161",
   "node_sha256": "6441304649985de9a12c8758584785e0e0cc980b793fb735a1c5f0cffba70f14",
   "genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
+  "request_sha256": "a64b7762bc561ce1ab3fe24bff95a4f1dc756f9e27d8270f4126e54e496815ec",
   "boundaries": {
     "terraform_state_changed": false,
     "mainnet_changed": false,
     "assets_moved": false,
     "bridge_activated": false
-  },
-  "request_sha256": "a64b7762bc561ce1ab3fe24bff95a4f1dc756f9e27d8270f4126e54e496815ec"
+  }
 }
