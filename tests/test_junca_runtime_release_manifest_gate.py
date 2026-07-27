@@ -208,14 +208,43 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         decision = evaluate(manifest, explorer, ebs)
         self.assertGreaterEqual(decision["failure_count"], 3)
 
-    def test_workflow_is_read_only_and_head_bound(self):
+    def test_workflow_is_read_only_and_runtime_source_bound(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("contents: read", workflow)
         self.assertIn("actions: read", workflow)
         self.assertNotIn("id-token: write", workflow)
         self.assertNotIn("contents: write", workflow)
         self.assertIn("ref: ${{ github.sha }}", workflow)
-        self.assertIn("SOURCE_COMMIT: ${{ github.sha }}", workflow)
+        self.assertIn(
+            "source_commit:\n"
+            "        description: Exact 40-character source commit bound to the "
+            "runtime artifacts\n"
+            "        required: true\n"
+            "        type: string",
+            workflow,
+        )
+        self.assertIn("SOURCE_COMMIT: ${{ inputs.source_commit }}", workflow)
+        self.assertNotIn("SOURCE_COMMIT: ${{ github.sha }}", workflow)
+        self.assertIn('[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]', workflow)
+
+    def test_workflow_verifies_evidence_run_provenance(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("evidence_workflow_name:", workflow)
+        self.assertIn("Verify candidate evidence run provenance", workflow)
+        self.assertIn(
+            '"repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}"',
+            workflow,
+        )
+        for required in (
+            '.status == "completed"',
+            '.conclusion == "success"',
+            ".name == $workflow",
+            '.head_branch == "main"',
+            ".head_sha == $source_commit",
+            ".repository.full_name == $repository",
+            ".head_repository.full_name == $repository",
+        ):
+            self.assertIn(required, workflow)
 
     def test_workflow_contains_no_deployment_or_apply_command(self):
         workflow = WORKFLOW.read_text(encoding="utf-8").lower()

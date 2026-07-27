@@ -7,6 +7,10 @@ on:
         description: "Verified immutable AMI workflow run ID"
         required: true
         type: string
+      manifest_gate_run_id:
+        description: "Successful JUNCA Runtime Release Manifest Gate run ID"
+        required: true
+        type: string
       authorize_rollout:
         description: "Exact authorization phrase: PUBLIC_TESTNET_ROLLOUT"
         required: true
@@ -25,10 +29,12 @@ concurrency:
 
 jobs:
   deploy-and-accept:
-    if: inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'
     runs-on: ubuntu-24.04
     environment: public-testnet
-    timeout-minutes: 45
+    timeout-minutes: 150
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
@@ -38,6 +44,7 @@ jobs:
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
       AMI_RUN_ID: ${{ inputs.ami_run_id }}
+      MANIFEST_GATE_RUN_ID: ${{ inputs.manifest_gate_run_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +53,34 @@ jobs:
           terraform_version: 1.9.8
           terraform_wrapper: false
 
+      - name: Verify immutable AMI and manifest workflow provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$MANIFEST_GATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          ami_run="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${AMI_RUN_ID}")"
+          manifest_run="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${MANIFEST_GATE_RUN_ID}")"
+          jq -e --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Immutable AMI Build" and
+            .head_branch == "main" and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$ami_run"
+          jq -e --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Runtime Release Manifest Gate" and
+            .head_branch == "main" and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$manifest_run"
+
       - uses: actions/download-artifact@v4
         with:
           name: junca-validator-ami-build-${{ env.AMI_RUN_ID }}
@@ -53,11 +88,12 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ env.AMI_RUN_ID }}
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: actions/download-artifact@v4
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: junca-validator-release-${{ github.run_id }}
+          name: junca-runtime-release-manifest-gate-${{ env.MANIFEST_GATE_RUN_ID }}
+          path: artifacts/manifest
+          github-token: ${{ github.token }}
+          run-id: ${{ env.MANIFEST_GATE_RUN_ID }}
 
       - name: Bind verified immutable AMI inputs
         run: |
@@ -77,6 +113,49 @@ jobs:
             echo "NODE_ARTIFACT_SHA256=$(jq -er .node_artifact_sha256 "$evidence")"
             echo "GENESIS_SHA256=$(jq -er .genesis_sha256 "$evidence")"
             echo "SOURCE_COMMIT=$(jq -er .source_commit "$evidence")"
+          } >> "$GITHUB_ENV"
+
+          decision=artifacts/manifest/junca-runtime-release-manifest-decision.json
+          test "$(find artifacts/manifest -type f | wc -l)" = 1
+          jq -e \
+            --arg source_commit "$(jq -er .source_commit "$evidence")" \
+            --arg node_sha256 "$(jq -er .node_artifact_sha256 "$evidence")" \
+            --arg genesis_sha256 "$(jq -er .genesis_sha256 "$evidence")" \
+            --arg ami_id "$(jq -er .ami_id "$evidence")" '
+            .schema_version == "junca-runtime-release-manifest-decision/v1" and
+            .accepted == true and
+            .decision == "PROMOTION_GATE_PASS" and
+            .candidate.source_commit == $source_commit and
+            .candidate.node_artifact_sha256 == $node_sha256 and
+            .candidate.genesis_sha256 == $genesis_sha256 and
+            .candidate.ami_id == $ami_id and
+            .release_boundary.mainnet_changed == false and
+            .release_boundary.assets_moved == false and
+            .release_boundary.bridge_activated == false
+          ' "$decision"
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-release-${{ github.run_id }}
+
+      - name: Generate one-time shared automatic finality epoch
+        run: |
+          set -euo pipefail
+          interval=30
+          now="$(date +%s)"
+          # Keep activation clear of the bounded three-node rolling replacement
+          # and SSM readiness windows. The state is preserved on later releases,
+          # so this safety delay is paid once.
+          activation_delay=3600
+          slot_epoch="$(( ((now + activation_delay + interval - 1) / interval) * interval ))"
+          test "$slot_epoch" -gt "$now"
+          test "$((slot_epoch % interval))" -eq 0
+          {
+            echo "AUTOMATIC_FINALITY_ENABLED=true"
+            echo "VALIDATOR_BLOCK_INTERVAL_SECONDS=$interval"
+            echo "VALIDATOR_SLOT_EPOCH_SECONDS=$slot_epoch"
           } >> "$GITHUB_ENV"
 
       - name: Apply validators-only Terraform foundation
@@ -254,6 +333,161 @@ jobs:
             bridge_activated: false
           }' artifacts/health-i-*.json \
             > artifacts/public-testnet-runtime-acceptance.json
+          sha256sum artifacts/public-testnet-runtime-acceptance.json \
+            > artifacts/public-testnet-runtime-acceptance.json.sha256
+
+      - name: Require two consecutive canonical finality slots
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          initial_height="$(
+            jq -s -er '
+              (map(.head_height) | unique) as $heads
+              | select(($heads | length) == 1)
+              | $heads[0]
+            ' artifacts/health-i-*.json
+          )"
+          finality="$(
+            jq -ce '
+              .automatic_finality_readback.value
+              | select(
+                  .enabled == true and
+                  .block_interval_seconds == 30 and
+                  (.slot_epoch_seconds | type) == "number" and
+                  .slot_epoch_seconds > 0 and
+                  .slot_epoch_seconds % 30 == 0
+                )
+            ' artifacts/foundation-outputs.json
+          )"
+          slot_epoch="$(jq -er .slot_epoch_seconds <<<"$finality")"
+          interval="$(jq -er .block_interval_seconds <<<"$finality")"
+          ready_at="$((slot_epoch + ((initial_height + 1) * interval) + 5))"
+          now="$(date +%s)"
+          if (( ready_at > now )); then
+            sleep "$((ready_at - now))"
+          fi
+
+          health_command='curl -fsS http://127.0.0.1:8545/health'
+          jq -n --arg command "$health_command" \
+            '{commands: [$command]}' > artifacts/ssm-automatic-health.json
+          observed_height="$initial_height"
+          for series in 1 2; do
+            expected_height="$((observed_height + 1))"
+            accepted=false
+            for observation in $(seq 1 24); do
+              command_id="$(aws ssm send-command \
+                --instance-ids "${instances[@]}" \
+                --document-name AWS-RunShellScript \
+                --parameters file://artifacts/ssm-automatic-health.json \
+                --comment "JUNCA Canonical Finality Slot ${series} Readback" \
+                --query Command.CommandId --output text)"
+              for instance in "${instances[@]}"; do
+                command_status=""
+                for attempt in $(seq 1 30); do
+                  command_status="$(aws ssm get-command-invocation \
+                    --command-id "$command_id" --instance-id "$instance" \
+                    --query Status --output text)"
+                  case "$command_status" in
+                    Success) break ;;
+                    Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+                  esac
+                  test "$attempt" -lt 30
+                  sleep 2
+                done
+                [[ "$command_status" == "Success" ]]
+                aws ssm get-command-invocation \
+                  --command-id "$command_id" --instance-id "$instance" \
+                  > "artifacts/automatic-${series}-command-${instance}.json"
+                jq -er .StandardOutputContent \
+                  "artifacts/automatic-${series}-command-${instance}.json" \
+                  > "artifacts/automatic-${series}-health-${instance}.json"
+              done
+              if jq -s -e \
+                --argjson expected_height "$expected_height" \
+                --argjson slot_epoch "$slot_epoch" '
+                length == 3 and
+                (map(.status) | unique) == ["healthy"] and
+                (map(.head_height) | unique) == [$expected_height] and
+                (map(.head_hash) | unique | length) == 1 and
+                (map(.head_timestamp) | unique | length) == 1 and
+                (map(.consensus.last_certificate_hash) | unique | length) == 1 and
+                (map(.consensus.last_certificate | tojson) | unique | length) == 1 and
+                all(
+                  .automatic_finality_enabled == true and
+                  .automatic_finality_loop_running == true and
+                  .block_interval_seconds == 30 and
+                  .slot_epoch_seconds == $slot_epoch and
+                  (.head_timestamp | type) == "number" and
+                  .head_timestamp ==
+                    ($slot_epoch +
+                      (.automatic_finality_last_successful_slot * 30)) and
+                  .automatic_finality.last_successful_height == .head_height and
+                  .consensus.last_certificate.finality_status == "FINALIZED" and
+                  .consensus.last_certificate.height == .head_height and
+                  .consensus.last_certificate.block_hash == .head_hash and
+                  .consensus.last_certificate.signed_power == 3 and
+                  .consensus.last_certificate.total_power == 3 and
+                  .consensus.last_certificate.validator_ids ==
+                    ["validator-01","validator-02","validator-03"] and
+                  .private_key_material_accepted == false and
+                  .mainnet_changed == false and
+                  .assets_moved == false and
+                  .bridge_activated == false
+                )
+              ' artifacts/automatic-${series}-health-i-*.json >/dev/null; then
+                accepted=true
+                observed_height="$expected_height"
+                break
+              fi
+              sleep 5
+            done
+            test "$accepted" = "true"
+          done
+
+          first_timestamp="$(
+            jq -s -er 'map(.head_timestamp) | unique | .[0]' \
+              artifacts/automatic-1-health-i-*.json
+          )"
+          final_timestamp="$(
+            jq -s -er 'map(.head_timestamp) | unique | .[0]' \
+              artifacts/automatic-2-health-i-*.json
+          )"
+          test "$((final_timestamp - first_timestamp))" -eq "$interval"
+
+          jq -n \
+            --argjson initial_height "$initial_height" \
+            --argjson slot_epoch "$slot_epoch" \
+            --argjson first_timestamp "$first_timestamp" \
+            --argjson final_timestamp "$final_timestamp" \
+            --slurpfile before <(jq -s '.' artifacts/health-i-*.json) \
+            --slurpfile first <(jq -s '.' artifacts/automatic-1-health-i-*.json) \
+            --slurpfile second <(jq -s '.' artifacts/automatic-2-health-i-*.json) '{
+              schema_version: "junca-public-testnet-runtime-acceptance/v1",
+              result: "PASS",
+              validators: $second[0],
+              observations: {
+                before: $before[0],
+                first: $first[0],
+                second: $second[0],
+                initial_height: $initial_height,
+                first_height: $first[0][0].head_height,
+                final_height: $second[0][0].head_height,
+                first_timestamp: $first_timestamp,
+                final_timestamp: $final_timestamp,
+                consecutive_advances: 2,
+                canonical_timestamp_delta_seconds:
+                  ($final_timestamp - $first_timestamp),
+                head_advanced: true
+              },
+              automatic_finality: {
+                enabled: true,
+                block_interval_seconds: 30,
+                slot_epoch_seconds: $slot_epoch
+              },
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/public-testnet-runtime-acceptance.json
           sha256sum artifacts/public-testnet-runtime-acceptance.json \
             > artifacts/public-testnet-runtime-acceptance.json.sha256
 

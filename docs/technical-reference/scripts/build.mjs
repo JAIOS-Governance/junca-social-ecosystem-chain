@@ -33,15 +33,15 @@ const headerExplorerLink = [
 const runtimePanel = [
   '<section class="live-runtime-evidence" aria-labelledby="live-runtime-evidence-title">',
   '<div><small>Public Testnet · Live operations</small>',
-  '<h2 id="live-runtime-evidence-title">Testing is active. Runtime evidence is public.</h2>',
-  '<p>Latest verified public readback · 27 July 2026</p></div>',
-  '<dl><div><dt>Network</dt><dd>Healthy</dd></div>',
-  '<div><dt>Finality</dt><dd>Ready · 3 / 3</dd></div>',
+  '<h2 id="live-runtime-evidence-title">Public endpoints are active. Runtime acceptance is pending.</h2>',
+  '<p>Latest public endpoint readback · 27 July 2026</p></div>',
+  '<dl><div><dt>Network</dt><dd>Endpoint active</dd></div>',
+  '<div><dt>Finality</dt><dd>Certificate observed · 3 / 3</dd></div>',
   '<div><dt>Finalized Head</dt><dd>Height 1</dd></div>',
   '<div><dt>Chain ID</dt><dd>20260723</dd></div>',
   '<div><dt>Transactions</dt><dd>0</dd></div>',
   '<div><dt>Peer Count</dt><dd>0</dd></div>',
-  '<div><dt>Automation</dt><dd>Active · PASS</dd></div>',
+  '<div><dt>Automation</dt><dd>Pending · head not advancing</dd></div>',
   '<div><dt>Access</dt><dd>Read-only</dd></div></dl>',
   '<p class="live-runtime-boundary">Continuous block production and historical indexing remain under test. ',
   'Mainnet, asset movement and bridge activation are not active.</p>',
@@ -123,11 +123,11 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
       .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R27")
-      .replaceAll("Runtime Deployment in Progress", "Public Testnet Runtime Active")
-      .replaceAll("Pending Live Acceptance", "Live Acceptance Verified")
+      .replaceAll("Runtime Deployment in Progress", "Public Testnet Endpoints Active")
+      .replaceAll("Pending Live Acceptance", "Runtime Acceptance Pending")
       .replaceAll("Pending Runtime Binding", "Read-only Endpoint Active")
-      .replaceAll("Runtime Unverified", "Runtime Verified")
-      .replaceAll("Runtime unverified", "Runtime verified")
+      .replaceAll("Runtime Unverified", "Runtime Acceptance Pending")
+      .replaceAll("Runtime unverified", "Runtime acceptance pending")
       .replaceAll("Public endpoint pending", "Public endpoint active")
       .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260727-r26")
       .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260727-r26")
@@ -170,12 +170,12 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   chain_source_commit: chainSource,
   canonical_origin: "https://docs.jaios-governance.org",
   network_label: "Public Testnet / Read-only / Finalized / No Monetary Value",
-  runtime_status: "VERIFIED",
+  runtime_status: "PENDING",
   public_endpoint_status: "ACTIVE_READ_ONLY",
   runtime_evidence: {
     observed_date: "2026-07-27",
-    network: "HEALTHY",
-    finality: "READY",
+    network: "PUBLIC_ENDPOINT_ACTIVE",
+    finality: "CERTIFICATE_OBSERVED",
     finalized_height: 1,
     signed_power: 3,
     total_power: 3,

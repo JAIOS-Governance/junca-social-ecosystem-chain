@@ -53,6 +53,7 @@ NETWORK_LABEL = "Public Testnet / No Monetary Value"
 GENESIS_SCHEMA = "junca-public-testnet-genesis/v1"
 CLIENT_VERSION = "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
 ZERO_HASH = "0x" + ("0" * 64)
+MANUAL_BLOCK_INTERVAL_SECONDS = 30
 
 
 class ValidatorNodeError(ValueError):
@@ -641,6 +642,14 @@ class NodeState:
     signer_resource: str
     started_at: int
     peer_count: int = 0
+    automatic_finality_enabled: bool = False
+    block_interval_seconds: int = 0
+    slot_epoch_seconds: int = 0
+    automatic_finality_loop_running: bool = False
+    automatic_finality_last_attempted_slot: int | None = None
+    automatic_finality_last_successful_slot: int | None = None
+    automatic_finality_last_attempted_height: int | None = None
+    automatic_finality_last_successful_height: int | None = None
     consensus: PublicTestnetConsensus | None = None
     kms: AwsKmsSecp256k1Adapter | None = None
     peer_transport: PrivateVpcPeerTransport | None = None
@@ -655,9 +664,18 @@ class NodeState:
         with self.consensus_lock:
             proposal = self.consensus.runtime.pending_proposal
             if proposal is None:
+                if block_timestamp is None:
+                    current = int(datetime.now(timezone.utc).timestamp())
+                    block_timestamp = (
+                        current
+                        // MANUAL_BLOCK_INTERVAL_SECONDS
+                        * MANUAL_BLOCK_INTERVAL_SECONDS
+                    )
                 proposal = self.consensus.propose(
                     block_timestamp=block_timestamp
                 )
+            elif block_timestamp is None:
+                block_timestamp = proposal.block_timestamp
             elif proposal.block_timestamp != block_timestamp:
                 raise ValidatorNodeError(
                     "pending proposal timestamp does not match canonical slot"
@@ -690,6 +708,25 @@ class NodeState:
         # the new certificate while the peer receiver commits finality.
         with self.consensus_lock:
             head = self.store.head()
+            head_timestamp = self.store.block_timestamp(head.height)
+            automatic_finality = {
+                "enabled": self.automatic_finality_enabled,
+                "loop_running": self.automatic_finality_loop_running,
+                "block_interval_seconds": self.block_interval_seconds,
+                "slot_epoch_seconds": self.slot_epoch_seconds,
+                "last_attempted_slot": (
+                    self.automatic_finality_last_attempted_slot
+                ),
+                "last_successful_slot": (
+                    self.automatic_finality_last_successful_slot
+                ),
+                "last_attempted_height": (
+                    self.automatic_finality_last_attempted_height
+                ),
+                "last_successful_height": (
+                    self.automatic_finality_last_successful_height
+                ),
+            }
             evidence = {
                 "status": "healthy",
                 "network": NETWORK_LABEL,
@@ -697,11 +734,25 @@ class NodeState:
                 "validator_id": self.validator_id,
                 "head_height": head.height,
                 "head_hash": head.block_hash,
+                "head_timestamp": head_timestamp,
                 "genesis_hash": self.genesis_hash,
                 "signer_resource_digest": hashlib.sha256(
                     self.signer_resource.encode()
                 ).hexdigest(),
                 "private_key_material_accepted": False,
+                "automatic_finality_enabled": self.automatic_finality_enabled,
+                "block_interval_seconds": self.block_interval_seconds,
+                "slot_epoch_seconds": self.slot_epoch_seconds,
+                "automatic_finality_loop_running": (
+                    self.automatic_finality_loop_running
+                ),
+                "automatic_finality_last_attempted_slot": (
+                    self.automatic_finality_last_attempted_slot
+                ),
+                "automatic_finality_last_successful_slot": (
+                    self.automatic_finality_last_successful_slot
+                ),
+                "automatic_finality": automatic_finality,
                 "mainnet_changed": False,
                 "assets_moved": False,
                 "bridge_activated": False,
@@ -815,36 +866,81 @@ class BoundedFinalityLoop:
         self._wait = wait or self._stop.wait
         self._thread: threading.Thread | None = None
 
-    def canonical_timestamp(self, height: int) -> int:
-        if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
-            raise ValidatorNodeError("slot height must be positive")
-        return self.epoch_seconds + (height * self.interval_seconds)
+    def canonical_timestamp(self, slot: int) -> int:
+        if isinstance(slot, bool) or not isinstance(slot, int) or slot <= 0:
+            raise ValidatorNodeError("slot index must be positive")
+        return self.epoch_seconds + (slot * self.interval_seconds)
 
     def run_once(self, now: float | None = None) -> bool:
         current = self._clock() if now is None else now
         if current < self.epoch_seconds:
             return False
-        due_height = int((current - self.epoch_seconds) // self.interval_seconds)
-        next_height = self.state.store.head_height + 1
-        if due_height < next_height:
+        current_slot = int(
+            (current - self.epoch_seconds) // self.interval_seconds
+        )
+        if current_slot <= 0:
             return False
-        timestamp = self.canonical_timestamp(next_height)
-        self.state.broadcast_vote(block_timestamp=timestamp)
-        return True
+        timestamp = self.canonical_timestamp(current_slot)
+        with self.state.consensus_lock:
+            head = self.state.store.head()
+            head_timestamp = self.state.store.block_timestamp(head.height)
+            # A block finalized by any validator in this wall-clock slot
+            # suppresses another height across the whole validator set.
+            if head_timestamp is not None and head_timestamp >= timestamp:
+                return False
+            pending = (
+                self.state.consensus.runtime.pending_proposal
+                if self.state.consensus is not None
+                else None
+            )
+            # Never carry an unfinalized proposal into a different real slot:
+            # its block hash is already bound to the earlier timestamp.
+            if (
+                pending is not None
+                and pending.block_timestamp != timestamp
+            ):
+                return False
+            # A completed broadcast needs no same-slot repetition. A failed
+            # delivery may retry the same pending height and timestamp.
+            if (
+                self.state.automatic_finality_last_attempted_slot
+                == current_slot
+                and self.state.automatic_finality_last_successful_slot
+                == current_slot
+            ):
+                return False
+            next_height = head.height + 1
+            self.state.automatic_finality_last_attempted_slot = current_slot
+            self.state.automatic_finality_last_attempted_height = next_height
+            self.state.broadcast_vote(block_timestamp=timestamp)
+            self.state.automatic_finality_last_successful_slot = current_slot
+            self.state.automatic_finality_last_successful_height = next_height
+            return True
 
     def start(self) -> None:
         if self._thread is not None:
             raise ValidatorNodeError("finality loop is already started")
+        self._stop.clear()
+        with self.state.consensus_lock:
+            self.state.automatic_finality_loop_running = True
         self._thread = threading.Thread(
             target=self._run, name="junca-finality-loop", daemon=True
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception:
+            self._thread = None
+            with self.state.consensus_lock:
+                self.state.automatic_finality_loop_running = False
+            raise
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
         self._thread = None
+        with self.state.consensus_lock:
+            self.state.automatic_finality_loop_running = False
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -978,6 +1074,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     state = initialize_state(
         genesis, args.data_dir, args.validator_id, args.signer_resource
     )
+    state.automatic_finality_enabled = args.block_interval_seconds > 0
+    state.block_interval_seconds = args.block_interval_seconds
+    state.slot_epoch_seconds = args.slot_epoch_seconds
     transport: PrivateVpcPeerTransport | None = None
     finality_loop: BoundedFinalityLoop | None = None
     if args.block_interval_seconds and (

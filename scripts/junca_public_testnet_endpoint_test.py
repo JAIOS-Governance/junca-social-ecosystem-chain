@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -261,10 +262,18 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
     return {
         "status": "PASS",
         "scope": "Public Testnet Runtime Acceptance / Read-only",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
         "endpoints": {
             "health": HEALTH_URL,
             "explorer": EXPLORER_URL,
             "rpc": RPC_URL,
+        },
+        "finalized_head": {
+            "height": head["height"],
+            "hash": head["hash"],
+            "timestamp": head["timestamp"],
+            "state_root": head["state_root"],
+            "certificate_hash": head["certificate_hash"],
         },
         "checks": checks,
     }

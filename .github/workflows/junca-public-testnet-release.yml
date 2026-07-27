@@ -4,7 +4,6 @@ on:
   workflow_run:
     workflows:
       - "JUNCA Validator Foundation Release"
-      - "JUNCA Public Testnet IAM Recovery"
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -24,9 +23,13 @@ concurrency:
 jobs:
   publish-and-verify:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      ) ||
       (
         github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.name == 'JUNCA Validator Foundation Release' &&
         github.event.workflow_run.head_branch == 'main' &&
         github.event.workflow_run.head_repository.full_name == github.repository
       )
@@ -41,12 +44,53 @@ jobs:
       DOMAIN_NAME: jaios-governance.org
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
-      FOUNDATION_RUN_ID: ${{ github.event.workflow_run.name == 'JUNCA Public Testnet IAM Recovery' && '30237527940' || github.event.workflow_run.id || inputs.foundation_run_id }}
 
     steps:
+      - name: Resolve exact Validator Foundation Release run
+        id: foundation
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          MANUAL_FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_run)
+              test "$WORKFLOW_RUN_NAME" = "JUNCA Validator Foundation Release"
+              run_id="$WORKFLOW_RUN_ID"
+              ;;
+            workflow_dispatch)
+              run_id="$MANUAL_FOUNDATION_RUN_ID"
+              ;;
+            *)
+              echo "::error::Unsupported release event: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          run_json="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${run_id}")"
+          head_sha="$(jq -er \
+            --arg repository "${{ github.repository }}" '
+            select(
+              .status == "completed" and
+              .conclusion == "success" and
+              .name == "JUNCA Validator Foundation Release" and
+              .head_branch == "main" and
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.head_sha | test("^[0-9a-f]{40}$"))
+            )
+            | .head_sha
+          ' <<<"$run_json")"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ steps.foundation.outputs.head_sha }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -55,16 +99,18 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: junca-validator-foundation-release-${{ env.FOUNDATION_RUN_ID }}
+          name: junca-validator-foundation-release-${{ steps.foundation.outputs.run_id }}
           path: acceptance
           github-token: ${{ github.token }}
-          run-id: ${{ env.FOUNDATION_RUN_ID }}
+          run-id: ${{ steps.foundation.outputs.run_id }}
 
       - name: Verify immutable acceptance evidence
         run: |
           set -euo pipefail
           evidence=acceptance/public-testnet-runtime-acceptance.json
           jq -e '
+            .automatic_finality.slot_epoch_seconds as $slot_epoch |
+            .observations.final_timestamp as $final_timestamp |
             .schema_version == "junca-public-testnet-runtime-acceptance/v1" and
             .result == "PASS" and
             (.validators | length) == 3 and
@@ -72,7 +118,23 @@ jobs:
             (.validators | map(.head_height) | min) >= 1 and
             (.validators | map(.head_hash) | unique | length) == 1 and
             (.validators | map(.consensus.last_certificate_hash) | unique | length) == 1 and
+            .observations.head_advanced == true and
+            .observations.final_height > .observations.initial_height and
+            .observations.first_height == (.observations.initial_height + 1) and
+            .observations.final_height == (.observations.first_height + 1) and
+            .observations.consecutive_advances == 2 and
+            .observations.canonical_timestamp_delta_seconds == 30 and
+            .automatic_finality.enabled == true and
+            .automatic_finality.block_interval_seconds == 30 and
+            (.automatic_finality.slot_epoch_seconds | type) == "number" and
+            .automatic_finality.slot_epoch_seconds > 0 and
+            .automatic_finality.slot_epoch_seconds % 30 == 0 and
             all(.validators[];
+              .automatic_finality_enabled == true and
+              .automatic_finality_loop_running == true and
+              .block_interval_seconds == 30 and
+              .slot_epoch_seconds == $slot_epoch and
+              .head_timestamp == $final_timestamp and
               .consensus.last_certificate.signed_power == 3 and
               .consensus.last_certificate.total_power == 3
             ) and
@@ -118,46 +180,53 @@ jobs:
       - name: Public Testnet endpoint acceptance
         run: |
           set -euo pipefail
+          mkdir -p artifacts/public-endpoint-observations
           for attempt in $(seq 1 60); do
-            if curl -fsS --max-time 10 https://health.jaios-governance.org/health \
-              > artifacts/public-health.json; then
+            if python scripts/junca_public_testnet_endpoint_test.py --compact \
+              > artifacts/public-endpoint-observations/observation-1.json; then
               break
             fi
             test "$attempt" -lt 60
             sleep 10
           done
-          jq -e '
-            .status == "healthy" and .read_only == true and
-            .mainnet_changed == false and .assets_moved == false and
-            .bridge_activated == false
-          ' artifacts/public-health.json
+          sleep 35
+          python scripts/junca_public_testnet_endpoint_test.py --compact \
+            > artifacts/public-endpoint-observations/observation-2.json
+          sleep 35
+          python scripts/junca_public_testnet_endpoint_test.py --compact \
+            > artifacts/public-endpoint-observations/observation-3.json
 
-          curl -fsS --max-time 10 \
-            https://explorer.jaios-governance.org/explorer.json \
-            > artifacts/public-explorer.json
-          jq -e '
-            .status == "ready" and .finalized_only == true and
-            .head.height >= 1 and .head.signed_power == 3 and .head.total_power == 3
-          ' artifacts/public-explorer.json
-
-          curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-            --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
-            https://rpc.jaios-governance.org/ > artifacts/public-rpc.json
-          jq -e '.result | test("^0x[0-9a-f]+$")' artifacts/public-rpc.json
-
-          status="$(curl -sS -o artifacts/unsafe-rpc.json -w '%{http_code}' \
-            --max-time 10 -H 'Content-Type: application/json' \
-            --data '{"jsonrpc":"2.0","id":2,"method":"eth_sendRawTransaction","params":["0x00"]}' \
-            https://rpc.jaios-governance.org/)"
-          test "$status" = "403"
-          jq -e '.error.code == -32601' artifacts/unsafe-rpc.json
+          jq -s -e '
+            length == 3 and
+            all(.[]; .status == "PASS") and
+            .[1].finalized_head.height == (.[0].finalized_head.height + 1) and
+            .[2].finalized_head.height == (.[1].finalized_head.height + 1) and
+            (map(.finalized_head.hash) | unique | length) == 3 and
+            (map(.observed_at) | unique | length) == 3
+          ' artifacts/public-endpoint-observations/observation-*.json \
+            > artifacts/public-endpoint-observations.json
+          first_timestamp="$(
+            jq -er '.[0].finalized_head.timestamp' \
+              artifacts/public-endpoint-observations.json
+          )"
+          second_timestamp="$(
+            jq -er '.[1].finalized_head.timestamp' \
+              artifacts/public-endpoint-observations.json
+          )"
+          final_timestamp="$(
+            jq -er '.[2].finalized_head.timestamp' \
+              artifacts/public-endpoint-observations.json
+          )"
+          [[ "$first_timestamp" =~ ^0x[0-9a-f]+$ ]]
+          [[ "$second_timestamp" =~ ^0x[0-9a-f]+$ ]]
+          [[ "$final_timestamp" =~ ^0x[0-9a-f]+$ ]]
+          test "$((16#${second_timestamp#0x} - 16#${first_timestamp#0x}))" -eq 30
+          test "$((16#${final_timestamp#0x} - 16#${second_timestamp#0x}))" -eq 30
 
           jq -n \
             --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg acceptance_sha256 "$RUNTIME_ACCEPTANCE_SHA256" \
-            --slurpfile health artifacts/public-health.json \
-            --slurpfile explorer artifacts/public-explorer.json \
-            --slurpfile rpc artifacts/public-rpc.json '{
+            --slurpfile observations artifacts/public-endpoint-observations.json '{
               schema_version: "junca-public-testnet-publication/v1",
               result: "PASS",
               release_run_url: $run_url,
@@ -168,9 +237,9 @@ jobs:
                 scan_redirect: "https://scan.jaios-governance.org",
                 health: "https://health.jaios-governance.org"
               },
-              health: $health[0],
-              explorer: $explorer[0],
-              rpc: $rpc[0],
+              observations: $observations[0],
+              consecutive_canonical_advances: 2,
+              canonical_timestamp_delta_seconds: 30,
               unsafe_rpc_rejected: true,
               mainnet_changed: false,
               assets_moved: false,

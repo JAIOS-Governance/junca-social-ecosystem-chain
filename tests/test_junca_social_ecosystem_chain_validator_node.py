@@ -18,6 +18,7 @@ from jaios.social_ecosystem_chain.validator_node import (
 )
 from jaios.social_ecosystem_chain.finality import FinalityVote
 import hashlib
+import threading
 import time
 
 
@@ -98,6 +99,24 @@ class ValidatorNodeTests(unittest.TestCase):
             health = state.rpc("junca_health", [])
             self.assertEqual(health["status"], "healthy")
             self.assertFalse(health["private_key_material_accepted"])
+            self.assertFalse(health["automatic_finality_enabled"])
+            self.assertEqual(health["block_interval_seconds"], 0)
+            self.assertEqual(health["slot_epoch_seconds"], 0)
+            self.assertIsNone(health["head_timestamp"])
+            self.assertFalse(health["automatic_finality_loop_running"])
+            self.assertEqual(
+                health["automatic_finality"],
+                {
+                    "enabled": False,
+                    "loop_running": False,
+                    "block_interval_seconds": 0,
+                    "slot_epoch_seconds": 0,
+                    "last_attempted_slot": None,
+                    "last_successful_slot": None,
+                    "last_attempted_height": None,
+                    "last_successful_height": None,
+                },
+            )
             self.assertNotIn("arn:aws:kms:", str(health))
             with self.assertRaisesRegex(ValidatorNodeError, "allowlisted"):
                 state.rpc("eth_sendRawTransaction", ["0x00"])
@@ -344,6 +363,13 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             transport.packets[0].signature,
             transport.packets[1].signature,
         )
+        self.assertIsNotNone(transport.packets[0].block_timestamp)
+        self.assertEqual(
+            transport.packets[0].block_timestamp,
+            transport.packets[1].block_timestamp,
+        )
+        self.assertEqual(transport.packets[0].block_timestamp % 30, 0)
+        self.assertIn(b"block_timestamp", transport.packets[0].peer_signing_payload)
         journal = self.consensus.runtime.evidence()["signing_journal"]
         self.assertEqual(journal["signature_count"], 1)
         self.assertEqual(journal["latest_height"], 1)
@@ -357,6 +383,10 @@ class PublicTestnetConsensusTests(unittest.TestCase):
         self.assertEqual(
             self.node.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"],
             hex(1_800_000_030),
+        )
+        self.assertEqual(
+            self.node.rpc("junca_health", [])["head_timestamp"],
+            1_800_000_030,
         )
 
         restarted = PublicTestnetConsensus(
@@ -408,30 +438,111 @@ class PublicTestnetConsensusTests(unittest.TestCase):
 
 class BoundedFinalityLoopTests(unittest.TestCase):
     class Store:
-        head_height = 0
+        def __init__(self) -> None:
+            self.head_height = 0
+            self.head_timestamp: int | None = None
+
+        def head(self):
+            return type("Head", (), {"height": self.head_height})()
+
+        def block_timestamp(self, height):
+            self.asserted_height = height
+            return self.head_timestamp
 
     class State:
         def __init__(self) -> None:
             self.store = BoundedFinalityLoopTests.Store()
             self.timestamps: list[int | None] = []
+            self.consensus_lock = threading.RLock()
+            self.automatic_finality_loop_running = False
+            self.automatic_finality_last_attempted_slot = None
+            self.automatic_finality_last_successful_slot = None
+            self.automatic_finality_last_attempted_height = None
+            self.automatic_finality_last_successful_height = None
+            self.consensus = None
 
         def broadcast_vote(self, *, block_timestamp=None):
             self.timestamps.append(block_timestamp)
             return {"status": "BROADCAST", "height": self.store.head_height + 1}
 
-    def test_slot_is_bounded_and_same_slot_retry_is_canonical(self) -> None:
+    def test_lagging_node_advances_at_most_one_height_per_real_slot(self) -> None:
         state = self.State()
         loop = BoundedFinalityLoop(
             state, interval_seconds=30, epoch_seconds=1_800_000_000
         )
         self.assertFalse(loop.run_once(1_800_000_029))
-        self.assertTrue(loop.run_once(1_800_000_030))
-        self.assertTrue(loop.run_once(1_800_000_059))
-        self.assertEqual(state.timestamps, [1_800_000_030, 1_800_000_030])
+        self.assertTrue(loop.run_once(1_800_000_090))
+        self.assertFalse(loop.run_once(1_800_000_099))
+        self.assertEqual(state.timestamps, [1_800_000_090])
+        self.assertEqual(state.automatic_finality_last_attempted_slot, 3)
+        self.assertEqual(state.automatic_finality_last_successful_slot, 3)
+        self.assertEqual(state.automatic_finality_last_attempted_height, 1)
+        self.assertEqual(state.automatic_finality_last_successful_height, 1)
+
         state.store.head_height = 1
-        self.assertFalse(loop.run_once(1_800_000_059))
-        self.assertTrue(loop.run_once(1_800_000_060))
+        state.store.head_timestamp = 1_800_000_090
+        self.assertFalse(loop.run_once(1_800_000_119))
+        self.assertTrue(loop.run_once(1_800_000_120))
+        self.assertEqual(state.timestamps[-1], 1_800_000_120)
+
+    def test_peer_finalized_head_suppresses_second_height_in_same_slot(self) -> None:
+        state = self.State()
+        state.store.head_height = 7
+        state.store.head_timestamp = 1_800_000_090
+        loop = BoundedFinalityLoop(
+            state, interval_seconds=30, epoch_seconds=1_800_000_000
+        )
+        self.assertFalse(loop.run_once(1_800_000_099))
+        self.assertEqual(state.timestamps, [])
+        self.assertIsNone(state.automatic_finality_last_attempted_slot)
+
+    def test_failed_broadcast_retries_only_the_same_height_and_slot(self) -> None:
+        state = self.State()
+
+        def fail_broadcast(*, block_timestamp=None):
+            state.timestamps.append(block_timestamp)
+            raise ValidatorNodeError("temporary signer failure")
+
+        state.broadcast_vote = fail_broadcast
+        loop = BoundedFinalityLoop(
+            state, interval_seconds=30, epoch_seconds=1_800_000_000
+        )
+        with self.assertRaisesRegex(ValidatorNodeError, "temporary signer"):
+            loop.run_once(1_800_000_030)
+        with self.assertRaisesRegex(ValidatorNodeError, "temporary signer"):
+            loop.run_once(1_800_000_059)
+        self.assertEqual(
+            state.timestamps,
+            [1_800_000_030, 1_800_000_030],
+        )
+        self.assertEqual(state.automatic_finality_last_attempted_slot, 1)
+        self.assertIsNone(state.automatic_finality_last_successful_slot)
+        with self.assertRaisesRegex(ValidatorNodeError, "temporary signer"):
+            loop.run_once(1_800_000_060)
         self.assertEqual(state.timestamps[-1], 1_800_000_060)
+
+    def test_unfinalized_proposal_is_not_carried_into_a_later_slot(self) -> None:
+        state = self.State()
+        proposal = type(
+            "Proposal",
+            (),
+            {"block_timestamp": 1_800_000_030},
+        )()
+        runtime = type(
+            "Runtime",
+            (),
+            {"pending_proposal": proposal},
+        )()
+        state.consensus = type(
+            "Consensus",
+            (),
+            {"runtime": runtime},
+        )()
+        loop = BoundedFinalityLoop(
+            state, interval_seconds=30, epoch_seconds=1_800_000_000
+        )
+        self.assertFalse(loop.run_once(1_800_000_060))
+        self.assertEqual(state.timestamps, [])
 
     def test_loop_stops_cleanly(self) -> None:
         state = self.State()
@@ -442,8 +553,10 @@ class BoundedFinalityLoopTests(unittest.TestCase):
             clock=lambda: 31,
         )
         loop.start()
+        self.assertTrue(state.automatic_finality_loop_running)
         time.sleep(0.02)
         loop.stop()
+        self.assertFalse(state.automatic_finality_loop_running)
         count = len(state.timestamps)
         time.sleep(0.02)
         self.assertEqual(len(state.timestamps), count)

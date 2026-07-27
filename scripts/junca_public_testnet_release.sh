@@ -37,6 +37,76 @@ terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
   -backend-config="encrypt=true" \
   -backend-config="kms_key_id=$state_kms_key_arn"
 
+terraform -chdir=infra/aws/public-testnet output -json \
+  > artifacts/pre-public-release-outputs.json
+
+# Public-service publication must preserve the durable validator state exactly.
+# Omitting these opt-in values would make Terraform plan their removal even
+# though the retained volumes themselves are protected by prevent_destroy.
+validator_state="$(
+  jq -ce '
+    .validator_state_volume_readback.value
+    | select(
+        length == 3 and
+        (map(.validator_id) | sort) ==
+          ["validator-01", "validator-02", "validator-03"] and
+        all(.encrypted == true) and
+        all(.type == "gp3") and
+        all(.migration_required == true) and
+        all(.state_path == "/var/lib/junca") and
+        (map(.volume_id) | unique | length) == 3 and
+        all(.volume_id | test("^vol-[0-9a-f]{8,17}$")) and
+        (map(.size_gib) | unique | length) == 1 and
+        (map(.iops) | unique | length) == 1 and
+        (map(.throughput_mibps) | unique | length) == 1
+      )
+  ' artifacts/pre-public-release-outputs.json
+)"
+validator_state_volume_size_gib="$(
+  jq -er '.[0].size_gib' <<<"$validator_state"
+)"
+validator_state_volume_iops="$(
+  jq -er '.[0].iops' <<<"$validator_state"
+)"
+validator_state_volume_throughput_mibps="$(
+  jq -er '.[0].throughput_mibps' <<<"$validator_state"
+)"
+validator_state_snapshot_ids="$(
+  jq -ce '
+    map(.restored_snapshot) as $snapshots
+    | if all($snapshots[]; . == null) then
+        null
+      else
+        $snapshots
+        | select(
+            length == 3 and
+            (unique | length) == 3 and
+            all(.[]; type == "string" and test("^snap-[0-9a-f]{8,17}$"))
+          )
+      end
+  ' <<<"$validator_state"
+)"
+
+automatic_finality="$(
+  jq -ce '
+    .automatic_finality_readback.value
+    | select(
+        .enabled == true and
+        .block_interval_seconds == 30 and
+        (.slot_epoch_seconds | type) == "number" and
+        .slot_epoch_seconds > 0 and
+        .slot_epoch_seconds % 30 == 0
+      )
+  ' artifacts/pre-public-release-outputs.json
+)"
+automatic_finality_enabled="$(jq -er .enabled <<<"$automatic_finality")"
+validator_block_interval_seconds="$(
+  jq -er .block_interval_seconds <<<"$automatic_finality"
+)"
+validator_slot_epoch_seconds="$(
+  jq -er .slot_epoch_seconds <<<"$automatic_finality"
+)"
+
 jq -n \
   --arg aws_account_id "$AWS_ACCOUNT_ID" \
   --arg aws_region "$AWS_REGION" \
@@ -49,6 +119,17 @@ jq -n \
   --arg source_commit "$SOURCE_COMMIT" \
   --arg quorum "$QUORUM_ACCEPTANCE_SHA256" \
   --arg runtime "$RUNTIME_ACCEPTANCE_SHA256" \
+  --argjson enable_validator_state_volumes true \
+  --argjson validator_state_volume_size_gib \
+    "$validator_state_volume_size_gib" \
+  --argjson validator_state_volume_iops "$validator_state_volume_iops" \
+  --argjson validator_state_volume_throughput_mibps \
+    "$validator_state_volume_throughput_mibps" \
+  --argjson validator_state_snapshot_ids "$validator_state_snapshot_ids" \
+  --argjson automatic_finality_enabled "$automatic_finality_enabled" \
+  --argjson validator_block_interval_seconds \
+    "$validator_block_interval_seconds" \
+  --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
   --argjson validator_signer_arns "$signer_arns" \
   '{
@@ -63,6 +144,15 @@ jq -n \
     node_artifact_sha256: $node_artifact_sha256,
     genesis_sha256: $genesis_sha256,
     source_commit: $source_commit,
+    enable_validator_state_volumes: $enable_validator_state_volumes,
+    validator_state_volume_size_gib: $validator_state_volume_size_gib,
+    validator_state_volume_iops: $validator_state_volume_iops,
+    validator_state_volume_throughput_mibps:
+      $validator_state_volume_throughput_mibps,
+    validator_state_snapshot_ids: $validator_state_snapshot_ids,
+    automatic_finality_enabled: $automatic_finality_enabled,
+    validator_block_interval_seconds: $validator_block_interval_seconds,
+    validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
     enable_public_services: true,
     quorum_acceptance_sha256: $quorum,
     runtime_acceptance_sha256: $runtime
@@ -76,6 +166,14 @@ terraform -chdir=infra/aws/public-testnet show -json \
 
 jq -e '
   [.resource_changes[]? | select(.change.actions | index("delete"))] | length == 0
+' artifacts/public-release-plan.json >/dev/null
+
+jq -e '
+  [
+    .resource_changes[]?
+    | select(.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
+    | select(.change.actions != ["no-op"] and .change.actions != ["read"])
+  ] | length == 0
 ' artifacts/public-release-plan.json >/dev/null
 
 jq -e '
@@ -115,6 +213,11 @@ jq -e --arg quorum "$QUORUM_ACCEPTANCE_SHA256" --arg runtime "$RUNTIME_ACCEPTANC
   .public_services_acceptance_readback.value.enabled == true and
   .public_services_acceptance_readback.value.quorum_evidence_sha256 == $quorum and
   .public_services_acceptance_readback.value.runtime_evidence_sha256 == $runtime and
+  .automatic_finality_readback.value.enabled == true and
+  .automatic_finality_readback.value.block_interval_seconds == 30 and
+  (.automatic_finality_readback.value.slot_epoch_seconds | type) == "number" and
+  .automatic_finality_readback.value.slot_epoch_seconds > 0 and
+  .automatic_finality_readback.value.slot_epoch_seconds % 30 == 0 and
   .runtime_boundary.value.mainnet_changed == false and
   .runtime_boundary.value.assets_moved == false and
   .runtime_boundary.value.bridge_activated == false

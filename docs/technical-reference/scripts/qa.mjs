@@ -12,6 +12,7 @@ const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementati
 const prohibited = [
   "CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled",
   "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
+  "Public Testnet Runtime Active", "Runtime Verified", "Live Acceptance Verified", "Automation Active · PASS",
 ];
 const failures = [];
 
@@ -29,13 +30,13 @@ for (const route of routes) {
     "JUNCA Social Ecosystem Chain",
     "JAIOS Institutional Governance",
     "Public Testnet",
-    "Public Testnet Runtime Active",
-    "Testing is active. Runtime evidence is public.",
+    "Public Testnet Endpoints Active",
+    "Public endpoints are active. Runtime acceptance is pending.",
     "Finality",
-    "Ready · 3 / 3",
+    "Certificate observed · 3 / 3",
     "Chain ID",
     "20260723",
-    "Active · PASS",
+    "Pending · head not advancing",
     'href="https://jaios-governance.org/"',
     'class="jaios-institutional-link"',
     'href="https://explorer.jaios-governance.org/"',
@@ -68,7 +69,7 @@ for (const required of [
   "Chain Core",
   "Implemented / CI Verified",
   "AWS Runtime",
-  "Live Acceptance Verified",
+  "Runtime Acceptance Pending",
   "Assets Moved",
   "Revision · 2026.07.27 / R27",
 ]) {
@@ -141,7 +142,7 @@ if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) fa
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
 if (releaseManifest.revision !== "R27") failures.push("release manifest revision must be R27");
-if (releaseManifest.runtime_status !== "VERIFIED") failures.push("release manifest runtime must be verified");
+if (releaseManifest.runtime_status !== "PENDING") failures.push("release manifest runtime acceptance must remain pending");
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
 if (releaseManifest.runtime_evidence?.total_power !== 3) failures.push("verified finality quorum is missing");

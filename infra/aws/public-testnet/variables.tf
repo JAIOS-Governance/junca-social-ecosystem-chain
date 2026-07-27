@@ -120,6 +120,38 @@ variable "validator_instance_type" {
   default = "m7i.large"
 }
 
+variable "automatic_finality_enabled" {
+  description = "Enable the bounded automatic finality loop on all three Public Testnet validators."
+  type        = bool
+  default     = false
+}
+
+variable "validator_block_interval_seconds" {
+  description = "Canonical Public Testnet finality interval shared by all validators."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.validator_block_interval_seconds == 30
+    error_message = "Public Testnet automatic finality requires the canonical 30-second interval."
+  }
+}
+
+variable "validator_slot_epoch_seconds" {
+  description = "Shared Unix epoch for the canonical 30-second validator slots. Zero is allowed only while automatic finality is disabled."
+  type        = number
+  default     = 0
+
+  validation {
+    condition = (
+      var.validator_slot_epoch_seconds >= 0 &&
+      floor(var.validator_slot_epoch_seconds) == var.validator_slot_epoch_seconds &&
+      var.validator_slot_epoch_seconds % 30 == 0
+    )
+    error_message = "validator_slot_epoch_seconds must be a non-negative Unix timestamp on a 30-second boundary."
+  }
+}
+
 variable "enable_validator_state_volumes" {
   description = "Provision and attach retained EBS volumes for /var/lib/junca. This does not format, copy, or mount them; migration is a separate acceptance-gated operation."
   type        = bool
