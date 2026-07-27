@@ -675,8 +675,8 @@ record_validator_evidence() {
     ($invocation[0].StandardOutputContent | fromjson) as $result
     | ($binding[0]) as $request
     | if (
-        $invocation | length == 1 and
-        $binding | length == 1 and
+        ($invocation | length) == 1 and
+        ($binding | length) == 1 and
         $request.instance_id == $instance_id and
         $request.state_volume_id == $state_volume_id and
         $request.finality_backfill_request_sha256 ==
