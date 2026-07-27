@@ -40,6 +40,11 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             'select(.DeviceName == "/dev/sdf")',
             '$state_devices[0].Ebs.VolumeId == $volume_id',
             "describe-instance-status",
+            "StandardErrorContent // empty",
+            "submission_path",
+            "list-command-invocations",
+            "list-commands --command-id",
+            'recovery-${current_instance}.json',
             "validator-state-preflight.tfplan",
             "validator-state-preflight-plan.json",
             "] | length == 0",
@@ -96,6 +101,13 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             '"sha256"',
             'cmp "$source_manifest" "$target_manifest"',
             "copy_manifest_sha256",
+            'test "$filesystem" = ext4',
+            "JUNCA_VALIDATOR_STATE",
+            'rmdir "$temporary_mount/lost+found"',
+            'if [[ -f "$temporary_mount/state.sqlite" ]]',
+            'local rollback_status="$1"',
+            "trap 'rollback 130' INT",
+            "trap 'rollback 143' TERM",
         ):
             self.assertIn(required, NODE)
 
