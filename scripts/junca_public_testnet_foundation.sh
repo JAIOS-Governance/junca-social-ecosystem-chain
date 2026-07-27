@@ -472,17 +472,27 @@ case "$validator_state_count" in
       jq -er '.[0].throughput_mibps' <<<"$validator_state_readback"
     )"
     validator_state_snapshot_ids="$(
-      jq -ce '
+      jq -c '
         map(.restored_snapshot) as $snapshots
-        | if all($snapshots[]; . == null) then
+        | if ($snapshots | length) != 3 then
+            error("restored snapshots must contain exactly three values")
+          elif (
+            all($snapshots[]; . == null) or
+            all($snapshots[]; . == "")
+          ) then
             null
-          else
+          elif (
+            ($snapshots | unique | length) == 3 and
+            all(
+              $snapshots[];
+              type == "string" and test("^snap-[0-9a-f]{8,17}$")
+            )
+          ) then
             $snapshots
-            | select(
-                length == 3 and
-                (unique | length) == 3 and
-                all(.[]; type == "string" and test("^snap-[0-9a-f]{8,17}$"))
-              )
+          else
+            error(
+              "restored snapshots must be all null, all empty, or three unique snap IDs"
+            )
           end
       ' <<<"$validator_state_readback"
     )"
