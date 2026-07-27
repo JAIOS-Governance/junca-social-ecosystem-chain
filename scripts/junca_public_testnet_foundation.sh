@@ -29,6 +29,344 @@ jq -e 'type == "array" and length == 3 and (unique | length) == 3 and all(starts
 
 mkdir -p artifacts
 
+wait_for_ssm_command() {
+  local command_id="$1"
+  local instance_id="$2"
+  local output_path="$3"
+  local status=""
+  for attempt in $(seq 1 90); do
+    status="$(
+      aws ssm get-command-invocation \
+        --command-id "$command_id" \
+        --instance-id "$instance_id" \
+        --query Status \
+        --output text
+    )"
+    case "$status" in
+      Success) break ;;
+      Failed|Cancelled|TimedOut|Cancelling)
+        break
+        ;;
+    esac
+    test "$attempt" -lt 90
+    sleep 2
+  done
+  aws ssm get-command-invocation \
+    --command-id "$command_id" \
+    --instance-id "$instance_id" >"$output_path"
+  jq -e '.Status == "Success"' "$output_path" >/dev/null
+}
+
+set_runtime_finality() {
+  local block_interval="$1"
+  local slot_epoch="$2"
+  shift 2
+  local instances=("$@")
+  local finality_enabled
+  local command
+  local command_id
+  local instance_id
+  test "${#instances[@]}" -ge 1
+  [[ "$block_interval" =~ ^(0|30)$ ]]
+  [[ "$slot_epoch" =~ ^[0-9]+$ ]]
+  if [[ "$block_interval" == "30" ]]; then
+    test "$slot_epoch" -gt "$(date +%s)"
+    test "$((slot_epoch % 30))" -eq 0
+    finality_enabled=true
+  else
+    finality_enabled=false
+  fi
+  command="$(
+    cat <<EOF
+set -euo pipefail
+test -f /etc/junca/runtime.env
+sed -i -E 's/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=${finality_enabled}/' /etc/junca/runtime.env
+sed -i -E 's/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}/' /etc/junca/runtime.env
+sed -i -E 's/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}/' /etc/junca/runtime.env
+systemctl restart junca-validator.service
+for attempt in \$(seq 1 60); do
+  systemctl is-active --quiet junca-validator.service &&
+    curl -fsS http://127.0.0.1:8545/health >/dev/null &&
+    exit 0
+  sleep 2
+done
+systemctl status junca-validator.service --no-pager -l || true
+journalctl -u junca-validator.service --no-pager -n 100 || true
+exit 1
+EOF
+  )"
+  jq -n --arg command "$command" '{commands: [$command]}' \
+    > artifacts/ssm-set-finality.json
+  command_id="$(
+    aws ssm send-command \
+      --instance-ids "${instances[@]}" \
+      --document-name AWS-RunShellScript \
+      --parameters file://artifacts/ssm-set-finality.json \
+      --comment "JUNCA Public Testnet fail-closed finality configuration" \
+      --query Command.CommandId \
+      --output text
+  )"
+  for instance_id in "${instances[@]}"; do
+    wait_for_ssm_command \
+      "$command_id" \
+      "$instance_id" \
+      "artifacts/finality-${block_interval}-${slot_epoch}-${instance_id}.json"
+  done
+}
+
+capture_validator_observation() {
+  local validator_id="$1"
+  local instance_id="$2"
+  local output_path="$3"
+  local ping_status
+  local readback_command
+  local command_id
+  local invocation
+  local ami_id
+  ping_status="$(
+    aws ssm describe-instance-information \
+      --filters "Key=InstanceIds,Values=${instance_id}" \
+      --query 'InstanceInformationList[0].PingStatus' \
+      --output text
+  )"
+  [[ "$ping_status" == "Online" ]]
+  ami_id="$(
+    aws ec2 describe-instances \
+      --instance-ids "$instance_id" \
+      --query 'Reservations[0].Instances[0].ImageId' \
+      --output text
+  )"
+  [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+  readback_command='
+set -euo pipefail
+systemctl is-active --quiet junca-validator.service
+mountpoint -q /var/lib/junca
+test -f /var/lib/junca/state.sqlite
+test ! -L /var/lib/junca/state.sqlite
+test "$(python3 -c '"'"'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro", uri=True); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()'"'"')" = "ok"
+durable="$(python3 -c '"'"'import json,sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro",uri=True); connection.row_factory=sqlite3.Row; row=connection.execute("SELECT b.height,b.block_hash,b.certificate_hash,f.certificate_json FROM blocks b JOIN finality_certificates f ON f.height=b.height WHERE b.finalized=1 ORDER BY b.height DESC LIMIT 1").fetchone(); assert row is not None; certificate=json.loads(row["certificate_json"]); print(json.dumps({"head_height":row["height"],"head_hash":row["block_hash"],"certificate_hash":row["certificate_hash"],"certificate":certificate},sort_keys=True,separators=(",",":"))); connection.close()'"'"')"
+runtime_version="$(sed -n '"'"'s/^NODE_ARTIFACT_SHA256=//p'"'"' /etc/junca/runtime.env)"
+test "$(printf %s "$runtime_version" | wc -c)" = 64
+health="$(curl -fsS http://127.0.0.1:8545/health)"
+jq -n --arg runtime_version "$runtime_version" --argjson health "$health" --argjson durable "$durable" '"'"'
+{
+  validator_id: $health.validator_id,
+  runtime_version: $runtime_version,
+  healthy: ($health.status == "healthy"),
+  health_status: $health.status,
+  network: $health.network,
+  chain_id: $health.chain_id,
+  ssm_online: true,
+  service_active: true,
+  durable_mount_verified: true,
+  state_store_integrity: true,
+  head_height: $health.head_height,
+  head_hash: $health.head_hash,
+  certificate_hash:
+    ($health.consensus.last_certificate_hash // $durable.certificate_hash),
+  durable_certificate_hash: $durable.certificate_hash,
+  certificate_height:
+    ($health.consensus.last_certificate.height // $durable.certificate.height),
+  certificate_block_hash:
+    ($health.consensus.last_certificate.block_hash //
+      $durable.certificate.block_hash),
+  certificate_finality_status:
+    ($health.consensus.last_certificate.finality_status //
+      $durable.certificate.finality_status),
+  certificate_signed_power:
+    ($health.consensus.last_certificate.signed_power //
+      $durable.certificate.signed_power),
+  certificate_total_power:
+    ($health.consensus.last_certificate.total_power //
+      $durable.certificate.total_power),
+  certificate_validator_ids:
+    ($health.consensus.last_certificate.validator_ids //
+      $durable.certificate.validator_ids),
+  certificate_vote_hashes:
+    ($health.consensus.last_certificate.vote_hashes //
+      $durable.certificate.vote_hashes),
+  automatic_finality_enabled: $health.automatic_finality_enabled,
+  slot_epoch_seconds: $health.slot_epoch_seconds,
+  mainnet_changed: $health.mainnet_changed,
+  assets_moved: $health.assets_moved,
+  bridge_activated: $health.bridge_activated
+}
+'"'"'
+'
+  jq -n --arg command "$readback_command" '{commands: [$command]}' \
+    > artifacts/ssm-validator-readback.json
+  command_id="$(
+    aws ssm send-command \
+      --instance-ids "$instance_id" \
+      --document-name AWS-RunShellScript \
+      --parameters file://artifacts/ssm-validator-readback.json \
+      --comment "JUNCA Public Testnet rolling compatibility readback" \
+      --query Command.CommandId \
+      --output text
+  )"
+  invocation="artifacts/readback-${validator_id}-${instance_id}.json"
+  wait_for_ssm_command "$command_id" "$instance_id" "$invocation"
+  jq -er .StandardOutputContent "$invocation" |
+    jq \
+      --arg ami_id "$ami_id" \
+      --arg instance_id "$instance_id" \
+      '. + {ami_id: $ami_id, instance_id: $instance_id}' >"$output_path"
+  jq -e --arg validator_id "$validator_id" \
+    '.validator_id == $validator_id' "$output_path" >/dev/null
+}
+
+write_rolling_compatibility_evidence() {
+  local expected_state="$1"
+  local expected_next="${2:-}"
+  local -a current_instances
+  local index
+  terraform -chdir=infra/aws/public-testnet output -json \
+    > artifacts/rolling-foundation-outputs.json
+  mapfile -t current_instances < <(
+    jq -er '.validator_instance_ids.value[]' \
+      artifacts/rolling-foundation-outputs.json
+  )
+  test "${#current_instances[@]}" = 3
+  for index in 0 1 2; do
+    capture_validator_observation \
+      "validator-0$((index + 1))" \
+      "${current_instances[$index]}" \
+      "artifacts/rolling-validator-$((index + 1)).json"
+  done
+  jq -s '.' artifacts/rolling-validator-{1,2,3}.json \
+    > artifacts/rolling-validators.json
+  jq -n \
+    --arg target_version "$NODE_ARTIFACT_SHA256" \
+    --arg target_ami_id "$NODE_AMI_ID" \
+    --argjson requested_slot_epoch_seconds \
+      "$validator_slot_epoch_seconds" \
+    --argjson observed_unix_time "$(date +%s)" \
+    --slurpfile validators artifacts/rolling-validators.json \
+    --slurpfile rollback artifacts/rollback-rehearsal.json '{
+      target_version: $target_version,
+      target_ami_id: $target_ami_id,
+      update_order: ["validator-01", "validator-02", "validator-03"],
+      validators: $validators[0],
+      requested_slot_epoch_seconds: $requested_slot_epoch_seconds,
+      observed_unix_time: $observed_unix_time,
+      fallback_active: false,
+      rollback: $rollback[0],
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false
+    }' > artifacts/rolling-compatibility-evidence.json
+  python -m jaios.social_ecosystem_chain.rolling_compatibility \
+    --evidence artifacts/rolling-compatibility-evidence.json \
+    --output artifacts/rolling-compatibility-decision.json
+  if [[ "$expected_state" == "AUTO" ]]; then
+    jq -e '
+      .mainnet_changed == false and
+      .assets_moved == false and
+      .bridge_activated == false
+    ' artifacts/rolling-compatibility-decision.json >/dev/null
+  else
+    jq -e \
+      --arg expected_state "$expected_state" \
+      --arg expected_next "$expected_next" '
+        .state == $expected_state and
+        (
+          if $expected_next == ""
+          then .next_validator == null
+          else .next_validator == $expected_next
+          end
+        ) and
+        .mainnet_changed == false and
+        .assets_moved == false and
+        .bridge_activated == false
+      ' artifacts/rolling-compatibility-decision.json >/dev/null
+  fi
+  cp \
+    artifacts/rolling-compatibility-evidence.json \
+    "artifacts/rolling-compatibility-${expected_state}.json"
+  write_rolling_resume_evidence
+}
+
+write_rolling_resume_evidence() {
+  local updated_count
+  local parent_sha256=""
+  updated_count="$(
+    jq -er '.updated_count | select(type == "number" and . >= 0 and . <= 3)' \
+      artifacts/rolling-compatibility-decision.json
+  )"
+  if [[ -n "${ROLLING_RESUME_EVIDENCE_PATH:-}" ]]; then
+    parent_sha256="$(sha256sum "$ROLLING_RESUME_EVIDENCE_PATH" | cut -d' ' -f1)"
+  fi
+  jq -n \
+    --arg repository "$GITHUB_REPOSITORY" \
+    --arg head_sha "$GITHUB_SHA" \
+    --argjson producer_run_id "$GITHUB_RUN_ID" \
+    --argjson ami_run_id "$AMI_RUN_ID" \
+    --argjson manifest_gate_run_id "$MANIFEST_GATE_RUN_ID" \
+    --argjson resume_run_id "$ROLLING_RESUME_RUN_ID" \
+    --arg parent_evidence_sha256 "$parent_sha256" \
+    --arg source_commit "$SOURCE_COMMIT" \
+    --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
+    --arg genesis_sha256 "$GENESIS_SHA256" \
+    --arg ami_id "$NODE_AMI_ID" \
+    --arg request_sha256 "$REQUEST_SHA256" \
+    --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" \
+    --argjson validator_slot_epoch_seconds \
+      "$validator_slot_epoch_seconds" \
+    --argjson updated_count "$updated_count" \
+    --argjson terraform_replacement_addresses \
+      "$terraform_replacement_addresses_json" \
+    --slurpfile validators artifacts/rolling-validators.json \
+    --slurpfile rollback artifacts/rollback-rehearsal.json \
+    --slurpfile decision artifacts/rolling-compatibility-decision.json '{
+      schema_version: "junca-validator-rolling-resume/v1",
+      repository: $repository,
+      head_sha: $head_sha,
+      producer_run_id: $producer_run_id,
+      ami_run_id: $ami_run_id,
+      manifest_gate_run_id: $manifest_gate_run_id,
+      resume_parent: (
+        if $resume_run_id == 0
+        then null
+        else {
+          run_id: $resume_run_id,
+          evidence_sha256: $parent_evidence_sha256
+        }
+        end
+      ),
+      candidate: {
+        source_commit: $source_commit,
+        node_artifact_sha256: $node_artifact_sha256,
+        genesis_sha256: $genesis_sha256,
+        ami_id: $ami_id,
+        request_sha256: $request_sha256,
+        manifest_decision_sha256: $manifest_decision_sha256
+      },
+      automatic_finality: {
+        block_interval_seconds: 30,
+        slot_epoch_seconds: $validator_slot_epoch_seconds,
+        minimum_remaining_seconds: 900,
+        maximum_remaining_seconds: 7230
+      },
+      updated_count: $updated_count,
+      updated_validator_ids:
+        (["validator-01", "validator-02", "validator-03"][0:$updated_count]),
+      terraform_replacement_addresses: $terraform_replacement_addresses,
+      validators: $validators[0],
+      rollback: $rollback[0],
+      compatibility_decision: $decision[0],
+      automatic_finality_activation_pending:
+        ($decision[0].state != "ACCEPTED"),
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false
+    }' > artifacts/rolling-resume-evidence.json
+  (
+    cd artifacts
+    sha256sum rolling-resume-evidence.json \
+      > rolling-resume-evidence.json.sha256
+  )
+}
+
 terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
   -backend-config="bucket=$STATE_BUCKET_NAME" \
   -backend-config="key=public-testnet/bootstrap.tfstate" \
@@ -164,7 +502,45 @@ existing_finality="$(
       {enabled: false, block_interval_seconds: 0, slot_epoch_seconds: 0}
   ' artifacts/pre-foundation-outputs.json
 )"
-if [[ "$(jq -r .enabled <<<"$existing_finality")" == "true" ]]; then
+rolling_release="${FOUNDATION_ROLLING_RELEASE:-false}"
+case "$rolling_release" in
+  true|false) ;;
+  *)
+    echo "FOUNDATION_ROLLING_RELEASE must be true or false" >&2
+    exit 2
+    ;;
+esac
+if [[ "$rolling_release" == "true" ]]; then
+  for name in \
+    AMI_RUN_ID MANIFEST_GATE_RUN_ID REQUEST_SHA256 \
+    MANIFEST_DECISION_SHA256 GITHUB_RUN_ID GITHUB_SHA GITHUB_REPOSITORY \
+    ROLLING_RESUME_RUN_ID
+  do
+    [[ -n "${!name:-}" ]] || {
+      echo "missing rolling release binding: $name" >&2
+      exit 2
+    }
+  done
+  [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$MANIFEST_GATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$MANIFEST_DECISION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+  [[ "$ROLLING_RESUME_RUN_ID" =~ ^(0|[1-9][0-9]*)$ ]]
+  test "$GITHUB_REPOSITORY" = \
+    "JAIOS-Governance/junca-social-ecosystem-chain"
+  automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
+  validator_block_interval_seconds="${VALIDATOR_BLOCK_INTERVAL_SECONDS:-}"
+  validator_slot_epoch_seconds="${VALIDATOR_SLOT_EPOCH_SECONDS:-}"
+  test "$automatic_finality_enabled" = "true"
+  test "$validator_block_interval_seconds" = "30"
+  [[ "$validator_slot_epoch_seconds" =~ ^[0-9]+$ ]]
+  epoch_remaining="$((validator_slot_epoch_seconds - $(date +%s)))"
+  test "$epoch_remaining" -ge 900
+  test "$epoch_remaining" -le 7230
+  test "$((validator_slot_epoch_seconds % 30))" -eq 0
+elif [[ "$(jq -r .enabled <<<"$existing_finality")" == "true" ]]; then
   automatic_finality_enabled=true
   validator_block_interval_seconds="$(
     jq -er '.block_interval_seconds | select(. == 30)' <<<"$existing_finality"
@@ -374,14 +750,283 @@ jq -e \
 
 mapfile -t validator_replacements < <(
   jq -r '
-    .resource_changes[]?
-    | select(
-        (.change.actions | index("delete")) and
-        (.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
-      )
-    | .address
+    [
+      .resource_changes[]?
+      | select(
+          (.change.actions | index("delete")) and
+          (.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
+        )
+      | .address
+    ] | sort[]
   ' artifacts/foundation-plan.json
 )
+
+terraform_replacement_addresses_json="$(
+  printf '%s\n' "${validator_replacements[@]}" |
+    jq -Rsc 'split("\n")[:-1]'
+)"
+if (( ${#validator_replacements[@]} > 0 )); then
+  test "$rolling_release" = "true"
+fi
+
+if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
+  mapfile -t pre_rollout_instances < <(
+    jq -er '.validator_instance_ids.value[]' \
+      artifacts/pre-foundation-outputs.json
+  )
+  test "${#pre_rollout_instances[@]}" = 3
+  resume_path="${ROLLING_RESUME_EVIDENCE_PATH:-}"
+  if [[ "$ROLLING_RESUME_RUN_ID" == "0" ]]; then
+    test -z "$resume_path"
+    test "${#validator_replacements[@]}" = 3
+    previous_artifact_sha256="$(
+      jq -er '
+        .approved_node_ami_readback.value.node_sha256
+        | select(type == "string" and test("^[0-9a-f]{64}$"))
+      ' artifacts/pre-foundation-outputs.json
+    )"
+    previous_ami_id="$(
+      jq -er '
+        .approved_node_ami_readback.value.id
+        | select(type == "string" and test("^ami-[0-9a-f]{8,17}$"))
+      ' artifacts/pre-foundation-outputs.json
+    )"
+    test "$previous_artifact_sha256" != "$NODE_ARTIFACT_SHA256"
+    test "$previous_ami_id" != "$NODE_AMI_ID"
+  else
+    test -f "$resume_path"
+    jq -e \
+      --arg repository "$GITHUB_REPOSITORY" \
+      --arg head_sha "$GITHUB_SHA" \
+      --argjson producer_run_id "$ROLLING_RESUME_RUN_ID" \
+      --argjson ami_run_id "$AMI_RUN_ID" \
+      --argjson manifest_gate_run_id "$MANIFEST_GATE_RUN_ID" \
+      --arg source_commit "$SOURCE_COMMIT" \
+      --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
+      --arg genesis_sha256 "$GENESIS_SHA256" \
+      --arg ami_id "$NODE_AMI_ID" \
+      --arg request_sha256 "$REQUEST_SHA256" \
+      --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" \
+      --argjson validator_block_interval_seconds \
+        "$validator_block_interval_seconds" \
+      --argjson validator_slot_epoch_seconds \
+        "$validator_slot_epoch_seconds" '
+        .schema_version == "junca-validator-rolling-resume/v1" and
+        .repository == $repository and
+        .head_sha == $head_sha and
+        .producer_run_id == $producer_run_id and
+        .ami_run_id == $ami_run_id and
+        .manifest_gate_run_id == $manifest_gate_run_id and
+        .candidate == {
+          source_commit: $source_commit,
+          node_artifact_sha256: $node_artifact_sha256,
+          genesis_sha256: $genesis_sha256,
+          ami_id: $ami_id,
+          request_sha256: $request_sha256,
+          manifest_decision_sha256: $manifest_decision_sha256
+        } and
+        .automatic_finality == {
+          block_interval_seconds: $validator_block_interval_seconds,
+          slot_epoch_seconds: $validator_slot_epoch_seconds,
+          minimum_remaining_seconds: 900,
+          maximum_remaining_seconds: 7230
+        } and
+        (.updated_count | type) == "number" and
+        .updated_count >= 0 and .updated_count <= 3 and
+        .updated_validator_ids ==
+          (["validator-01","validator-02","validator-03"][0:.updated_count]) and
+        .mainnet_changed == false and
+        .assets_moved == false and
+        .bridge_activated == false
+      ' "$resume_path" >/dev/null
+    previous_artifact_sha256="$(
+      jq -er '.rollback.artifact_sha256' "$resume_path"
+    )"
+    previous_ami_id="$(jq -er '.rollback.ami_id' "$resume_path")"
+    [[ "$previous_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+    [[ "$previous_ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+    test "$previous_artifact_sha256" != "$NODE_ARTIFACT_SHA256"
+    test "$previous_ami_id" != "$NODE_AMI_ID"
+    jq -e \
+      --arg previous_artifact_sha256 "$previous_artifact_sha256" \
+      --arg previous_ami_id "$previous_ami_id" '
+        .rollback.target_version == $previous_artifact_sha256 and
+        .rollback.artifact_sha256 == $previous_artifact_sha256 and
+        .rollback.ami_id == $previous_ami_id and
+        .rollback.rehearsal_passed == true and
+        .rollback.automatic_finality_disabled == true and
+        .rollback.no_state_rewind == true and
+        .rollback.durable_volume_reused == true and
+        .rollback.snapshot_restore_performed == false and
+        (.rollback.validators | length) == 3
+      ' "$resume_path" >/dev/null
+    jq '.rollback' "$resume_path" > artifacts/rollback-rehearsal.json
+  fi
+
+  # Stop the automatic-finality loop on all three old-version validators
+  # before the first replacement. The Terraform-canonical future epoch remains
+  # bound to the release, but cannot execute while runtime versions are mixed.
+  set_runtime_finality 0 0 "${pre_rollout_instances[@]}"
+  for index in 0 1 2; do
+    capture_validator_observation \
+      "validator-0$((index + 1))" \
+      "${pre_rollout_instances[$index]}" \
+      "artifacts/pre-rollout-validator-$((index + 1)).json"
+  done
+
+  validator_state_rollback="$(
+    jq -ce '
+      .validator_state_volume_readback.value
+      | select(
+          length == 3 and
+          (map(.validator_id) | sort) ==
+            ["validator-01", "validator-02", "validator-03"] and
+          (map(.volume_id) | unique | length) == 3 and
+          (map(.rollback_snapshot_id) | unique | length) == 3
+        )
+    ' artifacts/pre-foundation-outputs.json
+  )"
+  for index in 0 1 2; do
+    state_volume_id="$(
+      jq -er ".[$index].volume_id" <<<"$validator_state_rollback"
+    )"
+    aws ec2 describe-volumes \
+      --volume-ids "$state_volume_id" \
+      > "artifacts/rollback-volume-$((index + 1)).json"
+    jq -e \
+      --arg instance_id "${pre_rollout_instances[$index]}" '
+        .Volumes | length == 1 and
+        .[0].Encrypted == true and
+        .[0].State == "in-use" and
+        (.[0].Attachments | length) == 1 and
+        .[0].Attachments[0].InstanceId == $instance_id and
+        .[0].Attachments[0].State == "attached"
+      ' "artifacts/rollback-volume-$((index + 1)).json" >/dev/null
+  done
+  mapfile -t rollback_snapshot_ids < <(
+    jq -er '.[].rollback_snapshot_id' <<<"$validator_state_rollback"
+  )
+  aws ec2 describe-snapshots \
+    --snapshot-ids "${rollback_snapshot_ids[@]}" \
+    --owner-ids self \
+    > artifacts/rollback-snapshot-readback.json
+  jq -e \
+    --argjson expected "$(
+      printf '%s\n' "${rollback_snapshot_ids[@]}" |
+        jq -Rsc 'split("\n")[:-1] | sort'
+    )" '
+      (.Snapshots | length) == 3 and
+      ([.Snapshots[].SnapshotId] | sort) == $expected and
+      all(.Snapshots[]; .State == "completed" and .Encrypted == true)
+    ' artifacts/rollback-snapshot-readback.json >/dev/null
+
+  if [[ "$ROLLING_RESUME_RUN_ID" == "0" ]]; then
+    jq -n \
+      --arg target_version "$previous_artifact_sha256" \
+      --arg artifact_sha256 "$previous_artifact_sha256" \
+      --arg ami_id "$previous_ami_id" \
+      --slurpfile observed <(
+        jq -s '.' artifacts/pre-rollout-validator-{1,2,3}.json
+      ) \
+      --argjson state "$validator_state_rollback" '{
+        target_version: $target_version,
+        artifact_sha256: $artifact_sha256,
+        ami_id: $ami_id,
+        rehearsal_passed: true,
+        automatic_finality_disabled: true,
+        no_state_rewind: true,
+        durable_volume_reused: true,
+        snapshot_restore_performed: false,
+        validators: [
+          range(0; 3) as $index
+          | $observed[0][$index] as $health
+          | $state[$index] as $volume
+          | {
+              validator_id: $health.validator_id,
+              volume_id: $volume.volume_id,
+              rollback_snapshot_id: $volume.rollback_snapshot_id,
+              state_rewind_permitted: false,
+              head_height: $health.head_height,
+              head_hash: $health.head_hash,
+              certificate_hash: $health.certificate_hash,
+              certificate_height: $health.certificate_height,
+              certificate_block_hash: $health.certificate_block_hash,
+              certificate_finality_status:
+                $health.certificate_finality_status,
+              certificate_signed_power: $health.certificate_signed_power,
+              certificate_total_power: $health.certificate_total_power,
+              certificate_validator_ids: $health.certificate_validator_ids,
+              certificate_vote_hashes: $health.certificate_vote_hashes
+            }
+        ],
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }' > artifacts/rollback-rehearsal.json
+  else
+    jq -e \
+      --argjson state "$validator_state_rollback" '
+        [.rollback.validators[] |
+          {validator_id, volume_id, rollback_snapshot_id}] ==
+        [$state[] |
+          {validator_id, volume_id, rollback_snapshot_id}]
+      ' "$resume_path" >/dev/null
+  fi
+
+  write_rolling_compatibility_evidence AUTO
+  live_updated_count="$(
+    jq -er '.updated_count' artifacts/rolling-compatibility-decision.json
+  )"
+  prior_updated_count=0
+  if [[ "$ROLLING_RESUME_RUN_ID" != "0" ]]; then
+    prior_updated_count="$(jq -er '.updated_count' "$resume_path")"
+    test "$live_updated_count" -ge "$prior_updated_count"
+    test "$live_updated_count" -le "$((prior_updated_count + 1))"
+    jq -e \
+      --argjson prior_count "$prior_updated_count" \
+      --slurpfile current artifacts/rolling-validators.json '
+        .validators as $previous
+        | all(
+            range(0; $prior_count);
+            $previous[.] as $before
+            | $current[0][.] as $after
+            | $before.validator_id == $after.validator_id and
+              $before.instance_id == $after.instance_id and
+              $before.ami_id == $after.ami_id and
+              $before.runtime_version == $after.runtime_version and
+              $after.head_height >= $before.head_height and
+              (
+                $after.head_height > $before.head_height or
+                (
+                  $after.head_hash == $before.head_hash and
+                  $after.certificate_hash == $before.certificate_hash
+                )
+              )
+          )
+      ' "$resume_path" >/dev/null
+  fi
+  expected_replacements="$(
+    jq -cn --argjson prefix "$live_updated_count" '
+      [range($prefix; 3) | "aws_instance.validator[\(.)]"]
+    '
+  )"
+  jq -ne \
+    --argjson expected "$expected_replacements" \
+    --args \
+    '$ARGS.positional == $expected' \
+    "${validator_replacements[@]}" >/dev/null
+  if (( live_updated_count < 3 )); then
+    expected_next="validator-0$((live_updated_count + 1))"
+    jq -e --arg expected_next "$expected_next" '
+      .state == "READY_FOR_NEXT_VALIDATOR" and
+      .next_validator == $expected_next
+    ' artifacts/rolling-compatibility-decision.json >/dev/null
+  else
+    jq -e '
+      .state == "READY_FOR_SLOT_EPOCH" and .next_validator == null
+    ' artifacts/rolling-compatibility-decision.json >/dev/null
+  fi
+fi
 
 apply_executed=false
 if [[ "$phase" == "foundation-apply" ]]; then
@@ -454,6 +1099,9 @@ if [[ "$phase" == "foundation-apply" ]]; then
           )
       ' "$target_json" >/dev/null
 
+      # Fail before replacement when the future epoch no longer leaves a
+      # bounded boot/SSM quiesce window.
+      test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
       terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
         "$target_plan"
 
@@ -485,6 +1133,13 @@ if [[ "$phase" == "foundation-apply" ]]; then
           ' >/dev/null
       fi
 
+      # A replacement boots with the Terraform-bound future epoch. Quiesce it
+      # immediately after SSM and retained-volume readback; the epoch is still
+      # in the future, so no automatic-finality slot can execute during this
+      # bounded transition.
+      test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
+      set_runtime_finality 0 0 "$new_instance"
+
       if [[ "$public_services_enabled" == "true" ]]; then
         current_outputs="$(
           terraform -chdir=infra/aws/public-testnet output -json
@@ -497,6 +1152,15 @@ if [[ "$phase" == "foundation-apply" ]]; then
             --target-group-arn "$target_group" \
             --targets "Id=${new_instance}"
         done
+      fi
+
+      updated_count="$((index + 1))"
+      if (( updated_count < 3 )); then
+        next_validator="validator-0$((updated_count + 1))"
+        write_rolling_compatibility_evidence \
+          READY_FOR_NEXT_VALIDATOR "$next_validator"
+      else
+        write_rolling_compatibility_evidence READY_FOR_SLOT_EPOCH
       fi
     done
 
@@ -515,6 +1179,27 @@ if [[ "$phase" == "foundation-apply" ]]; then
   else
     terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
       "$GITHUB_WORKSPACE/artifacts/foundation.tfplan"
+  fi
+
+  if [[ "$rolling_release" == "true" ]]; then
+    # Activation is a separate phase after every validator has the exact target
+    # runtime, SSM/service health, durable mount, SQLite integrity and matching
+    # finalized head/certificate. This also completes an evidence-bound resume
+    # whose strict live prefix was already 3/3 when the rerun began.
+    mapfile -t activated_instances < <(
+      terraform -chdir=infra/aws/public-testnet output -json \
+        validator_instance_ids |
+        jq -er '.[]'
+    )
+    test "${#activated_instances[@]}" = 3
+    test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
+    set_runtime_finality \
+      0 "$validator_slot_epoch_seconds" "${activated_instances[@]}"
+    write_rolling_compatibility_evidence READY_FOR_FINALITY_ENABLE
+    test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
+    set_runtime_finality \
+      30 "$validator_slot_epoch_seconds" "${activated_instances[@]}"
+    write_rolling_compatibility_evidence ACCEPTED
   fi
 
   apply_executed=true
