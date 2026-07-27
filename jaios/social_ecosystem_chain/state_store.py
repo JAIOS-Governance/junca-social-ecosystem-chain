@@ -61,6 +61,11 @@ class PersistentStateStore:
               accounts_json TEXT NOT NULL,
               receipts_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS finality_certificates(
+              height INTEGER PRIMARY KEY,
+              certificate_json TEXT NOT NULL,
+              FOREIGN KEY(height) REFERENCES blocks(height)
+            );
             """
         )
         self._bind_chain_id()
@@ -170,6 +175,20 @@ class PersistentStateStore:
                     json.dumps(receipts, sort_keys=True, separators=(",", ":")),
                 ),
             )
+            self.connection.execute(
+                """
+                INSERT INTO finality_certificates(height,certificate_json)
+                VALUES(?,?)
+                """,
+                (
+                    height,
+                    json.dumps(
+                        certificate.as_evidence(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
             self.connection.execute("COMMIT")
         except Exception:
             self.connection.execute("ROLLBACK")
@@ -196,6 +215,33 @@ class PersistentStateStore:
         if row is None:
             raise StateStoreError("unknown block height")
         return self._stored_block(row)
+
+    def latest_finality_certificate(self) -> FinalityCertificate | None:
+        """Return the certificate atomically stored with the finalized head.
+
+        Genesis has no certificate. Stores created by an older runtime can
+        contain a certificate hash without the full certificate; those stores
+        return ``None`` instead of fabricating recovery evidence.
+        """
+        row = self.connection.execute(
+            """
+            SELECT b.height,b.block_hash,b.certificate_hash,c.certificate_json
+            FROM blocks AS b
+            LEFT JOIN finality_certificates AS c ON c.height=b.height
+            ORDER BY b.height DESC LIMIT 1
+            """
+        ).fetchone()
+        if row is None or row["height"] == 0 or row["certificate_json"] is None:
+            return None
+        certificate = _decode_finality_certificate(row["certificate_json"])
+        if (
+            certificate.chain_id != self.chain_id
+            or certificate.height != row["height"]
+            or certificate.block_hash != row["block_hash"]
+            or certificate.certificate_hash != row["certificate_hash"]
+        ):
+            raise StateStoreError("stored finality certificate does not bind head")
+        return certificate
 
     def accounts_at(self, height: int | None = None) -> dict[str, AccountState]:
         target = self.head_height if height is None else height
@@ -554,6 +600,97 @@ def _decode_accounts_json(payload: str) -> dict[str, AccountState]:
     if _accounts_json(accounts) != payload:
         raise StateStoreError("stored account snapshot is not canonical")
     return accounts
+
+
+def _decode_finality_certificate(payload: str) -> FinalityCertificate:
+    try:
+        raw = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise StateStoreError("stored finality certificate is invalid") from exc
+    required = {
+        "schema_version",
+        "chain_id",
+        "height",
+        "round",
+        "block_hash",
+        "signed_power",
+        "total_power",
+        "validator_ids",
+        "vote_hashes",
+        "certificate_hash",
+        "finality_status",
+        "mainnet_changed",
+        "assets_moved",
+        "bridge_activated",
+    }
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != required
+        or raw["schema_version"] != "junca-finality-certificate/v1"
+        or raw["finality_status"] != "FINALIZED"
+        or raw["mainnet_changed"] is not False
+        or raw["assets_moved"] is not False
+        or raw["bridge_activated"] is not False
+    ):
+        raise StateStoreError("stored finality certificate is invalid")
+    integer_fields = ("chain_id", "height", "round", "signed_power", "total_power")
+    if any(
+        isinstance(raw[field], bool) or not isinstance(raw[field], int)
+        for field in integer_fields
+    ):
+        raise StateStoreError("stored finality certificate is invalid")
+    if (
+        raw["chain_id"] <= 0
+        or raw["height"] <= 0
+        or raw["round"] < 0
+        or raw["signed_power"] <= 0
+        or raw["total_power"] <= 0
+        or raw["signed_power"] > raw["total_power"]
+        or raw["signed_power"] * 3 <= raw["total_power"] * 2
+    ):
+        raise StateStoreError("stored finality certificate is invalid")
+    validators = raw["validator_ids"]
+    vote_hashes = raw["vote_hashes"]
+    if (
+        not isinstance(validators, list)
+        or not validators
+        or validators != sorted(set(validators))
+        or any(not isinstance(item, str) or not item for item in validators)
+        or not isinstance(vote_hashes, list)
+        or len(vote_hashes) != len(validators)
+    ):
+        raise StateStoreError("stored finality certificate is invalid")
+    _hash(raw["block_hash"], "stored certificate block_hash")
+    _hash(raw["certificate_hash"], "stored certificate_hash")
+    for item in vote_hashes:
+        _hash(item, "stored certificate vote_hash")
+    body = {
+        "block_hash": raw["block_hash"],
+        "chain_id": raw["chain_id"],
+        "height": raw["height"],
+        "round": raw["round"],
+        "signed_power": raw["signed_power"],
+        "total_power": raw["total_power"],
+        "validator_ids": validators,
+        "vote_hashes": vote_hashes,
+    }
+    expected_hash = "0x" + hashlib.sha256(
+        b"JUNCA_FINALITY_CERTIFICATE_V1\x00"
+        + json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if raw["certificate_hash"] != expected_hash:
+        raise StateStoreError("stored finality certificate hash mismatch")
+    return FinalityCertificate(
+        chain_id=raw["chain_id"],
+        height=raw["height"],
+        round=raw["round"],
+        block_hash=raw["block_hash"],
+        signed_power=raw["signed_power"],
+        total_power=raw["total_power"],
+        validator_ids=tuple(validators),
+        vote_hashes=tuple(vote_hashes),
+        certificate_hash=raw["certificate_hash"],
+    )
 
 
 def _validate_stored_block_identity(row: sqlite3.Row) -> None:
