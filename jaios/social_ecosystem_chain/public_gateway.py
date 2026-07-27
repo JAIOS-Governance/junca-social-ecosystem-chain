@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -188,7 +188,7 @@ class PublicGateway:
             "notice": NOTICE,
             "finalized_only": True,
             "status": "ready" if finalized else "syncing",
-            "observed_at": datetime.now(UTC).isoformat(),
+            "observed_at": datetime.now(timezone.utc).isoformat(),
             "network": network,
             "head": (
                 {
