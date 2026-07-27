@@ -44,7 +44,7 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/favicon.svg"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png"',
   'rel="icon" href="https://docs.jaios-governance.org/icon-192.png"',
   'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png"',
   'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest"',
@@ -154,11 +154,11 @@ for (const prohibitedMarker of ["Monotype official Optima Bold specimen", "flatt
   if (favicon.includes(prohibitedMarker)) failures.push(`favicon retains retired J provenance: ${prohibitedMarker}`);
 }
 const expectedSymbolDigests = new Map([
-  ["official-junca-symbol.png", "6cba53b6217543d9d4fb33a1d4727ea24ee3dfd09a55ac9ed46da46ff13886cb"],
-  ["icon-192.png", "48db3873676c0b70969b47b067a51907d8b69bb2c6b231253bb83a767b7604f7"],
-  ["icon-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
-  ["icon-maskable-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
-  ["apple-touch-icon.png", "30aaf78297a8dd8077025eefc3d7b4bf613fd1ab955dd1d47858f9d797ecec88"],
+  ["official-junca-symbol.png", "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"],
+  ["icon-192.png", "e0467b657d02d3be641056d53d922f83f7e557413b4d48b9450517012e4e5b3a"],
+  ["icon-512.png", "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"],
+  ["icon-maskable-512.png", "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"],
+  ["apple-touch-icon.png", "1eb5fb801e45366beabf85cc724ac4686864f805b64540c23e8a36aeaf2903f5"],
   ["junca-symbol-r20-192.png", "48db3873676c0b70969b47b067a51907d8b69bb2c6b231253bb83a767b7604f7"],
   ["junca-symbol-r20-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
   ["junca-symbol-r20-maskable-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
