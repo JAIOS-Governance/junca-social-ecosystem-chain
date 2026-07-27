@@ -114,6 +114,7 @@ def evaluate(
             "SourceCommit": expected_source_commit,
             "NodeArtifactSHA256": expected_artifact_sha256,
             "GenesisSHA256": expected_genesis_sha256,
+            "RequestDigest": request_sha256,
             "MainnetChanged": "false",
             "AssetsMoved": "false",
             "BridgeActivated": "false",
