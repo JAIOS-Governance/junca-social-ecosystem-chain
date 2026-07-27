@@ -1,7 +1,7 @@
 {
   "schema_version": "junca-validator-state-migration-request/v1",
-  "state": "AUTHORIZED",
   "approval_phrase": "PUBLIC_TESTNET_VALIDATOR_STATE_MIGRATION",
+  "state": "AUTHORIZED",
   "environment": "public-testnet",
   "network": "Public Testnet",
   "aws_account_id": "595710543956",
