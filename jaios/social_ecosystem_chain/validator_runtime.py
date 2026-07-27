@@ -129,12 +129,14 @@ class LiveValidatorRuntime:
         next_set = self.schedule.at_height(self.pipeline.store.head_height + 1)
         self.bindings = self._validate_bindings(next_set, bindings)
 
-    def propose(self, *, round: int = 0) -> ExecutedProposal:
+    def propose(
+        self, *, round: int = 0, block_timestamp: int | None = None
+    ) -> ExecutedProposal:
         if self._proposal is not None:
             raise ValidatorRuntimeError("a proposal is already awaiting finality")
         if isinstance(round, bool) or not isinstance(round, int) or round < 0:
             raise ValidatorRuntimeError("round must be a non-negative integer")
-        proposal = self.pipeline.execute_candidate()
+        proposal = self.pipeline.execute_candidate(block_timestamp=block_timestamp)
         active = self.schedule.at_height(proposal.height)
         self._validate_bindings(active, self.bindings)
         self._proposal = proposal
