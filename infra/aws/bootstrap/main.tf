@@ -270,7 +270,6 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
         "ec2:*",
         "elasticloadbalancing:*",
         "wafv2:AssociateWebACL",
-        "wafv2:CreateWebACL",
         "wafv2:DeleteWebACL",
         "wafv2:DisassociateWebACL",
         "wafv2:GetWebACL",
@@ -335,6 +334,26 @@ resource "aws_iam_role_policy" "deployment_infrastructure" {
       Condition = {
         StringEqualsIfExists = {
           "aws:ResourceTag/Project" = "JUNCA Social Ecosystem Chain"
+        }
+      }
+    },
+    {
+      Sid      = "CreateTaggedPublicTestnetWebAcl"
+      Effect   = "Allow"
+      Action   = "wafv2:CreateWebACL"
+      Resource = "*"
+      Condition = {
+        StringEquals = {
+          "aws:RequestTag/Project" = "JUNCA Social Ecosystem Chain"
+        }
+        "ForAllValues:StringEquals" = {
+          "aws:TagKeys" = [
+            "Governance",
+            "ManagedBy",
+            "MonetaryUse",
+            "Network",
+            "Project"
+          ]
         }
       }
     },
