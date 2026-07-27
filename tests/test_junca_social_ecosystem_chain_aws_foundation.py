@@ -59,6 +59,12 @@ def runtime_finality_exact_readback_block(script: str) -> str:
     return block.replace("\\$", "$")
 
 
+def runtime_finality_binding_functions(script: str) -> str:
+    return script.split("build_runtime_finality_bindings() {", 1)[1].split(
+        "\nset_runtime_finality() {", 1
+    )[0].join(("build_runtime_finality_bindings() {", ""))
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -865,8 +871,7 @@ class AwsFoundationTests(unittest.TestCase):
         for required in (
             "resume_updated_count=0",
             'resume_updated_count="$(jq -er \'.updated_count\' "$resume_path")"',
-            "if $index < $updated_count",
-            "allow_missing_finality_keys: ($index >= $updated_count)",
+            "build_pre_rollout_finality_bindings",
             'build_runtime_finality_bindings \\\n'
             '          "$NODE_ARTIFACT_SHA256" false "$new_instance"',
             'build_runtime_finality_bindings \\\n'
@@ -875,6 +880,121 @@ class AwsFoundationTests(unittest.TestCase):
             "NODE_ARTIFACT_SHA256=${expected_artifact_sha256}",
         ):
             self.assertIn(required, self.foundation_script)
+
+    def test_finality_binding_builders_are_unambiguous_and_ordered(self) -> None:
+        functions = runtime_finality_binding_functions(
+            self.foundation_script
+        )
+        self.assertNotIn("--args", functions)
+        self.assertIn("--argjson instances", functions)
+        target = "a" * 64
+        previous = "b" * 64
+        instances = (
+            "i-0709abcdef1234567",
+            "i-0809abcdef1234567",
+            "i-0909abcdef1234567",
+        )
+
+        def run(
+            function: str, arguments: tuple[str, ...]
+        ) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + functions
+                    + f'\n{function} "$@"\n',
+                    "binding-test",
+                    *arguments,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        for selected in (instances[:1], instances):
+            with self.subTest(homogeneous=selected):
+                result = run(
+                    "build_runtime_finality_bindings",
+                    (target, "false", *selected),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bindings = json.loads(result.stdout)
+                self.assertEqual(
+                    [item["instance_id"] for item in bindings],
+                    list(selected),
+                )
+                self.assertTrue(
+                    all(
+                        item["expected_artifact_sha256"] == target
+                        and item["allow_missing_finality_keys"] is False
+                        for item in bindings
+                    )
+                )
+
+        for updated_count in range(4):
+            with self.subTest(updated_count=updated_count):
+                result = run(
+                    "build_pre_rollout_finality_bindings",
+                    (
+                        str(updated_count),
+                        target,
+                        previous,
+                        *instances,
+                    ),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bindings = json.loads(result.stdout)
+                self.assertEqual(
+                    [item["instance_id"] for item in bindings],
+                    list(instances),
+                )
+                for index, item in enumerate(bindings):
+                    is_target = index < updated_count
+                    self.assertEqual(
+                        item["expected_artifact_sha256"],
+                        target if is_target else previous,
+                    )
+                    self.assertEqual(
+                        item["allow_missing_finality_keys"],
+                        not is_target,
+                    )
+
+        rejected = (
+            (
+                "build_runtime_finality_bindings",
+                (target, "false"),
+            ),
+            (
+                "build_runtime_finality_bindings",
+                (target, "false", *instances, "i-0a09abcdef1234567"),
+            ),
+            (
+                "build_runtime_finality_bindings",
+                (target, "false", "invalid-instance"),
+            ),
+            (
+                "build_pre_rollout_finality_bindings",
+                ("-1", target, previous, *instances),
+            ),
+            (
+                "build_pre_rollout_finality_bindings",
+                ("4", target, previous, *instances),
+            ),
+            (
+                "build_pre_rollout_finality_bindings",
+                ("0", target, previous, *instances[:2]),
+            ),
+            (
+                "build_pre_rollout_finality_bindings",
+                ("0", target, previous, instances[0], instances[0], instances[2]),
+            ),
+        )
+        for function, arguments in rejected:
+            with self.subTest(rejected=(function, arguments)):
+                result = run(function, arguments)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_finality_preflight_is_read_only_and_precedes_all_mutation(self) -> None:
         block = runtime_finality_preflight_block(self.foundation_script)
