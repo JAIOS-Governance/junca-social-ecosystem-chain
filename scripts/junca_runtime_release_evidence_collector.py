@@ -307,7 +307,7 @@ def verify_volumes(
             "JuncaMigrationState": "VERIFIED_PASS",
             "JuncaFilesystemVerified": "true",
             "JuncaStateStoreIntegrity": "true",
-            "JuncaFinalityCertificateRecovered": "true",
+            "JuncaFinalityCertificateBackfilled": "true",
             "PublicTestnetOnly": "true",
         }
         for name, value in required_tags.items():
