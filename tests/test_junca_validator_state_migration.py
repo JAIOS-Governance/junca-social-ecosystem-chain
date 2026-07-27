@@ -182,8 +182,12 @@ class ValidatorStateMigrationTests(unittest.TestCase):
             'terraform -chdir="$runtime_dir" output -json',
             'terraform -chdir="$runtime_dir" plan',
             'terraform -chdir="$runtime_dir" show -json',
+            "-target=aws_ebs_volume.validator_state",
             "provision_validator_state_volumes: true",
-            "aws_(ebs_volume|volume_attachment)\\\\.validator_state",
+            "aws_ebs_volume\\\\.validator_state",
+            "aws ec2 attach-volume",
+            'attachment_identity="/dev/sdf:${volume_id}:${instance_id}"',
+            'terraform -chdir="$runtime_dir" import',
         ):
             self.assertIn(required, self.controller)
         self.assertRegex(
@@ -196,12 +200,11 @@ class ValidatorStateMigrationTests(unittest.TestCase):
         )
         self.assertRegex(
             self.controller,
-            re.compile(r"(length|wc -l).*(==|=).*6", re.DOTALL),
+            re.compile(r"(length|wc -l).*(==|=).*3", re.DOTALL),
         )
         for prohibited in (
             "terraform state rm",
             "terraform state mv",
-            "terraform import",
             "bootstrap-apply",
             "infra/aws/bootstrap",
         ):
