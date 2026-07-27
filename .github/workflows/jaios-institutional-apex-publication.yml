@@ -102,6 +102,14 @@ jobs:
             --query PolicyDocument --output json >/tmp/jaios-apex-cloudfront-policy-readback.json
           grep -q "cloudfront:CreateDistribution" /tmp/jaios-apex-cloudfront-policy-readback.json
 
+      - name: Refresh AWS identity with bounded capability
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-institutional-cloudfront-${{ github.run_id }}
+          disable-retry: true
+
       - name: Ensure CloudFront distribution
         id: distribution
         shell: bash
