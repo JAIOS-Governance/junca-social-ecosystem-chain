@@ -157,6 +157,19 @@ jobs:
             .terraform_canonicalized == true and
             .runtime_mount_verified == true and
             .immutable_runtime_mount_activation_pending == true and
+            .immutable_runtime_certificate_activation_pending == true and
+            (
+              .finalized_head
+              | (
+                  (.height | type == "number") and
+                  (.height >= 1) and
+                  (.hash | test("^0x[0-9a-f]{64}$")) and
+                  (
+                    .certificate_hash
+                    | test("^0x[0-9a-f]{64}$")
+                  )
+                )
+            ) and
             .bootstrap_changed == false and
             .mainnet_changed == false and
             .assets_moved == false and
@@ -295,10 +308,68 @@ jobs:
               )
               test "${#instances[@]}" = 3
               test "$(printf '%s\n' "${instances[@]}" | sort -u | wc -l)" = 3
-              jq -n '{
+              durable_reader="$(
+                base64 -w0 <<'PY'
+          import json
+          import os
+          import sqlite3
+
+          health = json.loads(os.environ["JUNCA_HEALTH_JSON"])
+          connection = sqlite3.connect(
+              "file:/var/lib/junca/state.sqlite?mode=ro",
+              uri=True,
+          )
+          connection.row_factory = sqlite3.Row
+          connection.execute("PRAGMA query_only=ON")
+          quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+          head = connection.execute(
+              """
+              SELECT height,block_hash,finalized,certificate_hash
+              FROM blocks
+              ORDER BY height DESC
+              LIMIT 1
+              """
+          ).fetchone()
+          if head is None:
+              raise RuntimeError("durable finalized head is absent")
+          certificate_row = connection.execute(
+              """
+              SELECT certificate_json
+              FROM finality_certificates
+              WHERE height=?
+              """,
+              (head["height"],),
+          ).fetchone()
+          if certificate_row is None:
+              raise RuntimeError("durable finality certificate is absent")
+          certificate = json.loads(certificate_row["certificate_json"])
+          connection.close()
+          print(
+              json.dumps(
+                  {
+                      "health": health,
+                      "durable_state": {
+                          "quick_check": quick_check,
+                          "head": dict(head),
+                          "certificate": certificate,
+                      },
+                  },
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+          )
+          PY
+              )"
+              test -n "$durable_reader"
+              jq -n --arg reader "$durable_reader" '{
                 commands: [
                   "set -euo pipefail",
-                  "curl -fsS http://127.0.0.1:8545/health"
+                  "export JUNCA_HEALTH_JSON=\"$(curl -fsS http://127.0.0.1:8545/health)\"",
+                  (
+                    "printf %s "
+                    + ($reader | @sh)
+                    + " | base64 --decode | python3 -"
+                  )
                 ]
               }' > evidence/readback/private-health-request.json
               command_id="$(
@@ -330,21 +401,22 @@ jobs:
                 done
                 test "$command_status" = "Success"
                 invocation="evidence/readback/private-health-invocation-${index}.json"
-                health="evidence/readback/private-health-${index}.json"
+                readback="evidence/readback/private-readback-${index}.json"
                 item="evidence/readback/private-validator-${index}.json"
                 aws ssm get-command-invocation \
                   --command-id "$command_id" \
                   --instance-id "$instance_id" >"$invocation"
                 jq -er '.StandardOutputContent | fromjson' \
-                  "$invocation" >"$health"
+                  "$invocation" >"$readback"
                 jq -n \
                   --arg validator_id \
                     "$(printf 'validator-%02d' "$((index + 1))")" \
                   --arg instance_id "$instance_id" \
-                  --slurpfile health "$health" '{
+                  --slurpfile readback "$readback" '{
                     validator_id: $validator_id,
                     instance_id: $instance_id,
-                    health: $health[0]
+                    health: $readback[0].health,
+                    durable_state: $readback[0].durable_state
                   }' >"$item"
               done
               jq -s '{
