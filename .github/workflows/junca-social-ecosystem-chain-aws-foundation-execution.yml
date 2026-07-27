@@ -1,19 +1,6 @@
 name: JUNCA Chain AWS Foundation Execution
 
 on:
-  workflow_run:
-    workflows:
-      - "JUNCA Chain Runtime Self Permission Recovery"
-    types:
-      - completed
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-social-ecosystem-chain-aws-foundation-execution.yml"
-      - "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
-      - "config/junca_public_testnet_foundation_bootstrap_policy.json"
-      - "infra/aws/bootstrap/**"
-      - "infra/aws/public-testnet/**"
   workflow_dispatch:
     inputs:
       phase:
