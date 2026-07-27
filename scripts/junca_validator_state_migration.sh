@@ -519,9 +519,10 @@ last_quorum_hash=""
 last_quorum_certificate=""
 
 wait_ssm_command() {
-  command_id="$1"
-  instance_id="$2"
-  max_attempts="$3"
+  local command_id="$1"
+  local instance_id="$2"
+  local max_attempts="$3"
+  local attempt status
   for attempt in $(seq 1 "$max_attempts"); do
     status="$(
       aws ssm get-command-invocation \
@@ -767,7 +768,7 @@ require_peer_health() {
               | select(.instance_id == $peer.instance_id)
             ) as $binding
           | $peer.health.status == "healthy" and
-            $peer.health.network == "Public Testnet" and
+            $peer.health.network == "Public Testnet / No Monetary Value" and
             $peer.health.validator_id == $binding.validator_id and
             $peer.health.signer_resource_digest ==
               $binding.signer_resource_digest and
@@ -836,7 +837,7 @@ require_peer_health() {
 }
 
 restart_on_controller_error() {
-  status=$?
+  local controller_status="$1"
   trap - ERR EXIT INT TERM
   set +e
   if [[ -n "$active_command_id" && -n "$current_instance" ]]; then
@@ -858,7 +859,7 @@ restart_on_controller_error() {
       wait_ssm_command "$recovery_id" "$current_instance" 24
     fi
   fi
-  exit "$status"
+  exit "$controller_status"
 }
 
 if [[ "$already_accepted" == true ]]; then
@@ -891,7 +892,9 @@ if [[ "$already_accepted" == true ]]; then
     require_peer_health "" "accepted-verify-${validator_index}"
   done
 else
-  trap restart_on_controller_error ERR EXIT INT TERM
+  trap 'restart_on_controller_error "$?"' ERR EXIT
+  trap 'restart_on_controller_error 130' INT
+  trap 'restart_on_controller_error 143' TERM
 
   for validator_index in 0 1 2; do
     instance_id="${instances[$validator_index]}"
@@ -1064,7 +1067,7 @@ else
     current_instance=""
     require_peer_health "" "validator-${validator_index}-after"
   done
-  trap - ERR EXIT
+  trap - ERR EXIT INT TERM
 fi
 
 test "${#rollback_snapshots[@]}" = 3
