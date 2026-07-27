@@ -68,6 +68,8 @@ jobs:
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Validator Immutable AMI Build" and
+            .path == ".github/workflows/junca-validator-ami-build.yml" and
+            .event == "workflow_dispatch" and
             .head_branch == "main" and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -76,6 +78,8 @@ jobs:
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Manifest Gate" and
+            .path == ".github/workflows/junca-runtime-release-manifest-gate.yml" and
+            .event == "workflow_dispatch" and
             .head_branch == "main" and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
