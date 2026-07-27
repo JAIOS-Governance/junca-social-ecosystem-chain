@@ -2,7 +2,9 @@ name: JUNCA Public Testnet Release
 
 on:
   workflow_run:
-    workflows: ["JUNCA Validator Foundation Release"]
+    workflows:
+      - "JUNCA Validator Foundation Release"
+      - "JUNCA Public Testnet IAM Recovery"
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -33,7 +35,7 @@ jobs:
       DOMAIN_NAME: jaios-governance.org
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
-      FOUNDATION_RUN_ID: ${{ github.event.workflow_run.id || inputs.foundation_run_id }}
+      FOUNDATION_RUN_ID: ${{ github.event.workflow_run.name == 'JUNCA Public Testnet IAM Recovery' && '30237527940' || github.event.workflow_run.id || inputs.foundation_run_id }}
 
     steps:
       - uses: actions/checkout@v4
