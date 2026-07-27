@@ -806,11 +806,19 @@ write_live_rollout_prefix_readback() {
   local evidence_validators_path="$2"
   local previous_artifact_sha256="$3"
   local previous_ami_id="$4"
+  local rollback_path="$5"
   local -a current_instances
   local index
+  local state_volume_id
+  local validator_state_rollback
+  local observation_path
+  local enriched_observation_path
   [[ "$evidence_updated_count" =~ ^[0-3]$ ]]
   if [[ -n "$evidence_validators_path" ]]; then
     test -f "$evidence_validators_path"
+  fi
+  if [[ -n "$rollback_path" ]]; then
+    test -f "$rollback_path"
   fi
   terraform -chdir=infra/aws/public-testnet output -json \
     > artifacts/live-prefix-foundation-outputs.json
@@ -819,16 +827,107 @@ write_live_rollout_prefix_readback() {
       artifacts/live-prefix-foundation-outputs.json
   )
   test "${#current_instances[@]}" = 3
+  validator_state_rollback="$(
+    jq -ce '
+      .validator_state_volume_readback.value
+      | select(
+          length == 3 and
+          (map(.validator_id) | sort) ==
+            ["validator-01", "validator-02", "validator-03"] and
+          (map(.volume_id) | unique | length) == 3 and
+          (map(.rollback_snapshot_id) | unique | length) == 3
+        )
+    ' artifacts/live-prefix-foundation-outputs.json
+  )"
+  if [[ -n "$rollback_path" ]]; then
+    jq -e \
+      --argjson state "$validator_state_rollback" '
+        [.validators[] |
+          {validator_id, volume_id, rollback_snapshot_id}] ==
+        [$state[] |
+          {validator_id, volume_id, rollback_snapshot_id}]
+      ' "$rollback_path" >/dev/null
+  fi
   for index in 0 1 2; do
+    observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
     capture_validator_observation \
       "validator-0$((index + 1))" \
       "${current_instances[$index]}" \
-      "artifacts/live-prefix-validator-$((index + 1)).json"
+      "$observation_path"
+    state_volume_id="$(
+      jq -er \
+        ".[$index].volume_id |
+          select(type == \"string\" and
+            test(\"^vol-[0-9a-f]{8,17}$\"))" \
+        <<<"$validator_state_rollback"
+    )"
+    aws ec2 describe-volumes --volume-ids "$state_volume_id" \
+      --output json \
+      >"artifacts/live-prefix-volume-$((index + 1)).json"
+    jq -e \
+      --arg instance_id "${current_instances[$index]}" \
+      --arg volume_id "$state_volume_id" '
+        .Volumes | length == 1 and
+        .[0].VolumeId == $volume_id and
+        .[0].Encrypted == true and
+        .[0].State == "in-use" and
+        (.[0].Attachments | length) == 1 and
+        .[0].Attachments[0].InstanceId == $instance_id and
+        .[0].Attachments[0].State == "attached"
+      ' "artifacts/live-prefix-volume-$((index + 1)).json" >/dev/null
+    enriched_observation_path="${observation_path%.json}.enriched.json"
+    jq --arg volume_id "$state_volume_id" \
+      '. + {volume_id: $volume_id}' \
+      "$observation_path" >"$enriched_observation_path"
+    mv "$enriched_observation_path" "$observation_path"
   done
   jq -s '.' artifacts/live-prefix-validator-{1,2,3}.json \
     > artifacts/live-prefix-validators.json
   if [[ -z "$evidence_validators_path" ]]; then
     evidence_validators_path=artifacts/live-prefix-validators.json
+  fi
+  if [[ -z "$rollback_path" ]]; then
+    rollback_path=artifacts/live-prefix-rollback-floor.json
+    jq -n \
+      --arg target_version "$previous_artifact_sha256" \
+      --arg artifact_sha256 "$previous_artifact_sha256" \
+      --arg ami_id "$previous_ami_id" \
+      --slurpfile observed artifacts/live-prefix-validators.json \
+      --argjson state "$validator_state_rollback" '{
+        target_version: $target_version,
+        artifact_sha256: $artifact_sha256,
+        ami_id: $ami_id,
+        rehearsal_passed: true,
+        automatic_finality_disabled: true,
+        no_state_rewind: true,
+        durable_volume_reused: true,
+        snapshot_restore_performed: false,
+        validators: [
+          range(0; 3) as $index
+          | $observed[0][$index] as $health
+          | $state[$index] as $volume
+          | {
+              validator_id: $health.validator_id,
+              volume_id: $volume.volume_id,
+              rollback_snapshot_id: $volume.rollback_snapshot_id,
+              state_rewind_permitted: false,
+              head_height: $health.head_height,
+              head_hash: $health.head_hash,
+              certificate_hash: $health.certificate_hash,
+              certificate_height: $health.certificate_height,
+              certificate_block_hash: $health.certificate_block_hash,
+              certificate_finality_status:
+                $health.certificate_finality_status,
+              certificate_signed_power: $health.certificate_signed_power,
+              certificate_total_power: $health.certificate_total_power,
+              certificate_validator_ids: $health.certificate_validator_ids,
+              certificate_vote_hashes: $health.certificate_vote_hashes
+            }
+        ],
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }' >"$rollback_path"
   fi
   jq -n \
     --arg target_version "$NODE_ARTIFACT_SHA256" \
@@ -840,7 +939,8 @@ write_live_rollout_prefix_readback() {
       "$validator_slot_epoch_seconds" \
     --argjson observed_unix_time "$(date +%s)" \
     --slurpfile validators artifacts/live-prefix-validators.json \
-    --slurpfile evidence_validators "$evidence_validators_path" '{
+    --slurpfile evidence_validators "$evidence_validators_path" \
+    --slurpfile rollback "$rollback_path" '{
       target_version: $target_version,
       target_ami_id: $target_ami_id,
       previous_version: $previous_version,
@@ -849,6 +949,7 @@ write_live_rollout_prefix_readback() {
       evidence_updated_count: $evidence_updated_count,
       validators: $validators[0],
       evidence_validators: $evidence_validators[0],
+      rollback: $rollback[0],
       requested_slot_epoch_seconds: $requested_slot_epoch_seconds,
       observed_unix_time: $observed_unix_time,
       mainnet_changed: false,
@@ -1437,6 +1538,7 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   resume_path="${ROLLING_RESUME_EVIDENCE_PATH:-}"
   resume_updated_count=0
   resume_evidence_validators_path=""
+  live_prefix_rollback_path=""
   if [[ "$ROLLING_RESUME_RUN_ID" == "0" ]]; then
     test -z "$resume_path"
     test "${#validator_replacements[@]}" = 3
@@ -1522,6 +1624,7 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
         (.rollback.validators | length) == 3
       ' "$resume_path" >/dev/null
     jq '.rollback' "$resume_path" > artifacts/rollback-rehearsal.json
+    live_prefix_rollback_path=artifacts/rollback-rehearsal.json
     jq '.validators' "$resume_path" \
       > artifacts/resume-evidence-validators.json
     resume_evidence_validators_path=artifacts/resume-evidence-validators.json
@@ -1535,7 +1638,8 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   write_live_rollout_prefix_readback \
     "$resume_updated_count" \
     "$resume_evidence_validators_path" \
-    "$previous_artifact_sha256" "$previous_ami_id"
+    "$previous_artifact_sha256" "$previous_ami_id" \
+    "$live_prefix_rollback_path"
   live_updated_count="$(
     jq -er '.live_updated_count' artifacts/live-prefix-decision.json
   )"
