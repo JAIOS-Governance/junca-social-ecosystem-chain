@@ -11,6 +11,11 @@ on:
         description: "Successful JUNCA Runtime Release Manifest Gate run ID"
         required: true
         type: string
+      resume_run_id:
+        description: "Prior failed Foundation Release run ID, or 0 for a fresh rollout"
+        required: false
+        default: "0"
+        type: string
       authorize_rollout:
         description: "Exact authorization phrase: PUBLIC_TESTNET_ROLLOUT"
         required: true
@@ -34,7 +39,7 @@ jobs:
       inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'
     runs-on: ubuntu-24.04
     environment: public-testnet
-    timeout-minutes: 150
+    timeout-minutes: 210
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
@@ -45,6 +50,8 @@ jobs:
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
       AMI_RUN_ID: ${{ inputs.ami_run_id }}
       MANIFEST_GATE_RUN_ID: ${{ inputs.manifest_gate_run_id }}
+      ROLLING_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      FOUNDATION_ROLLING_RELEASE: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -146,6 +153,86 @@ jobs:
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
           ' "$decision"
+          echo "MANIFEST_DECISION_SHA256=$(sha256sum "$decision" | cut -d' ' -f1)" \
+            >> "$GITHUB_ENV"
+
+      - name: Resolve exact resumable rolling evidence
+        if: inputs.resume_run_id != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$ROLLING_RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$ROLLING_RESUME_RUN_ID" != "$GITHUB_RUN_ID"
+          resume_run="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${ROLLING_RESUME_RUN_ID}")"
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg head "$GITHUB_SHA" '
+              .status == "completed" and
+              (.conclusion == "failure" or
+               .conclusion == "cancelled" or
+               .conclusion == "timed_out") and
+              .name == "JUNCA Validator Foundation Release" and
+              .path == ".github/workflows/junca-validator-foundation-release.yml" and
+              .event == "workflow_dispatch" and
+              .head_branch == "main" and
+              .head_sha == $head and
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository
+            ' <<<"$resume_run"
+          mkdir -p artifacts/resume
+          gh run download "$ROLLING_RESUME_RUN_ID" \
+            --repo "${{ github.repository }}" \
+            --name "junca-validator-foundation-release-${ROLLING_RESUME_RUN_ID}" \
+            --dir artifacts/resume
+          test -f artifacts/resume/rolling-resume-evidence.json
+          test -f artifacts/resume/rolling-resume-evidence.json.sha256
+          (
+            cd artifacts/resume
+            sha256sum -c rolling-resume-evidence.json.sha256
+          )
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg head "$GITHUB_SHA" \
+            --argjson producer_run_id "$ROLLING_RESUME_RUN_ID" \
+            --argjson ami_run_id "$AMI_RUN_ID" \
+            --argjson manifest_gate_run_id "$MANIFEST_GATE_RUN_ID" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "$NODE_ARTIFACT_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            --arg ami_id "$NODE_AMI_ID" \
+            --arg request_sha256 "$REQUEST_SHA256" \
+            --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" '
+              .schema_version == "junca-validator-rolling-resume/v1" and
+              .repository == $repository and
+              .head_sha == $head and
+              .producer_run_id == $producer_run_id and
+              .ami_run_id == $ami_run_id and
+              .manifest_gate_run_id == $manifest_gate_run_id and
+              .candidate.source_commit == $source_commit and
+              .candidate.node_artifact_sha256 == $node_sha256 and
+              .candidate.genesis_sha256 == $genesis_sha256 and
+              .candidate.ami_id == $ami_id and
+              .candidate.request_sha256 == $request_sha256 and
+              .candidate.manifest_decision_sha256 ==
+                $manifest_decision_sha256 and
+              .automatic_finality.block_interval_seconds == 30 and
+              (.automatic_finality.slot_epoch_seconds | type) == "number" and
+              (.automatic_finality.slot_epoch_seconds | floor) ==
+                .automatic_finality.slot_epoch_seconds and
+              .automatic_finality.slot_epoch_seconds > 0 and
+              .automatic_finality.slot_epoch_seconds % 30 == 0 and
+              .automatic_finality.minimum_remaining_seconds == 900 and
+              .automatic_finality.maximum_remaining_seconds == 7230 and
+              (.updated_count | type) == "number" and
+              .updated_count >= 0 and .updated_count <= 3 and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false
+            ' artifacts/resume/rolling-resume-evidence.json
+          echo "ROLLING_RESUME_EVIDENCE_PATH=$GITHUB_WORKSPACE/artifacts/resume/rolling-resume-evidence.json" \
+            >> "$GITHUB_ENV"
 
       - uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
@@ -158,12 +245,37 @@ jobs:
           set -euo pipefail
           interval=30
           now="$(date +%s)"
-          # Keep activation clear of the bounded three-node rolling replacement
-          # and SSM readiness windows. The state is preserved on later releases,
-          # so this safety delay is paid once.
-          activation_delay=3600
-          slot_epoch="$(( ((now + activation_delay + interval - 1) / interval) * interval ))"
-          test "$slot_epoch" -gt "$now"
+          minimum_remaining=900
+          maximum_remaining=7230
+          if [[ -n "${ROLLING_RESUME_EVIDENCE_PATH:-}" ]]; then
+            test "$ROLLING_RESUME_RUN_ID" != "0"
+            test -f "$ROLLING_RESUME_EVIDENCE_PATH"
+            test "$(
+              jq -er '.automatic_finality.block_interval_seconds' \
+                "$ROLLING_RESUME_EVIDENCE_PATH"
+            )" = "$interval"
+            slot_epoch="$(
+              jq -er '
+                .automatic_finality.slot_epoch_seconds
+                | select(
+                    type == "number" and
+                    floor == . and
+                    . > 0 and
+                    . % 30 == 0
+                  )
+              ' "$ROLLING_RESUME_EVIDENCE_PATH"
+            )"
+          else
+            test "$ROLLING_RESUME_RUN_ID" = "0"
+            # Keep activation clear of the bounded three-node replacement and
+            # SSM windows. A resume reuses this exact epoch; it never generates
+            # a second Terraform/user_data schedule.
+            activation_delay=7200
+            slot_epoch="$(( ((now + activation_delay + interval - 1) / interval) * interval ))"
+          fi
+          remaining="$((slot_epoch - now))"
+          test "$remaining" -ge "$minimum_remaining"
+          test "$remaining" -le "$maximum_remaining"
           test "$((slot_epoch % interval))" -eq 0
           {
             echo "AUTOMATIC_FINALITY_ENABLED=true"
@@ -229,46 +341,6 @@ jobs:
             jq -e '.Status == "Success"' \
               "artifacts/reset-round-${instance}.json"
           done
-
-      - name: Drive one real three-validator finalization
-        run: |
-          set -euo pipefail
-          mapfile -t instances < artifacts/validator-instance-ids.txt
-          jq -n '{
-            commands: [
-              "set -euo pipefail",
-              "curl -fsS -H Content-Type:application/json --data '\''{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"junca_broadcastVote\",\"params\":[]}'\'' http://127.0.0.1:8545/"
-            ]
-          }' > artifacts/ssm-broadcast.json
-          for instance in "${instances[@]}"; do
-            # Serialize votes by validator identity. A concurrent broadcast can
-            # let a late local RPC propose the next height after height N has
-            # already finalized, obscuring the certificate being accepted.
-            command_id="$(aws ssm send-command \
-              --instance-ids "$instance" \
-              --document-name AWS-RunShellScript \
-              --parameters file://artifacts/ssm-broadcast.json \
-              --comment "JUNCA Public Testnet Runtime Acceptance" \
-              --query Command.CommandId --output text)"
-            aws ssm wait command-executed \
-              --command-id "$command_id" --instance-id "$instance"
-            aws ssm get-command-invocation \
-              --command-id "$command_id" --instance-id "$instance" \
-              > "artifacts/broadcast-${instance}.json"
-            jq -e '.Status == "Success"' "artifacts/broadcast-${instance}.json"
-            jq -er .StandardOutputContent "artifacts/broadcast-${instance}.json" \
-              > "artifacts/broadcast-result-${instance}.json"
-            jq -e '
-              .error == null and
-              .result.status == "BROADCAST" and
-              (.result.height | type) == "number" and
-              .result.height >= 1
-            ' "artifacts/broadcast-result-${instance}.json"
-          done
-          jq -s -e '
-            length == 3 and
-            (map(.result.height) | unique | length) == 1
-          ' artifacts/broadcast-result-i-*.json
 
       - name: Read back identical finalized heads
         run: |
