@@ -467,10 +467,10 @@ resource "aws_instance" "validator" {
   }
 
   user_data = templatefile("${path.module}/templates/validator-user-data.sh.tftpl", {
-    validator_id   = format("validator-%02d", count.index + 1)
-    chain_id       = var.chain_id
-    genesis_sha256 = var.genesis_sha256
-    node_sha256    = var.node_artifact_sha256
+    validator_id               = format("validator-%02d", count.index + 1)
+    chain_id                   = var.chain_id
+    genesis_sha256             = var.genesis_sha256
+    node_sha256                = var.node_artifact_sha256
     automatic_finality_enabled = var.automatic_finality_enabled
     block_interval_seconds = (
       var.automatic_finality_enabled
@@ -488,8 +488,8 @@ resource "aws_instance" "validator" {
       ? aws_ebs_volume.validator_state[count.index].id
       : ""
     )
-    signer_arn     = var.validator_signer_arns[count.index]
-    aws_region     = var.aws_region
+    signer_arn = var.validator_signer_arns[count.index]
+    aws_region = var.aws_region
     signer_bindings = join(",", [
       for index, arn in var.validator_signer_arns :
       format("validator-%02d=%s", index + 1, arn)
