@@ -72,12 +72,105 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
                 capture_output=True,
             )
 
+    @staticmethod
+    def acceptance_plan(
+        snapshot_id: str | None,
+        *,
+        remove_boundary: str | None = None,
+    ) -> dict[str, object]:
+        after_tags = {
+            "AssetsMoved": "false",
+            "BridgeActivated": "false",
+            "FailureDomain": "us-east-1a",
+            "JuncaFilesystemVerified": "true",
+            "JuncaFinalityCertificateBackfilled": "true",
+            "JuncaMigrationState": "VERIFIED_PASS",
+            "JuncaRollbackSnapshotId": "snap-0123456789abcdef0",
+            "JuncaStateStoreIntegrity": "true",
+            "MainnetChanged": "false",
+            "MigrationRequired": "false",
+            "Name": "junca-testnet-validator-01-state",
+            "PublicTestnetOnly": "true",
+            "StatePath": "/var/lib/junca",
+            "Validator": "01",
+        }
+        if remove_boundary is not None:
+            after_tags.pop(remove_boundary)
+        physical = {
+            "encrypted": True,
+            "type": "gp3",
+            "size": 200,
+            "iops": 6000,
+            "throughput": 250,
+            "snapshot_id": snapshot_id,
+        }
+        return {
+            "resource_changes": [
+                {
+                    "address": "aws_ebs_volume.validator_state[0]",
+                    "change": {
+                        "actions": ["update"],
+                        "before": {
+                            **physical,
+                            "tags": {
+                                "FailureDomain": "us-east-1a",
+                                "Name": "junca-testnet-validator-01-state",
+                                "Validator": "01",
+                            },
+                        },
+                        "after": {
+                            **physical,
+                            "tags": after_tags,
+                        },
+                    },
+                }
+            ]
+        }
+
+    def run_acceptance_plan(
+        self,
+        plan: dict[str, object],
+    ) -> subprocess.CompletedProcess[str]:
+        with TemporaryDirectory() as temporary:
+            plan_path = Path(temporary) / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            snapshots = json.dumps(
+                [
+                    "snap-0123456789abcdef0",
+                    "snap-1123456789abcdef0",
+                    "snap-2123456789abcdef0",
+                ]
+            )
+            program = (
+                "set -euo pipefail\n"
+                + extract_controller_function(
+                    "validate_state_volume_acceptance_plan"
+                )
+                + 'validate_state_volume_acceptance_plan "$1" "$2"\n'
+            )
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    program,
+                    "acceptance-plan",
+                    str(plan_path),
+                    snapshots,
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
     def test_attachment_readback_accepts_only_pending_or_verified_state(
         self,
     ) -> None:
         base_tags = [
             {"Key": "StatePath", "Value": "/var/lib/junca"},
             {"Key": "PublicTestnetOnly", "Value": "true"},
+            {"Key": "MainnetChanged", "Value": "false"},
+            {"Key": "AssetsMoved", "Value": "false"},
+            {"Key": "BridgeActivated", "Value": "false"},
         ]
         pending = [
             *base_tags,
@@ -133,6 +226,38 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             with self.subTest(tags=tags):
                 self.assertNotEqual(
                     self.run_attachment_readback(copy.deepcopy(tags)).returncode,
+                    0,
+                )
+
+    def test_acceptance_plan_allows_only_absent_snapshot_source(
+        self,
+    ) -> None:
+        for snapshot_id in (None, ""):
+            with self.subTest(snapshot_id=snapshot_id):
+                self.assertEqual(
+                    self.run_acceptance_plan(
+                        self.acceptance_plan(snapshot_id)
+                    ).returncode,
+                    0,
+                )
+        self.assertNotEqual(
+            self.run_acceptance_plan(
+                self.acceptance_plan("snap-99999999999999999")
+            ).returncode,
+            0,
+        )
+
+    def test_acceptance_plan_prohibits_boundary_tag_removal(self) -> None:
+        for boundary in (
+            "MainnetChanged",
+            "AssetsMoved",
+            "BridgeActivated",
+        ):
+            with self.subTest(boundary=boundary):
+                self.assertNotEqual(
+                    self.run_acceptance_plan(
+                        self.acceptance_plan("", remove_boundary=boundary)
+                    ).returncode,
                     0,
                 )
 
@@ -205,8 +330,12 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             ".change.after.size == 200",
             ".change.after.iops == 6000",
             ".change.after.throughput == 250",
+            '.change.after.snapshot_id == ""',
             ".change.after.tags | keys | sort",
             "JuncaRollbackSnapshotId",
+            '.change.after.tags.MainnetChanged == "false"',
+            '.change.after.tags.AssetsMoved == "false"',
+            '.change.after.tags.BridgeActivated == "false"',
         ):
             self.assertIn(required, CONTROLLER)
         self.assertLess(
