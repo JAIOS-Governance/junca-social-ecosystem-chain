@@ -7,8 +7,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.27";
-const revision = "R26";
+const revision = "R27";
 const chainSource = "372b4e1fc5967f50e037323c62513a1c2875e819";
+const officialWordmarkSource = join(root, "..", "..", "jaios", "social_ecosystem_chain", "assets", "junca-chain-logo-gold-on-navy.png");
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 const governanceFooter = '<div><span>Governance</span><strong>JAIOS Institutional Governance</strong></div>';
 const governanceLink = [
@@ -84,12 +85,20 @@ const governanceLinkStyle = [
   '.live-runtime-evidence dd{margin:.35rem 0 0;font-weight:700}.live-runtime-evidence a{color:#c6a96b}',
   '.live-runtime-boundary{color:#a9b5c4}.live-runtime-evidence>p{max-width:780px}',
   '@media(max-width:760px){.live-runtime-evidence{margin:1.5rem;padding:1.4rem}.live-runtime-evidence dl{grid-template-columns:repeat(2,1fr)}}',
+  '.wordmark{min-width:0}.wordmark img{display:block;width:190px;max-width:100%;height:auto;object-fit:contain}',
+  '.documentation-nav-head .official-brand-lockup{display:block}.documentation-nav-head .official-brand-lockup img{width:200px;height:auto}',
+  '.documentation-nav-head .official-brand-lockup span{display:block;margin-top:.65rem}',
+  '.hero .official-product-name img{width:min(410px,78vw);height:auto;margin-bottom:1rem}',
+  '.hero .official-product-name span{display:block}',
+  '@media(width<=720px){.site-header{gap:.7rem}.wordmark img{width:150px}.menu-toggle{margin-left:auto}',
+  '.hero .official-product-name img{width:min(300px,82vw)}.official-product-name span{font-size:.72em}}',
   '</style>',
 ].join("");
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await cp(snapshot, dist, { recursive: true });
+await cp(officialWordmarkSource, join(dist, "junca-chain-official-wordmark.png"));
 for (const route of routes) {
   const path = join(dist, route === "/" ? "index.html" : `${route.slice(1)}/index.html`);
   const source = await readFile(path, "utf8");
@@ -99,6 +108,9 @@ for (const route of routes) {
   await writeFile(
     path,
     source
+      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260727-r27" alt="JUNCA" width="190" height="57"></a>')
+      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260727-r27" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
+      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260727-r27" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
       .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs">${governanceLinkStyle}</head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
@@ -108,7 +120,7 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R26")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R27")
       .replaceAll("Runtime Deployment in Progress", "Public Testnet Runtime Active")
       .replaceAll("Pending Live Acceptance", "Live Acceptance Verified")
       .replaceAll("Pending Runtime Binding", "Read-only Endpoint Active")

@@ -44,6 +44,8 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
+    'src="/junca-chain-official-wordmark.png?v=20260727-r27"',
+    'alt="JUNCA"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
   }
@@ -68,7 +70,7 @@ for (const required of [
   "AWS Runtime",
   "Live Acceptance Verified",
   "Assets Moved",
-  "Revision · 2026.07.27 / R26",
+  "Revision · 2026.07.27 / R27",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -78,13 +80,8 @@ const css = cssName ? await readFile(join(dist, "assets", cssName), "utf8") : ""
 for (const font of ["Cormorant Garamond", "Source Serif 4", "Inter", "Shuei Mincho", "Shuei Kaku Gothic"]) {
   if (!css.includes(font)) failures.push(`font stack missing ${font}`);
 }
-for (const required of [
-  '--wordmark:"Optima LT Std Bold","Optima LT Std"',
-  "font-family:var(--wordmark)",
-  "font-weight:700",
-  "font-synthesis:none",
-]) {
-  if (!css.includes(required)) failures.push(`formal wordmark typography missing ${required}`);
+if (!home.includes(".wordmark img{display:block;width:190px")) {
+  failures.push("canonical JUNCA wordmark display rule missing");
 }
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
 for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
@@ -134,7 +131,7 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R26") failures.push("release manifest revision must be R26");
+if (releaseManifest.revision !== "R27") failures.push("release manifest revision must be R27");
 if (releaseManifest.runtime_status !== "VERIFIED") failures.push("release manifest runtime must be verified");
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
@@ -159,6 +156,13 @@ await readFile(join(dist, "icon-192.png"));
 await readFile(join(dist, "icon-512.png"));
 await readFile(join(dist, "icon-maskable-512.png"));
 await readFile(join(dist, "apple-touch-icon.png"));
+const officialWordmark = await readFile(join(dist, "junca-chain-official-wordmark.png"));
+const officialWordmarkDigest = createHash("sha256").update(officialWordmark).digest("hex");
+if (officialWordmarkDigest !== "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c89226e086049728ac") {
+  failures.push("official flattened JUNCA wordmark digest mismatch");
+}
+if (!home.includes('class="official-product-name"')) failures.push("/: official product-name lockup missing");
+if (!home.includes('class="official-brand-lockup"')) failures.push("/: documentation brand lockup missing");
 await readFile(join(dist, "junca-j-r21-192.png"));
 await readFile(join(dist, "junca-j-r21-512.png"));
 await readFile(join(dist, "junca-j-r21-maskable-512.png"));
