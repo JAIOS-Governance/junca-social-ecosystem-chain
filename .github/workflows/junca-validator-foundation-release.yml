@@ -55,6 +55,67 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve immutable candidate provenance head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          candidate_head="$GITHUB_SHA"
+          if [[ "$ROLLING_RESUME_RUN_ID" != "0" ]]; then
+            [[ "$ROLLING_RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            test "$ROLLING_RESUME_RUN_ID" != "$GITHUB_RUN_ID"
+            resume_run="$(gh api \
+              "repos/${{ github.repository }}/actions/runs/${ROLLING_RESUME_RUN_ID}")"
+            jq -e \
+              --arg repository "${{ github.repository }}" '
+                .status == "completed" and
+                (.conclusion == "failure" or
+                 .conclusion == "cancelled" or
+                 .conclusion == "timed_out") and
+                .name == "JUNCA Validator Foundation Release" and
+                .path == ".github/workflows/junca-validator-foundation-release.yml" and
+                .event == "workflow_dispatch" and
+                .head_branch == "main" and
+                (.head_sha | test("^[0-9a-f]{40}$")) and
+                .repository.full_name == $repository and
+                .head_repository.full_name == $repository
+              ' <<<"$resume_run"
+            resume_producer_head="$(jq -er .head_sha <<<"$resume_run")"
+            mkdir -p artifacts/resume
+            gh run download "$ROLLING_RESUME_RUN_ID" \
+              --repo "${{ github.repository }}" \
+              --name "junca-validator-foundation-release-${ROLLING_RESUME_RUN_ID}" \
+              --dir artifacts/resume
+            test -f artifacts/resume/rolling-resume-evidence.json
+            test -f artifacts/resume/rolling-resume-evidence.json.sha256
+            (
+              cd artifacts/resume
+              sha256sum -c rolling-resume-evidence.json.sha256
+            )
+            candidate_head="$(
+              jq -er \
+                '.candidate.provenance_head_sha // .head_sha |
+                 select(type == "string" and test("^[0-9a-f]{40}$"))' \
+                artifacts/resume/rolling-resume-evidence.json
+            )"
+            jq -e \
+              --arg repository "${{ github.repository }}" \
+              --argjson producer_run_id "$ROLLING_RESUME_RUN_ID" \
+              --arg producer_head "$resume_producer_head" '
+                .schema_version == "junca-validator-rolling-resume/v1" and
+                .repository == $repository and
+                .producer_run_id == $producer_run_id and
+                .head_sha == $producer_head and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' artifacts/resume/rolling-resume-evidence.json
+            echo "ROLLING_RESUME_EVIDENCE_PATH=$GITHUB_WORKSPACE/artifacts/resume/rolling-resume-evidence.json" \
+              >> "$GITHUB_ENV"
+          fi
+          [[ "$candidate_head" =~ ^[0-9a-f]{40}$ ]]
+          echo "ROLLING_CANDIDATE_HEAD_SHA=$candidate_head" >> "$GITHUB_ENV"
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
@@ -73,7 +134,7 @@ jobs:
             "repos/${{ github.repository }}/actions/runs/${MANIFEST_GATE_RUN_ID}")"
           jq -e \
             --arg repository "${{ github.repository }}" \
-            --arg head "$GITHUB_SHA" '
+            --arg head "$ROLLING_CANDIDATE_HEAD_SHA" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Validator Immutable AMI Build" and
@@ -86,7 +147,7 @@ jobs:
           ' <<<"$ami_run"
           jq -e \
             --arg repository "${{ github.repository }}" \
-            --arg head "$GITHUB_SHA" '
+            --arg head "$ROLLING_CANDIDATE_HEAD_SHA" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Manifest Gate" and
@@ -164,37 +225,10 @@ jobs:
           set -euo pipefail
           [[ "$ROLLING_RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           test "$ROLLING_RESUME_RUN_ID" != "$GITHUB_RUN_ID"
-          resume_run="$(gh api \
-            "repos/${{ github.repository }}/actions/runs/${ROLLING_RESUME_RUN_ID}")"
+          test -f "$ROLLING_RESUME_EVIDENCE_PATH"
           jq -e \
             --arg repository "${{ github.repository }}" \
-            --arg head "$GITHUB_SHA" '
-              .status == "completed" and
-              (.conclusion == "failure" or
-               .conclusion == "cancelled" or
-               .conclusion == "timed_out") and
-              .name == "JUNCA Validator Foundation Release" and
-              .path == ".github/workflows/junca-validator-foundation-release.yml" and
-              .event == "workflow_dispatch" and
-              .head_branch == "main" and
-              .head_sha == $head and
-              .repository.full_name == $repository and
-              .head_repository.full_name == $repository
-            ' <<<"$resume_run"
-          mkdir -p artifacts/resume
-          gh run download "$ROLLING_RESUME_RUN_ID" \
-            --repo "${{ github.repository }}" \
-            --name "junca-validator-foundation-release-${ROLLING_RESUME_RUN_ID}" \
-            --dir artifacts/resume
-          test -f artifacts/resume/rolling-resume-evidence.json
-          test -f artifacts/resume/rolling-resume-evidence.json.sha256
-          (
-            cd artifacts/resume
-            sha256sum -c rolling-resume-evidence.json.sha256
-          )
-          jq -e \
-            --arg repository "${{ github.repository }}" \
-            --arg head "$GITHUB_SHA" \
+            --arg candidate_head "$ROLLING_CANDIDATE_HEAD_SHA" \
             --argjson producer_run_id "$ROLLING_RESUME_RUN_ID" \
             --argjson ami_run_id "$AMI_RUN_ID" \
             --argjson manifest_gate_run_id "$MANIFEST_GATE_RUN_ID" \
@@ -206,7 +240,8 @@ jobs:
             --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" '
               .schema_version == "junca-validator-rolling-resume/v1" and
               .repository == $repository and
-              .head_sha == $head and
+              (.candidate.provenance_head_sha // .head_sha) ==
+                $candidate_head and
               .producer_run_id == $producer_run_id and
               .ami_run_id == $ami_run_id and
               .manifest_gate_run_id == $manifest_gate_run_id and
@@ -230,9 +265,7 @@ jobs:
               .mainnet_changed == false and
               .assets_moved == false and
               .bridge_activated == false
-            ' artifacts/resume/rolling-resume-evidence.json
-          echo "ROLLING_RESUME_EVIDENCE_PATH=$GITHUB_WORKSPACE/artifacts/resume/rolling-resume-evidence.json" \
-            >> "$GITHUB_ENV"
+            ' "$ROLLING_RESUME_EVIDENCE_PATH"
 
       - uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
