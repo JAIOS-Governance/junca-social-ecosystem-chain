@@ -43,6 +43,7 @@ jobs:
       node_artifact_sha256: ${{ steps.resolve.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ steps.resolve.outputs.genesis_sha256 }}
       ami_id: ${{ steps.resolve.outputs.ami_id }}
+      request_sha256: ${{ steps.resolve.outputs.request_sha256 }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve exact public release and immutable candidate
@@ -67,6 +68,7 @@ jobs:
             .conclusion == "success" and
             .name == "JUNCA Public Testnet Release" and
             .path == ".github/workflows/junca-public-testnet-release.yml" and
+            .event == "workflow_run" and
             .head_branch == "main" and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -90,11 +92,13 @@ jobs:
           node_sha256="$(jq -er .candidate_binding.node_artifact_sha256 "$publication")"
           genesis_sha256="$(jq -er .candidate_binding.genesis_sha256 "$publication")"
           ami_id="$(jq -er .candidate_binding.ami_id "$publication")"
+          request_sha256="$(jq -er .candidate_binding.request_sha256 "$publication")"
           [[ "$foundation_run_id" =~ ^[1-9][0-9]*$ ]]
           [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
           [[ "$node_sha256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+          [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]]
           run_json="$(gh api \
             "repos/${{ github.repository }}/actions/runs/${foundation_run_id}")"
           jq -e --arg repository "${{ github.repository }}" '
@@ -130,6 +134,10 @@ jobs:
             .assets_moved == false and
             .bridge_activated == false
           ' evidence/foundation/public-testnet-runtime-acceptance.json
+          test "$request_sha256" = "$(
+            jq -er .request_sha256 \
+              evidence/foundation/ami/junca-validator-ami-build.json
+          )"
           foundation_digest="$(
             sha256sum evidence/foundation/public-testnet-runtime-acceptance.json |
             cut -d' ' -f1
@@ -144,6 +152,7 @@ jobs:
             echo "node_artifact_sha256=$node_sha256"
             echo "genesis_sha256=$genesis_sha256"
             echo "ami_id=$ami_id"
+            echo "request_sha256=$request_sha256"
           } >> "$GITHUB_OUTPUT"
       - name: Prove advancing public runtime before the timed soak
         run: |
@@ -163,6 +172,7 @@ jobs:
       node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
       ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
 
   segment-02:
     needs: [preflight, segment-01]
@@ -173,6 +183,7 @@ jobs:
       node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
       ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
 
   segment-03:
     needs: [preflight, segment-02]
@@ -183,6 +194,7 @@ jobs:
       node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
       ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
 
   segment-04:
     needs: [preflight, segment-03]
@@ -193,6 +205,7 @@ jobs:
       node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
       ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
 
   segment-05:
     needs: [preflight, segment-04]
@@ -203,6 +216,7 @@ jobs:
       node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
       ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
 
   segment-06:
     needs: [preflight, segment-05]
@@ -213,6 +227,7 @@ jobs:
       node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
       genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
       ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
 
   aggregate:
     needs: [preflight, segment-06]
@@ -244,6 +259,7 @@ jobs:
           NODE_ARTIFACT_SHA256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
           GENESIS_SHA256: ${{ needs.preflight.outputs.genesis_sha256 }}
           AMI_ID: ${{ needs.preflight.outputs.ami_id }}
+          REQUEST_SHA256: ${{ needs.preflight.outputs.request_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p artifacts/readback
@@ -300,20 +316,23 @@ jobs:
             --arg source_commit "$SOURCE_COMMIT" \
             --arg node_sha256 "$NODE_ARTIFACT_SHA256" \
             --arg genesis_sha256 "$GENESIS_SHA256" \
-            --arg ami_id "$AMI_ID" '
+            --arg ami_id "$AMI_ID" \
+            --arg request_sha256 "$REQUEST_SHA256" '
             .Images | length == 1 and
             .[0].ImageId == $ami_id and
             .[0].State == "available" and
             ([.[0].Tags[] | {key: .Key, value: .Value}] | from_entries) as $tags |
             $tags.SourceCommit == $source_commit and
             $tags.NodeArtifactSHA256 == $node_sha256 and
-            $tags.GenesisSHA256 == $genesis_sha256
+            $tags.GenesisSHA256 == $genesis_sha256 and
+            $tags.RequestDigest == $request_sha256
           ' artifacts/readback/image.json
           jq -n \
             --arg source_commit "$SOURCE_COMMIT" \
             --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
             --arg genesis_sha256 "$GENESIS_SHA256" \
             --arg ami_id "$AMI_ID" \
+            --arg request_sha256 "$REQUEST_SHA256" \
             --slurpfile instances artifacts/readback/instances.json '{
               schema_version: "junca-public-testnet-final-runtime-readback/v1",
               status: "PASS",
@@ -321,7 +340,8 @@ jobs:
                 source_commit: $source_commit,
                 node_artifact_sha256: $node_artifact_sha256,
                 genesis_sha256: $genesis_sha256,
-                ami_id: $ami_id
+                ami_id: $ami_id,
+                request_sha256: $request_sha256
               },
               instance_ids: [$instances[0].Reservations[].Instances[].InstanceId],
               mainnet_changed: false,
@@ -341,6 +361,7 @@ jobs:
           NODE_ARTIFACT_SHA256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
           GENESIS_SHA256: ${{ needs.preflight.outputs.genesis_sha256 }}
           AMI_ID: ${{ needs.preflight.outputs.ami_id }}
+          REQUEST_SHA256: ${{ needs.preflight.outputs.request_sha256 }}
           FOUNDATION_RUN_ID: ${{ needs.preflight.outputs.foundation_run_id }}
           PUBLIC_RELEASE_RUN_ID: ${{ needs.preflight.outputs.public_release_run_id }}
         run: |
@@ -356,6 +377,7 @@ jobs:
             --node-artifact-sha256 "$NODE_ARTIFACT_SHA256" \
             --genesis-sha256 "$GENESIS_SHA256" \
             --ami-id "$AMI_ID" \
+            --request-sha256 "$REQUEST_SHA256" \
             --foundation-run-id "$FOUNDATION_RUN_ID" \
             --public-release-run-id "$PUBLIC_RELEASE_RUN_ID" \
             --final-runtime-readback-sha256 "$final_readback_sha256" \
