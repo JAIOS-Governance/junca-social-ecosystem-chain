@@ -68,10 +68,13 @@ set_runtime_finality() {
   local instance_id
   test "${#instances[@]}" -ge 1
   [[ "$block_interval" =~ ^(0|30)$ ]]
-  [[ "$slot_epoch" =~ ^[0-9]+$ ]]
-  if [[ "$block_interval" == "30" ]]; then
+  [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]]
+  if [[ "$slot_epoch" != "0" ]]; then
     test "$slot_epoch" -gt "$(date +%s)"
     test "$((slot_epoch % 30))" -eq 0
+  fi
+  if [[ "$block_interval" == "30" ]]; then
+    test "$slot_epoch" != "0"
     finality_enabled=true
   else
     finality_enabled=false
@@ -80,13 +83,27 @@ set_runtime_finality() {
     cat <<EOF
 set -euo pipefail
 test -f /etc/junca/runtime.env
+test ! -L /etc/junca/runtime.env
+test "\$(grep -c '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env)" = 1
+test "\$(grep -c '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env)" = 1
+test "\$(grep -c '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env)" = 1
 sed -i -E 's/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=${finality_enabled}/' /etc/junca/runtime.env
 sed -i -E 's/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}/' /etc/junca/runtime.env
 sed -i -E 's/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}/' /etc/junca/runtime.env
+assert_runtime_finality() {
+  test "\$(grep -c '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env)" = 1
+  test "\$(grep -c '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env)" = 1
+  test "\$(grep -c '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env)" = 1
+  grep -Fxq 'AUTOMATIC_FINALITY_ENABLED=${finality_enabled}' /etc/junca/runtime.env
+  grep -Fxq 'TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}' /etc/junca/runtime.env
+  grep -Fxq 'TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}' /etc/junca/runtime.env
+}
+assert_runtime_finality
 systemctl restart junca-validator.service
 for attempt in \$(seq 1 60); do
   systemctl is-active --quiet junca-validator.service &&
     curl -fsS http://127.0.0.1:8545/health >/dev/null &&
+    assert_runtime_finality &&
     exit 0
   sleep 2
 done
@@ -145,10 +162,72 @@ test -f /var/lib/junca/state.sqlite
 test ! -L /var/lib/junca/state.sqlite
 test "$(python3 -c '"'"'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro", uri=True); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()'"'"')" = "ok"
 durable="$(python3 -c '"'"'import json,sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro",uri=True); connection.row_factory=sqlite3.Row; row=connection.execute("SELECT b.height,b.block_hash,b.certificate_hash,f.certificate_json FROM blocks b JOIN finality_certificates f ON f.height=b.height WHERE b.finalized=1 ORDER BY b.height DESC LIMIT 1").fetchone(); assert row is not None; certificate=json.loads(row["certificate_json"]); print(json.dumps({"head_height":row["height"],"head_hash":row["block_hash"],"certificate_hash":row["certificate_hash"],"certificate":certificate},sort_keys=True,separators=(",",":"))); connection.close()'"'"')"
+test -f /etc/junca/runtime.env
+test ! -L /etc/junca/runtime.env
 runtime_version="$(sed -n '"'"'s/^NODE_ARTIFACT_SHA256=//p'"'"' /etc/junca/runtime.env)"
 test "$(printf %s "$runtime_version" | wc -c)" = 64
+# BEGIN_RUNTIME_FINALITY_READBACK
+test "$(grep -c '"'"'^AUTOMATIC_FINALITY_ENABLED='"'"' /etc/junca/runtime.env)" = 1
+test "$(grep -c '"'"'^TESTNET_BLOCK_INTERVAL_SECONDS='"'"' /etc/junca/runtime.env)" = 1
+test "$(grep -c '"'"'^TESTNET_SLOT_EPOCH_SECONDS='"'"' /etc/junca/runtime.env)" = 1
+runtime_automatic_finality_enabled="$(sed -n '"'"'s/^AUTOMATIC_FINALITY_ENABLED=//p'"'"' /etc/junca/runtime.env)"
+runtime_block_interval_seconds="$(sed -n '"'"'s/^TESTNET_BLOCK_INTERVAL_SECONDS=//p'"'"' /etc/junca/runtime.env)"
+runtime_slot_epoch_seconds="$(sed -n '"'"'s/^TESTNET_SLOT_EPOCH_SECONDS=//p'"'"' /etc/junca/runtime.env)"
+[[ "$runtime_automatic_finality_enabled" =~ ^(true|false)$ ]]
+[[ "$runtime_block_interval_seconds" =~ ^(0|30)$ ]]
+[[ "$runtime_slot_epoch_seconds" =~ ^(0|[1-9][0-9]*)$ ]]
+if [[ "$runtime_automatic_finality_enabled" == "true" ]]; then
+  test "$runtime_block_interval_seconds" = 30
+  test "$runtime_slot_epoch_seconds" -gt 0
+else
+  test "$runtime_block_interval_seconds" = 0
+fi
+# END_RUNTIME_FINALITY_READBACK
 health="$(curl -fsS http://127.0.0.1:8545/health)"
-jq -n --arg runtime_version "$runtime_version" --argjson health "$health" --argjson durable "$durable" '"'"'
+jq -n \
+  --arg runtime_version "$runtime_version" \
+  --argjson health "$health" \
+  --argjson durable "$durable" \
+  --argjson runtime_automatic_finality_enabled "$runtime_automatic_finality_enabled" \
+  --argjson runtime_block_interval_seconds "$runtime_block_interval_seconds" \
+  --argjson runtime_slot_epoch_seconds "$runtime_slot_epoch_seconds" '"'"'
+def finality_readback:
+  [
+    $health.automatic_finality_enabled,
+    $health.block_interval_seconds,
+    $health.slot_epoch_seconds
+  ] as $observed
+  | ($observed | map(select(. != null)) | length) as $present
+  | if $present == 0 then
+      {
+        automatic_finality_enabled: $runtime_automatic_finality_enabled,
+        block_interval_seconds: $runtime_block_interval_seconds,
+        slot_epoch_seconds: $runtime_slot_epoch_seconds,
+        health_supported: false
+      }
+    elif $present != 3 then
+      error("health finality readback is partially missing")
+    elif (
+      ($health.automatic_finality_enabled | type) != "boolean" or
+      ($health.block_interval_seconds | type) != "number" or
+      ($health.slot_epoch_seconds | type) != "number" or
+      $health.automatic_finality_enabled !=
+        $runtime_automatic_finality_enabled or
+      $health.block_interval_seconds != $runtime_block_interval_seconds or
+      $health.slot_epoch_seconds != $runtime_slot_epoch_seconds
+    ) then
+      error("health and runtime.env finality readback differ")
+    else
+      {
+        automatic_finality_enabled: $health.automatic_finality_enabled,
+        block_interval_seconds: $health.block_interval_seconds,
+        slot_epoch_seconds: $health.slot_epoch_seconds,
+        health_supported: true
+      }
+    end;
+
+(finality_readback) as $finality
+|
 {
   validator_id: $health.validator_id,
   runtime_version: $runtime_version,
@@ -185,8 +264,22 @@ jq -n --arg runtime_version "$runtime_version" --argjson health "$health" --argj
   certificate_vote_hashes:
     ($health.consensus.last_certificate.vote_hashes //
       $durable.certificate.vote_hashes),
-  automatic_finality_enabled: $health.automatic_finality_enabled,
-  slot_epoch_seconds: $health.slot_epoch_seconds,
+  automatic_finality_enabled: $finality.automatic_finality_enabled,
+  block_interval_seconds: $finality.block_interval_seconds,
+  slot_epoch_seconds: $finality.slot_epoch_seconds,
+  finality_readback: {
+    runtime_env: {
+      automatic_finality_enabled: $runtime_automatic_finality_enabled,
+      block_interval_seconds: $runtime_block_interval_seconds,
+      slot_epoch_seconds: $runtime_slot_epoch_seconds
+    },
+    health: {
+      automatic_finality_enabled: $health.automatic_finality_enabled,
+      block_interval_seconds: $health.block_interval_seconds,
+      slot_epoch_seconds: $health.slot_epoch_seconds
+    },
+    health_supported: $finality.health_supported
+  },
   mainnet_changed: $health.mainnet_changed,
   assets_moved: $health.assets_moved,
   bridge_activated: $health.bridge_activated
