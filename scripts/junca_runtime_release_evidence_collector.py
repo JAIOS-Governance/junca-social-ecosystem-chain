@@ -690,6 +690,40 @@ def verify_endpoint_acceptance(report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def verify_endpoint_outage(report: Mapping[str, Any]) -> dict[str, Any]:
+    require(report.get("status") == "FAIL", "endpoint_outage.status:not_fail")
+    require(
+        report.get("scope")
+        == "Public Testnet Runtime Acceptance / Read-only",
+        "endpoint_outage.scope:mismatch",
+    )
+    observed_at = report.get("observed_at")
+    require(
+        isinstance(observed_at, str) and bool(observed_at),
+        "endpoint_outage.observed_at:missing",
+    )
+    require(
+        report.get("endpoints")
+        == {
+            "health": "https://health.jaios-governance.org/health",
+            "explorer": "https://explorer.jaios-governance.org/explorer.json",
+            "rpc": "https://rpc.jaios-governance.org/",
+        },
+        "endpoint_outage.endpoints:mismatch",
+    )
+    error = report.get("error")
+    require(
+        isinstance(error, str) and bool(error),
+        "endpoint_outage.error:missing",
+    )
+    return {
+        "status": "FAIL",
+        "observed_at": observed_at,
+        "endpoints": report["endpoints"],
+        "error": error,
+    }
+
+
 def verify_private_validator_health(
     report: Mapping[str, Any],
     instance_ids: Sequence[str],
@@ -988,16 +1022,39 @@ def collect(
         instance_root_volumes=instance_root_volumes,
         snapshot_root_volumes=snapshot_root_volumes,
     )
-    if public_services_enabled:
+    if public_services_enabled and isinstance(endpoints, Mapping):
+        if endpoints.get("status") == "PASS":
+            require(
+                private_validator_health is None,
+                "private_ssm:unexpected_with_healthy_public_services",
+            )
+            endpoint_readback = verify_endpoint_acceptance(endpoints)
+            baseline_mode = "public_endpoints"
+            baseline_schema = "junca-public-explorer-pre-rollout-baseline/v1"
+            unsafe_rpc_rejection: bool | str = True
+        else:
+            outage_readback = verify_endpoint_outage(endpoints)
+            require(
+                isinstance(private_validator_health, Mapping),
+                "private_ssm:required_for_public_endpoint_outage",
+            )
+            endpoint_readback = verify_private_validator_health(
+                private_validator_health,
+                instance_ids,
+                signers,
+                migration_finality,
+            )
+            endpoint_readback["public_endpoint_outage"] = outage_readback
+            baseline_mode = "private_ssm"
+            baseline_schema = "junca-private-ssm-pre-rollout-baseline/v1"
+            unsafe_rpc_rejection = "NOT_APPLICABLE_PRIVATE_SSM"
+    elif public_services_enabled:
         require(
-            isinstance(endpoints, Mapping),
+            False,
             "endpoints:required_for_public_services",
         )
-        endpoint_readback = verify_endpoint_acceptance(endpoints)
-        baseline_mode = "public_endpoints"
-        baseline_schema = "junca-public-explorer-pre-rollout-baseline/v1"
-        unsafe_rpc_rejection: bool | str = True
     else:
+        require(endpoints is None, "endpoints:unexpected_when_public_services_disabled")
         require(
             isinstance(private_validator_health, Mapping),
             "private_ssm:required_when_public_services_disabled",
