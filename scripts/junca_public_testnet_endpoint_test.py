@@ -41,7 +41,7 @@ UNSAFE_RPC_METHODS = (
 )
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
 HEALTH_SCHEMA = "junca-public-gateway-health/v1"
-EXPLORER_SCHEMA = "junca-public-explorer/v2"
+EXPLORER_SCHEMA = "junca-public-explorer/v3"
 
 
 class AcceptanceError(RuntimeError):
@@ -125,7 +125,7 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
     _require(explorer.status == 200, "explorer: expected HTTP 200")
     _require(
         explorer.body.get("schema_version") == EXPLORER_SCHEMA,
-        "explorer: v2 schema is required",
+        "explorer: v3 schema is required",
     )
     _require(explorer.body.get("status") == "ready", "explorer: status is not ready")
     _require(

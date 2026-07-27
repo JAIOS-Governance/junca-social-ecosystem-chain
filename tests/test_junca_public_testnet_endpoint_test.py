@@ -38,7 +38,7 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             return endpoint_test.HttpResponse(
                 200,
                 {
-                    "schema_version": "junca-public-explorer/v2",
+                    "schema_version": "junca-public-explorer/v3",
                     "status": "ready",
                     "finalized_only": True,
                     "read_only": True,
@@ -156,7 +156,7 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             endpoint_test.run_acceptance(legacy_transport)
         self.assertEqual(len(self.calls), 2)
 
-    def test_explorer_v1_cannot_pass_v2_rollout_gate(self):
+    def test_explorer_v1_cannot_pass_v3_rollout_gate(self):
         def v1_transport(method, url, payload):
             response = self.transport(method, url, payload)
             if url == endpoint_test.EXPLORER_URL:
@@ -165,7 +165,7 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
                 return endpoint_test.HttpResponse(response.status, body)
             return response
 
-        with self.assertRaisesRegex(endpoint_test.AcceptanceError, "v2 schema is required"):
+        with self.assertRaisesRegex(endpoint_test.AcceptanceError, "v3 schema is required"):
             endpoint_test.run_acceptance(v1_transport)
 
     def test_missing_certificate_body_projection_fails_closed(self):
