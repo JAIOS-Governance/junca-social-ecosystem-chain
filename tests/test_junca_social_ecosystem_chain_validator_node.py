@@ -128,12 +128,14 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             item: f"arn:aws:kms:us-east-1:595710543956:key/{item}"
             for item in self.genesis["validator_ids"]
         }
+        self.consensus_sign_calls: list[tuple[str, bytes]] = []
         self.consensus = PublicTestnetConsensus(
             store=self.node.store,
             data_dir=self.directory.name,
             signer_resources=self.resources,
             consensus_verifier=self.verify_consensus,
             peer_verifier=self.verify_peer,
+            consensus_signer=self.sign_consensus,
         )
         self.addCleanup(self.consensus.close)
 
@@ -150,6 +152,10 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             resource == self.resources[validator_id]
             and signature == self.signature(resource, payload)
         )
+
+    def sign_consensus(self, resource: str, payload: bytes) -> bytes:
+        self.consensus_sign_calls.append((resource, payload))
+        return self.signature(resource, payload)
 
     def verify_peer(
         self, validator_id: str, payload: bytes, signature: bytes
@@ -233,6 +239,83 @@ class PublicTestnetConsensusTests(unittest.TestCase):
         self.assertEqual(
             self.consensus.evidence()["authenticated_vote_count"], 2
         )
+
+    def test_finality_certificate_is_recovered_after_consensus_restart(self) -> None:
+        proposal = self.consensus.propose()
+        finalized = None
+        for validator_id in ("validator-1", "validator-2", "validator-3"):
+            finalized = self.consensus.submit(self.packet(validator_id, proposal))
+        self.assertIsNotNone(finalized)
+        expected = self.consensus.evidence()["last_certificate"]
+
+        restarted = PublicTestnetConsensus(
+            store=self.node.store,
+            data_dir=self.directory.name,
+            signer_resources=self.resources,
+            consensus_verifier=self.verify_consensus,
+            peer_verifier=self.verify_peer,
+        )
+        self.addCleanup(restarted.close)
+        evidence = restarted.evidence()
+        self.assertEqual(evidence["head_height"], 1)
+        self.assertEqual(evidence["last_certificate"], expected)
+        self.assertEqual(
+            evidence["last_certificate_hash"],
+            expected["certificate_hash"],
+        )
+
+    def test_tampered_persisted_certificate_fails_closed_on_restart(self) -> None:
+        proposal = self.consensus.propose()
+        for validator_id in ("validator-1", "validator-2", "validator-3"):
+            self.consensus.submit(self.packet(validator_id, proposal))
+        row = self.node.store.connection.execute(
+            "SELECT certificate_json FROM finality_certificates WHERE height=1"
+        ).fetchone()
+        tampered = json.loads(row["certificate_json"])
+        tampered["certificate_hash"] = "0x" + ("f" * 64)
+        self.node.store.connection.execute(
+            "UPDATE finality_certificates SET certificate_json=? WHERE height=1",
+            (json.dumps(tampered, sort_keys=True, separators=(",", ":")),),
+        )
+        with self.assertRaisesRegex(ValueError, "certificate hash mismatch"):
+            PublicTestnetConsensus(
+                store=self.node.store,
+                data_dir=self.directory.name,
+                signer_resources=self.resources,
+                consensus_verifier=self.verify_consensus,
+                peer_verifier=self.verify_peer,
+            )
+
+    def test_broadcast_consensus_vote_uses_persistent_signing_journal(self) -> None:
+        class PeerKms:
+            def sign(inner_self, resource: str, payload: bytes) -> bytes:
+                return self.signature(resource, payload)
+
+        class Transport:
+            def __init__(inner_self) -> None:
+                inner_self.packets: list[AuthenticatedVote] = []
+
+            def broadcast(inner_self, packet: AuthenticatedVote) -> None:
+                inner_self.packets.append(packet)
+
+        transport = Transport()
+        self.node.consensus = self.consensus
+        self.node.kms = PeerKms()
+        self.node.peer_transport = transport
+
+        first = self.node.rpc("junca_broadcastVote", [])
+        second = self.node.rpc("junca_broadcastVote", [])
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(self.consensus_sign_calls), 1)
+        self.assertEqual(len(transport.packets), 2)
+        self.assertEqual(
+            transport.packets[0].signature,
+            transport.packets[1].signature,
+        )
+        journal = self.consensus.runtime.evidence()["signing_journal"]
+        self.assertEqual(journal["signature_count"], 1)
+        self.assertEqual(journal["latest_height"], 1)
 
     def test_peer_auth_and_assigned_kms_binding_fail_closed(self) -> None:
         proposal = self.consensus.propose()
