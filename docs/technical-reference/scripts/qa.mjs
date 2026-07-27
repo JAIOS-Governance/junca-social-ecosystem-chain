@@ -33,6 +33,8 @@ for (const route of routes) {
     'class="public-explorer-link"',
     'src="/official-junca-symbol.png"',
     'class="header-explorer-link"',
+    '<meta name="application-name" content="JUNCA Docs">',
+    '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
   }
@@ -126,6 +128,7 @@ await readFile(join(dist, "release-manifest.json"), "utf8");
 await readFile(join(dist, "manifest.webmanifest"), "utf8");
 const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanifest"), "utf8"));
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
+if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
   "/icon-192.png",
   "/icon-512.png",
