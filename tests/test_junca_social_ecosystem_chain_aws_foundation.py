@@ -2,6 +2,7 @@ import pathlib
 import json
 import re
 import subprocess
+import tempfile
 import textwrap
 import unittest
 
@@ -20,6 +21,30 @@ def restored_snapshot_filter(script: str) -> str:
     if match is None:
         raise AssertionError("restored snapshot jq filter is missing")
     return textwrap.dedent(match.group("filter"))
+
+
+def runtime_finality_readback_block(script: str) -> str:
+    block = script.split("# BEGIN_RUNTIME_FINALITY_READBACK\n", 1)[1].split(
+        "\n# END_RUNTIME_FINALITY_READBACK", 1
+    )[0]
+    return block.replace("'\"'\"'", "'")
+
+
+def finality_readback_filter(script: str) -> str:
+    definition = script.split("def finality_readback:\n", 1)[1].split(
+        "\n\n(finality_readback) as $finality", 1
+    )[0]
+    return "def finality_readback:\n" + definition + "\nfinality_readback"
+
+
+def set_runtime_finality_block(script: str) -> str:
+    function = script.split("set_runtime_finality() {", 1)[1].split(
+        "\ncapture_validator_observation() {", 1
+    )[0]
+    block = function.split("set -euo pipefail\n", 1)[1].split(
+        "\nsystemctl restart junca-validator.service", 1
+    )[0]
+    return block.replace("\\$(", "$(")
 
 
 # Public services remain disabled until validator quorum evidence is accepted.
@@ -547,6 +572,219 @@ class AwsFoundationTests(unittest.TestCase):
             '$ARGS.positional == $expected',
         ):
             self.assertIn(required, self.foundation_script)
+
+    def test_validator_readback_uses_exact_legacy_env_only_when_health_omits_all(
+        self,
+    ) -> None:
+        jq_filter = finality_readback_filter(self.foundation_script)
+
+        def resolve(health: dict, env: tuple[str, str, str]) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [
+                    "jq",
+                    "-c",
+                    "-n",
+                    "--argjson",
+                    "health",
+                    json.dumps(health),
+                    "--argjson",
+                    "runtime_automatic_finality_enabled",
+                    env[0],
+                    "--argjson",
+                    "runtime_block_interval_seconds",
+                    env[1],
+                    "--argjson",
+                    "runtime_slot_epoch_seconds",
+                    env[2],
+                    jq_filter,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        legacy = resolve({}, ("false", "0", "0"))
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual(
+            json.loads(legacy.stdout),
+            {
+                "automatic_finality_enabled": False,
+                "block_interval_seconds": 0,
+                "slot_epoch_seconds": 0,
+                "health_supported": False,
+            },
+        )
+
+        matching = resolve(
+            {
+                "automatic_finality_enabled": True,
+                "block_interval_seconds": 30,
+                "slot_epoch_seconds": 2_000_000_010,
+            },
+            ("true", "30", "2000000010"),
+        )
+        self.assertEqual(matching.returncode, 0, matching.stderr)
+        self.assertTrue(json.loads(matching.stdout)["health_supported"])
+
+        rejected = (
+            (
+                {
+                    "automatic_finality_enabled": False,
+                    "block_interval_seconds": 0,
+                },
+                ("false", "0", "0"),
+                "partially missing",
+            ),
+            (
+                {
+                    "automatic_finality_enabled": True,
+                    "block_interval_seconds": 30,
+                    "slot_epoch_seconds": 2_000_000_010,
+                },
+                ("false", "0", "0"),
+                "differ",
+            ),
+            (
+                {
+                    "automatic_finality_enabled": "false",
+                    "block_interval_seconds": 0,
+                    "slot_epoch_seconds": 0,
+                },
+                ("false", "0", "0"),
+                "differ",
+            ),
+        )
+        for health, env, message in rejected:
+            with self.subTest(health=health):
+                result = resolve(health, env)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(message, result.stderr)
+
+    def test_runtime_env_readback_rejects_missing_duplicate_and_invalid_values(
+        self,
+    ) -> None:
+        block = runtime_finality_readback_block(self.foundation_script)
+        accepted = (
+            (
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
+            ),
+            (
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n"
+            ),
+            (
+                "AUTOMATIC_FINALITY_ENABLED=true\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n"
+            ),
+        )
+        rejected = (
+            (
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+            ),
+            (
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
+            ),
+            (
+                "AUTOMATIC_FINALITY_ENABLED=False\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
+            ),
+            (
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
+            ),
+            (
+                "AUTOMATIC_FINALITY_ENABLED=true\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_env = pathlib.Path(directory) / "runtime.env"
+            executable = block.replace(
+                "/etc/junca/runtime.env", str(runtime_env)
+            )
+            for content in accepted:
+                with self.subTest(accepted=content):
+                    runtime_env.write_text(content, encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-c", "set -euo pipefail\n" + executable],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            for content in rejected:
+                with self.subTest(rejected=content):
+                    runtime_env.write_text(content, encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-c", "set -euo pipefail\n" + executable],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_finality_mutation_requires_exact_keys_before_and_after_sed(
+        self,
+    ) -> None:
+        block = set_runtime_finality_block(self.foundation_script)
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_env = pathlib.Path(directory) / "runtime.env"
+            executable = block.replace(
+                "/etc/junca/runtime.env", str(runtime_env)
+            )
+            executable = (
+                executable.replace("${finality_enabled}", "false")
+                .replace("${block_interval}", "0")
+                .replace("${slot_epoch}", "0")
+            )
+            prefix = "set -euo pipefail\n"
+            runtime_env.write_text(
+                "AUTOMATIC_FINALITY_ENABLED=true\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["bash", "-c", prefix + executable],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                runtime_env.read_text(encoding="utf-8"),
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n",
+            )
+            for content in (
+                "AUTOMATIC_FINALITY_ENABLED=true\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n",
+                "AUTOMATIC_FINALITY_ENABLED=true\n"
+                "AUTOMATIC_FINALITY_ENABLED=false\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
+            ):
+                with self.subTest(rejected=content):
+                    runtime_env.write_text(content, encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-c", prefix + executable],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_finality_activation_is_separate_and_manual_vote_is_disabled(self) -> None:
         disable_index = self.foundation_script.index(
