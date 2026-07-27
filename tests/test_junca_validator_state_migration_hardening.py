@@ -110,6 +110,7 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             ".consensus.last_certificate.finality_status ==",
             ".signer_resource_digest ==",
             ".private_key_material_accepted == false",
+            '.network == "Public Testnet / No Monetary Value"',
             ".mainnet_changed == false",
             ".assets_moved == false",
             ".bridge_activated == false",
@@ -120,6 +121,13 @@ class ValidatorStateMigrationHardeningTests(unittest.TestCase):
             'quorum: "3/3"',
             'require_peer_health "$instance_id"',
             'require_peer_health ""',
+            'local controller_status="$1"',
+            "local attempt status",
+            'exit "$controller_status"',
+            "trap 'restart_on_controller_error \"$?\"' ERR EXIT",
+            "trap 'restart_on_controller_error 130' INT",
+            "trap 'restart_on_controller_error 143' TERM",
+            "trap - ERR EXIT INT TERM",
         ):
             self.assertIn(required, CONTROLLER)
 
