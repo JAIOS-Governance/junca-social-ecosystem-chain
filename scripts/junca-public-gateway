@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Installed entrypoint for the JUNCA public-testnet read-only gateway."""
+
+from jaios.social_ecosystem_chain.public_gateway import main
+
+raise SystemExit(main())
