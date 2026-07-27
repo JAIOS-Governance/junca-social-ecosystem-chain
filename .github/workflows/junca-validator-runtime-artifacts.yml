@@ -30,6 +30,7 @@ on:
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
   # Manual dispatch remains available for release-control-only changes that
   # must rebind otherwise identical immutable runtime bytes to the new commit.
+  # Acceptance timing fixes are rebound through this immutable-input contract.
   workflow_dispatch:
 
 permissions:
