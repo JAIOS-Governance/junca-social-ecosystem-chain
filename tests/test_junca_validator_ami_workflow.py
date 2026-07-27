@@ -1,6 +1,10 @@
 from pathlib import Path
+import importlib.util
 import unittest
 
+from jaios.social_ecosystem_chain.rolling_compatibility import (
+    RECOVERY_FILE_ALLOWLIST,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/junca-validator-ami-build.yml"
@@ -11,6 +15,15 @@ ORCHESTRATOR = (
 )
 FOUNDATION = ROOT / ".github/workflows/junca-validator-foundation-release.yml"
 REQUEST = ROOT / "tests/fixtures/junca_validator_ami_build_request.json"
+LIVE_REQUEST = ROOT / "config/junca_validator_ami_build_request.json"
+REQUEST_VALIDATOR_PATH = ROOT / "scripts/junca_validator_ami_build_request.py"
+SPEC = importlib.util.spec_from_file_location(
+    "junca_validator_ami_build_request",
+    REQUEST_VALIDATOR_PATH,
+)
+assert SPEC is not None and SPEC.loader is not None
+REQUEST_VALIDATOR = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(REQUEST_VALIDATOR)
 
 
 class ValidatorAmiWorkflowTests(unittest.TestCase):
@@ -22,6 +35,7 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         cls.orchestrator = ORCHESTRATOR.read_text(encoding="utf-8")
         cls.foundation = FOUNDATION.read_text(encoding="utf-8")
         cls.request = REQUEST.read_text(encoding="utf-8")
+        cls.live_request = LIVE_REQUEST.read_text(encoding="utf-8")
 
     def test_workflow_binds_all_immutable_inputs(self):
         for field in (
@@ -107,6 +121,129 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("terraform apply", self.orchestrator)
         self.assertNotIn("cloudformation", self.orchestrator.lower())
+
+    def test_foundation_resume_is_one_shot_and_skips_rebuild_chain(self):
+        self.assertIn(
+            "junca-validator-foundation-resume-request/v1",
+            self.orchestrator,
+        )
+        self.assertEqual(
+            self.orchestrator.count(
+                "if: steps.request.outputs.request_type == 'ami-build'"
+            ),
+            3,
+        )
+        self.assertIn('test "$GITHUB_RUN_ATTEMPT" = 1', self.orchestrator)
+        self.assertIn(
+            'git rev-list "${GITHUB_SHA}^" -- "$REQUEST_PATH"',
+            self.orchestrator,
+        )
+        self.assertIn("(.files | length) == 5", self.orchestrator)
+        self.assertIn(
+            "inputs[resume_run_id]=${RESUME_RUN_ID}",
+            self.orchestrator,
+        )
+        self.assertIn(
+            "steps.request.outputs.ami_run_id",
+            self.orchestrator,
+        )
+        self.assertIn(
+            "steps.request.outputs.manifest_gate_run_id",
+            self.orchestrator,
+        )
+        self.assertIn(
+            "steps.request.outputs.resume_run_id",
+            self.orchestrator,
+        )
+        self.assertIn("FOUNDATION_RESUME_REQUEST_CONSUMED", self.orchestrator)
+        self.assertIn("rebuild_ami: false", self.orchestrator)
+        self.assertIn("rebuild_manifest: false", self.orchestrator)
+        self.assertIn("always()", self.orchestrator)
+        self.assertIn("if-no-files-found: error", self.orchestrator)
+        for path in (
+            ".github/workflows/"
+            "junca-validator-public-testnet-orchestrator.yml",
+            "config/junca_validator_ami_build_request.json",
+            "scripts/junca_validator_ami_build_request.py",
+            "tests/test_junca_validator_ami_workflow.py",
+        ):
+            self.assertIn(path, RECOVERY_FILE_ALLOWLIST)
+        for value in (
+            "30311265807",
+            "30311368029",
+            "30311386951",
+            "PUBLIC_TESTNET_ROLLOUT",
+            "d143326804e0bea9ac657cb410c277801d"
+            "2af6d9d08e254c2338d894bb664443",
+        ):
+            self.assertIn(value, self.live_request)
+
+    def test_exact_foundation_resume_request_is_digest_bound(self):
+        request = {
+            "schema_version": (
+                "junca-validator-foundation-resume-request/v1"
+            ),
+            "state": "AUTHORIZED",
+            "network": "Public Testnet",
+            "environment": "public-testnet",
+            "mode": "foundation-resume-only",
+            "approval_phrase": "PUBLIC_TESTNET_ROLLOUT",
+            "ami_run_id": "30311265807",
+            "manifest_gate_run_id": "30311368029",
+            "resume_run_id": "30311386951",
+            "target_workflow": (
+                ".github/workflows/junca-validator-foundation-release.yml"
+            ),
+            "one_shot_nonce": "foundation-resume-30311386951-20260727",
+            "boundaries": {
+                "rebuild_ami": False,
+                "rebuild_manifest": False,
+                "mainnet_changed": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+            },
+            "request_sha256": "",
+        }
+        request["request_sha256"] = (
+            REQUEST_VALIDATOR.canonical_request_sha256(request)
+        )
+        outputs = REQUEST_VALIDATOR.validate_request(
+            request,
+            require_migration_binding=True,
+        )
+        self.assertEqual(outputs["request_type"], "foundation-resume")
+        self.assertEqual(outputs["ami_run_id"], "30311265807")
+        self.assertEqual(outputs["manifest_gate_run_id"], "30311368029")
+        self.assertEqual(outputs["resume_run_id"], "30311386951")
+
+        for field, value in (
+            ("ami_run_id", "0"),
+            ("manifest_gate_run_id", "invalid"),
+            ("resume_run_id", "0"),
+            ("approval_phrase", "PUBLIC_TESTNET_RUNTIME_RECOVERY"),
+            ("mode", "ami-build"),
+        ):
+            with self.subTest(field=field):
+                invalid = dict(request)
+                invalid[field] = value
+                with self.assertRaises(
+                    REQUEST_VALIDATOR.RequestValidationError
+                ):
+                    REQUEST_VALIDATOR.validate_request(invalid)
+
+        invalid = dict(request)
+        invalid["unexpected"] = True
+        with self.assertRaises(REQUEST_VALIDATOR.RequestValidationError):
+            REQUEST_VALIDATOR.validate_request(invalid)
+
+        invalid = dict(request)
+        invalid["boundaries"] = dict(request["boundaries"])
+        invalid["boundaries"]["rebuild_ami"] = True
+        invalid["request_sha256"] = (
+            REQUEST_VALIDATOR.canonical_request_sha256(invalid)
+        )
+        with self.assertRaises(REQUEST_VALIDATOR.RequestValidationError):
+            REQUEST_VALIDATOR.validate_request(invalid)
 
     def test_source_artifact_and_downstream_run_paths_are_hard_bound(self):
         for value in (

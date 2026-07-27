@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate one repository-authorized immutable validator AMI build request."""
+"""Validate one repository-authorized validator release request."""
 
 from __future__ import annotations
 
@@ -13,18 +13,35 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = "junca-validator-ami-build-request/v1"
 APPROVAL_PHRASE = "PUBLIC_TESTNET_IMMUTABLE_AMI_BUILD"
+FOUNDATION_RESUME_SCHEMA_VERSION = (
+    "junca-validator-foundation-resume-request/v1"
+)
+FOUNDATION_RESUME_APPROVAL_PHRASE = "PUBLIC_TESTNET_ROLLOUT"
+FOUNDATION_RESUME_MODE = "foundation-resume-only"
+FOUNDATION_WORKFLOW = (
+    ".github/workflows/junca-validator-foundation-release.yml"
+)
 NETWORK = "Public Testnet"
 ENVIRONMENT = "public-testnet"
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
+NONCE = re.compile(r"^[a-z0-9][a-z0-9-]{15,127}$")
 EXPECTED_BOUNDARIES = {
     "terraform_state_changed": False,
     "mainnet_changed": False,
     "assets_moved": False,
     "bridge_activated": False,
 }
+EXPECTED_FOUNDATION_RESUME_BOUNDARIES = {
+    "rebuild_ami": False,
+    "rebuild_manifest": False,
+    "mainnet_changed": False,
+    "assets_moved": False,
+    "bridge_activated": False,
+}
 OUTPUT_FIELDS = (
+    "request_type",
     "source_run_id",
     "source_commit",
     "node_artifact_name",
@@ -34,6 +51,11 @@ OUTPUT_FIELDS = (
     "request_sha256",
     "migration_run_id",
     "migration_evidence_sha256",
+    "ami_run_id",
+    "manifest_gate_run_id",
+    "resume_run_id",
+    "target_workflow",
+    "one_shot_nonce",
 )
 RUNTIME_REQUEST_FIELDS = {
     "schema_version",
@@ -54,6 +76,21 @@ MIGRATION_BINDING_FIELDS = {
     "migration_run_id",
     "migration_evidence_sha256",
 }
+FOUNDATION_RESUME_REQUEST_FIELDS = {
+    "schema_version",
+    "state",
+    "network",
+    "environment",
+    "mode",
+    "approval_phrase",
+    "ami_run_id",
+    "manifest_gate_run_id",
+    "resume_run_id",
+    "target_workflow",
+    "one_shot_nonce",
+    "boundaries",
+    "request_sha256",
+}
 
 
 class RequestValidationError(ValueError):
@@ -65,11 +102,10 @@ def canonical_request_sha256(request: Mapping[str, Any]) -> str:
     # completed durable-state migration.  This preserves the already approved
     # immutable AMI request digest while a later signed request binds the exact
     # migration run and evidence into the release phase.
-    payload = {
-        key: value
-        for key, value in request.items()
-        if key not in MIGRATION_BINDING_FIELDS and key != "request_sha256"
-    }
+    excluded = {"request_sha256"}
+    if request.get("schema_version") == SCHEMA_VERSION:
+        excluded |= MIGRATION_BINDING_FIELDS
+    payload = {key: value for key, value in request.items() if key not in excluded}
     encoded = json.dumps(
         payload,
         ensure_ascii=True,
@@ -84,6 +120,9 @@ def validate_request(
     *,
     require_migration_binding: bool = False,
 ) -> dict[str, str]:
+    if request.get("schema_version") == FOUNDATION_RESUME_SCHEMA_VERSION:
+        return _validate_foundation_resume_request(request)
+
     fields = set(request)
     if fields not in (
         RUNTIME_REQUEST_FIELDS,
@@ -141,7 +180,46 @@ def validate_request(
     if request["request_sha256"] != expected_digest:
         raise RequestValidationError("request_sha256 mismatch")
 
-    return {field: str(request.get(field, "")) for field in OUTPUT_FIELDS}
+    outputs = {field: str(request.get(field, "")) for field in OUTPUT_FIELDS}
+    outputs["request_type"] = "ami-build"
+    return outputs
+
+
+def _validate_foundation_resume_request(
+    request: Mapping[str, Any],
+) -> dict[str, str]:
+    if set(request) != FOUNDATION_RESUME_REQUEST_FIELDS:
+        raise RequestValidationError(
+            "request fields do not match the foundation resume v1 contract"
+        )
+    if request["state"] != "AUTHORIZED":
+        raise RequestValidationError("request is not authorized")
+    if request["network"] != NETWORK:
+        raise RequestValidationError("network mismatch")
+    if request["environment"] != ENVIRONMENT:
+        raise RequestValidationError("environment mismatch")
+    if request["mode"] != FOUNDATION_RESUME_MODE:
+        raise RequestValidationError("foundation resume mode mismatch")
+    if request["approval_phrase"] != FOUNDATION_RESUME_APPROVAL_PHRASE:
+        raise RequestValidationError("approval phrase mismatch")
+    if request["target_workflow"] != FOUNDATION_WORKFLOW:
+        raise RequestValidationError("target workflow mismatch")
+    if request["boundaries"] != EXPECTED_FOUNDATION_RESUME_BOUNDARIES:
+        raise RequestValidationError("release boundary mismatch")
+
+    for field in ("ami_run_id", "manifest_gate_run_id", "resume_run_id"):
+        if not RUN_ID.fullmatch(str(request[field])):
+            raise RequestValidationError(f"{field} must be a positive integer")
+    if not NONCE.fullmatch(str(request["one_shot_nonce"])):
+        raise RequestValidationError("one_shot_nonce format is invalid")
+
+    expected_digest = canonical_request_sha256(request)
+    if request["request_sha256"] != expected_digest:
+        raise RequestValidationError("request_sha256 mismatch")
+
+    outputs = {field: str(request.get(field, "")) for field in OUTPUT_FIELDS}
+    outputs["request_type"] = "foundation-resume"
+    return outputs
 
 
 def main() -> int:
