@@ -111,8 +111,8 @@ jobs:
           jq -n '{
             commands: [
               "set -euo pipefail",
-              "systemctl restart junca-validator",
-              "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health >/dev/null && exit 0; sleep 2; done; exit 1"
+              "if ! systemctl restart junca-validator; then systemctl status junca-validator --no-pager || true; journalctl -u junca-validator -n 100 --no-pager || true; exit 1; fi",
+              "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health >/dev/null && exit 0; sleep 2; done; systemctl status junca-validator --no-pager || true; journalctl -u junca-validator -n 100 --no-pager || true; exit 1"
             ]
           }' > artifacts/ssm-reset-round.json
           command_id="$(aws ssm send-command \
@@ -129,15 +129,16 @@ jobs:
                 --query Status --output text)"
               case "$command_status" in
                 Success) break ;;
-                Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+                Failed|Cancelled|TimedOut|Cancelling) break ;;
               esac
               test "$attempt" -lt 90
               sleep 2
             done
-            [[ "$command_status" == "Success" ]]
             aws ssm get-command-invocation \
               --command-id "$command_id" --instance-id "$instance" \
               > "artifacts/reset-round-${instance}.json"
+            jq -r '.StandardOutputContent, .StandardErrorContent' \
+              "artifacts/reset-round-${instance}.json"
             jq -e '.Status == "Success"' \
               "artifacts/reset-round-${instance}.json"
           done
