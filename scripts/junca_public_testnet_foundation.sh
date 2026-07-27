@@ -29,6 +29,98 @@ jq -e 'type == "array" and length == 3 and (unique | length) == 3 and all(starts
 
 mkdir -p artifacts
 
+wait_for_ssm_online() {
+  local instance_id="$1"
+  local output_path="$2"
+  local attempts_path="${output_path%.json}.attempts.jsonl"
+  local stderr_path="${output_path%.json}.stderr"
+  local ping_status=""
+  local cli_exit=0
+  local attempt
+  : >"$attempts_path"
+  : >"$stderr_path"
+  for attempt in $(seq 1 60); do
+    cli_exit=0
+    if ping_status="$(
+      aws ssm describe-instance-information \
+        --filters "Key=InstanceIds,Values=${instance_id}" \
+        --query 'InstanceInformationList[0].PingStatus' \
+        --output text 2>"$stderr_path"
+    )"; then
+      :
+    else
+      cli_exit=$?
+      ping_status=AwsCliError
+    fi
+    jq -cn \
+      --argjson attempt "$attempt" \
+      --argjson cli_exit "$cli_exit" \
+      --arg ping_status "$ping_status" \
+      --rawfile stderr "$stderr_path" '{
+        attempt: $attempt,
+        cli_exit: $cli_exit,
+        ping_status: $ping_status,
+        stderr: $stderr
+      }' >>"$attempts_path"
+    if [[ "$cli_exit" == 0 && "$ping_status" == "Online" ]]; then
+      jq -s \
+        --arg instance_id "$instance_id" \
+        --arg observed_status "$ping_status" '{
+          schema_version: "junca-validator-ssm-online-readback/v1",
+          instance_id: $instance_id,
+          observed_status: $observed_status,
+          attempts: .,
+          accepted: true
+        }' "$attempts_path" >"$output_path"
+      return 0
+    fi
+    if [[ "$attempt" -lt 60 ]]; then
+      sleep 10
+    fi
+  done
+  jq -s \
+    --arg instance_id "$instance_id" \
+    --arg observed_status "$ping_status" '{
+      schema_version: "junca-validator-ssm-online-readback/v1",
+      instance_id: $instance_id,
+      observed_status: $observed_status,
+      attempts: .,
+      accepted: false
+    }' "$attempts_path" >"$output_path"
+  return 1
+}
+
+write_post_apply_checkpoint() {
+  local index="$1"
+  local stage="$2"
+  local status="$3"
+  local instance_id="${4:-}"
+  local volume_id="${5:-}"
+  local stage_path="artifacts/post-apply-validator-${index}-${stage}.json"
+  [[ "$index" =~ ^[0-2]$ ]]
+  [[ "$stage" =~ ^[a-z0-9-]+$ ]]
+  [[ "$status" =~ ^(started|succeeded|failed)$ ]]
+  jq -n \
+    --argjson validator_index "$index" \
+    --arg validator_id "validator-0$((index + 1))" \
+    --arg stage "$stage" \
+    --arg status "$status" \
+    --arg instance_id "$instance_id" \
+    --arg volume_id "$volume_id" '{
+      schema_version: "junca-validator-post-apply-checkpoint/v1",
+      validator_index: $validator_index,
+      validator_id: $validator_id,
+      stage: $stage,
+      status: $status,
+      instance_id: (if $instance_id == "" then null else $instance_id end),
+      volume_id: (if $volume_id == "" then null else $volume_id end),
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false
+    }' >"$stage_path"
+  cp "$stage_path" "artifacts/post-apply-validator-${index}-checkpoint.json"
+}
+
 wait_for_ssm_command() {
   local command_id="$1"
   local instance_id="$2"
@@ -541,18 +633,13 @@ capture_validator_observation() {
   local validator_id="$1"
   local instance_id="$2"
   local output_path="$3"
-  local ping_status
   local readback_command
   local command_id
   local invocation
   local ami_id
-  ping_status="$(
-    aws ssm describe-instance-information \
-      --filters "Key=InstanceIds,Values=${instance_id}" \
-      --query 'InstanceInformationList[0].PingStatus' \
-      --output text
-  )"
-  [[ "$ping_status" == "Online" ]]
+  wait_for_ssm_online \
+    "$instance_id" \
+    "artifacts/ssm-online-${validator_id}-${instance_id}.json"
   ami_id="$(
     aws ec2 describe-instances \
       --instance-ids "$instance_id" \
@@ -714,6 +801,66 @@ def finality_readback:
     '.validator_id == $validator_id' "$output_path" >/dev/null
 }
 
+write_live_rollout_prefix_readback() {
+  local evidence_updated_count="$1"
+  local evidence_validators_path="$2"
+  local previous_artifact_sha256="$3"
+  local previous_ami_id="$4"
+  local -a current_instances
+  local index
+  [[ "$evidence_updated_count" =~ ^[0-3]$ ]]
+  if [[ -n "$evidence_validators_path" ]]; then
+    test -f "$evidence_validators_path"
+  fi
+  terraform -chdir=infra/aws/public-testnet output -json \
+    > artifacts/live-prefix-foundation-outputs.json
+  mapfile -t current_instances < <(
+    jq -er '.validator_instance_ids.value[]' \
+      artifacts/live-prefix-foundation-outputs.json
+  )
+  test "${#current_instances[@]}" = 3
+  for index in 0 1 2; do
+    capture_validator_observation \
+      "validator-0$((index + 1))" \
+      "${current_instances[$index]}" \
+      "artifacts/live-prefix-validator-$((index + 1)).json"
+  done
+  jq -s '.' artifacts/live-prefix-validator-{1,2,3}.json \
+    > artifacts/live-prefix-validators.json
+  if [[ -z "$evidence_validators_path" ]]; then
+    evidence_validators_path=artifacts/live-prefix-validators.json
+  fi
+  jq -n \
+    --arg target_version "$NODE_ARTIFACT_SHA256" \
+    --arg target_ami_id "$NODE_AMI_ID" \
+    --arg previous_version "$previous_artifact_sha256" \
+    --arg previous_ami_id "$previous_ami_id" \
+    --argjson evidence_updated_count "$evidence_updated_count" \
+    --argjson requested_slot_epoch_seconds \
+      "$validator_slot_epoch_seconds" \
+    --argjson observed_unix_time "$(date +%s)" \
+    --slurpfile validators artifacts/live-prefix-validators.json \
+    --slurpfile evidence_validators "$evidence_validators_path" '{
+      target_version: $target_version,
+      target_ami_id: $target_ami_id,
+      previous_version: $previous_version,
+      previous_ami_id: $previous_ami_id,
+      update_order: ["validator-01", "validator-02", "validator-03"],
+      evidence_updated_count: $evidence_updated_count,
+      validators: $validators[0],
+      evidence_validators: $evidence_validators[0],
+      requested_slot_epoch_seconds: $requested_slot_epoch_seconds,
+      observed_unix_time: $observed_unix_time,
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false
+    }' > artifacts/live-prefix-readback.json
+  python -m jaios.social_ecosystem_chain.rolling_compatibility \
+    --mode live-prefix \
+    --evidence artifacts/live-prefix-readback.json \
+    --output artifacts/live-prefix-decision.json
+}
+
 write_rolling_compatibility_evidence() {
   local expected_state="$1"
   local expected_next="${2:-}"
@@ -798,6 +945,7 @@ write_rolling_resume_evidence() {
   jq -n \
     --arg repository "$GITHUB_REPOSITORY" \
     --arg head_sha "$GITHUB_SHA" \
+    --arg candidate_provenance_head_sha "$ROLLING_CANDIDATE_HEAD_SHA" \
     --argjson producer_run_id "$GITHUB_RUN_ID" \
     --argjson ami_run_id "$AMI_RUN_ID" \
     --argjson manifest_gate_run_id "$MANIFEST_GATE_RUN_ID" \
@@ -833,6 +981,7 @@ write_rolling_resume_evidence() {
         end
       ),
       candidate: {
+        provenance_head_sha: $candidate_provenance_head_sha,
         source_commit: $source_commit,
         node_artifact_sha256: $node_artifact_sha256,
         genesis_sha256: $genesis_sha256,
@@ -1023,7 +1172,7 @@ if [[ "$rolling_release" == "true" ]]; then
   for name in \
     AMI_RUN_ID MANIFEST_GATE_RUN_ID REQUEST_SHA256 \
     MANIFEST_DECISION_SHA256 GITHUB_RUN_ID GITHUB_SHA GITHUB_REPOSITORY \
-    ROLLING_RESUME_RUN_ID
+    ROLLING_RESUME_RUN_ID ROLLING_CANDIDATE_HEAD_SHA
   do
     [[ -n "${!name:-}" ]] || {
       echo "missing rolling release binding: $name" >&2
@@ -1036,6 +1185,7 @@ if [[ "$rolling_release" == "true" ]]; then
   [[ "$MANIFEST_DECISION_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
   [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+  [[ "$ROLLING_CANDIDATE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
   [[ "$ROLLING_RESUME_RUN_ID" =~ ^(0|[1-9][0-9]*)$ ]]
   test "$GITHUB_REPOSITORY" = \
     "JAIOS-Governance/junca-social-ecosystem-chain"
@@ -1286,6 +1436,7 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   test "${#pre_rollout_instances[@]}" = 3
   resume_path="${ROLLING_RESUME_EVIDENCE_PATH:-}"
   resume_updated_count=0
+  resume_evidence_validators_path=""
   if [[ "$ROLLING_RESUME_RUN_ID" == "0" ]]; then
     test -z "$resume_path"
     test "${#validator_replacements[@]}" = 3
@@ -1307,7 +1458,7 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
     test -f "$resume_path"
     jq -e \
       --arg repository "$GITHUB_REPOSITORY" \
-      --arg head_sha "$GITHUB_SHA" \
+      --arg candidate_head_sha "$ROLLING_CANDIDATE_HEAD_SHA" \
       --argjson producer_run_id "$ROLLING_RESUME_RUN_ID" \
       --argjson ami_run_id "$AMI_RUN_ID" \
       --argjson manifest_gate_run_id "$MANIFEST_GATE_RUN_ID" \
@@ -1323,18 +1474,18 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
         "$validator_slot_epoch_seconds" '
         .schema_version == "junca-validator-rolling-resume/v1" and
         .repository == $repository and
-        .head_sha == $head_sha and
+        (.candidate.provenance_head_sha // .head_sha) ==
+          $candidate_head_sha and
         .producer_run_id == $producer_run_id and
         .ami_run_id == $ami_run_id and
         .manifest_gate_run_id == $manifest_gate_run_id and
-        .candidate == {
-          source_commit: $source_commit,
-          node_artifact_sha256: $node_artifact_sha256,
-          genesis_sha256: $genesis_sha256,
-          ami_id: $ami_id,
-          request_sha256: $request_sha256,
-          manifest_decision_sha256: $manifest_decision_sha256
-        } and
+        .candidate.source_commit == $source_commit and
+        .candidate.node_artifact_sha256 == $node_artifact_sha256 and
+        .candidate.genesis_sha256 == $genesis_sha256 and
+        .candidate.ami_id == $ami_id and
+        .candidate.request_sha256 == $request_sha256 and
+        .candidate.manifest_decision_sha256 ==
+          $manifest_decision_sha256 and
         .automatic_finality == {
           block_interval_seconds: $validator_block_interval_seconds,
           slot_epoch_seconds: $validator_slot_epoch_seconds,
@@ -1371,15 +1522,30 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
         (.rollback.validators | length) == 3
       ' "$resume_path" >/dev/null
     jq '.rollback' "$resume_path" > artifacts/rollback-rehearsal.json
+    jq '.validators' "$resume_path" \
+      > artifacts/resume-evidence-validators.json
+    resume_evidence_validators_path=artifacts/resume-evidence-validators.json
     resume_updated_count="$(jq -er '.updated_count' "$resume_path")"
   fi
 
-  # Stop automatic finality before the next replacement. A resumed target
+  # A failed targeted apply can replace one validator before its resume
+  # evidence is rewritten. Treat the evidence count as a committed lower bound
+  # and recover only the one next contiguous, fully read-back target prefix.
+  # This readback completes before any runtime.env mutation.
+  write_live_rollout_prefix_readback \
+    "$resume_updated_count" \
+    "$resume_evidence_validators_path" \
+    "$previous_artifact_sha256" "$previous_ami_id"
+  live_updated_count="$(
+    jq -er '.live_updated_count' artifacts/live-prefix-decision.json
+  )"
+
+  # Stop automatic finality before the next replacement. The observed target
   # prefix is bound strictly to the candidate artifact; only the remaining
   # legacy suffix may initialize all-absent false/0/0 keys.
   pre_rollout_finality_bindings="$(
     build_pre_rollout_finality_bindings \
-      "$resume_updated_count" \
+      "$live_updated_count" \
       "$NODE_ARTIFACT_SHA256" "$previous_artifact_sha256" \
       "${pre_rollout_instances[@]}"
   )"
@@ -1553,6 +1719,7 @@ if [[ "$phase" == "foundation-apply" ]]; then
     # create; SSM Online readback prevents advancing before the replacement is
     # manageable. Other resources remain untouched during each targeted step.
     for address in "${validator_replacements[@]}"; do
+      state_volume_id=""
       index="${address##*[}"
       index="${index%]}"
       target_plan="$GITHUB_WORKSPACE/artifacts/foundation-validator-${index}.tfplan"
@@ -1620,48 +1787,125 @@ if [[ "$phase" == "foundation-apply" ]]; then
       # Fail before replacement when the future epoch no longer leaves a
       # bounded boot/SSM quiesce window.
       test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
-      terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
-        "$target_plan"
+      write_post_apply_checkpoint "$index" terraform-apply started
+      if ! terraform -chdir=infra/aws/public-testnet apply \
+        -input=false -auto-approve "$target_plan"
+      then
+        write_post_apply_checkpoint "$index" terraform-apply failed
+        exit 1
+      fi
+      write_post_apply_checkpoint "$index" terraform-apply succeeded
 
-      new_instance="$(terraform -chdir=infra/aws/public-testnet output -json \
-        validator_instance_ids | jq -er ".[${index}]")"
-      for attempt in $(seq 1 60); do
-        ping_status="$(aws ssm describe-instance-information \
-          --filters "Key=InstanceIds,Values=${new_instance}" \
-          --query 'InstanceInformationList[0].PingStatus' --output text)"
-        [[ "$ping_status" == "Online" ]] && break
-        test "$attempt" -lt 60
-        sleep 10
-      done
+      write_post_apply_checkpoint "$index" instance-output started
+      if ! terraform -chdir=infra/aws/public-testnet output -json \
+        validator_instance_ids \
+        >"artifacts/post-apply-validator-${index}-instances.json"
+      then
+        write_post_apply_checkpoint "$index" instance-output failed
+        exit 1
+      fi
+      if ! new_instance="$(
+        jq -er ".[${index}] | select(test(\"^i-[0-9a-f]{8,17}$\"))" \
+          "artifacts/post-apply-validator-${index}-instances.json"
+      )"; then
+        write_post_apply_checkpoint "$index" instance-output failed
+        exit 1
+      fi
+      write_post_apply_checkpoint \
+        "$index" instance-output succeeded "$new_instance"
+
+      write_post_apply_checkpoint \
+        "$index" ssm-online started "$new_instance"
+      if ! wait_for_ssm_online \
+        "$new_instance" \
+        "artifacts/post-apply-validator-${index}-ssm-online.json"
+      then
+        write_post_apply_checkpoint \
+          "$index" ssm-online failed "$new_instance"
+        exit 1
+      fi
+      write_post_apply_checkpoint \
+        "$index" ssm-online succeeded "$new_instance"
 
       if [[ "$validator_state_enabled" == "true" ]]; then
-        state_volume_id="$(
-          terraform -chdir=infra/aws/public-testnet output -json \
-            validator_state_volume_readback |
-            jq -er ".[${index}].volume_id"
-        )"
-        aws ec2 describe-volumes --volume-ids "$state_volume_id" --output json |
-          jq -e --arg instance_id "$new_instance" '
+        write_post_apply_checkpoint \
+          "$index" state-volume started "$new_instance"
+        if ! terraform -chdir=infra/aws/public-testnet output -json \
+          validator_state_volume_readback \
+          >"artifacts/post-apply-validator-${index}-state-outputs.json"
+        then
+          write_post_apply_checkpoint \
+            "$index" state-volume failed "$new_instance"
+          exit 1
+        fi
+        if ! state_volume_id="$(
+          jq -er \
+            ".[${index}].volume_id |
+              select(test(\"^vol-[0-9a-f]{8,17}$\"))" \
+            "artifacts/post-apply-validator-${index}-state-outputs.json"
+        )"; then
+          write_post_apply_checkpoint \
+            "$index" state-volume failed "$new_instance"
+          exit 1
+        fi
+        if ! aws ec2 describe-volumes --volume-ids "$state_volume_id" \
+          --output json \
+          >"artifacts/post-apply-validator-${index}-volume.json"
+        then
+          write_post_apply_checkpoint \
+            "$index" state-volume failed "$new_instance" "$state_volume_id"
+          exit 1
+        fi
+        if ! jq -e --arg instance_id "$new_instance" '
             .Volumes | length == 1 and
             .[0].Encrypted == true and
             .[0].State == "in-use" and
             (.[0].Attachments | length) == 1 and
             .[0].Attachments[0].InstanceId == $instance_id and
             .[0].Attachments[0].State == "attached"
-          ' >/dev/null
+          ' "artifacts/post-apply-validator-${index}-volume.json" >/dev/null
+        then
+          write_post_apply_checkpoint \
+            "$index" state-volume failed "$new_instance" "$state_volume_id"
+          exit 1
+        fi
+        write_post_apply_checkpoint \
+          "$index" state-volume succeeded "$new_instance" "$state_volume_id"
       fi
 
       # A replacement boots with the Terraform-bound future epoch. Quiesce it
       # immediately after SSM and retained-volume readback; the epoch is still
       # in the future, so no automatic-finality slot can execute during this
       # bounded transition.
-      test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
-      new_instance_finality_bindings="$(
+      write_post_apply_checkpoint \
+        "$index" finality-quiesce started "$new_instance" \
+        "${state_volume_id:-}"
+      if ! test "$validator_slot_epoch_seconds" -gt "$(date +%s)"; then
+        write_post_apply_checkpoint \
+          "$index" finality-quiesce failed "$new_instance" \
+          "${state_volume_id:-}"
+        exit 1
+      fi
+      if ! new_instance_finality_bindings="$(
         build_runtime_finality_bindings \
           "$NODE_ARTIFACT_SHA256" false "$new_instance"
-      )"
-      set_runtime_finality \
+      )"; then
+        write_post_apply_checkpoint \
+          "$index" finality-quiesce failed "$new_instance" \
+          "${state_volume_id:-}"
+        exit 1
+      fi
+      if ! set_runtime_finality \
         0 0 "$new_instance_finality_bindings"
+      then
+        write_post_apply_checkpoint \
+          "$index" finality-quiesce failed "$new_instance" \
+          "${state_volume_id:-}"
+        exit 1
+      fi
+      write_post_apply_checkpoint \
+        "$index" finality-quiesce succeeded "$new_instance" \
+        "${state_volume_id:-}"
 
       if [[ "$public_services_enabled" == "true" ]]; then
         current_outputs="$(
