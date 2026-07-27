@@ -1,0 +1,78 @@
+name: JUNCA Public Testnet Live Soak Segment
+
+on:
+  workflow_call:
+    inputs:
+      segment_index:
+        required: true
+        type: number
+      source_commit:
+        required: true
+        type: string
+      node_artifact_sha256:
+        required: true
+        type: string
+      genesis_sha256:
+        required: true
+        type: string
+      ami_id:
+        required: true
+        type: string
+      request_sha256:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 270
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify immutable candidate binding
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          NODE_ARTIFACT_SHA256: ${{ inputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
+          AMI_ID: ${{ inputs.ami_id }}
+          REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          SEGMENT_INDEX: ${{ inputs.segment_index }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$NODE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$AMI_ID" =~ ^ami-[0-9a-f]{8,17}$ ]]
+          [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SEGMENT_INDEX" =~ ^[1-6]$ ]]
+
+      - name: Collect four-hour read-only segment
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          NODE_ARTIFACT_SHA256: ${{ inputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
+          AMI_ID: ${{ inputs.ami_id }}
+          REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          SEGMENT_INDEX: ${{ inputs.segment_index }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python scripts/junca_public_testnet_live_soak.py collect-segment \
+            --segment-index "$SEGMENT_INDEX" \
+            --source-commit "$SOURCE_COMMIT" \
+            --node-artifact-sha256 "$NODE_ARTIFACT_SHA256" \
+            --genesis-sha256 "$GENESIS_SHA256" \
+            --ami-id "$AMI_ID" \
+            --request-sha256 "$REQUEST_SHA256" \
+            --output "artifacts/segment-${SEGMENT_INDEX}.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-testnet-live-soak-segment-${{ inputs.segment_index }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

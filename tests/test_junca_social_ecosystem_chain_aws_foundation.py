@@ -544,6 +544,8 @@ class AwsFoundationTests(unittest.TestCase):
             '.status == "completed"',
             '.conclusion == "success"',
             '.name == "JUNCA Validator Foundation Release"',
+            '.path == ".github/workflows/junca-validator-foundation-release.yml"',
+            '.event == "workflow_dispatch"',
             '.head_branch == "main"',
             ".repository.full_name == $repository",
             ".head_repository.full_name == $repository",
@@ -551,6 +553,8 @@ class AwsFoundationTests(unittest.TestCase):
             "junca-validator-foundation-release-"
             "${{ steps.foundation.outputs.run_id }}",
             "run-id: ${{ steps.foundation.outputs.run_id }}",
+            "REQUEST_SHA256=$(jq -er .request_sha256",
+            "request_sha256: $request_sha256",
         ):
             self.assertIn(required, self.public_testnet_release)
         self.assertNotIn(

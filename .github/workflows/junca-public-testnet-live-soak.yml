@@ -1,0 +1,408 @@
+name: JUNCA Public Testnet Live 24h Soak
+
+on:
+  workflow_run:
+    workflows:
+      - "JUNCA Public Testnet Release"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      public_release_run_id:
+        description: Exact successful JUNCA Public Testnet Release run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: >-
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      ) ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.name == 'JUNCA Public Testnet Release' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      public_release_run_id: ${{ steps.resolve.outputs.public_release_run_id }}
+      foundation_run_id: ${{ steps.resolve.outputs.foundation_run_id }}
+      source_commit: ${{ steps.resolve.outputs.source_commit }}
+      node_artifact_sha256: ${{ steps.resolve.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ steps.resolve.outputs.genesis_sha256 }}
+      ami_id: ${{ steps.resolve.outputs.ami_id }}
+      request_sha256: ${{ steps.resolve.outputs.request_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve exact public release and immutable candidate
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          MANUAL_PUBLIC_RELEASE_RUN_ID: ${{ inputs.public_release_run_id || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            public_release_run_id="$WORKFLOW_RUN_ID"
+          else
+            public_release_run_id="$MANUAL_PUBLIC_RELEASE_RUN_ID"
+          fi
+          [[ "$public_release_run_id" =~ ^[1-9][0-9]*$ ]]
+          public_run_json="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${public_release_run_id}")"
+          jq -e --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Public Testnet Release" and
+            .path == ".github/workflows/junca-public-testnet-release.yml" and
+            .event == "workflow_run" and
+            .head_branch == "main" and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$public_run_json"
+          mkdir -p evidence/public-release
+          gh run download "$public_release_run_id" \
+            --repo "${{ github.repository }}" \
+            --name "junca-public-testnet-release-${public_release_run_id}" \
+            --dir evidence/public-release
+          publication=evidence/public-release/public-testnet-publication.json
+          jq -e '
+            .schema_version == "junca-public-testnet-publication/v1" and
+            .result == "PASS" and
+            .consecutive_canonical_advances == 2 and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' "$publication"
+          foundation_run_id="$(jq -er .foundation_run_id "$publication")"
+          source_commit="$(jq -er .candidate_binding.source_commit "$publication")"
+          node_sha256="$(jq -er .candidate_binding.node_artifact_sha256 "$publication")"
+          genesis_sha256="$(jq -er .candidate_binding.genesis_sha256 "$publication")"
+          ami_id="$(jq -er .candidate_binding.ami_id "$publication")"
+          request_sha256="$(jq -er .candidate_binding.request_sha256 "$publication")"
+          [[ "$foundation_run_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$node_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+          [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]]
+          run_json="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${foundation_run_id}")"
+          jq -e --arg repository "${{ github.repository }}" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Foundation Release" and
+            .path == ".github/workflows/junca-validator-foundation-release.yml" and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run_json"
+          mkdir -p evidence/foundation
+          gh run download "$foundation_run_id" \
+            --repo "${{ github.repository }}" \
+            --name "junca-validator-foundation-release-${foundation_run_id}" \
+            --dir evidence/foundation
+          jq -e \
+            --arg source_commit "$source_commit" \
+            --arg node_sha256 "$node_sha256" \
+            --arg genesis_sha256 "$genesis_sha256" \
+            --arg ami_id "$ami_id" '
+            .approved_node_ami_readback.value.id == $ami_id and
+            .approved_node_ami_readback.value.source_commit == $source_commit and
+            .approved_node_ami_readback.value.node_sha256 == $node_sha256 and
+            .approved_node_ami_readback.value.genesis_sha256 == $genesis_sha256
+          ' evidence/foundation/foundation-outputs.json
+          jq -e '
+            .schema_version == "junca-public-testnet-runtime-acceptance/v1" and
+            .result == "PASS" and
+            .observations.head_advanced == true and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' evidence/foundation/public-testnet-runtime-acceptance.json
+          test "$request_sha256" = "$(
+            jq -er .request_sha256 \
+              evidence/foundation/ami/junca-validator-ami-build.json
+          )"
+          foundation_digest="$(
+            sha256sum evidence/foundation/public-testnet-runtime-acceptance.json |
+            cut -d' ' -f1
+          )"
+          test "$foundation_digest" = "$(
+            jq -er .validator_acceptance_sha256 "$publication"
+          )"
+          {
+            echo "public_release_run_id=$public_release_run_id"
+            echo "foundation_run_id=$foundation_run_id"
+            echo "source_commit=$source_commit"
+            echo "node_artifact_sha256=$node_sha256"
+            echo "genesis_sha256=$genesis_sha256"
+            echo "ami_id=$ami_id"
+            echo "request_sha256=$request_sha256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Prove advancing public runtime before the timed soak
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python scripts/junca_public_testnet_runtime_acceptance_packet.py \
+            --observations 3 \
+            --interval-seconds 30 \
+            --output artifacts/preflight-live-acceptance.json
+
+  segment-01:
+    needs: preflight
+    uses: ./.github/workflows/junca-public-testnet-live-soak-segment.yml
+    with:
+      segment_index: 1
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
+      ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
+
+  segment-02:
+    needs: [preflight, segment-01]
+    uses: ./.github/workflows/junca-public-testnet-live-soak-segment.yml
+    with:
+      segment_index: 2
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
+      ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
+
+  segment-03:
+    needs: [preflight, segment-02]
+    uses: ./.github/workflows/junca-public-testnet-live-soak-segment.yml
+    with:
+      segment_index: 3
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
+      ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
+
+  segment-04:
+    needs: [preflight, segment-03]
+    uses: ./.github/workflows/junca-public-testnet-live-soak-segment.yml
+    with:
+      segment_index: 4
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
+      ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
+
+  segment-05:
+    needs: [preflight, segment-04]
+    uses: ./.github/workflows/junca-public-testnet-live-soak-segment.yml
+    with:
+      segment_index: 5
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
+      ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
+
+  segment-06:
+    needs: [preflight, segment-05]
+    uses: ./.github/workflows/junca-public-testnet-live-soak-segment.yml
+    with:
+      segment_index: 6
+      source_commit: ${{ needs.preflight.outputs.source_commit }}
+      node_artifact_sha256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+      genesis_sha256: ${{ needs.preflight.outputs.genesis_sha256 }}
+      ami_id: ${{ needs.preflight.outputs.ami_id }}
+      request_sha256: ${{ needs.preflight.outputs.request_sha256 }}
+
+  aggregate:
+    needs: [preflight, segment-06]
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 10
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-live-soak-readback-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Final read-only Terraform and AWS candidate identity
+        env:
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+          NODE_ARTIFACT_SHA256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ needs.preflight.outputs.genesis_sha256 }}
+          AMI_ID: ${{ needs.preflight.outputs.ami_id }}
+          REQUEST_SHA256: ${{ needs.preflight.outputs.request_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/readback
+          test "$(aws sts get-caller-identity --query Account --output text)" \
+            = "$AWS_ACCOUNT_ID"
+          terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/bootstrap.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true"
+          terraform -chdir=infra/aws/bootstrap output -json \
+            > artifacts/readback/bootstrap.json
+          state_kms_key_arn="$(
+            jq -er .state_kms_key_arn.value artifacts/readback/bootstrap.json
+          )"
+          lock_table="$(
+            jq -er .lock_table.value artifacts/readback/bootstrap.json
+          )"
+          terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$lock_table" \
+            -backend-config="encrypt=true" \
+            -backend-config="kms_key_id=$state_kms_key_arn"
+          terraform -chdir=infra/aws/public-testnet output -json \
+            > artifacts/readback/public-testnet.json
+          mapfile -t instances < <(
+            jq -er '.validator_instance_ids.value[]' \
+              artifacts/readback/public-testnet.json
+          )
+          test "${#instances[@]}" = 3
+          aws ec2 describe-instances --instance-ids "${instances[@]}" \
+            > artifacts/readback/instances.json
+          aws ec2 describe-images --image-ids "$AMI_ID" \
+            > artifacts/readback/image.json
+          jq -e \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "$NODE_ARTIFACT_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            --arg ami_id "$AMI_ID" '
+            .approved_node_ami_readback.value.id == $ami_id and
+            .approved_node_ami_readback.value.source_commit == $source_commit and
+            .approved_node_ami_readback.value.node_sha256 == $node_sha256 and
+            .approved_node_ami_readback.value.genesis_sha256 == $genesis_sha256
+          ' artifacts/readback/public-testnet.json
+          jq -e --arg ami_id "$AMI_ID" '
+            [.Reservations[].Instances[]] |
+            length == 3 and
+            (map(.InstanceId) | unique | length) == 3 and
+            all(.[]; .ImageId == $ami_id and .State.Name == "running")
+          ' artifacts/readback/instances.json
+          jq -e \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "$NODE_ARTIFACT_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            --arg ami_id "$AMI_ID" \
+            --arg request_sha256 "$REQUEST_SHA256" '
+            .Images | length == 1 and
+            .[0].ImageId == $ami_id and
+            .[0].State == "available" and
+            ([.[0].Tags[] | {key: .Key, value: .Value}] | from_entries) as $tags |
+            $tags.SourceCommit == $source_commit and
+            $tags.NodeArtifactSHA256 == $node_sha256 and
+            $tags.GenesisSHA256 == $genesis_sha256 and
+            $tags.RequestDigest == $request_sha256
+          ' artifacts/readback/image.json
+          jq -n \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
+            --arg genesis_sha256 "$GENESIS_SHA256" \
+            --arg ami_id "$AMI_ID" \
+            --arg request_sha256 "$REQUEST_SHA256" \
+            --slurpfile instances artifacts/readback/instances.json '{
+              schema_version: "junca-public-testnet-final-runtime-readback/v1",
+              status: "PASS",
+              candidate_binding: {
+                source_commit: $source_commit,
+                node_artifact_sha256: $node_artifact_sha256,
+                genesis_sha256: $genesis_sha256,
+                ami_id: $ami_id,
+                request_sha256: $request_sha256
+              },
+              instance_ids: [$instances[0].Reservations[].Instances[].InstanceId],
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/final-runtime-readback.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: junca-public-testnet-live-soak-segment-*
+          path: evidence/segments
+          merge-multiple: true
+
+      - name: Aggregate exact continuous candidate-bound evidence
+        env:
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+          NODE_ARTIFACT_SHA256: ${{ needs.preflight.outputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ needs.preflight.outputs.genesis_sha256 }}
+          AMI_ID: ${{ needs.preflight.outputs.ami_id }}
+          REQUEST_SHA256: ${{ needs.preflight.outputs.request_sha256 }}
+          FOUNDATION_RUN_ID: ${{ needs.preflight.outputs.foundation_run_id }}
+          PUBLIC_RELEASE_RUN_ID: ${{ needs.preflight.outputs.public_release_run_id }}
+        run: |
+          set -euo pipefail
+          test "$(find evidence/segments -type f -name 'segment-*.json' | wc -l)" = 6
+          mkdir -p artifacts
+          final_readback_sha256="$(
+            sha256sum artifacts/final-runtime-readback.json | cut -d' ' -f1
+          )"
+          python scripts/junca_public_testnet_live_soak.py aggregate \
+            --segments-dir evidence/segments \
+            --source-commit "$SOURCE_COMMIT" \
+            --node-artifact-sha256 "$NODE_ARTIFACT_SHA256" \
+            --genesis-sha256 "$GENESIS_SHA256" \
+            --ami-id "$AMI_ID" \
+            --request-sha256 "$REQUEST_SHA256" \
+            --foundation-run-id "$FOUNDATION_RUN_ID" \
+            --public-release-run-id "$PUBLIC_RELEASE_RUN_ID" \
+            --final-runtime-readback-sha256 "$final_readback_sha256" \
+            --output artifacts/junca-public-testnet-live-soak.json
+          jq -e '
+            .schema_version == "junca-public-testnet-live-soak/v1" and
+            .status == "PASS" and
+            .accepted == true and
+            .duration_seconds >= 86400 and
+            .segments_completed == 6 and
+            .continuous_observation == true and
+            .head_advanced == true and
+            .release_boundary.mainnet_changed == false and
+            .release_boundary.assets_moved == false and
+            .release_boundary.bridge_activated == false
+          ' artifacts/junca-public-testnet-live-soak.json
+          (
+            cd artifacts
+            sha256sum junca-public-testnet-live-soak.json \
+              > junca-public-testnet-live-soak.json.sha256
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-public-testnet-live-soak-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

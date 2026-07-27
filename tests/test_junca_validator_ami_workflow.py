@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/junca-validator-ami-build.yml"
 COMPONENT = ROOT / ".github/image-builder/validator-component.yml"
 RUNTIME_RECOVERY = ROOT / ".github/workflows/junca-validator-runtime-recovery.yml"
+ORCHESTRATOR = (
+    ROOT / ".github/workflows/junca-validator-public-testnet-orchestrator.yml"
+)
+FOUNDATION = ROOT / ".github/workflows/junca-validator-foundation-release.yml"
+REQUEST = ROOT / "tests/fixtures/junca_validator_ami_build_request.json"
 
 
 class ValidatorAmiWorkflowTests(unittest.TestCase):
@@ -14,6 +19,9 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.component = COMPONENT.read_text(encoding="utf-8")
         cls.runtime_recovery = RUNTIME_RECOVERY.read_text(encoding="utf-8")
+        cls.orchestrator = ORCHESTRATOR.read_text(encoding="utf-8")
+        cls.foundation = FOUNDATION.read_text(encoding="utf-8")
+        cls.request = REQUEST.read_text(encoding="utf-8")
 
     def test_workflow_binds_all_immutable_inputs(self):
         for field in (
@@ -32,10 +40,81 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertNotIn("terraform apply", self.workflow)
         self.assertNotIn("cloudformation", self.workflow.lower())
 
-    def test_ami_build_is_manual_and_cannot_chain_from_runtime_artifacts(self):
+    def test_ami_build_is_explicitly_requested_and_cannot_chain_from_runtime(self):
         self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertNotIn("\n  push:", self.workflow)
+        self.assertIn("push:", self.orchestrator)
+        self.assertIn(
+            "config/junca_validator_ami_build_request.json",
+            self.orchestrator,
+        )
         self.assertNotIn("workflow_run:", self.workflow)
         self.assertNotIn("github.event.workflow_run", self.workflow)
+        self.assertIn("junca_validator_ami_build_request.py", self.orchestrator)
+
+    def test_push_request_is_signed_main_only_and_fail_closed(self):
+        self.assertIn("refs/heads/main", self.orchestrator)
+        self.assertIn(".commit.verification.verified == true", self.orchestrator)
+        self.assertIn('.commit.verification.reason == "valid"', self.orchestrator)
+        self.assertIn("(.files | length) == 1", self.orchestrator)
+        self.assertIn(".files[0].filename == $path", self.orchestrator)
+        self.assertIn("junca_validator_ami_build_request.py", self.orchestrator)
+
+    def test_build_is_one_shot_idempotent_by_request_digest(self):
+        self.assertIn("Name=tag:RequestDigest,Values=", self.workflow)
+        self.assertIn("multiple AMIs exist for immutable request", self.workflow)
+        self.assertIn("reused_existing_ami", self.workflow)
+        self.assertIn("RequestDigest:", self.workflow)
+
+    def test_orchestrator_dispatches_only_provenance_bound_release_chain(self):
+        self.assertIn("actions: write", self.orchestrator)
+        self.assertIn("environment: public-testnet", self.orchestrator)
+        for workflow_name in (
+            "JUNCA Validator Immutable AMI Build",
+            "JUNCA Runtime Release Evidence Collector",
+            "JUNCA Runtime Release Manifest Gate",
+            "JUNCA Validator Foundation Release",
+        ):
+            self.assertIn(workflow_name, self.orchestrator)
+        for workflow_path in (
+            ".github/workflows/junca-validator-ami-build.yml",
+            ".github/workflows/junca-runtime-release-evidence-collector.yml",
+            ".github/workflows/junca-runtime-release-manifest-gate.yml",
+            ".github/workflows/junca-validator-foundation-release.yml",
+        ):
+            self.assertIn(workflow_path, self.orchestrator)
+        self.assertIn("PUBLIC_TESTNET_ROLLOUT", self.orchestrator)
+        self.assertNotIn("terraform apply", self.orchestrator)
+        self.assertNotIn("cloudformation", self.orchestrator.lower())
+
+    def test_source_artifact_and_downstream_run_paths_are_hard_bound(self):
+        for value in (
+            '"JUNCA Validator Runtime Artifacts"',
+            '".github/workflows/junca-validator-runtime-artifacts.yml"',
+            '.event == "push"',
+        ):
+            self.assertIn(value, self.workflow)
+        self.assertIn(
+            '.path == ".github/workflows/junca-validator-ami-build.yml"',
+            self.foundation,
+        )
+        self.assertIn(
+            '.path == ".github/workflows/junca-runtime-release-manifest-gate.yml"',
+            self.foundation,
+        )
+        self.assertGreaterEqual(self.foundation.count(".head_sha == $head"), 2)
+        self.assertIn(".candidate.request_sha256 == $request_sha256", self.foundation)
+
+    def test_canonical_request_binds_exact_six_runtime_inputs(self):
+        for value in (
+            "30273062161",
+            "598152b38364e1cc85ec5e6e737f3e5830945d8a",
+            "junca-validator-runtime-30273062161",
+            "junca-validator-genesis-30273062161",
+            "6441304649985de9a12c8758584785e0e0cc980b793fb735a1c5f0cffba70f14",
+            "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
+        ):
+            self.assertIn(value, self.request)
 
     def test_runtime_recovery_cannot_apply_from_push(self):
         self.assertIn("workflow_dispatch:", self.runtime_recovery)

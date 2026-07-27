@@ -4,15 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       evidence_run_id:
-        description: Exact successful run containing candidate release evidence
-        required: true
-        type: string
-      evidence_artifact_name:
-        description: Artifact containing manifest, Explorer v2 and EBS evidence
-        required: true
-        type: string
-      evidence_workflow_name:
-        description: Exact workflow name that produced the candidate evidence
+        description: Exact successful pre-rollout evidence collector run
         required: true
         type: string
       source_commit:
@@ -45,49 +37,43 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Verify candidate evidence run provenance
+      - name: Verify pre-rollout evidence run provenance
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
-          EVIDENCE_WORKFLOW_NAME: ${{ inputs.evidence_workflow_name }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
           [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          test -n "$EVIDENCE_WORKFLOW_NAME"
-          run_json="$(gh api \
+          evidence_run_json="$(gh api \
             "repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}")"
           jq -e \
-            --arg repository "${{ github.repository }}" \
-            --arg workflow "$EVIDENCE_WORKFLOW_NAME" \
-            --arg source_commit "$SOURCE_COMMIT" '
+            --arg repository "${{ github.repository }}" '
             .status == "completed" and
             .conclusion == "success" and
-            .name == $workflow and
+            .name == "JUNCA Runtime Release Evidence Collector" and
+            .path == ".github/workflows/junca-runtime-release-evidence-collector.yml" and
+            .event == "workflow_dispatch" and
             .head_branch == "main" and
-            .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
-          ' <<<"$run_json"
+          ' <<<"$evidence_run_json"
 
-      - name: Download exact candidate evidence
+      - name: Download exact pre-rollout evidence
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
-          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
         run: |
           set -euo pipefail
           mkdir -p evidence artifacts
           [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           gh run download "$EVIDENCE_RUN_ID" \
             --repo "${{ github.repository }}" \
-            --name "$EVIDENCE_ARTIFACT_NAME" \
+            --name "junca-runtime-release-evidence-${EVIDENCE_RUN_ID}" \
             --dir evidence
           test "$(find evidence -type f | wc -l)" = 3
-          test -f evidence/junca-runtime-release-manifest.json
-          test -f evidence/junca-public-explorer-acceptance-v2.json
-          test -f evidence/junca-validator-ebs-migration.json
+          test -f evidence/junca-runtime-pre-rollout-baseline.json
+          test -f evidence/junca-public-explorer-pre-rollout-baseline.json
+          test -f evidence/junca-validator-ebs-pre-rollout-baseline.json
 
       - name: Fail-closed release manifest decision
         env:
@@ -100,9 +86,9 @@ jobs:
           [[ "$NODE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
           python scripts/junca_runtime_release_manifest_gate.py \
-            --manifest evidence/junca-runtime-release-manifest.json \
-            --explorer-acceptance evidence/junca-public-explorer-acceptance-v2.json \
-            --ebs-migration evidence/junca-validator-ebs-migration.json \
+            --manifest evidence/junca-runtime-pre-rollout-baseline.json \
+            --explorer-acceptance evidence/junca-public-explorer-pre-rollout-baseline.json \
+            --ebs-migration evidence/junca-validator-ebs-pre-rollout-baseline.json \
             --expected-source-commit "$SOURCE_COMMIT" \
             --expected-artifact-sha256 "$NODE_ARTIFACT_SHA256" \
             --expected-genesis-sha256 "$GENESIS_SHA256" \
@@ -110,6 +96,7 @@ jobs:
           jq -e '
             .accepted == true and
             .decision == "PROMOTION_GATE_PASS" and
+            .phase == "PREDEPLOYMENT_READINESS" and
             .release_boundary.mainnet_changed == false and
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
