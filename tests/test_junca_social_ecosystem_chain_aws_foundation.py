@@ -1,9 +1,25 @@
 import pathlib
 import json
+import re
+import subprocess
+import textwrap
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def restored_snapshot_filter(script: str) -> str:
+    marker = 'validator_state_snapshot_ids="$('
+    remainder = script.split(marker, 1)[1]
+    match = re.search(
+        r"jq -c '\n(?P<filter>.*?)\n\s*' <<<",
+        remainder,
+        re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError("restored snapshot jq filter is missing")
+    return textwrap.dedent(match.group("filter"))
 
 
 # Public services remain disabled until validator quorum evidence is accepted.
@@ -572,6 +588,73 @@ class AwsFoundationTests(unittest.TestCase):
             "(map(.head_height) | unique) == [$expected_height]",
             self.validator_foundation_release,
         )
+
+    def test_restored_snapshot_normalization_is_identical_and_fail_closed(
+        self,
+    ) -> None:
+        foundation_filter = restored_snapshot_filter(
+            self.foundation_script
+        )
+        release_filter = restored_snapshot_filter(
+            self.public_release_script
+        )
+        self.assertEqual(foundation_filter, release_filter)
+
+        accepted = (
+            ([None, None, None], None),
+            (["", "", ""], None),
+            (
+                [
+                    "snap-00000001",
+                    "snap-00000002",
+                    "snap-00000003",
+                ],
+                [
+                    "snap-00000001",
+                    "snap-00000002",
+                    "snap-00000003",
+                ],
+            ),
+        )
+        for values, expected in accepted:
+            with self.subTest(accepted=values):
+                payload = [
+                    {"restored_snapshot": value} for value in values
+                ]
+                result = subprocess.run(
+                    ["jq", "-c", foundation_filter],
+                    input=json.dumps(payload),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), expected)
+
+        rejected = (
+            [None, None],
+            [None, None, None, None],
+            [None, "", None],
+            ["", "", "snap-00000001"],
+            [None, "snap-00000001", "snap-00000002"],
+            ["snap-00000001"] * 3,
+            ["snap-00000001", "snap-00000002", "snap-invalid"],
+            ["snap-00000001", "snap-00000002", None],
+        )
+        for values in rejected:
+            with self.subTest(rejected=values):
+                payload = [
+                    {"restored_snapshot": value} for value in values
+                ]
+                result = subprocess.run(
+                    ["jq", "-c", foundation_filter],
+                    input=json.dumps(payload),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("restored snapshots must", result.stderr)
 
     def test_resumable_rollout_is_run_request_and_evidence_bound(self) -> None:
         for required in (
