@@ -40,6 +40,8 @@ UNSAFE_RPC_METHODS = (
     "junca_broadcastVote",
 )
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
+HEALTH_SCHEMA = "junca-public-gateway-health/v1"
+EXPLORER_SCHEMA = "junca-public-explorer/v2"
 
 
 class AcceptanceError(RuntimeError):
@@ -110,6 +112,10 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
 
     health = transport("GET", HEALTH_URL, None)
     _require(health.status == 200, "health: expected HTTP 200")
+    _require(
+        health.body.get("schema_version") == HEALTH_SCHEMA,
+        "health: unsupported schema_version",
+    )
     _require(health.body.get("status") == "healthy", "health: status is not healthy")
     _require(health.body.get("read_only") is True, "health: read_only must be true")
     _verify_boundaries(health.body, "health")
@@ -117,12 +123,41 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
 
     explorer = transport("GET", EXPLORER_URL, None)
     _require(explorer.status == 200, "explorer: expected HTTP 200")
+    _require(
+        explorer.body.get("schema_version") == EXPLORER_SCHEMA,
+        "explorer: v2 schema is required",
+    )
     _require(explorer.body.get("status") == "ready", "explorer: status is not ready")
     _require(
         explorer.body.get("finalized_only") is True,
         "explorer: finalized_only must be true",
     )
+    _require(
+        explorer.body.get("read_only") is True,
+        "explorer: read_only must be true",
+    )
     _verify_boundaries(explorer.body, "explorer")
+    network = explorer.body.get("network")
+    _require(isinstance(network, Mapping), "explorer: network metadata is missing")
+    _require(
+        isinstance(network.get("chain_id"), str)
+        and network["chain_id"].startswith("0x")
+        and isinstance(network.get("chain_id_decimal"), int)
+        and network["chain_id_decimal"] >= 0,
+        "explorer: invalid chain id",
+    )
+    _require(
+        isinstance(network.get("client_version"), str)
+        and bool(network["client_version"]),
+        "explorer: invalid client version",
+    )
+    _require(
+        isinstance(network.get("peer_count"), int)
+        and network["peer_count"] >= 0
+        and isinstance(network.get("peer_count_hex"), str)
+        and network["peer_count_hex"].startswith("0x"),
+        "explorer: invalid peer count",
+    )
     head = explorer.body.get("head")
     _require(isinstance(head, Mapping), "explorer: finalized head is missing")
     _require(
@@ -134,10 +169,30 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
         "explorer: invalid finalized hash",
     )
     _require(
+        isinstance(head.get("certificate_hash"), str)
+        and head["certificate_hash"].startswith("0x"),
+        "explorer: finalized certificate is missing",
+    )
+    _require(
         isinstance(head.get("signed_power"), int)
         and isinstance(head.get("total_power"), int)
         and 0 < head["signed_power"] <= head["total_power"],
         "explorer: invalid finality power",
+    )
+    _require(
+        isinstance(head.get("timestamp"), str)
+        and head["timestamp"].startswith("0x"),
+        "explorer: finalized block timestamp is missing",
+    )
+    _require(
+        isinstance(head.get("state_root"), str)
+        and head["state_root"].startswith("0x"),
+        "explorer: finalized block state root is missing",
+    )
+    _require(
+        isinstance(head.get("transaction_count"), int)
+        and head["transaction_count"] >= 0,
+        "explorer: invalid transaction count",
     )
     checks["explorer"] = {
         "result": "PASS",
@@ -145,6 +200,7 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
         "finalized_hash": head["hash"],
         "signed_power": head["signed_power"],
         "total_power": head["total_power"],
+        "certificate_hash": head["certificate_hash"],
     }
 
     safe_results: dict[str, Any] = {}
@@ -157,6 +213,36 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
         _require("result" in response.body, f"rpc {method}: result is missing")
         _require("error" not in response.body, f"rpc {method}: unexpected error")
         safe_results[method] = response.body["result"]
+    _require(
+        safe_results["eth_chainId"] == network["chain_id"],
+        "rpc/explorer: chain id mismatch",
+    )
+    _require(
+        safe_results["web3_clientVersion"] == network["client_version"],
+        "rpc/explorer: client version mismatch",
+    )
+    _require(
+        safe_results["net_peerCount"] == network["peer_count_hex"],
+        "rpc/explorer: peer count mismatch",
+    )
+    _require(
+        safe_results["eth_blockNumber"] == hex(head["height"]),
+        "rpc/explorer: finalized height mismatch",
+    )
+    latest_block = safe_results["eth_getBlockByNumber"]
+    _require(
+        isinstance(latest_block, Mapping)
+        and latest_block.get("hash") == head["hash"]
+        and latest_block.get("timestamp") == head["timestamp"]
+        and latest_block.get("stateRoot") == head["state_root"],
+        "rpc/explorer: finalized block mismatch",
+    )
+    transactions = latest_block.get("transactions")
+    _require(
+        isinstance(transactions, list)
+        and len(transactions) == head["transaction_count"],
+        "rpc/explorer: transaction count mismatch",
+    )
     checks["safe_rpc"] = {"result": "PASS", "methods": sorted(safe_results)}
 
     for index, method in enumerate(UNSAFE_RPC_METHODS, start=1):
