@@ -110,6 +110,22 @@ jobs:
                 .assets_moved == false and
                 .bridge_activated == false
               ' artifacts/resume/rolling-resume-evidence.json
+            gh api \
+              "repos/${{ github.repository }}/compare/${candidate_head}...${GITHUB_SHA}" \
+              > artifacts/resume/recovery-head-compare.json
+            jq -n \
+              --arg expected_base "$candidate_head" \
+              --arg expected_head "$GITHUB_SHA" \
+              --slurpfile comparison \
+                artifacts/resume/recovery-head-compare.json '{
+                expected_base: $expected_base,
+                expected_head: $expected_head,
+                comparison: $comparison[0]
+              }' > artifacts/resume/recovery-head-evidence.json
+            python -m jaios.social_ecosystem_chain.rolling_compatibility \
+              --mode recovery-head \
+              --evidence artifacts/resume/recovery-head-evidence.json \
+              --output artifacts/resume/recovery-head-decision.json
             echo "ROLLING_RESUME_EVIDENCE_PATH=$GITHUB_WORKSPACE/artifacts/resume/rolling-resume-evidence.json" \
               >> "$GITHUB_ENV"
           fi
