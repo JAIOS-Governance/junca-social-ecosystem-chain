@@ -66,6 +66,11 @@ class PersistentStateStore:
               certificate_json TEXT NOT NULL,
               FOREIGN KEY(height) REFERENCES blocks(height)
             );
+            CREATE TABLE IF NOT EXISTS block_timestamps(
+              height INTEGER PRIMARY KEY,
+              timestamp INTEGER NOT NULL CHECK(timestamp > 0),
+              FOREIGN KEY(height) REFERENCES blocks(height)
+            );
             """
         )
         self._bind_chain_id()
@@ -125,6 +130,7 @@ class PersistentStateStore:
         parent_hash: str,
         transition: BlockTransition,
         certificate: FinalityCertificate,
+        block_timestamp: int | None = None,
     ) -> StoredBlock:
         if self.head_height < 0:
             raise StateStoreError("genesis must be initialized before block commit")
@@ -139,6 +145,15 @@ class PersistentStateStore:
             raise StateStoreError("chain_id mismatch")
         if certificate.height != height or certificate.block_hash != block_hash.lower():
             raise StateStoreError("finality certificate does not bind the committed block")
+        if (
+            block_timestamp is not None
+            and (
+                isinstance(block_timestamp, bool)
+                or not isinstance(block_timestamp, int)
+                or block_timestamp <= 0
+            )
+        ):
+            raise StateStoreError("block timestamp must be a positive integer")
         if certificate.signed_power * 3 <= certificate.total_power * 2:
             raise StateStoreError("finality certificate is below strict two-thirds quorum")
         normalized = _normalize_accounts(transition.accounts)
@@ -175,6 +190,11 @@ class PersistentStateStore:
                     json.dumps(receipts, sort_keys=True, separators=(",", ":")),
                 ),
             )
+            if block_timestamp is not None:
+                self.connection.execute(
+                    "INSERT INTO block_timestamps(height,timestamp) VALUES(?,?)",
+                    (height, block_timestamp),
+                )
             self.connection.execute(
                 """
                 INSERT INTO finality_certificates(height,certificate_json)
@@ -242,6 +262,12 @@ class PersistentStateStore:
         ):
             raise StateStoreError("stored finality certificate does not bind head")
         return certificate
+
+    def block_timestamp(self, height: int) -> int | None:
+        row = self.connection.execute(
+            "SELECT timestamp FROM block_timestamps WHERE height=?", (height,)
+        ).fetchone()
+        return None if row is None else int(row["timestamp"])
 
     def accounts_at(self, height: int | None = None) -> dict[str, AccountState]:
         target = self.head_height if height is None else height
