@@ -234,16 +234,69 @@ build_runtime_finality_bindings() {
   local expected_artifact_sha256="$1"
   local allow_missing_finality_keys="$2"
   shift 2
+  local instances_json
+  [[ "$expected_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+  case "$allow_missing_finality_keys" in
+    true|false) ;;
+    *) return 2 ;;
+  esac
+  instances_json="$(
+    printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1]'
+  )"
+  jq -e '
+    type == "array" and length >= 1 and length <= 3 and
+    (unique | length) == length and
+    all(.[]; type == "string" and test("^i-[0-9a-f]{8,17}$"))
+  ' <<<"$instances_json" >/dev/null
   jq -cn \
     --arg expected_artifact_sha256 "$expected_artifact_sha256" \
     --argjson allow_missing_finality_keys "$allow_missing_finality_keys" \
-    --args "$@" '
+    --argjson instances "$instances_json" '
       [
-        $ARGS.positional[] |
+        $instances[] |
         {
           instance_id: .,
           expected_artifact_sha256: $expected_artifact_sha256,
           allow_missing_finality_keys: $allow_missing_finality_keys
+        }
+      ]
+    '
+}
+
+build_pre_rollout_finality_bindings() {
+  local updated_count="$1"
+  local target_artifact_sha256="$2"
+  local previous_artifact_sha256="$3"
+  shift 3
+  local instances_json
+  [[ "$updated_count" =~ ^[0-3]$ ]]
+  [[ "$target_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$previous_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+  test "$target_artifact_sha256" != "$previous_artifact_sha256"
+  instances_json="$(
+    printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1]'
+  )"
+  jq -e '
+    type == "array" and length == 3 and
+    (unique | length) == 3 and
+    all(.[]; type == "string" and test("^i-[0-9a-f]{8,17}$"))
+  ' <<<"$instances_json" >/dev/null
+  jq -cn \
+    --argjson updated_count "$updated_count" \
+    --arg target_artifact_sha256 "$target_artifact_sha256" \
+    --arg previous_artifact_sha256 "$previous_artifact_sha256" \
+    --argjson instances "$instances_json" '
+      [
+        range(0; ($instances | length)) as $index |
+        {
+          instance_id: $instances[$index],
+          expected_artifact_sha256:
+            (if $index < $updated_count then
+               $target_artifact_sha256
+             else
+               $previous_artifact_sha256
+             end),
+          allow_missing_finality_keys: ($index >= $updated_count)
         }
       ]
     '
@@ -1325,25 +1378,10 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   # prefix is bound strictly to the candidate artifact; only the remaining
   # legacy suffix may initialize all-absent false/0/0 keys.
   pre_rollout_finality_bindings="$(
-    jq -cn \
-      --argjson updated_count "$resume_updated_count" \
-      --arg target_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
-      --arg previous_artifact_sha256 "$previous_artifact_sha256" \
-      --args "${pre_rollout_instances[@]}" '
-        [
-          range(0; ($ARGS.positional | length)) as $index |
-          {
-            instance_id: $ARGS.positional[$index],
-            expected_artifact_sha256:
-              (if $index < $updated_count then
-                 $target_artifact_sha256
-               else
-                 $previous_artifact_sha256
-               end),
-            allow_missing_finality_keys: ($index >= $updated_count)
-          }
-        ]
-      '
+    build_pre_rollout_finality_bindings \
+      "$resume_updated_count" \
+      "$NODE_ARTIFACT_SHA256" "$previous_artifact_sha256" \
+      "${pre_rollout_instances[@]}"
   )"
   set_runtime_finality \
     0 0 "$pre_rollout_finality_bindings"
