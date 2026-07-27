@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.27";
-const revision = "R22";
+const revision = "R23";
 const chainSource = "f4fbc9fa39cbd8f1c4d57fea9bca86bb2afaf37d";
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 const governanceFooter = '<div><span>Governance</span><strong>JAIOS Institutional Governance</strong></div>';
@@ -17,6 +17,12 @@ const governanceLink = [
   '<img src="/junca-j-r21.svg" alt="" width="48" height="48"/>',
   '<span><small>Governance</small><strong>JAIOS Institutional Governance</strong>',
   '<em>Official institutional website →</em></span></a>',
+].join("");
+const explorerLink = [
+  '<a class="public-explorer-link" href="https://explorer.jaios-governance.org/"',
+  ' aria-label="Open the JUNCA Social Ecosystem Chain Public Explorer">',
+  '<span><small>Public Testnet</small><strong>Public Explorer</strong>',
+  '<em>Read finalized network data →</em></span></a>',
 ].join("");
 const governanceLinkStyle = [
   '<style id="jaios-institutional-link-style">',
@@ -32,6 +38,16 @@ const governanceLinkStyle = [
   'letter-spacing:.08em;font-size:.61rem;font-style:normal}',
   'footer .jaios-institutional-link strong{color:#fff}',
   'footer .jaios-institutional-link em{color:#c6a96b;font-size:.65rem;font-style:normal}',
+  'footer .public-explorer-link{display:flex;align-items:center;color:inherit;text-decoration:none;',
+  'border:1px solid rgba(220,228,235,.18);padding:.8rem .9rem;',
+  'transition:border-color .2s ease,background .2s ease}',
+  'footer .public-explorer-link:hover,footer .public-explorer-link:focus-visible{',
+  'border-color:#c6a96b;background:rgba(255,255,255,.05);outline:none}',
+  'footer .public-explorer-link span{display:flex;flex-direction:column;gap:.18rem}',
+  'footer .public-explorer-link small{color:#9dacba;text-transform:uppercase;',
+  'letter-spacing:.08em;font-size:.61rem;font-style:normal}',
+  'footer .public-explorer-link strong{color:#fff}',
+  'footer .public-explorer-link em{color:#c6a96b;font-size:.65rem;font-style:normal}',
   '</style>',
 ].join("");
 
@@ -48,8 +64,8 @@ for (const route of routes) {
     path,
     source
       .replace("</head>", `${governanceLinkStyle}</head>`)
-      .replace(governanceFooter, governanceLink)
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R22"),
+      .replace(governanceFooter, `${governanceLink}${explorerLink}`)
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.27 / R23"),
     "utf8",
   );
 }

@@ -29,6 +29,8 @@ for (const route of routes) {
     "Runtime Deployment in Progress",
     'href="https://jaios-governance.org/"',
     'class="jaios-institutional-link"',
+    'href="https://explorer.jaios-governance.org/"',
+    'class="public-explorer-link"',
     'src="/junca-j-r21.svg"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
@@ -54,7 +56,7 @@ for (const required of [
   "AWS Runtime",
   "Pending Live Acceptance",
   "Assets Moved",
-  "Revision · 2026.07.27 / R22",
+  "Revision · 2026.07.27 / R23",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
