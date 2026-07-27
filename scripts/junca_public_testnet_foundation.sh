@@ -60,7 +60,9 @@ wait_for_ssm_command() {
 set_runtime_finality() {
   local block_interval="$1"
   local slot_epoch="$2"
-  shift 2
+  local expected_artifact_sha256="$3"
+  local allow_missing_finality_keys="$4"
+  shift 4
   local instances=("$@")
   local finality_enabled
   local command
@@ -69,6 +71,15 @@ set_runtime_finality() {
   test "${#instances[@]}" -ge 1
   [[ "$block_interval" =~ ^(0|30)$ ]]
   [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]]
+  [[ "$expected_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+  case "$allow_missing_finality_keys" in
+    true)
+      test "$block_interval" = 0
+      test "$slot_epoch" = 0
+      ;;
+    false) ;;
+    *) return 2 ;;
+  esac
   if [[ "$slot_epoch" != "0" ]]; then
     test "$slot_epoch" -gt "$(date +%s)"
     test "$((slot_epoch % 30))" -eq 0
@@ -84,13 +95,38 @@ set_runtime_finality() {
 set -euo pipefail
 test -f /etc/junca/runtime.env
 test ! -L /etc/junca/runtime.env
-test "\$(grep -c '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env)" = 1
-test "\$(grep -c '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env)" = 1
-test "\$(grep -c '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env)" = 1
+test "\$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+grep -Fxq 'NODE_ARTIFACT_SHA256=${expected_artifact_sha256}' /etc/junca/runtime.env
+automatic_finality_count="\$(awk '/^AUTOMATIC_FINALITY_ENABLED=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+block_interval_count="\$(awk '/^TESTNET_BLOCK_INTERVAL_SECONDS=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+slot_epoch_count="\$(awk '/^TESTNET_SLOT_EPOCH_SECONDS=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+if [[ '${allow_missing_finality_keys}' == true ]]; then
+  test '${finality_enabled}' = false
+  test '${block_interval}' = 0
+  test '${slot_epoch}' = 0
+  if [[ "\$automatic_finality_count" == 0 &&
+        "\$block_interval_count" == 0 &&
+        "\$slot_epoch_count" == 0 ]]; then
+    printf '%s\n' \
+      'AUTOMATIC_FINALITY_ENABLED=false' \
+      'TESTNET_BLOCK_INTERVAL_SECONDS=0' \
+      'TESTNET_SLOT_EPOCH_SECONDS=0' >> /etc/junca/runtime.env
+  else
+    test "\$automatic_finality_count" = 1
+    test "\$block_interval_count" = 1
+    test "\$slot_epoch_count" = 1
+  fi
+else
+  test "\$automatic_finality_count" = 1
+  test "\$block_interval_count" = 1
+  test "\$slot_epoch_count" = 1
+fi
 sed -i -E 's/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=${finality_enabled}/' /etc/junca/runtime.env
 sed -i -E 's/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}/' /etc/junca/runtime.env
 sed -i -E 's/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}/' /etc/junca/runtime.env
 assert_runtime_finality() {
+  test "\$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)" = 1
+  grep -Fxq 'NODE_ARTIFACT_SHA256=${expected_artifact_sha256}' /etc/junca/runtime.env
   test "\$(grep -c '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env)" = 1
   test "\$(grep -c '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env)" = 1
   test "\$(grep -c '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env)" = 1
@@ -969,7 +1005,8 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   # Stop the automatic-finality loop on all three old-version validators
   # before the first replacement. The Terraform-canonical future epoch remains
   # bound to the release, but cannot execute while runtime versions are mixed.
-  set_runtime_finality 0 0 "${pre_rollout_instances[@]}"
+  set_runtime_finality \
+    0 0 "$previous_artifact_sha256" true "${pre_rollout_instances[@]}"
   for index in 0 1 2; do
     capture_validator_observation \
       "validator-0$((index + 1))" \
@@ -1241,7 +1278,8 @@ if [[ "$phase" == "foundation-apply" ]]; then
       # in the future, so no automatic-finality slot can execute during this
       # bounded transition.
       test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
-      set_runtime_finality 0 0 "$new_instance"
+      set_runtime_finality \
+        0 0 "$NODE_ARTIFACT_SHA256" false "$new_instance"
 
       if [[ "$public_services_enabled" == "true" ]]; then
         current_outputs="$(
@@ -1297,11 +1335,13 @@ if [[ "$phase" == "foundation-apply" ]]; then
     test "${#activated_instances[@]}" = 3
     test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
     set_runtime_finality \
-      0 "$validator_slot_epoch_seconds" "${activated_instances[@]}"
+      0 "$validator_slot_epoch_seconds" \
+      "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"
     write_rolling_compatibility_evidence READY_FOR_FINALITY_ENABLE
     test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
     set_runtime_finality \
-      30 "$validator_slot_epoch_seconds" "${activated_instances[@]}"
+      30 "$validator_slot_epoch_seconds" \
+      "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"
     write_rolling_compatibility_evidence ACCEPTED
   fi
 
