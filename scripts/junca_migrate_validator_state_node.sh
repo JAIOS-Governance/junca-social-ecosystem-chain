@@ -381,8 +381,13 @@ fi
 
 rollback() {
   local rollback_status="$1"
+  local rollback_line="${2:-unknown}"
+  local rollback_command="${3:-unknown}"
   trap - ERR EXIT INT TERM
   set +e
+  printf \
+    'JUNCA_MIGRATION_FAILURE phase=%q line=%q status=%q command=%q\n' \
+    "$phase" "$rollback_line" "$rollback_status" "$rollback_command" >&2
   if [[ "$root_path_moved" == true ]]; then
     systemctl stop junca-validator
     mountpoint -q "$state_path" && umount "$state_path"
@@ -403,7 +408,7 @@ rollback() {
   fi
   exit "$rollback_status"
 }
-trap 'rollback "$?"' ERR EXIT
+trap 'rollback "$?" "$LINENO" "$BASH_COMMAND"' ERR EXIT
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
