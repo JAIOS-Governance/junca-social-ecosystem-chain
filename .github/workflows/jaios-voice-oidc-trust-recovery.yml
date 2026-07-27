@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - .github/workflows/jaios-voice-oidc-trust-recovery.yml
+    paths: [.github/workflows/jaios-voice-oidc-trust-recovery.yml]
 
 permissions:
   id-token: write
@@ -27,17 +26,17 @@ jobs:
       RECOVERY_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
       RECOVERY_POLICY_NAME: PublicTestnetFoundationBootstrap
       TARGET_ROLE: JuncaVoiceDomainProductionDeployment
-      OIDC_PROVIDER_ARN: arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com
+      TARGET_POLICY_NAME: JAIOSVoiceRoute53Production
     steps:
       - name: Configure verified AWS recovery identity
         uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
           role-to-assume: ${{ env.RECOVERY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: jaios-voice-trust-recovery-${{ github.run_id }}
+          role-session-name: jaios-voice-role-bootstrap-${{ github.run_id }}
           disable-retry: true
 
-      - name: Verify recovery boundary
+      - name: Create or repair the missing Voice role through the logged working route
         shell: bash
         run: |
           set -euo pipefail
@@ -47,10 +46,6 @@ jobs:
             *) exit 1 ;;
           esac
 
-      - name: Repair Voice role through the logged working IAM route
-        shell: bash
-        run: |
-          set -euo pipefail
           aws iam get-role-policy \
             --role-name "$RECOVERY_ROLE_NAME" \
             --policy-name "$RECOVERY_POLICY_NAME" \
@@ -59,9 +54,9 @@ jobs:
             .Statement = (
               (if (.Statement | type) == "array" then .Statement else [.Statement] end) +
               [{
-                "Sid":"TemporaryJAIOSVoiceTrustRecovery",
+                "Sid":"TemporaryJAIOSVoiceRoleBootstrap",
                 "Effect":"Allow",
-                "Action":["iam:GetRole","iam:UpdateAssumeRolePolicy"],
+                "Action":["iam:CreateRole","iam:GetRole","iam:UpdateAssumeRolePolicy","iam:PutRolePolicy","iam:GetRolePolicy"],
                 "Resource":$target
               }]
             )
@@ -78,55 +73,80 @@ jobs:
             --policy-name "$RECOVERY_POLICY_NAME" \
             --policy-document file:///tmp/bootstrap-patched.json
 
-          aws iam get-role --role-name "$TARGET_ROLE" \
-            --query 'Role.AssumeRolePolicyDocument' --output json > /tmp/voice-trust-before.json
           cat > /tmp/voice-trust.json <<'JSON'
           {
-            "Version": "2012-10-17",
-            "Statement": [
+            "Version":"2012-10-17",
+            "Statement":[{
+              "Sid":"GitHubActionsVoiceProductionOIDC",
+              "Effect":"Allow",
+              "Principal":{"Federated":"arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"},
+              "Action":"sts:AssumeRoleWithWebIdentity",
+              "Condition":{
+                "StringEquals":{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com"},
+                "StringLike":{"token.actions.githubusercontent.com:sub":[
+                  "repo:juncaGlobal/junca-Project:ref:refs/heads/main",
+                  "repo:juncaGlobal/junca-Project:environment:voice-admin-production",
+                  "repo:juncaGlobal@298956223/junca-Project@1286881101:ref:refs/heads/main",
+                  "repo:juncaGlobal@298956223/junca-Project@1286881101:environment:voice-admin-production"
+                ]}
+              }
+            }]
+          }
+          JSON
+          cat > /tmp/voice-permissions.json <<'JSON'
+          {
+            "Version":"2012-10-17",
+            "Statement":[
               {
-                "Sid": "GitHubActionsVoiceProductionOIDC",
-                "Effect": "Allow",
-                "Principal": {
-                  "Federated": "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
-                },
-                "Action": "sts:AssumeRoleWithWebIdentity",
-                "Condition": {
-                  "StringEquals": {
-                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-                  },
-                  "StringLike": {
-                    "token.actions.githubusercontent.com:sub": [
-                      "repo:juncaGlobal/junca-Project:ref:refs/heads/main",
-                      "repo:juncaGlobal/junca-Project:environment:voice-admin-production",
-                      "repo:juncaGlobal@298956223/junca-Project@1286881101:ref:refs/heads/main",
-                      "repo:juncaGlobal@298956223/junca-Project@1286881101:environment:voice-admin-production"
-                    ]
-                  }
-                }
+                "Sid":"VoiceDomainHostedZone",
+                "Effect":"Allow",
+                "Action":["route53:GetHostedZone","route53:ListResourceRecordSets","route53:ChangeResourceRecordSets"],
+                "Resource":"arn:aws:route53:::hostedzone/Z0336017285464TX0NT1G"
+              },
+              {
+                "Sid":"VoiceDomainChangeReadback",
+                "Effect":"Allow",
+                "Action":"route53:GetChange",
+                "Resource":"arn:aws:route53:::change/*"
               }
             ]
           }
           JSON
-          aws iam update-assume-role-policy \
+
+          if aws iam get-role --role-name "$TARGET_ROLE" >/dev/null 2>&1; then
+            aws iam update-assume-role-policy \
+              --role-name "$TARGET_ROLE" \
+              --policy-document file:///tmp/voice-trust.json
+          else
+            aws iam create-role \
+              --role-name "$TARGET_ROLE" \
+              --description "JAIOS Voice production custom-domain Route 53 deployment" \
+              --max-session-duration 3600 \
+              --assume-role-policy-document file:///tmp/voice-trust.json >/dev/null
+          fi
+          aws iam put-role-policy \
             --role-name "$TARGET_ROLE" \
-            --policy-document file:///tmp/voice-trust.json
+            --policy-name "$TARGET_POLICY_NAME" \
+            --policy-document file:///tmp/voice-permissions.json
+
           aws iam get-role --role-name "$TARGET_ROLE" \
             --query 'Role.AssumeRolePolicyDocument' --output json > /tmp/voice-trust-readback.json
+          aws iam get-role-policy --role-name "$TARGET_ROLE" \
+            --policy-name "$TARGET_POLICY_NAME" \
+            --query PolicyDocument --output json > /tmp/voice-permissions-readback.json
           python3 - <<'PY'
           import json
           from pathlib import Path
-          policy = json.loads(Path('/tmp/voice-trust-readback.json').read_text())
-          statement = policy['Statement'][0]
-          assert statement['Sid'] == 'GitHubActionsVoiceProductionOIDC'
-          assert statement['Principal']['Federated'] == 'arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com'
-          assert statement['Action'] == 'sts:AssumeRoleWithWebIdentity'
-          assert statement['Condition']['StringEquals']['token.actions.githubusercontent.com:aud'] == 'sts.amazonaws.com'
-          subjects = set(statement['Condition']['StringLike']['token.actions.githubusercontent.com:sub'])
+          trust=json.loads(Path('/tmp/voice-trust-readback.json').read_text())['Statement'][0]
+          assert trust['Principal']['Federated']=='arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com'
+          assert trust['Action']=='sts:AssumeRoleWithWebIdentity'
+          assert trust['Condition']['StringEquals']['token.actions.githubusercontent.com:aud']=='sts.amazonaws.com'
+          subjects=set(trust['Condition']['StringLike']['token.actions.githubusercontent.com:sub'])
           assert 'repo:juncaGlobal/junca-Project:ref:refs/heads/main' in subjects
           assert 'repo:juncaGlobal/junca-Project:environment:voice-admin-production' in subjects
-          assert 'repo:juncaGlobal@298956223/junca-Project@1286881101:ref:refs/heads/main' in subjects
-          assert 'repo:juncaGlobal@298956223/junca-Project@1286881101:environment:voice-admin-production' in subjects
+          permissions=json.loads(Path('/tmp/voice-permissions-readback.json').read_text())
+          actions={a for s in permissions['Statement'] for a in ([s['Action']] if isinstance(s['Action'],str) else s['Action'])}
+          assert {'route53:GetHostedZone','route53:ListResourceRecordSets','route53:ChangeResourceRecordSets','route53:GetChange'} <= actions
           PY
 
           restore_policy
@@ -141,12 +161,10 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### JAIOS Voice OIDC Trust Recovery"
+            echo "### JAIOS Voice AWS Role Bootstrap"
             echo "- AWS Account: $AWS_ACCOUNT_ID"
-            echo "- Recovery Role: $RECOVERY_ROLE_ARN"
             echo "- Target Role: $TARGET_ROLE"
-            echo "- Named and immutable Voice subjects: installed"
-            echo "- Voice trust policy readback: PASS"
+            echo "- Voice trust and Route 53 policy readback: PASS"
             echo "- Recovery policy restored exactly: PASS"
             echo "- Route 53 changed: false"
           } >> "$GITHUB_STEP_SUMMARY"
