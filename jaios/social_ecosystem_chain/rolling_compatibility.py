@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
+COMMIT = re.compile(r"[0-9a-f]{40}")
 HASH = re.compile(r"0x[0-9a-f]{64}")
 VOLUME = re.compile(r"vol-[0-9a-f]{8,17}")
 SNAPSHOT = re.compile(r"snap-[0-9a-f]{8,17}")
@@ -21,10 +22,94 @@ CHAIN_ID = 20260723
 NETWORK_LABEL = "Public Testnet / No Monetary Value"
 MINIMUM_SLOT_EPOCH_REMAINING_SECONDS = 900
 MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS = 7230
+RECOVERY_FILE_ALLOWLIST = frozenset(
+    {
+        ".github/workflows/junca-validator-foundation-release.yml",
+        "jaios/social_ecosystem_chain/rolling_compatibility.py",
+        "scripts/junca_public_testnet_foundation.sh",
+        "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
+        "tests/test_junca_validator_rolling_compatibility.py",
+    }
+)
 
 
 class RollingCompatibilityError(ValueError):
     """Raised when a rollout observation cannot safely advance."""
+
+
+def evaluate_recovery_head_compare(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Prove a workflow-only recovery head is a narrowly changed descendant."""
+
+    expected_base = _text(evidence.get("expected_base"), "expected_base")
+    expected_head = _text(evidence.get("expected_head"), "expected_head")
+    if not COMMIT.fullmatch(expected_base) or not COMMIT.fullmatch(expected_head):
+        raise RollingCompatibilityError("expected compare heads are invalid")
+    comparison = evidence.get("comparison")
+    if not isinstance(comparison, Mapping):
+        raise RollingCompatibilityError("GitHub comparison evidence is required")
+    status = comparison.get("status")
+    if status not in ("ahead", "identical"):
+        raise RollingCompatibilityError(
+            "current workflow head must be ahead of or identical to candidate"
+        )
+    if comparison.get("base_commit", {}).get("sha") != expected_base:
+        raise RollingCompatibilityError("comparison base commit differs")
+    if comparison.get("merge_base_commit", {}).get("sha") != expected_base:
+        raise RollingCompatibilityError(
+            "candidate is not the exact merge base of current workflow head"
+        )
+    if comparison.get("head_commit", {}).get("sha") != expected_head:
+        raise RollingCompatibilityError("comparison head commit differs")
+    ahead_by = comparison.get("ahead_by")
+    behind_by = comparison.get("behind_by")
+    total_commits = comparison.get("total_commits")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in (ahead_by, behind_by, total_commits)
+    ):
+        raise RollingCompatibilityError("comparison commit counts are invalid")
+    if behind_by != 0 or total_commits != ahead_by:
+        raise RollingCompatibilityError(
+            "current workflow head is behind or diverged from candidate"
+        )
+    files = comparison.get("files")
+    if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
+        raise RollingCompatibilityError("comparison file list is required")
+    filenames = [item.get("filename") for item in files if isinstance(item, Mapping)]
+    if (
+        len(filenames) != len(files)
+        or len(set(filenames)) != len(filenames)
+        or any(name not in RECOVERY_FILE_ALLOWLIST for name in filenames)
+        or any(
+            item.get("status") != "modified"
+            or item.get("previous_filename") is not None
+            for item in files
+        )
+    ):
+        raise RollingCompatibilityError(
+            "cross-head recovery contains a file outside the recovery allowlist"
+        )
+    if status == "identical":
+        if ahead_by != 0 or filenames or expected_base != expected_head:
+            raise RollingCompatibilityError(
+                "identical recovery comparison contains unexpected changes"
+            )
+    elif ahead_by < 1 or not filenames or expected_base == expected_head:
+        raise RollingCompatibilityError(
+            "ahead recovery comparison must contain an allowlisted change"
+        )
+    return {
+        "schema_version": "junca-validator-recovery-head/v1",
+        "state": "RECOVERY_HEAD_ACCEPTED",
+        "candidate_head": expected_base,
+        "current_head": expected_head,
+        "changed_files": sorted(filenames),
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
 
 
 def evaluate_live_rollout_prefix(
@@ -53,6 +138,13 @@ def evaluate_live_rollout_prefix(
         or target_ami == previous_ami
     ):
         raise RollingCompatibilityError("target/previous AMI binding is invalid")
+    _, rollback_previous, rollback_ami, rollback_by_id = _rollback(
+        evidence.get("rollback"), target, target_ami
+    )
+    if rollback_previous != previous or rollback_ami != previous_ami:
+        raise RollingCompatibilityError(
+            "rollback runtime and AMI differ from previous binding"
+        )
     order = _three_unique(evidence.get("update_order"), "update_order")
     validators = _ordered_validators(evidence.get("validators"), order)
     baseline = _ordered_validators(
@@ -104,7 +196,13 @@ def evaluate_live_rollout_prefix(
             raise RollingCompatibilityError(
                 f"{validator_id} evidence instance id is invalid"
             )
-        _live_validator_health(current)
+        _validator_health(current, rollback_by_id[validator_id])
+        if current.get("volume_id") != rollback_by_id[validator_id].get(
+            "volume_id"
+        ):
+            raise RollingCompatibilityError(
+                f"{validator_id} rollback volume binding mismatch"
+            )
         heads.add(_head(current))
         runtime = current.get("runtime_version")
         if runtime not in (previous, target):
@@ -460,33 +558,6 @@ def _ordered_validators(
     return by_id[order[0]], by_id[order[1]], by_id[order[2]]
 
 
-def _live_validator_health(item: Mapping[str, Any]) -> None:
-    validator_id = item.get("validator_id")
-    for field in (
-        "ssm_online",
-        "service_active",
-        "durable_mount_verified",
-        "state_store_integrity",
-    ):
-        if item.get(field) is not True:
-            raise RollingCompatibilityError(
-                f"{validator_id}.{field} must be true"
-            )
-    if item.get("healthy") is not True or item.get("health_status") != "healthy":
-        raise RollingCompatibilityError(f"{validator_id} is not healthy")
-    if item.get("network") != NETWORK_LABEL or item.get("chain_id") != CHAIN_ID:
-        raise RollingCompatibilityError(
-            f"{validator_id} Public Testnet binding is invalid"
-        )
-    if item.get("durable_certificate_hash") != item.get("certificate_hash"):
-        raise RollingCompatibilityError(
-            f"{validator_id} live and durable certificate hashes differ"
-        )
-    for boundary in BOUNDARIES:
-        if item.get(boundary) is not False:
-            raise RollingCompatibilityError(f"{validator_id}.{boundary} drifted")
-
-
 def _head(
     item: Mapping[str, Any], *, prefix: str = ""
 ) -> tuple[int, str, str]:
@@ -564,18 +635,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument(
         "--mode",
-        choices=("compatibility", "live-prefix"),
+        choices=("compatibility", "live-prefix", "recovery-head"),
         default="compatibility",
     )
     args = parser.parse_args(argv)
     evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
     if not isinstance(evidence, Mapping):
         raise RollingCompatibilityError("evidence must be an object")
-    decision = (
-        evaluate_live_rollout_prefix(evidence)
-        if args.mode == "live-prefix"
-        else evaluate_rolling_compatibility(evidence)
-    )
+    if args.mode == "live-prefix":
+        decision = evaluate_live_rollout_prefix(evidence)
+    elif args.mode == "recovery-head":
+        decision = evaluate_recovery_head_compare(evidence)
+    else:
+        decision = evaluate_rolling_compatibility(evidence)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
