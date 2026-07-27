@@ -516,6 +516,72 @@ class EvidenceCollectorTests(unittest.TestCase):
         )
         self.assertTrue(decision["accepted"], decision["failures"])
 
+    def test_private_ssm_readback_recovers_a_public_endpoint_outage(self):
+        values = fixture()
+        values["endpoints"] = {
+            "status": "FAIL",
+            "scope": "Public Testnet Runtime Acceptance / Read-only",
+            "observed_at": "2026-07-27T20:21:32+00:00",
+            "endpoints": {
+                "health": "https://health.jaios-governance.org/health",
+                "explorer": (
+                    "https://explorer.jaios-governance.org/explorer.json"
+                ),
+                "rpc": "https://rpc.jaios-governance.org/",
+            },
+            "error": (
+                "https://health.jaios-governance.org/health: "
+                "endpoint unavailable"
+            ),
+        }
+        values["private_validator_health"] = private_health(values)
+        _, paths = self.collect(values)
+        manifest, runtime, ebs = (
+            json.loads(path.read_text(encoding="utf-8")) for path in paths
+        )
+        self.assertEqual(manifest["baseline_mode"], "private_ssm")
+        self.assertEqual(runtime["baseline_mode"], "private_ssm")
+        self.assertEqual(
+            runtime["readback"]["public_endpoint_outage"]["status"],
+            "FAIL",
+        )
+        self.assertEqual(
+            runtime["readback"]["public_endpoint_outage"]["error"],
+            values["endpoints"]["error"],
+        )
+        decision = gate.evaluate(
+            manifest,
+            runtime,
+            ebs,
+            explorer_evidence_sha256=collector.digest(paths[1]),
+            ebs_evidence_sha256=collector.digest(paths[2]),
+            expected_source_commit=COMMIT,
+            expected_artifact_sha256=NODE,
+            expected_genesis_sha256=GENESIS,
+        )
+        self.assertTrue(decision["accepted"], decision["failures"])
+
+    def test_public_endpoint_outage_requires_private_ssm_readback(self):
+        values = fixture()
+        values["endpoints"] = {
+            "status": "FAIL",
+            "scope": "Public Testnet Runtime Acceptance / Read-only",
+            "observed_at": "2026-07-27T20:21:32+00:00",
+            "endpoints": {
+                "health": "https://health.jaios-governance.org/health",
+                "explorer": (
+                    "https://explorer.jaios-governance.org/explorer.json"
+                ),
+                "rpc": "https://rpc.jaios-governance.org/",
+            },
+            "error": "health endpoint unavailable",
+        }
+        with self.assertRaisesRegex(
+            collector.EvidenceError,
+            "private_ssm:required_for_public_endpoint_outage",
+        ):
+            self.collect(values)
+
     def test_private_ssm_head_certificate_and_boundary_drift_fail_closed(self):
         values = fixture()
         values["public"]["public_services_acceptance_readback"]["value"][

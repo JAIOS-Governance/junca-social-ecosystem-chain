@@ -290,9 +290,20 @@ def main() -> int:
     except AcceptanceError as exc:
         print(
             json.dumps(
-                {"status": "FAIL", "error": str(exc)},
+                {
+                    "status": "FAIL",
+                    "scope": "Public Testnet Runtime Acceptance / Read-only",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "endpoints": {
+                        "health": HEALTH_URL,
+                        "explorer": EXPLORER_URL,
+                        "rpc": RPC_URL,
+                    },
+                    "error": str(exc),
+                },
                 ensure_ascii=False,
                 indent=None if args.compact else 2,
+                sort_keys=True,
             )
         )
         return 1
