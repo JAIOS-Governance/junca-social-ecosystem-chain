@@ -20,7 +20,7 @@ def evidence():
                 "ami_id": "ami-11111111111111111",
                 "healthy": True,
                 "health_status": "healthy",
-                "network": "Public Testnet",
+                "network": "Public Testnet / No Monetary Value",
                 "chain_id": 20260723,
                 "ssm_online": True,
                 "service_active": True,
@@ -44,7 +44,21 @@ def evidence():
                     "0x" + f"{offset:02x}" * 32 for offset in (1, 2, 3)
                 ],
                 "automatic_finality_enabled": False,
+                "block_interval_seconds": 0,
                 "slot_epoch_seconds": 0,
+                "finality_readback": {
+                    "runtime_env": {
+                        "automatic_finality_enabled": False,
+                        "block_interval_seconds": 0,
+                        "slot_epoch_seconds": 0,
+                    },
+                    "health": {
+                        "automatic_finality_enabled": False,
+                        "block_interval_seconds": 0,
+                        "slot_epoch_seconds": 0,
+                    },
+                    "health_supported": True,
+                },
                 "mainnet_changed": False,
                 "assets_moved": False,
                 "bridge_activated": False,
@@ -131,12 +145,31 @@ class RollingCompatibilityTests(unittest.TestCase):
         )
         for validator in value["validators"]:
             validator["slot_epoch_seconds"] = 2_000_000_000
+            validator["finality_readback"]["runtime_env"][
+                "slot_epoch_seconds"
+            ] = 2_000_000_000
+            validator["finality_readback"]["health"]["slot_epoch_seconds"] = (
+                2_000_000_000
+            )
         self.assertEqual(
             evaluate_rolling_compatibility(value)["state"],
             "READY_FOR_FINALITY_ENABLE",
         )
         for validator in value["validators"]:
             validator["automatic_finality_enabled"] = True
+            validator["block_interval_seconds"] = 30
+            validator["finality_readback"]["runtime_env"].update(
+                {
+                    "automatic_finality_enabled": True,
+                    "block_interval_seconds": 30,
+                }
+            )
+            validator["finality_readback"]["health"].update(
+                {
+                    "automatic_finality_enabled": True,
+                    "block_interval_seconds": 30,
+                }
+            )
         self.assertEqual(evaluate_rolling_compatibility(value)["state"], "ACCEPTED")
 
     def test_quorum_and_head_disagreement_fail_closed(self):
@@ -259,6 +292,12 @@ class RollingCompatibilityTests(unittest.TestCase):
             validator["runtime_version"] = "v2"
             validator["ami_id"] = "ami-22222222222222222"
         value["validators"][0]["slot_epoch_seconds"] = 2_000_000_000
+        value["validators"][0]["finality_readback"]["runtime_env"][
+            "slot_epoch_seconds"
+        ] = 2_000_000_000
+        value["validators"][0]["finality_readback"]["health"][
+            "slot_epoch_seconds"
+        ] = 2_000_000_000
         with self.assertRaisesRegex(RollingCompatibilityError, "slot epoch"):
             evaluate_rolling_compatibility(value)
         value = evidence()
@@ -267,6 +306,75 @@ class RollingCompatibilityTests(unittest.TestCase):
             validator["ami_id"] = "ami-22222222222222222"
         value["validators"][0]["automatic_finality_enabled"] = True
         with self.assertRaisesRegex(RollingCompatibilityError, "mixed"):
+            evaluate_rolling_compatibility(value)
+
+    def test_network_finality_interval_and_target_health_are_fail_closed(self):
+        value = evidence()
+        value["validators"][0]["network"] = "Public Testnet"
+        with self.assertRaisesRegex(RollingCompatibilityError, "binding"):
+            evaluate_rolling_compatibility(value)
+
+        value = evidence()
+        value["validators"][0]["chain_id"] = 1
+        with self.assertRaisesRegex(RollingCompatibilityError, "binding"):
+            evaluate_rolling_compatibility(value)
+
+        value = evidence()
+        value["validators"][0]["block_interval_seconds"] = 30
+        with self.assertRaisesRegex(RollingCompatibilityError, "block interval"):
+            evaluate_rolling_compatibility(value)
+
+    def test_legacy_finality_provenance_is_previous_runtime_only(self):
+        value = evidence()
+        value["validators"][0]["finality_readback"]["health"] = {
+            "automatic_finality_enabled": None,
+            "block_interval_seconds": None,
+            "slot_epoch_seconds": None,
+        }
+        value["validators"][0]["finality_readback"]["health_supported"] = False
+        self.assertEqual(
+            evaluate_rolling_compatibility(value)["state"],
+            "READY_FOR_NEXT_VALIDATOR",
+        )
+
+        value["validators"][0]["finality_readback"]["health"][
+            "block_interval_seconds"
+        ] = 0
+        with self.assertRaisesRegex(
+            RollingCompatibilityError, "legacy health provenance"
+        ):
+            evaluate_rolling_compatibility(value)
+
+        value = evidence()
+        value["validators"][0]["finality_readback"]["runtime_env"][
+            "slot_epoch_seconds"
+        ] = 30
+        with self.assertRaisesRegex(
+            RollingCompatibilityError, "runtime.env finality provenance"
+        ):
+            evaluate_rolling_compatibility(value)
+
+        value = evidence()
+        value["validators"][0]["runtime_version"] = "v2"
+        value["validators"][0]["ami_id"] = "ami-22222222222222222"
+        value["validators"][0]["finality_readback"]["health"] = {
+            "automatic_finality_enabled": None,
+            "block_interval_seconds": None,
+            "slot_epoch_seconds": None,
+        }
+        value["validators"][0]["finality_readback"]["health_supported"] = False
+        with self.assertRaisesRegex(
+            RollingCompatibilityError, "target runtime finality health"
+        ):
+            evaluate_rolling_compatibility(value)
+
+        value = evidence()
+        for validator in value["validators"]:
+            validator["runtime_version"] = "v2"
+            validator["ami_id"] = "ami-22222222222222222"
+            validator["slot_epoch_seconds"] = 2_000_000_000
+            validator["automatic_finality_enabled"] = True
+        with self.assertRaisesRegex(RollingCompatibilityError, "block interval"):
             evaluate_rolling_compatibility(value)
 
     def test_resume_epoch_expiry_tamper_and_safety_window_fail_closed(self):
