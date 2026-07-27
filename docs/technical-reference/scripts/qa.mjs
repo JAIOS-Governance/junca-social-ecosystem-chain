@@ -80,10 +80,8 @@ const css = cssName ? await readFile(join(dist, "assets", cssName), "utf8") : ""
 for (const font of ["Cormorant Garamond", "Source Serif 4", "Inter", "Shuei Mincho", "Shuei Kaku Gothic"]) {
   if (!css.includes(font)) failures.push(`font stack missing ${font}`);
 }
-for (const prohibitedWordmarkFallback of ["font-family:var(--wordmark)", "Optima LT Std"]) {
-  if (css.includes(prohibitedWordmarkFallback)) {
-    failures.push(`typed JUNCA wordmark fallback remains: ${prohibitedWordmarkFallback}`);
-  }
+if (!home.includes(".wordmark img{display:block;width:190px")) {
+  failures.push("canonical JUNCA wordmark display rule missing");
 }
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
 for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
