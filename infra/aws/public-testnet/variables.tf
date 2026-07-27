@@ -120,6 +120,64 @@ variable "validator_instance_type" {
   default = "m7i.large"
 }
 
+variable "enable_validator_state_volumes" {
+  description = "Provision and attach retained EBS volumes for /var/lib/junca. This does not format, copy, or mount them; migration is a separate acceptance-gated operation."
+  type        = bool
+  default     = false
+}
+
+variable "validator_state_volume_size_gib" {
+  description = "Size of each validator durable-state gp3 volume in GiB."
+  type        = number
+  default     = 200
+
+  validation {
+    condition     = var.validator_state_volume_size_gib >= 100
+    error_message = "Validator durable-state volumes must be at least 100 GiB."
+  }
+}
+
+variable "validator_state_volume_iops" {
+  description = "Provisioned IOPS for each validator durable-state gp3 volume."
+  type        = number
+  default     = 6000
+
+  validation {
+    condition     = var.validator_state_volume_iops >= 3000 && var.validator_state_volume_iops <= 16000
+    error_message = "validator_state_volume_iops must be within the gp3 range 3000..16000."
+  }
+}
+
+variable "validator_state_volume_throughput_mibps" {
+  description = "Provisioned throughput in MiB/s for each validator durable-state gp3 volume."
+  type        = number
+  default     = 250
+
+  validation {
+    condition     = var.validator_state_volume_throughput_mibps >= 125 && var.validator_state_volume_throughput_mibps <= 1000
+    error_message = "validator_state_volume_throughput_mibps must be within the gp3 range 125..1000."
+  }
+}
+
+variable "validator_state_snapshot_ids" {
+  description = "Optional exact-three EBS snapshot IDs used to restore validator state. Null creates empty volumes; empty or guessed IDs are rejected."
+  type        = list(string)
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.validator_state_snapshot_ids == null ? true : (
+        length(var.validator_state_snapshot_ids) == 3 &&
+        length(toset(var.validator_state_snapshot_ids)) == 3 &&
+        alltrue([
+          for snapshot_id in var.validator_state_snapshot_ids :
+          can(regex("^snap-[0-9a-f]{8,17}$", snapshot_id))
+        ])
+    )
+    error_message = "validator_state_snapshot_ids must be null or three distinct exact EBS snapshot IDs."
+  }
+}
+
 variable "rpc_instance_type" {
   type    = string
   default = "m7i.large"
