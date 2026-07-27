@@ -69,6 +69,8 @@ terraform -chdir="$runtime_dir" init -input=false -reconfigure \
   -backend-config="dynamodb_table=$LOCK_TABLE_NAME" \
   -backend-config="encrypt=true" \
   -backend-config="kms_key_id=$state_kms_key_id"
+terraform -chdir="$runtime_dir" version -json \
+  >"$artifact_dir/readback/terraform-version.json"
 terraform -chdir="$runtime_dir" output -json \
   >"$artifact_dir/readback/pre-migration-outputs.json"
 
@@ -203,6 +205,7 @@ case "$state_volume_count" in
     write_tfvars false null
     terraform -chdir="$runtime_dir" plan -input=false \
       -var-file="$artifact_dir/validator-state-migration.auto.tfvars.json" \
+      -target=aws_ebs_volume.validator_state \
       -out="$artifact_dir/validator-state-provision.tfplan"
     terraform -chdir="$runtime_dir" show -json \
       "$artifact_dir/validator-state-provision.tfplan" \
@@ -212,15 +215,14 @@ case "$state_volume_count" in
         .resource_changes[]?
         | select(.change.actions != ["no-op"] and .change.actions != ["read"])
       ] as $changes
-      | ($changes | length) <= 6 and
+      | ($changes | length) <= 3 and
         ($changes | map(.address) | unique | length) == ($changes | length) and
         all(
           $changes[];
           .change.actions == ["create"] and
           (
-            .address | test(
-              "^aws_(ebs_volume|volume_attachment)\\.validator_state\\[[0-2]\\]$"
-            )
+            .address |
+            test("^aws_ebs_volume\\.validator_state\\[[0-2]\\]$")
           )
         ) and
         all(
@@ -235,13 +237,6 @@ case "$state_volume_count" in
           .change.after.tags.StatePath == "/var/lib/junca" and
           .change.after.tags.MigrationRequired == "true" and
           .change.after.tags.PublicTestnetOnly == "true"
-        ) and
-        all(
-          $changes[]
-          | select(.address | startswith("aws_volume_attachment."));
-          .change.after.device_name == "/dev/sdf" and
-          .change.after.force_detach == false and
-          .change.after.stop_instance_before_detaching == true
         )
     ' "$artifact_dir/validator-state-provision-plan.json" >/dev/null
     terraform -chdir="$runtime_dir" apply -input=false -auto-approve \
@@ -269,6 +264,146 @@ test "${#volumes[@]}" = 3
 test "${#signer_arns[@]}" = 3
 test "$(printf '%s\n' "${instances[@]}" | sort -u | wc -l)" = 3
 test "$(printf '%s\n' "${volumes[@]}" | sort -u | wc -l)" = 3
+
+# The live validators may legitimately have user-data drift from newly merged
+# immutable-runtime source. Planning the attachment resources directly would
+# therefore also schedule validator replacement. Attach only the exact new
+# volumes, verify the AWS binding, and adopt that binding into the existing
+# Terraform state using the provider's canonical import identity.
+for validator_index in 0 1 2; do
+  instance_id="${instances[$validator_index]}"
+  volume_id="${volumes[$validator_index]}"
+  expected_az="$(
+    jq -er ".availability_zones.value[$validator_index]" "$outputs"
+  )"
+  attachment_address="aws_volume_attachment.validator_state[$validator_index]"
+  attachment_identity="/dev/sdf:${volume_id}:${instance_id}"
+  aws ec2 describe-instances --instance-ids "$instance_id" \
+    >"$artifact_dir/readback/attachment-${validator_index}-instance.json"
+  jq -e \
+    --arg instance_id "$instance_id" \
+    --arg expected_az "$expected_az" '
+    [.Reservations[].Instances[]] as $instances
+    | ($instances | length) == 1 and
+      $instances[0].InstanceId == $instance_id and
+      $instances[0].State.Name == "running" and
+      $instances[0].Placement.AvailabilityZone == $expected_az and
+      all(
+        $instances[0].BlockDeviceMappings[];
+        .DeviceName != "/dev/sdf"
+      )
+  ' "$artifact_dir/readback/attachment-${validator_index}-instance.json" \
+    >/dev/null
+  aws ec2 describe-volumes --volume-ids "$volume_id" \
+    >"$artifact_dir/readback/attachment-${validator_index}-before.json"
+  jq -e \
+    --arg volume_id "$volume_id" \
+    --arg expected_az "$expected_az" '
+    (.Volumes | length) == 1 and
+    .Volumes[0].VolumeId == $volume_id and
+    .Volumes[0].AvailabilityZone == $expected_az and
+    .Volumes[0].Encrypted == true and
+    .Volumes[0].VolumeType == "gp3" and
+    .Volumes[0].Size == 200 and
+    .Volumes[0].Iops == 6000 and
+    .Volumes[0].Throughput == 250 and
+    (
+      [.Volumes[0].Tags[]? | select(
+        .Key == "StatePath" and .Value == "/var/lib/junca"
+      )] | length
+    ) == 1 and
+    (
+      [.Volumes[0].Tags[]? | select(
+        .Key == "PublicTestnetOnly" and .Value == "true"
+      )] | length
+    ) == 1 and
+    (
+      [.Volumes[0].Tags[]? | select(
+        .Key == "MigrationRequired" and .Value == "true"
+      )] | length
+    ) == 1
+  ' "$artifact_dir/readback/attachment-${validator_index}-before.json" \
+    >/dev/null
+  attachment_count="$(
+    jq -er '.Volumes[0].Attachments | length' \
+      "$artifact_dir/readback/attachment-${validator_index}-before.json"
+  )"
+  case "$attachment_count" in
+    0)
+      aws ec2 attach-volume \
+        --volume-id "$volume_id" \
+        --instance-id "$instance_id" \
+        --device /dev/sdf \
+        >"$artifact_dir/readback/attachment-${validator_index}-request.json"
+      aws ec2 wait volume-in-use --volume-ids "$volume_id"
+      ;;
+    1)
+      jq -e \
+        --arg instance_id "$instance_id" '
+        .Volumes[0].Attachments[0].InstanceId == $instance_id and
+        .Volumes[0].Attachments[0].Device == "/dev/sdf" and
+        (
+          .Volumes[0].Attachments[0].State == "attaching" or
+          .Volumes[0].Attachments[0].State == "attached"
+        )
+      ' "$artifact_dir/readback/attachment-${validator_index}-before.json" \
+        >/dev/null
+      aws ec2 wait volume-in-use --volume-ids "$volume_id"
+      ;;
+    *)
+      echo "state volume has an unexpected attachment set: $volume_id" >&2
+      exit 1
+      ;;
+  esac
+  aws ec2 describe-volumes --volume-ids "$volume_id" \
+    >"$artifact_dir/readback/attachment-${validator_index}-after.json"
+  jq -e \
+    --arg instance_id "$instance_id" '
+    (.Volumes | length) == 1 and
+    (.Volumes[0].Attachments | length) == 1 and
+    .Volumes[0].Attachments[0].InstanceId == $instance_id and
+    .Volumes[0].Attachments[0].Device == "/dev/sdf" and
+    .Volumes[0].Attachments[0].State == "attached"
+  ' "$artifact_dir/readback/attachment-${validator_index}-after.json" \
+    >/dev/null
+  if ! terraform -chdir="$runtime_dir" state list |
+    grep -Fxq "$attachment_address"; then
+    terraform -chdir="$runtime_dir" import -input=false \
+      -lock-timeout=5m \
+      -var-file="$artifact_dir/validator-state-migration.auto.tfvars.json" \
+      "$attachment_address" "$attachment_identity"
+  fi
+  terraform -chdir="$runtime_dir" state show -no-color \
+    "$attachment_address" \
+    >"$artifact_dir/readback/attachment-${validator_index}-terraform-state.txt"
+  grep -Eq '^[[:space:]]*device_name[[:space:]]*=[[:space:]]*"/dev/sdf"$' \
+    "$artifact_dir/readback/attachment-${validator_index}-terraform-state.txt"
+  grep -Eq \
+    "^[[:space:]]*instance_id[[:space:]]*=[[:space:]]*\"${instance_id}\"$" \
+    "$artifact_dir/readback/attachment-${validator_index}-terraform-state.txt"
+  grep -Eq \
+    "^[[:space:]]*volume_id[[:space:]]*=[[:space:]]*\"${volume_id}\"$" \
+    "$artifact_dir/readback/attachment-${validator_index}-terraform-state.txt"
+  aws ec2 describe-instance-status \
+    --include-all-instances \
+    --instance-ids "${instances[@]}" \
+    >"$artifact_dir/readback/attachment-${validator_index}-instance-status.json"
+  jq -e \
+    --argjson instance_ids \
+      "$(printf '%s\n' "${instances[@]}" | jq -Rsc 'split("\n")[:-1]')" '
+    (.InstanceStatuses | length) == 3 and
+    ([.InstanceStatuses[].InstanceId] | sort) == ($instance_ids | sort) and
+    all(
+      .InstanceStatuses[];
+      .InstanceState.Name == "running" and
+      .InstanceStatus.Status == "ok" and
+      .SystemStatus.Status == "ok"
+    )
+  ' "$artifact_dir/readback/attachment-${validator_index}-instance-status.json" \
+    >/dev/null
+done
+terraform -chdir="$runtime_dir" output -json >"$outputs"
+
 health_bindings="$(
   jq -n \
     --arg instance_0 "${instances[0]}" \
@@ -350,6 +485,7 @@ if [[ "$already_accepted" == false && "$existing_migration_tag_count" == 0 ]]; t
   write_tfvars false null
   terraform -chdir="$runtime_dir" plan -input=false \
     -var-file="$artifact_dir/validator-state-migration.auto.tfvars.json" \
+    -target=aws_ebs_volume.validator_state \
     -out="$artifact_dir/validator-state-preflight.tfplan"
   terraform -chdir="$runtime_dir" show -json \
     "$artifact_dir/validator-state-preflight.tfplan" \
@@ -932,6 +1068,7 @@ outputs="$artifact_dir/readback/pre-migration-outputs.json"
 write_tfvars true "$rollback_json"
 terraform -chdir="$runtime_dir" plan -input=false \
   -var-file="$artifact_dir/validator-state-migration.auto.tfvars.json" \
+  -target=aws_ebs_volume.validator_state \
   -out="$artifact_dir/validator-state-acceptance.tfplan"
 terraform -chdir="$runtime_dir" show -json \
   "$artifact_dir/validator-state-acceptance.tfplan" \
