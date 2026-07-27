@@ -283,9 +283,11 @@ class AwsFoundationTests(unittest.TestCase):
             "public-testnet/terraform.tfstate",
             "foundation.tfplan",
             'select(index("delete"))',
-            "enable_public_services: false",
+            "enable_public_services: $enable_public_services",
+            "public_services_acceptance_readback.value.enabled",
+            "public-services stage while rotating validator",
             "quorum_verified: false",
-            "public_services_enabled: false",
+            "public_services_enabled: $public_services_enabled",
             "terraform -chdir=infra/aws/public-testnet apply",
         ):
             self.assertIn(required, self.foundation_script)
