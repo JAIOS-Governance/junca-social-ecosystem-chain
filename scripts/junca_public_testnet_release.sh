@@ -92,7 +92,7 @@ jq -e '
         (.address | test("^aws_wafv2_web_acl_association\\.public\\[0\\]$")) or
         (.address | test("^aws_lb_listener\\.https\\[0\\]$")) or
         (.address | test("^aws_lb_listener_certificate\\.scan\\[0\\]$")) or
-        (.address | test("^aws_lb_listener_rule\\.(rpc|explorer)\\[0\\]$")) or
+        (.address | test("^aws_lb_listener_rule\\.(rpc|explorer|scan_redirect)\\[0\\]$")) or
         (.address | test("^aws_route53_record\\.public\\[")) or
         (.address | test("^aws_acm_certificate\\.scan$")) or
         (.address | test("^aws_route53_record\\.scan_certificate_validation\\[")) or
