@@ -72,7 +72,7 @@ for (const route of routes) {
   await writeFile(
     path,
     source
-      .replace("</head>", `${governanceLinkStyle}</head>`)
+      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs">${governanceLinkStyle}</head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
       .replaceAll("junca-j-r21.svg", "icon-192.png")
