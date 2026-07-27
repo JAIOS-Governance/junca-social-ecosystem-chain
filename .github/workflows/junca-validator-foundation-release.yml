@@ -13,7 +13,7 @@ on:
       ami_run_id:
         description: "Verified immutable AMI workflow run ID"
         required: false
-        default: "30235669265"
+        default: "30242215399"
 
 permissions:
   actions: read
@@ -41,7 +41,8 @@ jobs:
       DOMAIN_NAME: jaios-governance.org
       ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
       AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
-      AMI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ami_run_id || '30235669265' }}
+      # Verified AMI containing the finalized-only Explorer v1 gateway.
+      AMI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ami_run_id || '30242215399' }}
     steps:
       - uses: actions/checkout@v4
         with:
