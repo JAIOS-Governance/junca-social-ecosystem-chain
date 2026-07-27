@@ -1,0 +1,90 @@
+name: JUNCA Runtime Release Manifest Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_run_id:
+        description: Exact successful run containing candidate release evidence
+        required: true
+        type: string
+      evidence_artifact_name:
+        description: Artifact containing manifest, Explorer v2 and EBS evidence
+        required: true
+        type: string
+      node_artifact_sha256:
+        description: Expected immutable runtime artifact SHA-256
+        required: true
+        type: string
+      genesis_sha256:
+        description: Expected canonical genesis SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: junca-runtime-release-manifest-gate
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download exact candidate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence artifacts
+          [[ "$EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          gh run download "$EVIDENCE_RUN_ID" \
+            --repo "${{ github.repository }}" \
+            --name "$EVIDENCE_ARTIFACT_NAME" \
+            --dir evidence
+          test "$(find evidence -type f | wc -l)" = 3
+          test -f evidence/junca-runtime-release-manifest.json
+          test -f evidence/junca-public-explorer-acceptance-v2.json
+          test -f evidence/junca-validator-ebs-migration.json
+
+      - name: Fail-closed release manifest decision
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          NODE_ARTIFACT_SHA256: ${{ inputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$NODE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          python scripts/junca_runtime_release_manifest_gate.py \
+            --manifest evidence/junca-runtime-release-manifest.json \
+            --explorer-acceptance evidence/junca-public-explorer-acceptance-v2.json \
+            --ebs-migration evidence/junca-validator-ebs-migration.json \
+            --expected-source-commit "$SOURCE_COMMIT" \
+            --expected-artifact-sha256 "$NODE_ARTIFACT_SHA256" \
+            --expected-genesis-sha256 "$GENESIS_SHA256" \
+            --output artifacts/junca-runtime-release-manifest-decision.json
+          jq -e '
+            .accepted == true and
+            .decision == "PROMOTION_GATE_PASS" and
+            .release_boundary.mainnet_changed == false and
+            .release_boundary.assets_moved == false and
+            .release_boundary.bridge_activated == false
+          ' artifacts/junca-runtime-release-manifest-decision.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-runtime-release-manifest-gate-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
