@@ -176,8 +176,8 @@ if [[ "$phase" == prepare ]]; then
 fi
 
 rollback() {
-  status=$?
-  trap - ERR EXIT
+  local rollback_status="$1"
+  trap - ERR EXIT INT TERM
   set +e
   if [[ "$root_path_moved" == true ]]; then
     systemctl stop junca-validator
@@ -197,9 +197,11 @@ rollback() {
   if [[ "$service_stopped" == true ]]; then
     systemctl start junca-validator
   fi
-  exit "$status"
+  exit "$rollback_status"
 }
-trap rollback ERR EXIT INT TERM
+trap 'rollback "$?"' ERR EXIT
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 for attempt in $(seq 1 120); do
   [[ -b "$device" ]] && break
@@ -258,7 +260,7 @@ if mountpoint -q "$state_path"; then
     "$(certificate_hash "$after_health")" \
     "$(head_field "$after_health" head_height)" \
     "$(head_field "$after_health" head_hash)"
-  trap - ERR EXIT
+  trap - ERR EXIT INT TERM
   exit 0
 fi
 
@@ -275,28 +277,44 @@ sync
 verify_sqlite "$state_path/state.sqlite"
 
 filesystem="$(blkid -o value -s TYPE "$device" 2>/dev/null || true)"
-if [[ -n "$filesystem" ]]; then
-  echo "validator state device is not empty/unformatted; refusing mkfs" >&2
-  exit 1
-fi
 test "$(lsblk -nrpo NAME "$device" | wc -l)" = 1
 test -z "$(findmnt -rn -S "$resolved_device" -o TARGET)"
-test -z "$(
-  wipefs -n -o TYPE "$device" 2>/dev/null |
-    tail -n +2 |
-    tr -d '[:space:]'
-)"
-mkfs.ext4 -m 0 -L JUNCA_VALIDATOR_STATE "$device"
+if [[ -z "$filesystem" ]]; then
+  test -z "$(
+    wipefs -n -o TYPE "$device" 2>/dev/null |
+      tail -n +2 |
+      tr -d '[:space:]'
+  )"
+  # Only an empty/unformatted exact device may reach mkfs.
+  mkfs.ext4 -m 0 -L JUNCA_VALIDATOR_STATE "$device"
+else
+  test "$filesystem" = ext4
+  test "$(blkid -o value -s LABEL "$device")" = JUNCA_VALIDATOR_STATE
+fi
 install -d -m 0750 "$temporary_mount"
 mount -o noatime,nosuid,nodev "$device" "$temporary_mount"
 test "$(findmnt -n -o SOURCE --target "$temporary_mount")" = "$resolved_device"
-test -z "$(find "$temporary_mount" -mindepth 1 -maxdepth 1 -print -quit)"
+if [[ -d "$temporary_mount/lost+found" ]]; then
+  test ! -L "$temporary_mount/lost+found"
+  test -z "$(
+    find "$temporary_mount/lost+found" -mindepth 1 -print -quit
+  )"
+  rmdir "$temporary_mount/lost+found"
+fi
 
 # Amazon Linux 2023 provides coreutils and Python in the immutable AMI.  cp -a
 # preserves ownership, modes, symlinks, ACL/xattr metadata, and timestamps
 # without downloading migration-time packages.
-cp -a --preserve=all "$state_path/." "$temporary_mount/"
-sync
+if [[ -f "$temporary_mount/state.sqlite" ]]; then
+  test ! -L "$temporary_mount/state.sqlite"
+  verify_sqlite "$temporary_mount/state.sqlite"
+else
+  test -z "$(
+    find "$temporary_mount" -mindepth 1 -maxdepth 1 -print -quit
+  )"
+  cp -a --preserve=all "$state_path/." "$temporary_mount/"
+  sync
+fi
 test -f "$temporary_mount/state.sqlite"
 test ! -L "$temporary_mount/state.sqlite"
 verify_sqlite "$temporary_mount/state.sqlite"
@@ -379,4 +397,4 @@ printf '{"state":"VERIFIED_PASS","volume_id":"%s","device":"%s","state_sha256":"
   "$copy_manifest_sha256" "$after_certificate" "$before_height" \
   "$(head_field "$before_health" head_hash)" "$after_height" \
   "$(head_field "$after_health" head_hash)" "$rollback_path"
-trap - ERR EXIT
+trap - ERR EXIT INT TERM
