@@ -51,6 +51,31 @@ terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
   -backend-config="encrypt=true" \
   -backend-config="kms_key_id=$state_kms_key_arn"
 
+# Preserve an already-published public-services stage while rotating validator
+# AMIs. Reverting this flag to false would plan destruction of the ALB, WAF,
+# listeners, target groups and public DNS before replacement acceptance.
+terraform -chdir=infra/aws/public-testnet output -json \
+  > artifacts/pre-foundation-outputs.json
+public_services_enabled="$(
+  jq -er '.public_services_acceptance_readback.value.enabled // false' \
+    artifacts/pre-foundation-outputs.json
+)"
+if [[ "$public_services_enabled" == "true" ]]; then
+  quorum_acceptance_sha256="$(
+    jq -er '.public_services_acceptance_readback.value.quorum_evidence_sha256' \
+      artifacts/pre-foundation-outputs.json
+  )"
+  runtime_acceptance_sha256="$(
+    jq -er '.public_services_acceptance_readback.value.runtime_evidence_sha256' \
+      artifacts/pre-foundation-outputs.json
+  )"
+  [[ "$quorum_acceptance_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$runtime_acceptance_sha256" =~ ^[0-9a-f]{64}$ ]]
+else
+  quorum_acceptance_sha256=""
+  runtime_acceptance_sha256=""
+fi
+
 jq -n \
   --arg aws_account_id "$AWS_ACCOUNT_ID" \
   --arg aws_region "$AWS_REGION" \
@@ -61,8 +86,11 @@ jq -n \
   --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
   --arg genesis_sha256 "$GENESIS_SHA256" \
   --arg source_commit "$SOURCE_COMMIT" \
+  --arg quorum_acceptance_sha256 "$quorum_acceptance_sha256" \
+  --arg runtime_acceptance_sha256 "$runtime_acceptance_sha256" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
   --argjson validator_signer_arns "$signer_arns" \
+  --argjson enable_public_services "$public_services_enabled" \
   '{
     aws_account_id: $aws_account_id,
     aws_region: $aws_region,
@@ -75,9 +103,13 @@ jq -n \
     node_artifact_sha256: $node_artifact_sha256,
     genesis_sha256: $genesis_sha256,
     source_commit: $source_commit,
-    enable_public_services: false,
-    quorum_acceptance_sha256: null,
-    runtime_acceptance_sha256: null
+    enable_public_services: $enable_public_services,
+    quorum_acceptance_sha256: (
+      if $enable_public_services then $quorum_acceptance_sha256 else null end
+    ),
+    runtime_acceptance_sha256: (
+      if $enable_public_services then $runtime_acceptance_sha256 else null end
+    )
   }' > artifacts/foundation.auto.tfvars.json
 
 terraform -chdir=infra/aws/public-testnet plan -input=false \
@@ -88,7 +120,7 @@ terraform -chdir=infra/aws/public-testnet show -json \
 
 # Destructive changes remain fail-closed. The only permitted delete action is
 # an AMI-driven replacement of one or more of the three canonical validators.
-jq -e '
+jq -e --argjson public_services_enabled "$public_services_enabled" '
   [
     .resource_changes[]?
     | select(.change.actions | index("delete"))
@@ -100,18 +132,54 @@ jq -e '
   ] as $deletions
   | ($deletions | length) == 0 or
     (
-      ($deletions | length) >= 1 and
-      ($deletions | length) <= 3 and
-      ([ $deletions[].address ] | unique | length) == ($deletions | length) and
-      all(
-        $deletions[];
-        (.address == "aws_instance.validator[0]" or
-         .address == "aws_instance.validator[1]" or
-         .address == "aws_instance.validator[2]") and
-        (.actions | index("create")) != null and
-        (.actions | index("delete")) != null and
-        (.replace_paths | any(.[]; . == ["ami"]))
-      )
+      [
+        $deletions[]
+        | select(.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
+      ] as $validators
+      | [
+          $validators[].address
+          | capture("^aws_instance\\.validator\\[(?<index>[0-2])\\]$").index
+        ] as $indices
+      | [
+          $indices[] as $index
+          | "aws_lb_target_group_attachment.rpc[\($index)]",
+            "aws_lb_target_group_attachment.explorer[\($index)]"
+        ] as $expected_attachments
+      | [
+          $deletions[]
+          | select(.address | test(
+              "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
+            ))
+        ] as $attachments
+      | ($validators | length) >= 1 and
+        ($validators | length) <= 3 and
+        ([ $deletions[].address ] | unique | length) == ($deletions | length) and
+        (
+          if $public_services_enabled then
+            ([ $attachments[].address ] | sort) == ($expected_attachments | sort) and
+            ($deletions | length) == (($validators | length) * 3)
+          else
+            ($attachments | length) == 0 and
+            ($deletions | length) == ($validators | length)
+          end
+        ) and
+        all(
+          $deletions[];
+          (.actions | index("create")) != null and
+          (.actions | index("delete")) != null and
+          (
+            (
+              (.address | test("^aws_instance\\.validator\\[[0-2]\\]$")) and
+              (.replace_paths | any(.[]; . == ["ami"]))
+            ) or
+            (
+              (.address | test(
+                "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
+              )) and
+              (.replace_paths | any(.[]; . == ["target_id"]))
+            )
+          )
+        )
     )
 ' artifacts/foundation-plan.json >/dev/null
 
@@ -134,28 +202,56 @@ if [[ "$phase" == "foundation-apply" ]]; then
       index="${index%]}"
       target_plan="$GITHUB_WORKSPACE/artifacts/foundation-validator-${index}.tfplan"
       target_json="artifacts/foundation-validator-${index}-plan.json"
+      target_args=(-target="$address")
+      expected_addresses=("$address")
+      if [[ "$public_services_enabled" == "true" ]]; then
+        rpc_attachment="aws_lb_target_group_attachment.rpc[${index}]"
+        explorer_attachment="aws_lb_target_group_attachment.explorer[${index}]"
+        target_args+=(
+          -target="$rpc_attachment"
+          -target="$explorer_attachment"
+        )
+        expected_addresses+=("$rpc_attachment" "$explorer_attachment")
+      fi
+      expected_addresses_json="$(
+        printf '%s\n' "${expected_addresses[@]}" | jq -Rsc 'split("\n")[:-1]'
+      )"
 
       terraform -chdir=infra/aws/public-testnet plan -input=false \
         -var-file="$GITHUB_WORKSPACE/artifacts/foundation.auto.tfvars.json" \
-        -target="$address" \
+        "${target_args[@]}" \
         -out="$target_plan"
       terraform -chdir=infra/aws/public-testnet show -json "$target_plan" \
         > "$target_json"
-      jq -e --arg address "$address" '
+      jq -e \
+        --arg address "$address" \
+        --argjson expected_addresses "$expected_addresses_json" '
         [
           .resource_changes[]?
           | select(.change.actions | index("delete"))
           | {
               address,
               actions: .change.actions,
-              replace_paths: (.change.replace_paths // [])
-            }
+            replace_paths: (.change.replace_paths // [])
+          }
         ] as $deletions
-        | ($deletions | length) == 1 and
-          $deletions[0].address == $address and
-          ($deletions[0].actions | index("create")) != null and
-          ($deletions[0].actions | index("delete")) != null and
-          ($deletions[0].replace_paths | any(.[]; . == ["ami"]))
+        | ($deletions | length) == ($expected_addresses | length) and
+          ([ $deletions[].address ] | sort) == ($expected_addresses | sort) and
+          all(
+            $deletions[];
+            (.actions | index("create")) != null and
+            (.actions | index("delete")) != null and
+            (
+              (
+                .address == $address and
+                (.replace_paths | any(.[]; . == ["ami"]))
+              ) or
+              (
+                .address != $address and
+                (.replace_paths | any(.[]; . == ["target_id"]))
+              )
+            )
+          )
       ' "$target_json" >/dev/null
 
       terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
@@ -171,6 +267,20 @@ if [[ "$phase" == "foundation-apply" ]]; then
         test "$attempt" -lt 60
         sleep 10
       done
+
+      if [[ "$public_services_enabled" == "true" ]]; then
+        current_outputs="$(
+          terraform -chdir=infra/aws/public-testnet output -json
+        )"
+        for target_group in \
+          "$(jq -er '.public_target_group_arns.value.rpc' <<<"$current_outputs")" \
+          "$(jq -er '.public_target_group_arns.value.explorer' <<<"$current_outputs")"
+        do
+          aws elbv2 wait target-in-service \
+            --target-group-arn "$target_group" \
+            --targets "Id=${new_instance}"
+        done
+      fi
     done
 
     # Reconcile non-destructive dependants (for example CloudWatch alarm
@@ -192,12 +302,22 @@ if [[ "$phase" == "foundation-apply" ]]; then
 
   apply_executed=true
   terraform -chdir=infra/aws/public-testnet output -json > artifacts/foundation-outputs.json
-  jq -e '
+  jq -e --argjson public_services_enabled "$public_services_enabled" '
     (.validator_instance_ids.value | length) == 3 and
-    .deployment_stage.value == "validators-only" and
-    .public_rpc_url.value == null and
-    .explorer_url.value == null and
-    .health_url.value == null and
+    .deployment_stage.value == (
+      if $public_services_enabled then "public-services" else "validators-only" end
+    ) and
+    (
+      if $public_services_enabled then
+        .public_rpc_url.value == "https://rpc.jaios-governance.org" and
+        .explorer_url.value == "https://explorer.jaios-governance.org" and
+        .health_url.value == "https://health.jaios-governance.org"
+      else
+        .public_rpc_url.value == null and
+        .explorer_url.value == null and
+        .health_url.value == null
+      end
+    ) and
     .runtime_boundary.value.governance == "JAIOS Institutional Governance" and
     .runtime_boundary.value.mainnet_changed == false and
     .runtime_boundary.value.assets_moved == false and
@@ -213,6 +333,7 @@ jq -n \
   --arg source_commit "$SOURCE_COMMIT" \
   --arg node_ami_id "$NODE_AMI_ID" \
   --argjson apply_executed "$apply_executed" \
+  --argjson public_services_enabled "$public_services_enabled" \
   '{
     schema_version: "1.0",
     chain_name: "JUNCA Social Ecosystem Chain",
@@ -224,10 +345,12 @@ jq -n \
     deployment_role_arn: $role_arn,
     source_commit: $source_commit,
     node_ami_id: $node_ami_id,
-    deployment_stage: "validators-only",
+    deployment_stage: (
+      if $public_services_enabled then "public-services" else "validators-only" end
+    ),
     apply_executed: $apply_executed,
     quorum_verified: false,
-    public_services_enabled: false,
+    public_services_enabled: $public_services_enabled,
     mainnet_changed: false,
     assets_moved: false,
     bridge_activated: false
