@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import html
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +10,8 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+
+from .explorer_page import EXPLORER_DOCUMENT
 
 
 NOTICE = "Public Testnet / No Monetary Value"
@@ -211,28 +212,8 @@ class PublicGateway:
         return (200 if finalized else 503), body
 
     def explorer_html(self) -> tuple[int, str]:
-        status, evidence = self.explorer()
-        head = evidence.get("head")
-        if isinstance(head, Mapping):
-            detail = (
-                f"<dl><dt>Finalized height</dt><dd>{html.escape(str(head['height']))}</dd>"
-                f"<dt>Finalized hash</dt><dd><code>{html.escape(str(head['hash']))}</code></dd>"
-                f"<dt>Certificate</dt><dd><code>{html.escape(str(head['certificate_hash']))}</code></dd>"
-                f"<dt>Quorum</dt><dd>{html.escape(str(head['signed_power']))}/"
-                f"{html.escape(str(head['total_power']))}</dd></dl>"
-            )
-        else:
-            detail = "<p>Finalized chain data is synchronizing.</p>"
-        document = (
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            "<title>JUNCA Public Testnet Explorer</title></head><body>"
-            "<main><h1>JUNCA Social Ecosystem Chain</h1>"
-            f"<p>{html.escape(NOTICE)}</p>{detail}"
-            "<p>Finalized blocks only. Mainnet and asset movement are not active.</p>"
-            "</main></body></html>"
-        )
-        return status, document
+        status, _evidence = self.explorer()
+        return status, EXPLORER_DOCUMENT
 
     def _validator_health(self) -> Mapping[str, Any]:
         response = self._transport(
