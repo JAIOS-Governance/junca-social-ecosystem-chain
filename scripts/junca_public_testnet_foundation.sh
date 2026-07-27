@@ -76,6 +76,121 @@ else
   runtime_acceptance_sha256=""
 fi
 
+# Preserve an already-provisioned durable-state layer. Omitting these values
+# after the opt-in migration would ask Terraform to remove the attachments and
+# volumes on the next immutable AMI rollout.
+validator_state_readback="$(
+  jq -ce '.validator_state_volume_readback.value // []' \
+    artifacts/pre-foundation-outputs.json
+)"
+validator_state_count="$(jq -r 'length' <<<"$validator_state_readback")"
+case "$validator_state_count" in
+  0)
+    validator_state_enabled=false
+    validator_state_size_gib=200
+    validator_state_iops=6000
+    validator_state_throughput_mibps=250
+    validator_state_snapshot_ids=null
+    ;;
+  3)
+    jq -e '
+      (map(.validator_id) | sort) ==
+        ["validator-01", "validator-02", "validator-03"] and
+      all(.encrypted == true) and
+      all(.type == "gp3") and
+      all(.migration_required == true) and
+      all(.state_path == "/var/lib/junca") and
+      (map(.volume_id) | unique | length) == 3 and
+      all(.volume_id | test("^vol-[0-9a-f]{8,17}$")) and
+      (map(.availability_zone) | unique | length) == 3 and
+      (map(.size_gib) | unique | length) == 1 and
+      (map(.iops) | unique | length) == 1 and
+      (map(.throughput_mibps) | unique | length) == 1
+    ' <<<"$validator_state_readback" >/dev/null
+    validator_state_enabled=true
+    validator_state_size_gib="$(
+      jq -er '.[0].size_gib' <<<"$validator_state_readback"
+    )"
+    validator_state_iops="$(
+      jq -er '.[0].iops' <<<"$validator_state_readback"
+    )"
+    validator_state_throughput_mibps="$(
+      jq -er '.[0].throughput_mibps' <<<"$validator_state_readback"
+    )"
+    validator_state_snapshot_ids="$(
+      jq -ce '
+        map(.restored_snapshot) as $snapshots
+        | if all($snapshots[]; . == null) then
+            null
+          else
+            $snapshots
+            | select(
+                length == 3 and
+                (unique | length) == 3 and
+                all(.[]; type == "string" and test("^snap-[0-9a-f]{8,17}$"))
+              )
+          end
+      ' <<<"$validator_state_readback"
+    )"
+    ;;
+  *)
+    echo "durable validator state must contain exactly zero or three volumes" >&2
+    exit 1
+    ;;
+esac
+
+# Preserve the exact Terraform-canonical automatic finality epoch after its
+# first successful apply. A later AMI rollout must not create a second slot
+# schedule or silently disable the running schedule.
+existing_finality="$(
+  jq -ce '
+    .automatic_finality_readback.value //
+      {enabled: false, block_interval_seconds: 0, slot_epoch_seconds: 0}
+  ' artifacts/pre-foundation-outputs.json
+)"
+if [[ "$(jq -r .enabled <<<"$existing_finality")" == "true" ]]; then
+  automatic_finality_enabled=true
+  validator_block_interval_seconds="$(
+    jq -er '.block_interval_seconds | select(. == 30)' <<<"$existing_finality"
+  )"
+  validator_slot_epoch_seconds="$(
+    jq -er '
+      .slot_epoch_seconds
+      | select(
+          type == "number" and . > 0 and
+          floor == . and . % 30 == 0
+        )
+    ' <<<"$existing_finality"
+  )"
+else
+  automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-false}"
+  validator_block_interval_seconds="${VALIDATOR_BLOCK_INTERVAL_SECONDS:-30}"
+  validator_slot_epoch_seconds="${VALIDATOR_SLOT_EPOCH_SECONDS:-0}"
+  case "$automatic_finality_enabled" in
+    true)
+      [[ "$validator_block_interval_seconds" =~ ^[0-9]+$ ]]
+      [[ "$validator_slot_epoch_seconds" =~ ^[0-9]+$ ]]
+      test "$validator_block_interval_seconds" -eq 30
+      test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
+      test "$((validator_slot_epoch_seconds % 30))" -eq 0
+      ;;
+    false)
+      validator_block_interval_seconds=30
+      validator_slot_epoch_seconds=0
+      ;;
+    *)
+      echo "AUTOMATIC_FINALITY_ENABLED must be true or false" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+if [[ "$phase" == "foundation-apply" &&
+      "$automatic_finality_enabled" != "true" ]]; then
+  echo "foundation apply requires automatic finality to be enabled" >&2
+  exit 2
+fi
+
 jq -n \
   --arg aws_account_id "$AWS_ACCOUNT_ID" \
   --arg aws_region "$AWS_REGION" \
@@ -88,6 +203,16 @@ jq -n \
   --arg source_commit "$SOURCE_COMMIT" \
   --arg quorum_acceptance_sha256 "$quorum_acceptance_sha256" \
   --arg runtime_acceptance_sha256 "$runtime_acceptance_sha256" \
+  --argjson enable_validator_state_volumes "$validator_state_enabled" \
+  --argjson validator_state_volume_size_gib "$validator_state_size_gib" \
+  --argjson validator_state_volume_iops "$validator_state_iops" \
+  --argjson validator_state_volume_throughput_mibps \
+    "$validator_state_throughput_mibps" \
+  --argjson validator_state_snapshot_ids "$validator_state_snapshot_ids" \
+  --argjson automatic_finality_enabled "$automatic_finality_enabled" \
+  --argjson validator_block_interval_seconds \
+    "$validator_block_interval_seconds" \
+  --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
   --argjson validator_signer_arns "$signer_arns" \
   --argjson enable_public_services "$public_services_enabled" \
@@ -103,6 +228,15 @@ jq -n \
     node_artifact_sha256: $node_artifact_sha256,
     genesis_sha256: $genesis_sha256,
     source_commit: $source_commit,
+    enable_validator_state_volumes: $enable_validator_state_volumes,
+    validator_state_volume_size_gib: $validator_state_volume_size_gib,
+    validator_state_volume_iops: $validator_state_volume_iops,
+    validator_state_volume_throughput_mibps:
+      $validator_state_volume_throughput_mibps,
+    validator_state_snapshot_ids: $validator_state_snapshot_ids,
+    automatic_finality_enabled: $automatic_finality_enabled,
+    validator_block_interval_seconds: $validator_block_interval_seconds,
+    validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
     enable_public_services: $enable_public_services,
     quorum_acceptance_sha256: (
       if $enable_public_services then $quorum_acceptance_sha256 else null end
@@ -120,7 +254,9 @@ terraform -chdir=infra/aws/public-testnet show -json \
 
 # Destructive changes remain fail-closed. The only permitted delete action is
 # an AMI-driven replacement of one or more of the three canonical validators.
-jq -e --argjson public_services_enabled "$public_services_enabled" '
+jq -e \
+  --argjson public_services_enabled "$public_services_enabled" \
+  --argjson validator_state_enabled "$validator_state_enabled" '
   [
     .resource_changes[]?
     | select(.change.actions | index("delete"))
@@ -146,22 +282,43 @@ jq -e --argjson public_services_enabled "$public_services_enabled" '
             "aws_lb_target_group_attachment.explorer[\($index)]"
         ] as $expected_attachments
       | [
+          $indices[] as $index
+          | "aws_volume_attachment.validator_state[\($index)]"
+        ] as $expected_state_attachments
+      | [
           $deletions[]
           | select(.address | test(
               "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
-            ))
+          ))
         ] as $attachments
+      | [
+          $deletions[]
+          | select(.address | test(
+              "^aws_volume_attachment\\.validator_state\\[[0-2]\\]$"
+            ))
+        ] as $state_attachments
       | ($validators | length) >= 1 and
         ($validators | length) <= 3 and
         ([ $deletions[].address ] | unique | length) == ($deletions | length) and
         (
           if $public_services_enabled then
-            ([ $attachments[].address ] | sort) == ($expected_attachments | sort) and
-            ($deletions | length) == (($validators | length) * 3)
+            ([ $attachments[].address ] | sort) == ($expected_attachments | sort)
           else
-            ($attachments | length) == 0 and
-            ($deletions | length) == ($validators | length)
+            ($attachments | length) == 0
           end
+        ) and
+        (
+          if $validator_state_enabled then
+            ([ $state_attachments[].address ] | sort) ==
+              ($expected_state_attachments | sort)
+          else
+            ($state_attachments | length) == 0
+          end
+        ) and
+        ($deletions | length) == (
+          ($validators | length) +
+          ($attachments | length) +
+          ($state_attachments | length)
         ) and
         all(
           $deletions[];
@@ -177,6 +334,12 @@ jq -e --argjson public_services_enabled "$public_services_enabled" '
                 "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
               )) and
               (.replace_paths | any(.[]; . == ["target_id"]))
+            ) or
+            (
+              (.address | test(
+                "^aws_volume_attachment\\.validator_state\\[[0-2]\\]$"
+              )) and
+              (.replace_paths | any(.[]; . == ["instance_id"]))
             )
           )
         )
@@ -186,7 +349,10 @@ jq -e --argjson public_services_enabled "$public_services_enabled" '
 mapfile -t validator_replacements < <(
   jq -r '
     .resource_changes[]?
-    | select(.change.actions | index("delete"))
+    | select(
+        (.change.actions | index("delete")) and
+        (.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
+      )
     | .address
   ' artifacts/foundation-plan.json
 )
@@ -212,6 +378,11 @@ if [[ "$phase" == "foundation-apply" ]]; then
           -target="$explorer_attachment"
         )
         expected_addresses+=("$rpc_attachment" "$explorer_attachment")
+      fi
+      if [[ "$validator_state_enabled" == "true" ]]; then
+        state_attachment="aws_volume_attachment.validator_state[${index}]"
+        target_args+=(-target="$state_attachment")
+        expected_addresses+=("$state_attachment")
       fi
       expected_addresses_json="$(
         printf '%s\n' "${expected_addresses[@]}" | jq -Rsc 'split("\n")[:-1]'
@@ -248,7 +419,10 @@ if [[ "$phase" == "foundation-apply" ]]; then
               ) or
               (
                 .address != $address and
-                (.replace_paths | any(.[]; . == ["target_id"]))
+                (
+                  (.replace_paths | any(.[]; . == ["target_id"])) or
+                  (.replace_paths | any(.[]; . == ["instance_id"]))
+                )
               )
             )
           )
@@ -267,6 +441,23 @@ if [[ "$phase" == "foundation-apply" ]]; then
         test "$attempt" -lt 60
         sleep 10
       done
+
+      if [[ "$validator_state_enabled" == "true" ]]; then
+        state_volume_id="$(
+          terraform -chdir=infra/aws/public-testnet output -json \
+            validator_state_volume_readback |
+            jq -er ".[${index}].volume_id"
+        )"
+        aws ec2 describe-volumes --volume-ids "$state_volume_id" --output json |
+          jq -e --arg instance_id "$new_instance" '
+            .Volumes | length == 1 and
+            .[0].Encrypted == true and
+            .[0].State == "in-use" and
+            (.[0].Attachments | length) == 1 and
+            .[0].Attachments[0].InstanceId == $instance_id and
+            .[0].Attachments[0].State == "attached"
+          ' >/dev/null
+      fi
 
       if [[ "$public_services_enabled" == "true" ]]; then
         current_outputs="$(
@@ -321,7 +512,12 @@ if [[ "$phase" == "foundation-apply" ]]; then
     .runtime_boundary.value.governance == "JAIOS Institutional Governance" and
     .runtime_boundary.value.mainnet_changed == false and
     .runtime_boundary.value.assets_moved == false and
-    .runtime_boundary.value.bridge_activated == false
+    .runtime_boundary.value.bridge_activated == false and
+    .automatic_finality_readback.value.enabled == true and
+    .automatic_finality_readback.value.block_interval_seconds == 30 and
+    (.automatic_finality_readback.value.slot_epoch_seconds | type) == "number" and
+    .automatic_finality_readback.value.slot_epoch_seconds > 0 and
+    .automatic_finality_readback.value.slot_epoch_seconds % 30 == 0
   ' artifacts/foundation-outputs.json >/dev/null
 fi
 

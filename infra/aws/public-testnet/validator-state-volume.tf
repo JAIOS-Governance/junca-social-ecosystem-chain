@@ -55,7 +55,7 @@ resource "aws_volume_attachment" "validator_state" {
   # A detach must never be forced from a running validator.
   stop_instance_before_detaching = true
 
-  lifecycle {
-    prevent_destroy = true
-  }
+  # The retained EBS volume is protected above. The attachment itself must be
+  # replaceable when an immutable validator instance is rotated, otherwise
+  # Terraform cannot move the preserved volume to the replacement instance.
 }

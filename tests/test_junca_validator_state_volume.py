@@ -41,14 +41,20 @@ class ValidatorStateVolumeTests(unittest.TestCase):
         ):
             self.assertIn(required, self.volume)
 
-    def test_attachment_cannot_force_detach_or_destroy(self) -> None:
+    def test_attachment_is_safe_but_replaceable_for_immutable_rollout(self) -> None:
         attachment = self.volume.split(
             'resource "aws_volume_attachment" "validator_state"', 1
         )[1]
         self.assertIn('device_name  = "/dev/sdf"', attachment)
         self.assertIn("force_detach = false", attachment)
         self.assertIn("stop_instance_before_detaching = true", attachment)
-        self.assertIn("prevent_destroy = true", attachment)
+        self.assertNotIn("prevent_destroy = true", attachment)
+        volume = self.volume.split(
+            'resource "aws_ebs_volume" "validator_state"', 1
+        )[1].split(
+            'resource "aws_volume_attachment" "validator_state"', 1
+        )[0]
+        self.assertIn("prevent_destroy = true", volume)
 
     def test_snapshot_restore_is_exact_and_fail_closed(self) -> None:
         self.assertIn('variable "validator_state_snapshot_ids"', self.variables)

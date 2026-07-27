@@ -47,6 +47,15 @@ output "validator_instance_ids" {
   value = aws_instance.validator[*].id
 }
 
+output "automatic_finality_readback" {
+  description = "Terraform-canonical automatic finality settings shared by all three validators."
+  value = {
+    enabled                = var.automatic_finality_enabled
+    block_interval_seconds = var.automatic_finality_enabled ? var.validator_block_interval_seconds : 0
+    slot_epoch_seconds     = var.automatic_finality_enabled ? var.validator_slot_epoch_seconds : 0
+  }
+}
+
 output "validator_state_volume_readback" {
   description = "Durable validator volume IDs and attachment state. Empty until the opt-in provisioning gate is enabled."
   value = [

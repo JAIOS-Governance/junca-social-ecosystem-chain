@@ -49,6 +49,9 @@ The machine-verifiable boundary is defined in
 Infrastructure remains fail-closed until canonical cloud binding, three
 independent signer resources, validator quorum, TLS/DNS, read-only RPC,
 monitoring, runtime acceptance and rollback readback are verified.
+Release evidence is bound to the runtime artifact's explicit source commit,
+artifact SHA-256 and genesis SHA-256; a newer documentation-only repository
+head does not replace that runtime provenance.
 
 Mainnet changed: **false**  
 Assets moved: **false**  

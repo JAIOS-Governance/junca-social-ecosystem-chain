@@ -42,9 +42,16 @@ class AwsFoundationTests(unittest.TestCase):
         cls.foundation_script = (
             ROOT / "scripts/junca_public_testnet_foundation.sh"
         ).read_text(encoding="utf-8")
+        cls.public_release_script = (
+            ROOT / "scripts/junca_public_testnet_release.sh"
+        ).read_text(encoding="utf-8")
         cls.validator_foundation_release = (
             ROOT
             / ".github/workflows/junca-validator-foundation-release.yml"
+        ).read_text(encoding="utf-8")
+        cls.public_testnet_release = (
+            ROOT
+            / ".github/workflows/junca-public-testnet-release.yml"
         ).read_text(encoding="utf-8")
         cls.self_permission_recovery = (
             ROOT
@@ -300,6 +307,11 @@ class AwsFoundationTests(unittest.TestCase):
             "quorum_verified: false",
             "public_services_enabled: $public_services_enabled",
             "terraform -chdir=infra/aws/public-testnet apply",
+            "validator_state_volume_readback.value // []",
+            "enable_validator_state_volumes: $enable_validator_state_volumes",
+            "aws_volume_attachment.validator_state",
+            'test("^aws_instance\\\\.validator\\\\[[0-2]\\\\]$")',
+            "describe-volumes --volume-ids",
         ):
             self.assertIn(required, self.foundation_script)
         for required in (
@@ -336,16 +348,215 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertNotIn("workflow_run:", self.validator_foundation_release)
         self.assertIn(
-            "if: inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'",
+            "inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'",
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "github.ref == 'refs/heads/main'",
             self.validator_foundation_release,
         )
         self.assertIn(
             "required: true",
             self.validator_foundation_release.split("ami_run_id:", 1)[1].split(
-                "authorize_rollout:", 1
+                "manifest_gate_run_id:", 1
             )[0],
         )
+        self.assertIn(
+            "required: true",
+            self.validator_foundation_release.split(
+                "manifest_gate_run_id:", 1
+            )[1].split("authorize_rollout:", 1)[0],
+        )
         self.assertNotIn("30233435029", self.validator_foundation_release)
+
+    def test_foundation_requires_matching_manifest_gate_and_ami_chain(self) -> None:
+        for required in (
+            "Verify immutable AMI and manifest workflow provenance",
+            '"JUNCA Validator Immutable AMI Build"',
+            '"JUNCA Runtime Release Manifest Gate"',
+            "junca-runtime-release-manifest-gate-"
+            "${{ env.MANIFEST_GATE_RUN_ID }}",
+            "run-id: ${{ env.MANIFEST_GATE_RUN_ID }}",
+            '.candidate.source_commit == $source_commit',
+            ".candidate.node_artifact_sha256 == $node_sha256",
+            ".candidate.genesis_sha256 == $genesis_sha256",
+            ".candidate.ami_id == $ami_id",
+            '.decision == "PROMOTION_GATE_PASS"',
+        ):
+            self.assertIn(required, self.validator_foundation_release)
+        provenance_index = self.validator_foundation_release.index(
+            "Verify immutable AMI and manifest workflow provenance"
+        )
+        manifest_decision_index = self.validator_foundation_release.index(
+            '.decision == "PROMOTION_GATE_PASS"'
+        )
+        oidc_index = self.validator_foundation_release.index(
+            "aws-actions/configure-aws-credentials@v6.1.2"
+        )
+        apply_index = self.validator_foundation_release.index(
+            "scripts/junca_public_testnet_foundation.sh foundation-apply"
+        )
+        self.assertLess(provenance_index, manifest_decision_index)
+        self.assertLess(manifest_decision_index, oidc_index)
+        self.assertLess(oidc_index, apply_index)
+
+    def test_automatic_finality_is_terraform_canonical_and_shared(self) -> None:
+        for required in (
+            'variable "automatic_finality_enabled"',
+            'variable "validator_block_interval_seconds"',
+            'variable "validator_slot_epoch_seconds"',
+            "var.validator_block_interval_seconds == 30",
+            "var.validator_slot_epoch_seconds % 30 == 0",
+        ):
+            self.assertIn(required, self.runtime_variables)
+        for required in (
+            "automatic_finality_enabled = var.automatic_finality_enabled",
+            "block_interval_seconds",
+            "slot_epoch_seconds",
+            "Automatic finality requires a shared positive 30-second-boundary",
+        ):
+            self.assertIn(required, self.runtime)
+        for required in (
+            "AUTOMATIC_FINALITY_ENABLED=${automatic_finality_enabled}",
+            "TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval_seconds}",
+            "TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch_seconds}",
+        ):
+            self.assertIn(required, self.validator_user_data)
+        self.assertIn(
+            'output "automatic_finality_readback"', self.runtime_outputs
+        )
+
+    def test_foundation_generates_once_then_preserves_shared_slot_epoch(self) -> None:
+        for required in (
+            "Generate one-time shared automatic finality epoch",
+            "activation_delay=3600",
+            "now + activation_delay + interval - 1",
+            "VALIDATOR_BLOCK_INTERVAL_SECONDS=$interval",
+            "VALIDATOR_SLOT_EPOCH_SECONDS=$slot_epoch",
+            "automatic_finality_readback.value",
+            "foundation apply requires automatic finality to be enabled",
+            "automatic_finality_enabled: $automatic_finality_enabled",
+            "validator_slot_epoch_seconds: $validator_slot_epoch_seconds",
+        ):
+            self.assertTrue(
+                required in self.validator_foundation_release
+                or required in self.foundation_script
+            )
+
+    def test_durable_state_mount_is_exact_existing_and_fail_closed(self) -> None:
+        for required in (
+            "user_data_replace_on_change = true",
+            "validator_state_volume_id",
+            "aws_ebs_volume.validator_state[count.index].id",
+        ):
+            self.assertIn(required, self.runtime)
+        for required in (
+            "nvme-Amazon_Elastic_Block_Store_",
+            'case "\\$filesystem" in',
+            "ext4|xfs",
+            "RequiresMountsFor=/var/lib/junca",
+            "ConditionPathIsMountPoint=/var/lib/junca",
+            "ConditionPathExists=/var/lib/junca/state.sqlite",
+            "ExecStartPre=/usr/bin/test -f /var/lib/junca/state.sqlite",
+            "test ! -L /var/lib/junca/state.sqlite",
+        ):
+            self.assertIn(required, self.validator_user_data)
+        self.assertNotIn("mkfs", self.validator_user_data)
+        self.assertNotIn("wipefs", self.validator_user_data)
+
+    def test_public_release_preserves_finality_without_validator_change(self) -> None:
+        for required in (
+            "pre-public-release-outputs.json",
+            "validator_state_volume_readback.value",
+            "enable_validator_state_volumes: $enable_validator_state_volumes",
+            "validator_state_volume_size_gib: $validator_state_volume_size_gib",
+            "validator_state_volume_iops: $validator_state_volume_iops",
+            "validator_state_volume_throughput_mibps:",
+            "validator_state_snapshot_ids: $validator_state_snapshot_ids",
+            "automatic_finality_readback.value",
+            "automatic_finality_enabled: $automatic_finality_enabled",
+            "validator_block_interval_seconds: $validator_block_interval_seconds",
+            "validator_slot_epoch_seconds: $validator_slot_epoch_seconds",
+            '^aws_instance\\\\.validator\\\\[[0-2]\\\\]$',
+        ):
+            self.assertIn(required, self.public_release_script)
+
+    def test_foundation_acceptance_requires_automatic_head_advancement(self) -> None:
+        for required in (
+            "Require two consecutive canonical finality slots",
+            "(map(.head_height) | unique) == [$expected_height]",
+            "(map(.head_timestamp) | unique | length) == 1",
+            "(map(.consensus.last_certificate | tojson) | unique | length) == 1",
+            ".automatic_finality_enabled == true",
+            ".automatic_finality_loop_running == true",
+            ".block_interval_seconds == 30",
+            ".slot_epoch_seconds == $slot_epoch",
+            "slot_epoch + ((initial_height + 1) * interval) + 5",
+            "timeout-minutes: 150",
+            "consecutive_advances: 2",
+            "canonical_timestamp_delta_seconds:",
+            "head_advanced: true",
+            "final_height: $second[0][0].head_height",
+        ):
+            self.assertIn(required, self.validator_foundation_release)
+
+    def test_public_release_requires_consecutive_endpoint_parity(self) -> None:
+        for required in (
+            "junca_public_testnet_endpoint_test.py --compact",
+            "observation-1.json",
+            "observation-2.json",
+            "observation-3.json",
+            "consecutive_canonical_advances: 2",
+            "canonical_timestamp_delta_seconds: 30",
+            "finalized_head.height == (.[0].finalized_head.height + 1)",
+        ):
+            self.assertIn(required, self.public_testnet_release)
+
+    def test_public_release_auto_source_is_only_successful_main_foundation(self) -> None:
+        trigger = self.public_testnet_release.split(
+            "permissions:", 1
+        )[0]
+        self.assertIn(
+            '- "JUNCA Validator Foundation Release"',
+            trigger,
+        )
+        self.assertNotIn("JUNCA Public Testnet IAM Recovery", trigger)
+        for required in (
+            "github.event.workflow_run.conclusion == 'success'",
+            "github.event.workflow_run.name == "
+            "'JUNCA Validator Foundation Release'",
+            "github.event.workflow_run.head_branch == 'main'",
+            "github.event.workflow_run.head_repository.full_name == "
+            "github.repository",
+        ):
+            self.assertIn(required, self.public_testnet_release)
+        self.assertNotIn("30237527940", self.public_testnet_release)
+
+    def test_public_release_resolves_foundation_run_id_fail_closed(self) -> None:
+        for required in (
+            "Resolve exact Validator Foundation Release run",
+            'test "$WORKFLOW_RUN_NAME" = "JUNCA Validator Foundation Release"',
+            'run_id="$WORKFLOW_RUN_ID"',
+            'run_id="$MANUAL_FOUNDATION_RUN_ID"',
+            '[[ "$run_id" =~ ^[1-9][0-9]*$ ]]',
+            'echo "run_id=$run_id" >> "$GITHUB_OUTPUT"',
+            'echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"',
+            '.status == "completed"',
+            '.conclusion == "success"',
+            '.name == "JUNCA Validator Foundation Release"',
+            '.head_branch == "main"',
+            ".repository.full_name == $repository",
+            ".head_repository.full_name == $repository",
+            "ref: ${{ steps.foundation.outputs.head_sha }}",
+            "junca-validator-foundation-release-"
+            "${{ steps.foundation.outputs.run_id }}",
+            "run-id: ${{ steps.foundation.outputs.run_id }}",
+        ):
+            self.assertIn(required, self.public_testnet_release)
+        self.assertNotIn(
+            "github.event.workflow_run.id || inputs.foundation_run_id",
+            self.public_testnet_release,
+        )
 
     def test_deployment_role_can_refresh_and_update_validator_iam_roles(self) -> None:
         for action in (

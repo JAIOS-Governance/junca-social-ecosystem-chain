@@ -104,6 +104,9 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["checks"]["health"], "PASS")
         self.assertEqual(report["checks"]["explorer"]["finalized_height"], 7)
+        self.assertEqual(report["finalized_head"]["height"], 7)
+        self.assertEqual(report["finalized_head"]["timestamp"], "0x1234")
+        self.assertIn("observed_at", report)
         self.assertEqual(
             report["checks"]["safe_rpc"]["methods"],
             sorted(endpoint_test.SAFE_RPC_METHODS),

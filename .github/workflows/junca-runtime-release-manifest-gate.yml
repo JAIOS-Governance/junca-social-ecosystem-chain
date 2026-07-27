@@ -11,6 +11,14 @@ on:
         description: Artifact containing manifest, Explorer v2 and EBS evidence
         required: true
         type: string
+      evidence_workflow_name:
+        description: Exact workflow name that produced the candidate evidence
+        required: true
+        type: string
+      source_commit:
+        description: Exact 40-character source commit bound to the runtime artifacts
+        required: true
+        type: string
       node_artifact_sha256:
         description: Expected immutable runtime artifact SHA-256
         required: true
@@ -37,6 +45,32 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Verify candidate evidence run provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_WORKFLOW_NAME: ${{ inputs.evidence_workflow_name }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$EVIDENCE_WORKFLOW_NAME"
+          run_json="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}")"
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg workflow "$EVIDENCE_WORKFLOW_NAME" \
+            --arg source_commit "$SOURCE_COMMIT" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == $workflow and
+            .head_branch == "main" and
+            .head_sha == $source_commit and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$run_json"
+
       - name: Download exact candidate evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence artifacts
-          [[ "$EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           gh run download "$EVIDENCE_RUN_ID" \
             --repo "${{ github.repository }}" \
             --name "$EVIDENCE_ARTIFACT_NAME" \
@@ -57,7 +91,7 @@ jobs:
 
       - name: Fail-closed release manifest decision
         env:
-          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
           NODE_ARTIFACT_SHA256: ${{ inputs.node_artifact_sha256 }}
           GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
         run: |

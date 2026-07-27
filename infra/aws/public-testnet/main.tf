@@ -444,6 +444,7 @@ resource "aws_instance" "validator" {
   count = 3
 
   ami                         = var.node_ami_id
+  user_data_replace_on_change = true
   instance_type               = var.validator_instance_type
   subnet_id                   = aws_subnet.private[count.index].id
   private_ip                  = local.validator_private_ips[count.index]
@@ -466,12 +467,29 @@ resource "aws_instance" "validator" {
   }
 
   user_data = templatefile("${path.module}/templates/validator-user-data.sh.tftpl", {
-    validator_id   = format("validator-%02d", count.index + 1)
-    chain_id       = var.chain_id
-    genesis_sha256 = var.genesis_sha256
-    node_sha256    = var.node_artifact_sha256
-    signer_arn     = var.validator_signer_arns[count.index]
-    aws_region     = var.aws_region
+    validator_id               = format("validator-%02d", count.index + 1)
+    chain_id                   = var.chain_id
+    genesis_sha256             = var.genesis_sha256
+    node_sha256                = var.node_artifact_sha256
+    automatic_finality_enabled = var.automatic_finality_enabled
+    block_interval_seconds = (
+      var.automatic_finality_enabled
+      ? var.validator_block_interval_seconds
+      : 0
+    )
+    slot_epoch_seconds = (
+      var.automatic_finality_enabled
+      ? var.validator_slot_epoch_seconds
+      : 0
+    )
+    validator_state_required = var.enable_validator_state_volumes
+    validator_state_volume_id = (
+      var.enable_validator_state_volumes
+      ? aws_ebs_volume.validator_state[count.index].id
+      : ""
+    )
+    signer_arn = var.validator_signer_arns[count.index]
+    aws_region = var.aws_region
     signer_bindings = join(",", [
       for index, arn in var.validator_signer_arns :
       format("validator-%02d=%s", index + 1, arn)
@@ -487,6 +505,18 @@ resource "aws_instance" "validator" {
     precondition {
       condition     = data.aws_caller_identity.current.account_id == var.aws_account_id
       error_message = "AWS account binding mismatch."
+    }
+
+    precondition {
+      condition = (
+        !var.automatic_finality_enabled ||
+        (
+          var.validator_block_interval_seconds == 30 &&
+          var.validator_slot_epoch_seconds > 0 &&
+          var.validator_slot_epoch_seconds % 30 == 0
+        )
+      )
+      error_message = "Automatic finality requires a shared positive 30-second-boundary slot epoch."
     }
   }
 

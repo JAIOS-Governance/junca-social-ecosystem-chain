@@ -4,6 +4,56 @@ umask 027
 
 install -d -m 0750 /etc/junca /var/lib/junca /var/log/junca
 
+%{ if validator_state_required ~}
+validator_state_volume_id='${validator_state_volume_id}'
+[[ "$validator_state_volume_id" =~ ^vol-[0-9a-f]{8,17}$ ]]
+validator_state_serial="$${validator_state_volume_id//-/}"
+
+cat >/usr/local/sbin/junca-mount-validator-state <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+volume_id='$${validator_state_volume_id}'
+expected_serial='$${validator_state_serial}'
+device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$${expected_serial}"
+for attempt in \$(seq 1 120); do
+  [[ -b "\$device" ]] && break
+  test "\$attempt" -lt 120
+  sleep 5
+done
+[[ -b "\$device" ]]
+resolved_device="\$(readlink -f "\$device")"
+[[ -b "\$resolved_device" ]]
+actual_serial="\$(lsblk -ndo SERIAL "\$device" | tr -d '-')"
+test "\$actual_serial" = "\$expected_serial"
+filesystem="\$(blkid -o value -s TYPE "\$device")"
+case "\$filesystem" in
+  ext4|xfs) ;;
+  *) echo "validator state filesystem is absent or unapproved" >&2; exit 1 ;;
+esac
+if ! mountpoint -q /var/lib/junca; then
+  mount -o noatime,nosuid,nodev "\$device" /var/lib/junca
+fi
+test "\$(findmnt -n -o SOURCE --target /var/lib/junca)" = "\$resolved_device"
+test -f /var/lib/junca/state.sqlite
+test ! -L /var/lib/junca/state.sqlite
+EOF
+chmod 0750 /usr/local/sbin/junca-mount-validator-state
+
+cat >/etc/systemd/system/junca-validator-state.service <<'EOF'
+[Unit]
+Description=JUNCA Validator Durable State Mount
+Before=junca-validator.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/junca-mount-validator-state
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+%{ endif ~}
+
 cat >/etc/junca/runtime.env <<'EOF'
 CHAIN_NAME=JUNCA Social Ecosystem Chain
 GOVERNANCE=JAIOS Institutional Governance
@@ -21,6 +71,9 @@ P2P_PORT=30303
 # validator-01=arn:aws:kms:...,... and validator-01=10.x.x.x:30303,...
 VALIDATOR_SIGNER_BINDINGS=${signer_bindings}
 VALIDATOR_PEER_ENDPOINTS=${peer_endpoints}
+AUTOMATIC_FINALITY_ENABLED=${automatic_finality_enabled}
+TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval_seconds}
+TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch_seconds}
 BRIDGE_ACTIVATED=false
 EOF
 chmod 0640 /etc/junca/runtime.env
@@ -34,12 +87,22 @@ printf '%s  %s\n' '${node_sha256}' /opt/junca/validator-runtime.tar.gz | sha256s
 cat >/etc/systemd/system/junca-validator.service <<'EOF'
 [Unit]
 Description=JUNCA Social Ecosystem Chain Validator
-After=network-online.target
+After=network-online.target%{ if validator_state_required } junca-validator-state.service%{ endif }
 Wants=network-online.target
+%{ if validator_state_required ~}
+Requires=junca-validator-state.service
+RequiresMountsFor=/var/lib/junca
+ConditionPathIsMountPoint=/var/lib/junca
+ConditionPathExists=/var/lib/junca/state.sqlite
+%{ endif ~}
 
 [Service]
 Type=simple
 EnvironmentFile=/etc/junca/runtime.env
+%{ if validator_state_required ~}
+ExecStartPre=/usr/bin/test -f /var/lib/junca/state.sqlite
+ExecStartPre=/usr/bin/test ! -L /var/lib/junca/state.sqlite
+%{ endif ~}
 ExecStart=/usr/local/bin/junca-chain-node --config /etc/junca/validator.toml --genesis /etc/junca/genesis.json --data-dir /var/lib/junca --validator-id "$VALIDATOR_ID" --http.addr 127.0.0.1 --http.port 8545 --http.api eth,net,web3 --mine --signer-resource "$SIGNER_RESOURCE_ARN"
 Restart=on-failure
 RestartSec=10
@@ -95,6 +158,9 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+%{ if validator_state_required ~}
+systemctl enable junca-validator-state.service
+%{ endif ~}
 systemctl enable --now junca-validator.service
 systemctl enable --now junca-public-rpc.service junca-public-explorer.service
 
