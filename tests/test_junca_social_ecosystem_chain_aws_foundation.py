@@ -44,7 +44,7 @@ def set_runtime_finality_block(script: str) -> str:
     block = function.split("set -euo pipefail\n", 1)[1].split(
         "\nsystemctl restart junca-validator.service", 1
     )[0]
-    return block.replace("\\$(", "$(")
+    return block.replace("\\$", "$")
 
 
 # Public services remain disabled until validator quorum evidence is accepted.
@@ -738,66 +738,138 @@ class AwsFoundationTests(unittest.TestCase):
         self,
     ) -> None:
         block = set_runtime_finality_block(self.foundation_script)
-        with tempfile.TemporaryDirectory() as directory:
-            runtime_env = pathlib.Path(directory) / "runtime.env"
+        expected_artifact = "a" * 64
+
+        def execute(
+            runtime_env: pathlib.Path,
+            content: str,
+            *,
+            allow_missing: str,
+            finality_enabled: str = "false",
+            block_interval: str = "0",
+            slot_epoch: str = "0",
+            expected: str = expected_artifact,
+        ) -> subprocess.CompletedProcess:
+            runtime_env.write_text(content, encoding="utf-8")
             executable = block.replace(
                 "/etc/junca/runtime.env", str(runtime_env)
             )
             executable = (
-                executable.replace("${finality_enabled}", "false")
-                .replace("${block_interval}", "0")
-                .replace("${slot_epoch}", "0")
+                executable.replace(
+                    "${expected_artifact_sha256}", expected
+                )
+                .replace(
+                    "${allow_missing_finality_keys}", allow_missing
+                )
+                .replace("${finality_enabled}", finality_enabled)
+                .replace("${block_interval}", block_interval)
+                .replace("${slot_epoch}", slot_epoch)
             )
-            prefix = "set -euo pipefail\n"
-            runtime_env.write_text(
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                ["bash", "-c", prefix + executable],
+            return subprocess.run(
+                ["bash", "-c", "set -euo pipefail\n" + executable],
                 check=False,
                 capture_output=True,
                 text=True,
             )
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_env = pathlib.Path(directory) / "runtime.env"
+            result = execute(
+                runtime_env,
+                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
+                "AUTOMATIC_FINALITY_ENABLED=true\n"
+                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
+                allow_missing="false",
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 runtime_env.read_text(encoding="utf-8"),
+                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
                 "AUTOMATIC_FINALITY_ENABLED=false\n"
                 "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
                 "TESTNET_SLOT_EPOCH_SECONDS=0\n",
             )
-            for content in (
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n",
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
+
+            result = execute(
+                runtime_env,
+                f"NODE_ARTIFACT_SHA256={expected_artifact}\n",
+                allow_missing="true",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                runtime_env.read_text(encoding="utf-8"),
+                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
                 "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
-            ):
-                with self.subTest(rejected=content):
-                    runtime_env.write_text(content, encoding="utf-8")
-                    result = subprocess.run(
-                        ["bash", "-c", prefix + executable],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                "TESTNET_SLOT_EPOCH_SECONDS=0\n",
+            )
+
+            rejected = (
+                (
+                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
+                    "AUTOMATIC_FINALITY_ENABLED=false\n",
+                    {"allow_missing": "true"},
+                ),
+                (
+                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
+                    "AUTOMATIC_FINALITY_ENABLED=false\n"
+                    "AUTOMATIC_FINALITY_ENABLED=false\n"
+                    "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
+                    "TESTNET_SLOT_EPOCH_SECONDS=0\n",
+                    {"allow_missing": "true"},
+                ),
+                (
+                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n",
+                    {"allow_missing": "false"},
+                ),
+                (
+                    f"NODE_ARTIFACT_SHA256={'b' * 64}\n",
+                    {"allow_missing": "true"},
+                ),
+                (
+                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n",
+                    {
+                        "allow_missing": "true",
+                        "finality_enabled": "true",
+                        "block_interval": "30",
+                        "slot_epoch": "2000000010",
+                    },
+                ),
+            )
+            for content, arguments in rejected:
+                with self.subTest(rejected=(content, arguments)):
+                    result = execute(runtime_env, content, **arguments)
                     self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_finality_call_sites_bind_exact_runtime_and_legacy_mode(self) -> None:
+        for required in (
+            '0 0 "$previous_artifact_sha256" true '
+            '"${pre_rollout_instances[@]}"',
+            '0 0 "$NODE_ARTIFACT_SHA256" false "$new_instance"',
+            '0 "$validator_slot_epoch_seconds" \\\n'
+            '      "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"',
+            '30 "$validator_slot_epoch_seconds" \\\n'
+            '      "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"',
+            "NODE_ARTIFACT_SHA256=${expected_artifact_sha256}",
+        ):
+            self.assertIn(required, self.foundation_script)
 
     def test_finality_activation_is_separate_and_manual_vote_is_disabled(self) -> None:
         disable_index = self.foundation_script.index(
-            'set_runtime_finality 0 0 "${pre_rollout_instances[@]}"'
+            '0 0 "$previous_artifact_sha256" true '
+            '"${pre_rollout_instances[@]}"'
         )
         replacement_index = self.foundation_script.index(
             'for address in "${validator_replacements[@]}"'
         )
         epoch_index = self.foundation_script.index(
-            '0 "$validator_slot_epoch_seconds" "${activated_instances[@]}"'
+            '0 "$validator_slot_epoch_seconds" \\\n'
+            '      "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"'
         )
         enable_index = self.foundation_script.index(
-            '30 "$validator_slot_epoch_seconds" "${activated_instances[@]}"'
+            '30 "$validator_slot_epoch_seconds" \\\n'
+            '      "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"'
         )
         self.assertLess(disable_index, replacement_index)
         self.assertLess(replacement_index, epoch_index)
