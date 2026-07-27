@@ -47,6 +47,26 @@ output "validator_instance_ids" {
   value = aws_instance.validator[*].id
 }
 
+output "validator_state_volume_readback" {
+  description = "Durable validator volume IDs and attachment state. Empty until the opt-in provisioning gate is enabled."
+  value = [
+    for index, volume in aws_ebs_volume.validator_state : {
+      validator_id       = format("validator-%02d", index + 1)
+      volume_id          = volume.id
+      availability_zone  = volume.availability_zone
+      encrypted          = volume.encrypted
+      size_gib           = volume.size
+      type               = volume.type
+      iops               = volume.iops
+      throughput_mibps   = volume.throughput
+      restored_snapshot  = volume.snapshot_id
+      attachment_device  = aws_volume_attachment.validator_state[index].device_name
+      migration_required = true
+      state_path         = "/var/lib/junca"
+    }
+  ]
+}
+
 output "public_rpc_url" {
   value = var.enable_public_services ? "https://${local.rpc_hostname}" : null
 }
