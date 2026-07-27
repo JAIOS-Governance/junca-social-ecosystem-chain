@@ -175,7 +175,7 @@ def fixture():
                         "JuncaMigrationState": "VERIFIED_PASS",
                         "JuncaFilesystemVerified": "true",
                         "JuncaStateStoreIntegrity": "true",
-                        "JuncaFinalityCertificateRecovered": "true",
+                        "JuncaFinalityCertificateBackfilled": "true",
                         "JuncaRollbackSnapshotId": snapshot_id,
                         "PublicTestnetOnly": "true",
                     }
