@@ -78,6 +78,8 @@ jobs:
               .status == "completed" and
               .conclusion == "success" and
               .name == "JUNCA Validator Foundation Release" and
+              .path == ".github/workflows/junca-validator-foundation-release.yml" and
+              .event == "workflow_dispatch" and
               .head_branch == "main" and
               .repository.full_name == $repository and
               .head_repository.full_name == $repository and
@@ -152,6 +154,7 @@ jobs:
             echo "NODE_ARTIFACT_SHA256=$(jq -er .node_artifact_sha256 acceptance/ami/junca-validator-ami-build.json)"
             echo "GENESIS_SHA256=$(jq -er .genesis_sha256 acceptance/ami/junca-validator-ami-build.json)"
             echo "SOURCE_COMMIT=$(jq -er .source_commit acceptance/ami/junca-validator-ami-build.json)"
+            echo "REQUEST_SHA256=$(jq -er .request_sha256 acceptance/ami/junca-validator-ami-build.json)"
           } >> "$GITHUB_ENV"
 
       - uses: aws-actions/configure-aws-credentials@v6.1.2
@@ -231,6 +234,7 @@ jobs:
             --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
             --arg genesis_sha256 "$GENESIS_SHA256" \
             --arg ami_id "$NODE_AMI_ID" \
+            --arg request_sha256 "$REQUEST_SHA256" \
             --slurpfile observations artifacts/public-endpoint-observations.json '{
               schema_version: "junca-public-testnet-publication/v1",
               result: "PASS",
@@ -241,7 +245,8 @@ jobs:
                 source_commit: $source_commit,
                 node_artifact_sha256: $node_artifact_sha256,
                 genesis_sha256: $genesis_sha256,
-                ami_id: $ami_id
+                ami_id: $ami_id,
+                request_sha256: $request_sha256
               },
               endpoints: {
                 rpc: "https://rpc.jaios-governance.org",
