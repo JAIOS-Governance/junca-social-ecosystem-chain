@@ -121,6 +121,44 @@ write_post_apply_checkpoint() {
   cp "$stage_path" "artifacts/post-apply-validator-${index}-checkpoint.json"
 }
 
+verify_rollback_snapshots() {
+  local validator_state_json="$1"
+  local output_path="$2"
+  local -a snapshot_ids
+  local expected_ids
+  mapfile -t snapshot_ids < <(
+    jq -er '
+      .[].rollback_snapshot_id
+      | select(
+          type == "string" and
+          test("^snap-[0-9a-f]{8,17}$")
+        )
+    ' <<<"$validator_state_json"
+  )
+  test "${#snapshot_ids[@]}" = 3
+  expected_ids="$(
+    printf '%s\n' "${snapshot_ids[@]}" |
+      jq -Rsc 'split("\n")[:-1] | sort | unique'
+  )"
+  test "$(jq -r 'length' <<<"$expected_ids")" = 3
+  aws ec2 describe-snapshots \
+    --snapshot-ids "${snapshot_ids[@]}" \
+    --owner-ids "$AWS_ACCOUNT_ID" \
+    --output json >"$output_path"
+  jq -e \
+    --arg owner_id "$AWS_ACCOUNT_ID" \
+    --argjson expected_ids "$expected_ids" '
+      (.Snapshots | length) == 3 and
+      ([.Snapshots[].SnapshotId] | sort) == $expected_ids and
+      all(
+        .Snapshots[];
+        .State == "completed" and
+        .Encrypted == true and
+        .OwnerId == $owner_id
+      )
+    ' "$output_path" >/dev/null
+}
+
 wait_for_ssm_command() {
   local command_id="$1"
   local instance_id="$2"
@@ -848,6 +886,9 @@ write_live_rollout_prefix_readback() {
           {validator_id, volume_id, rollback_snapshot_id}]
       ' "$rollback_path" >/dev/null
   fi
+  verify_rollback_snapshots \
+    "$validator_state_rollback" \
+    artifacts/live-prefix-rollback-snapshots.json
   for index in 0 1 2; do
     observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
     capture_validator_observation \
