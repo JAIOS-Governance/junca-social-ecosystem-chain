@@ -21,6 +21,7 @@ permissions:
   id-token: write
 
 concurrency:
+  # Recovery trigger: apply the least-privilege cross-validator KMS verification policy.
   # Shared with the manual/auto foundation workflow because both can acquire
   # the canonical public-testnet Terraform state lock.
   group: junca-public-testnet-aws-foundation
