@@ -70,15 +70,18 @@ class StateTransitionTests(unittest.TestCase):
             },
             nonces={SENDER_B: 1, SENDER_A: 2},
         )
+
         self.assertEqual(first.state_root, second.state_root)
 
     def test_transaction_applies_atomically_and_advances_nonce(self) -> None:
         machine = self._machine()
         pre_root = machine.state_root
+
         receipt = machine.apply_transaction(
             self._transaction(),
             signature_verifier=accept,
         )
+
         self.assertEqual(machine.get("identity", "profiles/alice"), b'{"name":"Alice"}')
         self.assertEqual(machine.expected_nonce(SENDER_A), 1)
         self.assertEqual(receipt.pre_state_root, pre_root)
@@ -98,17 +101,20 @@ class StateTransitionTests(unittest.TestCase):
             ),
             StateWrite("permissions", "roles/alice", None, b"admin"),
         )
+
         with self.assertRaisesRegex(StateTransitionError, "precondition failed"):
             machine.apply_transaction(
                 self._transaction(nonce=1, operations=operations),
                 signature_verifier=accept,
             )
+
         self.assertEqual(machine.state_root, original_root)
         self.assertIsNone(machine.get("permissions", "roles/alice"))
         self.assertEqual(machine.expected_nonce(SENDER_A), 1)
 
     def test_signature_verifier_is_required_and_fails_closed(self) -> None:
         machine = self._machine()
+
         with self.assertRaisesRegex(StateTransitionError, "signature_verifier"):
             machine.apply_transaction(
                 self._transaction(),
@@ -130,6 +136,7 @@ class StateTransitionTests(unittest.TestCase):
         machine = self._machine()
         transaction = self._transaction()
         machine.apply_transaction(transaction, signature_verifier=accept)
+
         with self.assertRaisesRegex(StateTransitionError, "replay|nonce"):
             machine.apply_transaction(transaction, signature_verifier=accept)
         with self.assertRaisesRegex(StateTransitionError, "chain_id mismatch"):
@@ -146,8 +153,10 @@ class StateTransitionTests(unittest.TestCase):
     def test_resource_limit_rejection_is_atomic(self) -> None:
         machine = self._machine()
         transaction = self._transaction(max_resource_units=1)
+
         with self.assertRaisesRegex(StateTransitionError, "resource limit"):
             machine.apply_transaction(transaction, signature_verifier=accept)
+
         self.assertIsNone(machine.get("identity", "profiles/alice"))
         self.assertEqual(machine.expected_nonce(SENDER_A), 0)
 
@@ -166,6 +175,7 @@ class StateTransitionTests(unittest.TestCase):
                 ),
             ),
         )
+
         with self.assertRaisesRegex(StateTransitionError, "precondition failed"):
             machine.apply_block(
                 height=1,
@@ -174,6 +184,7 @@ class StateTransitionTests(unittest.TestCase):
                 transactions=(first, second),
                 signature_verifier=accept,
             )
+
         self.assertEqual(machine.state_root, root)
         self.assertEqual(machine.height, 0)
         self.assertEqual(machine.timestamp, 0)
@@ -196,6 +207,7 @@ class StateTransitionTests(unittest.TestCase):
             ),
             signature_verifier=accept,
         )
+
         self.assertEqual(machine.height, 1)
         self.assertEqual(machine.timestamp, 100)
         self.assertEqual(len(receipt.transaction_hashes), 2)
@@ -211,13 +223,16 @@ class StateTransitionTests(unittest.TestCase):
             transactions=(self._transaction(),),
             signature_verifier=accept,
         )
+
         snapshot = machine.export_snapshot()
         restored = StateMachine.restore_snapshot(snapshot)
+
         self.assertEqual(restored.as_evidence(), machine.as_evidence())
         self.assertEqual(
             restored.get("identity", "profiles/alice"),
             b'{"name":"Alice"}',
         )
+
         tampered = json.loads(snapshot)
         tampered["payload"]["height"] = 2
         with self.assertRaisesRegex(StateTransitionError, "digest mismatch"):
@@ -225,8 +240,16 @@ class StateTransitionTests(unittest.TestCase):
                 json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
             )
 
+    def test_noncanonical_snapshot_encoding_is_rejected(self) -> None:
+        snapshot = self._machine().export_snapshot()
+        noncanonical = json.dumps(json.loads(snapshot), indent=2).encode()
+
+        with self.assertRaisesRegex(StateTransitionError, "encoding is not canonical"):
+            StateMachine.restore_snapshot(noncanonical)
+
     def test_safety_evidence_does_not_activate_mainnet_assets_or_bridge(self) -> None:
         evidence = self._machine().as_evidence()
+
         self.assertEqual(
             evidence["activation_status"],
             "MAINNET_CANDIDATE_NOT_ACTIVATED",
