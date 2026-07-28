@@ -7,6 +7,7 @@ on:
 
 permissions:
   actions: read
+  checks: read
   contents: read
 
 jobs:
@@ -14,43 +15,33 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      READBACK_GENERATION: "7"
+      READBACK_GENERATION: "8"
+      CHECK_SUITE_ID: "82394668841"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read every patch-controller run
+      - name: Read invalid-workflow check annotations
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$READBACK_GENERATION" = "7"
+          test "$READBACK_GENERATION" = "8"
           mkdir -p artifacts/v2-release-readback
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/apply-evidence-bound-live-prefix-patch.yml/runs?per_page=100" \
-            | jq -s '[
-                .[].workflow_runs[] |
-                {
-                  id,
-                  name,
-                  display_title,
-                  path,
-                  status,
-                  conclusion,
-                  event,
-                  head_branch,
-                  head_sha,
-                  run_number,
-                  run_attempt,
-                  created_at,
-                  updated_at,
-                  html_url,
-                  check_suite_url,
-                  jobs_url
-                }
-              ] | unique_by(.id) | sort_by(.created_at) | reverse | .[:30]' \
-            > artifacts/v2-release-readback/controller-runs.json
-          jq -e 'length >= 1' artifacts/v2-release-readback/controller-runs.json
-          cat artifacts/v2-release-readback/controller-runs.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/check-suites/${CHECK_SUITE_ID}/check-runs" \
+            > artifacts/v2-release-readback/check-runs.json
+          jq -e '.total_count >= 1' artifacts/v2-release-readback/check-runs.json
+          jq -r '.check_runs[].id' artifacts/v2-release-readback/check-runs.json \
+            > artifacts/v2-release-readback/check-run-ids.txt
+          : > artifacts/v2-release-readback/annotations.jsonl
+          while read -r check_run_id; do
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/check-runs/${check_run_id}/annotations?per_page=100" \
+              | jq -c '.[]' >> artifacts/v2-release-readback/annotations.jsonl
+          done < artifacts/v2-release-readback/check-run-ids.txt
+          test -s artifacts/v2-release-readback/annotations.jsonl
+          cat artifacts/v2-release-readback/check-runs.json
+          cat artifacts/v2-release-readback/annotations.jsonl
 
       - uses: actions/upload-artifact@v4
         with:
