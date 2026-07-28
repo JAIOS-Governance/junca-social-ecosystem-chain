@@ -1,26 +1,25 @@
 name: Apply Evidence-bound Live Prefix Patch
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/apply-evidence-bound-live-prefix-patch.yml"
-  issues:
-    types: [opened]
+  workflow_run:
+    workflows:
+      - "JUNCA Social Ecosystem Chain Repository Governance"
+    types: [completed]
 
 permissions:
   contents: write
-  issues: read
 
 jobs:
   apply:
     if: >-
-      github.event_name == 'push' ||
-      github.event.issue.title == 'EXECUTE_EVIDENCE_BOUND_LIVE_PREFIX_PATCH'
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      PATCH_GENERATION: "3"
+      PATCH_GENERATION: "4"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +29,7 @@ jobs:
       - name: Replace only the initial live-prefix compatibility invocation
         run: |
           set -euo pipefail
-          test "$PATCH_GENERATION" = "3"
+          test "$PATCH_GENERATION" = "4"
           python - <<'PY'
           from pathlib import Path
 
