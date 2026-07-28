@@ -1,0 +1,146 @@
+name: junca-local-network
+
+x-validator-environment: &validator-environment
+  JUNCA_LOCAL_DEVELOPMENT: "1"
+  TESTNET_BLOCK_INTERVAL_SECONDS: "0"
+  TESTNET_SLOT_EPOCH_SECONDS: "0"
+  VALIDATOR_SIGNER_BINDINGS: >-
+    validator-01=arn:aws:kms:local:000000000000:key/validator-01,
+    validator-02=arn:aws:kms:local:000000000000:key/validator-02,
+    validator-03=arn:aws:kms:local:000000000000:key/validator-03
+  VALIDATOR_PEER_ENDPOINTS: >-
+    validator-01=172.30.0.11:30303,
+    validator-02=172.30.0.12:30303,
+    validator-03=172.30.0.13:30303
+
+x-validator-common: &validator-common
+  build:
+    context: ../..
+    dockerfile: docker/local-network/Dockerfile
+  environment: *validator-environment
+  depends_on:
+    genesis:
+      condition: service_completed_successfully
+  restart: "no"
+  healthcheck:
+    test:
+      - CMD
+      - python3
+      - -c
+      - >-
+        import json,urllib.request;
+        data=json.load(urllib.request.urlopen('http://127.0.0.1:8545/health',timeout=2));
+        assert data['status'] in ('healthy','recovery_required')
+    interval: 2s
+    timeout: 2s
+    retries: 60
+    start_period: 2s
+  networks:
+    local-validator-network: {}
+
+services:
+  genesis:
+    build:
+      context: ../..
+      dockerfile: docker/local-network/Dockerfile
+    entrypoint:
+      - python3
+      - /workspace/scripts/generate_junca_public_testnet_genesis.py
+    command:
+      - --chain-id
+      - "20260723"
+      - --validator
+      - validator-01
+      - --validator
+      - validator-02
+      - --validator
+      - validator-03
+      - --output
+      - /network/genesis.json
+    volumes:
+      - genesis-data:/network
+    restart: "no"
+
+  validator-01:
+    <<: *validator-common
+    command:
+      - --genesis
+      - /network/genesis.json
+      - --data-dir
+      - /var/lib/junca
+      - --validator-id
+      - validator-01
+      - --signer-resource
+      - arn:aws:kms:local:000000000000:key/validator-01
+      - --http.addr
+      - 0.0.0.0
+      - --http.port
+      - "8545"
+    ports:
+      - "18545:8545"
+    volumes:
+      - genesis-data:/network:ro
+      - validator-01-data:/var/lib/junca
+    networks:
+      local-validator-network:
+        ipv4_address: 172.30.0.11
+
+  validator-02:
+    <<: *validator-common
+    command:
+      - --genesis
+      - /network/genesis.json
+      - --data-dir
+      - /var/lib/junca
+      - --validator-id
+      - validator-02
+      - --signer-resource
+      - arn:aws:kms:local:000000000000:key/validator-02
+      - --http.addr
+      - 0.0.0.0
+      - --http.port
+      - "8545"
+    ports:
+      - "18546:8545"
+    volumes:
+      - genesis-data:/network:ro
+      - validator-02-data:/var/lib/junca
+    networks:
+      local-validator-network:
+        ipv4_address: 172.30.0.12
+
+  validator-03:
+    <<: *validator-common
+    command:
+      - --genesis
+      - /network/genesis.json
+      - --data-dir
+      - /var/lib/junca
+      - --validator-id
+      - validator-03
+      - --signer-resource
+      - arn:aws:kms:local:000000000000:key/validator-03
+      - --http.addr
+      - 0.0.0.0
+      - --http.port
+      - "8545"
+    ports:
+      - "18547:8545"
+    volumes:
+      - genesis-data:/network:ro
+      - validator-03-data:/var/lib/junca
+    networks:
+      local-validator-network:
+        ipv4_address: 172.30.0.13
+
+networks:
+  local-validator-network:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  genesis-data: {}
+  validator-01-data: {}
+  validator-02-data: {}
+  validator-03-data: {}
