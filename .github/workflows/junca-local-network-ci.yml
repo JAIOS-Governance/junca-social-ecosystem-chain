@@ -5,10 +5,12 @@ on:
     paths:
       - "docker/local-network/**"
       - "jaios/social_ecosystem_chain/development_signer.py"
+      - "jaios/social_ecosystem_chain/finality_gossip.py"
       - "scripts/dev/junca-local-network-node"
       - "scripts/dev/local-network.sh"
       - "scripts/dev/local_network_acceptance.py"
       - "tests/test_junca_development_signer.py"
+      - "tests/test_junca_finality_gossip.py"
       - "Makefile"
       - ".github/workflows/junca-local-network-ci.yml"
   push:
@@ -16,10 +18,12 @@ on:
     paths:
       - "docker/local-network/**"
       - "jaios/social_ecosystem_chain/development_signer.py"
+      - "jaios/social_ecosystem_chain/finality_gossip.py"
       - "scripts/dev/junca-local-network-node"
       - "scripts/dev/local-network.sh"
       - "scripts/dev/local_network_acceptance.py"
       - "tests/test_junca_development_signer.py"
+      - "tests/test_junca_finality_gossip.py"
       - "Makefile"
       - ".github/workflows/junca-local-network-ci.yml"
 
@@ -41,12 +45,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate isolated signer and operations syntax
+      - name: Validate signer, gossip and operations contracts
         run: |
           set -euo pipefail
-          python -m unittest tests.test_junca_development_signer -v
+          python -m unittest \
+            tests.test_junca_development_signer \
+            tests.test_junca_finality_gossip -v
           python -m py_compile \
             jaios/social_ecosystem_chain/development_signer.py \
+            jaios/social_ecosystem_chain/finality_gossip.py \
             scripts/dev/junca-local-network-node \
             scripts/dev/local_network_acceptance.py
           bash -n scripts/dev/local-network.sh
