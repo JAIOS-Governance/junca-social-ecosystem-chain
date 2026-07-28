@@ -1,7 +1,7 @@
 diff --git a/scripts/junca_public_testnet_foundation.sh b/scripts/junca_public_testnet_foundation.sh
 --- a/scripts/junca_public_testnet_foundation.sh
 +++ b/scripts/junca_public_testnet_foundation.sh
-@@ -999,11 +999,10 @@ write_live_rollout_prefix_readback() {
+@@ -999,10 +999,9 @@ write_live_rollout_prefix_readback() {
        assets_moved: false,
        bridge_activated: false
      }' > artifacts/live-prefix-readback.json
