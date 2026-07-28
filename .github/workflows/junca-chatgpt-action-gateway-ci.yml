@@ -1,0 +1,40 @@
+name: JUNCA ChatGPT Action Gateway CI
+
+on:
+  pull_request:
+    paths:
+      - "integrations/chatgpt-action-gateway/**"
+      - ".github/workflows/junca-chatgpt-action-gateway-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "integrations/chatgpt-action-gateway/**"
+      - ".github/workflows/junca-chatgpt-action-gateway-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-chatgpt-action-gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: integrations/chatgpt-action-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: integrations/chatgpt-action-gateway/package.json
+      - name: Install deployment dependency
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Validate handler syntax
+        run: npm run check
+      - name: Run security and boundary tests
+        run: npm test
