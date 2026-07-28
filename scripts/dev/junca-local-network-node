@@ -11,6 +11,7 @@ from jaios.social_ecosystem_chain.development_signer import (
     DeterministicDevelopmentKmsAdapter,
 )
 from jaios.social_ecosystem_chain.finality_gossip import (
+    GossipAwarePublicTestnetConsensus,
     ReliableAuthenticatedVoteGossip,
 )
 
@@ -21,6 +22,7 @@ def main() -> int:
             "local network entrypoint requires JUNCA_LOCAL_DEVELOPMENT=1"
         )
     validator_node.AwsKmsSecp256k1Adapter = DeterministicDevelopmentKmsAdapter
+    validator_node.PublicTestnetConsensus = GossipAwarePublicTestnetConsensus
     validator_node.PrivateVpcPeerTransport = ReliableAuthenticatedVoteGossip
     return validator_node.main()
 
