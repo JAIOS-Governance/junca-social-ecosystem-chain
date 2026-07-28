@@ -13,7 +13,7 @@ import base64
 import hashlib
 import json
 import re
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
 SCHEMA_VERSION = "junca-state-transition/v1"
@@ -108,6 +108,7 @@ class StateWrite:
 
     @property
     def resource_units(self) -> int:
+        # Deterministic accounting: fixed operation overhead plus key/value bytes.
         return 100 + len(self.namespace.encode()) + len(self.key.encode()) + (
             len(self.value) if self.value is not None else 0
         )
@@ -477,30 +478,53 @@ class StateMachine:
             envelope = json.loads(snapshot.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise StateTransitionError("snapshot is not valid canonical JSON") from exc
+        if snapshot != _canonical_json(envelope):
+            raise StateTransitionError("snapshot encoding is not canonical")
         if not isinstance(envelope, dict) or set(envelope) != {
             "payload",
             "snapshot_digest",
         }:
             raise StateTransitionError("snapshot envelope is invalid")
         payload = envelope["payload"]
-        if not isinstance(payload, dict):
+        expected_payload_fields = {
+            "schema_version",
+            "chain_id",
+            "genesis_hash",
+            "protocol_version",
+            "height",
+            "timestamp",
+            "state_root",
+            "state",
+            "nonces",
+            "activation_status",
+            "mainnet_changed",
+            "assets_moved",
+            "bridge_activated",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_payload_fields:
             raise StateTransitionError("snapshot payload is invalid")
         if envelope["snapshot_digest"] != _digest(SNAPSHOT_DOMAIN, payload):
             raise StateTransitionError("snapshot digest mismatch")
-        if payload.get("schema_version") != SCHEMA_VERSION:
+        if payload["schema_version"] != SCHEMA_VERSION:
             raise StateTransitionError("snapshot schema version mismatch")
         if (
-            payload.get("activation_status") != "MAINNET_CANDIDATE_NOT_ACTIVATED"
-            or payload.get("mainnet_changed") is not False
-            or payload.get("assets_moved") is not False
-            or payload.get("bridge_activated") is not False
+            payload["activation_status"] != "MAINNET_CANDIDATE_NOT_ACTIVATED"
+            or payload["mainnet_changed"] is not False
+            or payload["assets_moved"] is not False
+            or payload["bridge_activated"] is not False
         ):
             raise StateTransitionError("snapshot safety boundary is invalid")
 
+        state_entries = payload["state"]
+        if not isinstance(state_entries, list):
+            raise StateTransitionError("snapshot state list is invalid")
         state: dict[str, bytes] = {}
-        for entry in payload.get("state", []):
+        state_keys: list[str] = []
+        for entry in state_entries:
             if not isinstance(entry, dict) or set(entry) != {"key", "value_base64"}:
                 raise StateTransitionError("snapshot state entry is invalid")
+            if not isinstance(entry["key"], str):
+                raise StateTransitionError("snapshot state key is invalid")
             try:
                 value = base64.b64decode(entry["value_base64"], validate=True)
             except Exception as exc:
@@ -508,14 +532,27 @@ class StateMachine:
             if entry["key"] in state:
                 raise StateTransitionError("snapshot contains duplicate state key")
             state[entry["key"]] = value
+            state_keys.append(entry["key"])
+        if state_keys != sorted(state_keys):
+            raise StateTransitionError("snapshot state entries are not canonical")
 
+        nonce_entries = payload["nonces"]
+        if not isinstance(nonce_entries, list):
+            raise StateTransitionError("snapshot nonce list is invalid")
         nonces: dict[str, int] = {}
-        for entry in payload.get("nonces", []):
+        nonce_senders: list[str] = []
+        for entry in nonce_entries:
             if not isinstance(entry, dict) or set(entry) != {"sender", "nonce"}:
                 raise StateTransitionError("snapshot nonce entry is invalid")
-            if entry["sender"] in nonces:
+            normalized_sender = _normalize_address(entry["sender"], "snapshot nonce sender")
+            if entry["sender"] != normalized_sender:
+                raise StateTransitionError("snapshot nonce sender is not canonical")
+            if normalized_sender in nonces:
                 raise StateTransitionError("snapshot contains duplicate nonce address")
-            nonces[entry["sender"]] = entry["nonce"]
+            nonces[normalized_sender] = entry["nonce"]
+            nonce_senders.append(normalized_sender)
+        if nonce_senders != sorted(nonce_senders):
+            raise StateTransitionError("snapshot nonce entries are not canonical")
 
         machine = cls(
             chain_id=payload.get("chain_id"),
