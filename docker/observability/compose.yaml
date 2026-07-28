@@ -1,0 +1,83 @@
+name: junca-observability
+
+services:
+  junca-metrics-exporter:
+    build:
+      context: ../..
+      dockerfile: docker/observability/Dockerfile.exporter
+    environment:
+      JUNCA_VALIDATOR_HEALTH_ENDPOINTS: >-
+        validator-01=http://172.30.0.11:8545/health,
+        validator-02=http://172.30.0.12:8545/health,
+        validator-03=http://172.30.0.13:8545/health
+    ports:
+      - "19108:9108"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9108/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks:
+      - validator-network
+      - observability
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      junca-metrics-exporter:
+        condition: service_healthy
+    ports:
+      - "19464:9464"
+    restart: unless-stopped
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./junca-rules.yaml:/etc/prometheus/junca-rules.yaml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - otel-collector
+    ports:
+      - "19090:9090"
+    restart: unless-stopped
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana-oss:12.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "13000:3000"
+    restart: unless-stopped
+    networks:
+      - observability
+
+networks:
+  validator-network:
+    external: true
+    name: junca-local-network_local-validator-network
+  observability: {}
+
+volumes:
+  prometheus-data: {}
+  grafana-data: {}
