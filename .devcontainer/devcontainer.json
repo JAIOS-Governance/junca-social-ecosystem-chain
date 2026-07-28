@@ -1,0 +1,58 @@
+{
+  "name": "JUNCA Chain Protocol Development",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {}
+  },
+  "containerEnv": {
+    "PYTHONPATH": "${containerWorkspaceFolder}",
+    "JUNCA_NETWORK": "public-testnet-development"
+  },
+  "postCreateCommand": "bash scripts/dev/doctor.sh && make dev-test",
+  "forwardPorts": [3000, 8545, 8546],
+  "portsAttributes": {
+    "3000": {
+      "label": "Local Explorer",
+      "onAutoForward": "silent"
+    },
+    "8545": {
+      "label": "Local Validator RPC",
+      "onAutoForward": "silent"
+    },
+    "8546": {
+      "label": "Local Public RPC",
+      "onAutoForward": "silent"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker",
+        "hashicorp.terraform",
+        "timonwong.shellcheck"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.unittestEnabled": true,
+        "python.testing.pytestEnabled": false,
+        "python.testing.unittestArgs": [
+          "-v",
+          "-s",
+          "tests"
+        ],
+        "files.eol": "\n"
+      }
+    }
+  },
+  "remoteUser": "vscode"
+}
