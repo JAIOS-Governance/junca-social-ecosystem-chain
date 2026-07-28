@@ -128,6 +128,22 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(value, self.observer_workflow)
         self.assertNotIn('state: "approved"' + "\n" + '                    comment: ""', self.observer_workflow)
 
+    def test_stale_release_runs_are_cancelled_only_for_current_main(self) -> None:
+        for value in (
+            'workflow_path="junca-hardened-immutable-candidate-release.yml"',
+            'workflow_path="junca-validator-ami-build.yml"',
+            'workflow_path="junca-validator-foundation-release.yml"',
+            '[ "$source_binding" = "EXACT_CURRENT_MAIN" ]',
+            '.head_sha != $main_head',
+            '.status == "queued"',
+            '.status == "in_progress"',
+            '.status == "waiting"',
+            'actions/runs/${stale_run_id}/cancel',
+            'stale_run_cancellations',
+        ):
+            self.assertIn(value, self.observer_workflow)
+        self.assertIn('select(.id != $current_id)', self.observer_workflow)
+
     def test_ami_and_boot_contract_cover_all_three_services(self) -> None:
         for service in (
             "junca-validator.service",
