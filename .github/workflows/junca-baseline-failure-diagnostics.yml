@@ -1,0 +1,66 @@
+name: JUNCA Baseline Failure Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-baseline-failure-diagnostics.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_SOURCE_SHA: 5095561587653c7089448a91f8fdf43abda4cdd2
+      TARGET_WORKFLOW: junca-runtime-release-evidence-collector.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate failed baseline run and collect diagnostics
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/baseline-diagnostics
+          runs="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${TARGET_WORKFLOW}/runs?branch=main&per_page=100")"
+          jq --arg source "$TARGET_SOURCE_SHA" '[
+            .workflow_runs[] |
+            select(.head_sha == $source) |
+            {
+              id,
+              name,
+              status,
+              conclusion,
+              event,
+              head_sha,
+              created_at,
+              updated_at,
+              html_url
+            }
+          ]' <<<"$runs" > artifacts/baseline-diagnostics/runs.json
+          run_id="$(jq -er '
+            map(select(.status == "completed" and .conclusion == "failure")) |
+            sort_by(.created_at) |
+            last.id
+          ' artifacts/baseline-diagnostics/runs.json)"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          echo "$run_id" > artifacts/baseline-diagnostics/run-id
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json \
+            databaseId,name,status,conclusion,event,headSha,createdAt,updatedAt,url,jobs \
+            > artifacts/baseline-diagnostics/run.json
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed \
+            > artifacts/baseline-diagnostics/failed.log
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            > artifacts/baseline-diagnostics/artifacts.json
+          test -s artifacts/baseline-diagnostics/failed.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-baseline-failure-diagnostics-${{ github.run_id }}
+          path: artifacts/baseline-diagnostics/
+          if-no-files-found: error
+          retention-days: 7
