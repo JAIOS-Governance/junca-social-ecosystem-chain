@@ -19,6 +19,6 @@ jobs:
           jq . /tmp/x
           jq . /tmp/h
           jq . /tmp/r
-          jq -e '.status=="ready" and .head.signed_power==3 and .head.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/x
-          jq -e '.status=="healthy" and ((.consensus.last_certificate.signed_power // .head.signed_power)==3) and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/h
+          jq -e '.status=="ready" and .head.height==1 and .head.signed_power==3 and .head.total_power==3 and .finalized_only==true and .read_only==true and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/x
+          jq -e '.status=="healthy" and .schema_version=="junca-public-gateway-health/v1" and .validator.head_height==1 and .read_only==true and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/h
           jq -e '.result=="0x1352773"' /tmp/r
