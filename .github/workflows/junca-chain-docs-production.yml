@@ -205,7 +205,7 @@ jobs:
               --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
             test "${code}" = "200"
           done
-          for asset in favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png; do
+          for asset in favicon.ico favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png; do
             curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
               --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
             cmp "docs/technical-reference/dist/${asset}" "/tmp/${asset//\//-}"
