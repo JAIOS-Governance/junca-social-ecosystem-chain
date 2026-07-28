@@ -190,9 +190,10 @@ def compose(*arguments: str) -> None:
 
 
 def source_sha() -> str:
-    supplied = os.getenv("GITHUB_SHA", "")
-    if len(supplied) == 40:
-        return supplied
+    for name in ("JUNCA_SOURCE_SHA", "GITHUB_SHA"):
+        supplied = os.getenv(name, "").strip()
+        if len(supplied) == 40 and all(character in "0123456789abcdef" for character in supplied.lower()):
+            return supplied.lower()
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -293,6 +294,7 @@ def main() -> int:
                 "baseline_height": baseline_height,
                 "stalled_height": stalled_height,
                 "recovered_height": recovered["validator-01"]["head_height"],
+                "source_commit": evidence["source_commit"],
                 "state": "ACCEPTED",
             },
             sort_keys=True,
