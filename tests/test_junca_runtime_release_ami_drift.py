@@ -198,10 +198,14 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             drift.collector.verify_migration_evidence, original_migration
         )
 
-    def test_v2_workflow_uses_drift_wrapper_and_preserves_diagnostics(self):
+    def test_v2_workflow_and_wrapper_preserve_lineage_contract(self):
+        root = Path(__file__).resolve().parents[1]
         workflow = (
-            Path(__file__).resolve().parents[1]
+            root
             / ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
+        ).read_text(encoding="utf-8")
+        wrapper = (
+            root / "scripts/junca_runtime_release_evidence_collector_drift.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "python scripts/junca_runtime_release_evidence_collector_drift.py",
@@ -211,13 +215,16 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
         self.assertIn(
             "junca-runtime-release-evidence-${{ github.run_id }}", workflow
         )
-        self.assertIn(
-            'migration_lineage_state == "RETAINED_STATE_LINEAGE_VERIFIED"',
-            workflow,
-        )
-        self.assertIn(
-            ".migration_retained_state_lineage_verified == true", workflow
-        )
+        for value in (
+            "RETAINED_STATE_LINEAGE_VERIFIED",
+            "migration_retained_state_lineage_verified",
+            "migration_original_validator_mappings",
+            "migration_current_validator_mappings",
+            "migration_retained_state_volume_ids",
+            "migration_retained_rollback_snapshot_ids",
+            "migration_retained_signer_arns",
+        ):
+            self.assertIn(value, wrapper)
         for path in (
             "evidence/readback/bootstrap-outputs.json",
             "evidence/readback/public-testnet-outputs.json",
