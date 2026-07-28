@@ -1,0 +1,330 @@
+name: JUNCA Hardened Immutable Candidate Release
+
+on:
+  workflow_run:
+    workflows:
+      - "JUNCA Validator Runtime Artifacts"
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: junca-hardened-immutable-candidate-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.name == 'JUNCA Validator Runtime Artifacts' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 360
+    env:
+      POLICY_PATH: config/junca_hardened_immutable_candidate_policy.json
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Bind hardened runtime and create a new immutable request
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head "$SOURCE_COMMIT" '
+              .status == "completed" and
+              .conclusion == "success" and
+              .name == "JUNCA Validator Runtime Artifacts" and
+              .path == ".github/workflows/junca-validator-runtime-artifacts.yml" and
+              .event == "push" and
+              .head_branch == "main" and
+              .head_sha == $head and
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository
+            ' <<<"$run"
+          test "$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha
+          )" = "$SOURCE_COMMIT"
+
+          python scripts/junca_hardened_immutable_candidate_policy.py \
+            --policy "$POLICY_PATH" \
+            --candidate-source-commit "$SOURCE_COMMIT" \
+            --github-output "$GITHUB_OUTPUT"
+          minimum_hardened_commit="$(
+            jq -er .minimum_hardened_main_commit "$POLICY_PATH"
+          )"
+          git merge-base --is-ancestor "$minimum_hardened_commit" "$SOURCE_COMMIT"
+
+          mkdir -p artifacts/runtime artifacts/genesis artifacts/source-evidence \
+            artifacts/release-switch
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-validator-runtime-${SOURCE_RUN_ID}" \
+            --dir artifacts/runtime
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-validator-genesis-${SOURCE_RUN_ID}" \
+            --dir artifacts/genesis
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-validator-runtime-evidence-${SOURCE_RUN_ID}" \
+            --dir artifacts/source-evidence
+          (
+            cd artifacts/source-evidence
+            sha256sum -c SHA256SUMS
+          )
+          node_sha256="$(
+            sha256sum artifacts/runtime/validator-runtime.tar.gz | cut -d' ' -f1
+          )"
+          genesis_sha256="$(
+            sha256sum artifacts/genesis/genesis.json | cut -d' ' -f1
+          )"
+          jq -e \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node "$node_sha256" \
+            --arg genesis "$genesis_sha256" '
+              .schema_version == "junca-validator-runtime-build/v1" and
+              .state == "IMMUTABLE_INPUTS_VERIFIED" and
+              .source_commit == $source_commit and
+              .node_artifact_sha256 == $node and
+              .genesis_sha256 == $genesis and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false
+            ' artifacts/source-evidence/runtime-build.json
+
+          migration_run_id="$(jq -er .migration_binding.run_id "$POLICY_PATH")"
+          migration_evidence_sha256="$(
+            jq -er .migration_binding.evidence_sha256 "$POLICY_PATH"
+          )"
+          jq -n \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_name "junca-validator-runtime-${SOURCE_RUN_ID}" \
+            --arg genesis_name "junca-validator-genesis-${SOURCE_RUN_ID}" \
+            --arg node_sha256 "$node_sha256" \
+            --arg genesis_sha256 "$genesis_sha256" \
+            --arg migration_run_id "$migration_run_id" \
+            --arg migration_evidence_sha256 "$migration_evidence_sha256" '{
+              schema_version: "junca-validator-ami-build-request/v1",
+              state: "AUTHORIZED",
+              network: "Public Testnet",
+              environment: "public-testnet",
+              approval_phrase: "PUBLIC_TESTNET_IMMUTABLE_AMI_BUILD",
+              source_run_id: $source_run_id,
+              source_commit: $source_commit,
+              node_artifact_name: $node_name,
+              genesis_artifact_name: $genesis_name,
+              node_sha256: $node_sha256,
+              genesis_sha256: $genesis_sha256,
+              migration_run_id: $migration_run_id,
+              migration_evidence_sha256: $migration_evidence_sha256,
+              boundaries: {
+                terraform_state_changed: false,
+                mainnet_changed: false,
+                assets_moved: false,
+                bridge_activated: false
+              },
+              request_sha256: ""
+            }' > artifacts/release-switch/request.pending.json
+          python scripts/junca_validator_ami_build_request.py \
+            --request artifacts/release-switch/request.pending.json \
+            --seal-missing-digest \
+            --require-migration-binding \
+            --github-output "$GITHUB_OUTPUT"
+          request_sha256="$(
+            grep '^request_sha256=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2
+          )"
+          jq --arg request_sha256 "$request_sha256" \
+            '.request_sha256 = $request_sha256' \
+            artifacts/release-switch/request.pending.json \
+            > artifacts/release-switch/request.json
+          rm artifacts/release-switch/request.pending.json
+          python scripts/junca_validator_ami_build_request.py \
+            --request artifacts/release-switch/request.json \
+            --require-migration-binding
+          python scripts/junca_hardened_immutable_candidate_policy.py \
+            --policy "$POLICY_PATH" \
+            --request artifacts/release-switch/request.json
+
+          {
+            echo "source_run_id=$SOURCE_RUN_ID"
+            echo "source_commit=$SOURCE_COMMIT"
+            echo "node_sha256=$node_sha256"
+            echo "genesis_sha256=$genesis_sha256"
+            echo "migration_run_id=$migration_run_id"
+            echo "migration_evidence_sha256=$migration_evidence_sha256"
+            echo "request_sha256=$request_sha256"
+          } >> "$GITHUB_OUTPUT"
+          sha256sum artifacts/release-switch/request.json \
+            > artifacts/release-switch/request.json.sha256
+
+      - name: Build and verify a new hardened immutable AMI
+        id: ami
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ami_run_id="$(
+            bash scripts/junca_dispatch_workflow_and_wait.sh \
+              --workflow-name "JUNCA Validator Immutable AMI Build" \
+              --workflow-path ".github/workflows/junca-validator-ami-build.yml" \
+              --expected-head "$SOURCE_COMMIT" \
+              --attempts 380 \
+              --sleep-seconds 15 \
+              --input "source_run_id=${{ steps.candidate.outputs.source_run_id }}" \
+              --input "source_commit=${{ steps.candidate.outputs.source_commit }}" \
+              --input "node_artifact_name=junca-validator-runtime-${{ steps.candidate.outputs.source_run_id }}" \
+              --input "genesis_artifact_name=junca-validator-genesis-${{ steps.candidate.outputs.source_run_id }}" \
+              --input "node_sha256=${{ steps.candidate.outputs.node_sha256 }}" \
+              --input "genesis_sha256=${{ steps.candidate.outputs.genesis_sha256 }}" \
+              --input "request_sha256=${{ steps.candidate.outputs.request_sha256 }}"
+          )"
+          mkdir -p artifacts/ami
+          gh run download "$ami_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-validator-ami-build-${ami_run_id}" \
+            --dir artifacts/ami
+          (
+            cd artifacts/ami
+            sha256sum -c SHA256SUMS
+          )
+          jq -e \
+            --arg source_run_id "${{ steps.candidate.outputs.source_run_id }}" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node "${{ steps.candidate.outputs.node_sha256 }}" \
+            --arg genesis "${{ steps.candidate.outputs.genesis_sha256 }}" \
+            --arg request "${{ steps.candidate.outputs.request_sha256 }}" '
+              .state == "AMI_VERIFIED" and
+              .source_run_id == $source_run_id and
+              .source_commit == $source_commit and
+              .node_artifact_sha256 == $node and
+              .genesis_sha256 == $genesis and
+              .request_sha256 == $request and
+              .reused_existing_ami == false and
+              (.ami_id | test("^ami-[0-9a-f]{8,17}$")) and
+              .terraform_state_changed == false and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false
+            ' artifacts/ami/junca-validator-ami-build.json
+          python scripts/junca_hardened_immutable_candidate_policy.py \
+            --policy "$POLICY_PATH" \
+            --candidate-source-commit "$SOURCE_COMMIT" \
+            --candidate-request-sha256 "${{ steps.candidate.outputs.request_sha256 }}" \
+            --candidate-ami-run-id "$ami_run_id"
+          echo "ami_run_id=$ami_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Collect exact pre-rollout baseline evidence
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          evidence_run_id="$(
+            bash scripts/junca_dispatch_workflow_and_wait.sh \
+              --workflow-name "JUNCA Runtime Release Evidence Collector" \
+              --workflow-path ".github/workflows/junca-runtime-release-evidence-collector.yml" \
+              --expected-head "$SOURCE_COMMIT" \
+              --attempts 120 \
+              --sleep-seconds 15 \
+              --input "ami_run_id=${{ steps.ami.outputs.ami_run_id }}" \
+              --input "migration_run_id=${{ steps.candidate.outputs.migration_run_id }}" \
+              --input "migration_evidence_sha256=${{ steps.candidate.outputs.migration_evidence_sha256 }}" \
+              --input "source_commit=$SOURCE_COMMIT"
+          )"
+          echo "evidence_run_id=$evidence_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Pass the exact release manifest gate
+        id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest_run_id="$(
+            bash scripts/junca_dispatch_workflow_and_wait.sh \
+              --workflow-name "JUNCA Runtime Release Manifest Gate" \
+              --workflow-path ".github/workflows/junca-runtime-release-manifest-gate.yml" \
+              --expected-head "$SOURCE_COMMIT" \
+              --attempts 80 \
+              --sleep-seconds 15 \
+              --input "evidence_run_id=${{ steps.evidence.outputs.evidence_run_id }}" \
+              --input "source_commit=$SOURCE_COMMIT" \
+              --input "node_artifact_sha256=${{ steps.candidate.outputs.node_sha256 }}" \
+              --input "genesis_sha256=${{ steps.candidate.outputs.genesis_sha256 }}"
+          )"
+          echo "manifest_run_id=$manifest_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Execute fresh one-validator-at-a-time Foundation release
+        id: foundation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          foundation_run_id="$(
+            bash scripts/junca_dispatch_workflow_and_wait.sh \
+              --workflow-name "JUNCA Validator Foundation Release" \
+              --workflow-path ".github/workflows/junca-validator-foundation-release.yml" \
+              --expected-head "$SOURCE_COMMIT" \
+              --attempts 840 \
+              --sleep-seconds 15 \
+              --input "ami_run_id=${{ steps.ami.outputs.ami_run_id }}" \
+              --input "manifest_gate_run_id=${{ steps.manifest.outputs.manifest_run_id }}" \
+              --input "resume_run_id=0" \
+              --input "authorize_rollout=PUBLIC_TESTNET_ROLLOUT"
+          )"
+          echo "foundation_run_id=$foundation_run_id" >> "$GITHUB_OUTPUT"
+          jq -n \
+            --arg source_run_id "${{ steps.candidate.outputs.source_run_id }}" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha256 "${{ steps.candidate.outputs.node_sha256 }}" \
+            --arg genesis_sha256 "${{ steps.candidate.outputs.genesis_sha256 }}" \
+            --arg request_sha256 "${{ steps.candidate.outputs.request_sha256 }}" \
+            --arg ami_run_id "${{ steps.ami.outputs.ami_run_id }}" \
+            --arg evidence_run_id "${{ steps.evidence.outputs.evidence_run_id }}" \
+            --arg manifest_run_id "${{ steps.manifest.outputs.manifest_run_id }}" \
+            --arg foundation_run_id "$foundation_run_id" '{
+              schema_version: "junca-hardened-immutable-release-chain/v1",
+              state: "FOUNDATION_ACCEPTED",
+              source_run_id: $source_run_id,
+              source_commit: $source_commit,
+              node_artifact_sha256: $node_sha256,
+              genesis_sha256: $genesis_sha256,
+              request_sha256: $request_sha256,
+              ami_run_id: $ami_run_id,
+              evidence_run_id: $evidence_run_id,
+              manifest_run_id: $manifest_run_id,
+              foundation_run_id: $foundation_run_id,
+              endpoint_publication: "WORKFLOW_RUN_CHAIN_PENDING",
+              live_soak: "WORKFLOW_RUN_CHAIN_PENDING",
+              final_acceptance: "WORKFLOW_RUN_CHAIN_PENDING",
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/release-switch/release-chain.json
+          sha256sum artifacts/release-switch/release-chain.json \
+            > artifacts/release-switch/release-chain.json.sha256
+
+      - name: Upload immutable release-switch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-hardened-immutable-candidate-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
