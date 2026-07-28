@@ -49,15 +49,15 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "${PWD}/docker/observability:/config:ro" \
+            -v "${PWD}/docker/observability:/etc/prometheus:ro" \
             --entrypoint /bin/promtool \
             prom/prometheus:v3.5.0 \
-            check config /config/prometheus.yaml
+            check config /etc/prometheus/prometheus.yaml
           docker run --rm \
-            -v "${PWD}/docker/observability:/config:ro" \
+            -v "${PWD}/docker/observability:/etc/prometheus:ro" \
             --entrypoint /bin/promtool \
             prom/prometheus:v3.5.0 \
-            check rules /config/junca-rules.yaml
+            check rules /etc/prometheus/junca-rules.yaml
 
       - name: Build exporter container
         run: docker build -f docker/observability/Dockerfile.exporter -t junca-observability-exporter:test .
