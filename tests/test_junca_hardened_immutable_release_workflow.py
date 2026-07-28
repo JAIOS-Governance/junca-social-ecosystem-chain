@@ -94,6 +94,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             'requested) result="RUN_REQUESTED"',
             'in_progress) result="RUNNING"',
             'completed)',
+            "actions: write",
             "issues: write",
             "head_repository.full_name == github.repository",
             "head_branch == 'main'",
@@ -111,6 +112,21 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             "Bridge Activated: false",
         ):
             self.assertIn(value, self.observer_workflow)
+
+    def test_environment_review_is_exact_main_and_fail_closed(self) -> None:
+        for value in (
+            'environment_review="REVIEW_IF_REQUESTED"',
+            '[ "$OBSERVED_ACTION" = "requested" ]',
+            '[ "$source_binding" = "EXACT_CURRENT_MAIN" ]',
+            'pending_deployments',
+            'length == 1',
+            '.environment.name == "public-testnet"',
+            'state: "approved"',
+            'APPROVED_EXACT_CURRENT_MAIN',
+            'CEO-authorized exact-current-main Public Testnet release',
+        ):
+            self.assertIn(value, self.observer_workflow)
+        self.assertNotIn('state: "approved"' + "\n" + '                    comment: ""', self.observer_workflow)
 
     def test_ami_and_boot_contract_cover_all_three_services(self) -> None:
         for service in (
