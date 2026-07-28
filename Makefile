@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 .PHONY: help doctor dev-test unit runtime genesis clean \
-	local-network-config local-network-up local-network-down \
+	local-network-config local-network-up local-network-status local-network-down \
 	local-network-reset local-network-test
 
 help:
@@ -16,6 +16,7 @@ help:
 	  '  make dev-test             Run unit, runtime and genesis acceptance locally' \
 	  '  make local-network-config Validate the isolated three-validator topology' \
 	  '  make local-network-up     Build and start the isolated three-validator network' \
+	  '  make local-network-status Show local validator service status' \
 	  '  make local-network-down   Stop the network and preserve local state' \
 	  '  make local-network-reset  Stop the network and delete local state' \
 	  '  make local-network-test   Run finality, quorum-loss and recovery acceptance' \
@@ -48,6 +49,9 @@ local-network-config:
 
 local-network-up:
 	@bash scripts/dev/local-network.sh up
+
+local-network-status:
+	@bash scripts/dev/local-network.sh status
 
 local-network-down:
 	@bash scripts/dev/local-network.sh down
