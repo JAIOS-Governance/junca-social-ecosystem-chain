@@ -66,6 +66,18 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("hardened_candidate_policy_sha256", self.runtime_workflow)
 
+    def test_runtime_evidence_checksum_is_artifact_portable(self) -> None:
+        self.assertIn("cd artifacts/evidence", self.runtime_workflow)
+        self.assertIn(
+            "sha256sum runtime-build.json > SHA256SUMS",
+            self.runtime_workflow,
+        )
+        self.assertIn("sha256sum -c SHA256SUMS", self.runtime_workflow)
+        self.assertNotIn(
+            "sha256sum artifacts/evidence/runtime-build.json",
+            self.runtime_workflow,
+        )
+
     def test_release_observer_records_governed_workflow_evidence(self) -> None:
         for workflow_name in (
             "JUNCA Validator Runtime Artifacts",
