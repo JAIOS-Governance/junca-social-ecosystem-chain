@@ -1,11 +1,14 @@
-"""Liveness-preserving automatic finality loop for the Public Testnet.
+"""Liveness-preserving automatic finality loop for Mainnet candidates.
 
 A validator may retain a deterministic proposal when quorum delivery fails in
-its original wall-clock slot.  Dropping that proposal would permit the same
-validator to sign a different block at the same height and round.  Refusing to
-retry it, however, permanently stalls the node.  This loop retries the exact
+its original wall-clock slot. Dropping that proposal would permit the same
+validator to sign a different block at the same height and round. Refusing to
+retry it, however, permanently stalls the node. This loop retries the exact
 pending proposal, timestamp and signing-journal entry at most once per later
 wall-clock slot until quorum finalizes it.
+
+The current Public Testnet is the verification environment for this Mainnet
+Candidate consensus-liveness primitive. This module does not activate Mainnet.
 """
 
 from __future__ import annotations
@@ -55,11 +58,10 @@ class RecoveringBoundedFinalityLoop(BoundedFinalityLoop):
                     "pending proposal timestamp is ahead of the canonical slot"
                 )
 
-            if (
-                self.state.automatic_finality_last_attempted_slot == current_slot
-                and self.state.automatic_finality_last_successful_slot
-                == current_slot
-            ):
+            # The attempted-slot marker is the replay boundary. A transport may
+            # partially deliver before raising, so success cannot be required to
+            # suppress a second broadcast in the same canonical slot.
+            if self.state.automatic_finality_last_attempted_slot == current_slot:
                 return False
 
             next_height = head.height + 1
