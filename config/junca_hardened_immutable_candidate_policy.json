@@ -1,0 +1,84 @@
+{
+  "schema_version": "junca-hardened-immutable-candidate-policy/v1",
+  "state": "AUTHORIZED",
+  "network": "Public Testnet",
+  "environment": "public-testnet",
+  "minimum_hardened_main_commit": "8ff509be3733cb1f6e55cb4c0d3af66d997678d1",
+  "migration_binding": {
+    "run_id": "30301559973",
+    "evidence_sha256": "9e91cd13dd1971c2f9630aa51813263997e10bb4562e8b7228cbc18e47fc7334"
+  },
+  "retired_candidates": [
+    {
+      "candidate_id": "pr-145-legacy-ami",
+      "source_commit": "598152b38364e1cc85ec5e6e737f3e5830945d8a",
+      "request_sha256": "a64b7762bc561ce1ab3fe24bff95a4f1dc756f9e27d8270f4126e54e496815ec",
+      "ami_run_id": "30311265807",
+      "manifest_gate_run_id": "30311368029",
+      "preserve_for_audit": true,
+      "acceptance_eligible": false,
+      "foundation_resume_allowed": false,
+      "reason": "Incomplete immutable service contract before PR #215 hardening"
+    }
+  ],
+  "required_runtime_contract": [
+    "validator-runtime",
+    "explorer-runtime",
+    "read-only-rpc-runtime",
+    "systemd-units",
+    "non-root-runtime-identity",
+    "boot-auto-start",
+    "required-port-listen",
+    "health-endpoints",
+    "retained-ebs-state-recovery",
+    "genesis-runtime-digest-binding",
+    "source-ami-manifest-request-binding",
+    "restart-acceptance",
+    "fail-closed-startup"
+  ],
+  "rolling_release": {
+    "strategy": "one-validator-at-a-time",
+    "validator_order": [
+      "validator-01",
+      "validator-02",
+      "validator-03"
+    ],
+    "max_validator_replacements_per_apply": 1,
+    "terraform_destroy_allowed": false,
+    "parallel_replacement_allowed": false,
+    "preserve_terraform_state": true,
+    "preserve_retained_ebs": true,
+    "require_same_finalized_head_before_next": true,
+    "require_quorum": "3/3",
+    "require_healthy_public_gateway": true
+  },
+  "acceptance": {
+    "required_gates": [
+      "new-immutable-ami",
+      "pre-rollout-baseline",
+      "manifest",
+      "terraform-no-destroy",
+      "validator-01",
+      "validator-02",
+      "validator-03",
+      "same-finalized-head",
+      "quorum-3-of-3",
+      "continuous-block-production",
+      "explorer-health-rpc-readback",
+      "canonical-endpoint-publication",
+      "restart-failure-recovery",
+      "24-hour-soak",
+      "release-evidence"
+    ],
+    "final_marker": "PUBLIC_TESTNET_RUNTIME_ACCEPTED"
+  },
+  "boundaries": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "public_rpc_read_only": true,
+    "transaction_submission_enabled": false,
+    "mainnet_activation_authorized": false
+  },
+  "policy_sha256": "cad3fae62c84ae48db67e921a5463d29193a81950649c9eea290a0018b4666b0"
+}
