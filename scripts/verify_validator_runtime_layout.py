@@ -16,6 +16,13 @@ REQUIRED_FILES = {
     "etc/systemd/system/junca-public-explorer.service": 0,
 }
 
+ENTRYPOINTS = (
+    "usr/local/bin/junca-chain-node",
+    "usr/local/bin/junca-public-gateway",
+)
+RUNTIME_IMPORT_BINDING = "sys.path.insert(0, '/usr/local/lib/junca')"
+PYTHON_PACKAGE_ROOT = "usr/local/lib/junca/jaios/social_ecosystem_chain"
+
 COMMON_SERVICE_CONTRACTS = (
     "User=junca",
     "Group=junca",
@@ -47,6 +54,14 @@ SERVICE_CONTRACTS = {
 }
 
 
+def _compile_python(path: Path, relative: str) -> None:
+    try:
+        source = path.read_text(encoding="utf-8")
+        compile(source, relative, "exec")
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise ValueError(f"runtime Python source is invalid: {relative}") from exc
+
+
 def verify(root: Path) -> None:
     if not root.is_dir():
         raise ValueError(f"runtime root is not a directory: {root}")
@@ -57,6 +72,28 @@ def verify(root: Path) -> None:
             raise ValueError(f"required regular file missing: {relative}")
         if executable_mask and not (path.stat().st_mode & executable_mask):
             raise ValueError(f"required executable bit missing: {relative}")
+
+    for relative in ENTRYPOINTS:
+        path = root / relative
+        text = path.read_text(encoding="utf-8")
+        if not text.startswith("#!/usr/bin/env python3\n"):
+            raise ValueError(f"runtime entrypoint shebang is invalid: {relative}")
+        if text.count(RUNTIME_IMPORT_BINDING) != 1:
+            raise ValueError(
+                f"runtime entrypoint import binding is missing or duplicated: {relative}"
+            )
+        _compile_python(path, relative)
+
+    package_root = root / PYTHON_PACKAGE_ROOT
+    modules = sorted(package_root.glob("*.py"))
+    if not modules:
+        raise ValueError("runtime Python package is missing")
+    for module in modules:
+        _compile_python(module, str(module.relative_to(root)))
+
+    required_liveness = package_root / "validator_liveness.py"
+    if not required_liveness.is_file() or required_liveness.is_symlink():
+        raise ValueError("validator liveness module is missing from runtime")
 
     for relative, required_terms in SERVICE_CONTRACTS.items():
         text = (root / relative).read_text(encoding="utf-8")
@@ -81,7 +118,9 @@ def verify(root: Path) -> None:
         if actual != digest:
             raise ValueError(f"runtime digest mismatch: {relative}")
 
-    required_digest_paths = set(REQUIRED_FILES)
+    required_digest_paths = set(REQUIRED_FILES) | {
+        f"{PYTHON_PACKAGE_ROOT}/validator_liveness.py"
+    }
     if not required_digest_paths <= entries:
         missing = sorted(required_digest_paths - entries)
         raise ValueError(f"required runtime digest entries missing: {missing}")
