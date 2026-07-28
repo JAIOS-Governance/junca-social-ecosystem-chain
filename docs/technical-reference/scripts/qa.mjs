@@ -196,10 +196,25 @@ for (const retiredTypedLockup of [
 ]) {
   if (home.includes(retiredTypedLockup)) failures.push(`/: retired typed lockup remains: ${retiredTypedLockup}`);
 }
-await readFile(join(dist, "junca-j-r21-192.png"));
-await readFile(join(dist, "junca-j-r21-512.png"));
-await readFile(join(dist, "junca-j-r21-maskable-512.png"));
-await readFile(join(dist, "junca-j-r21-apple-touch.png"));
+const retiredAssets = [
+  "junca-j-r21-192.png",
+  "junca-j-r21-512.png",
+  "junca-j-r21-maskable-512.png",
+  "junca-j-r21-apple-touch.png",
+  "junca-j-r21.svg",
+  "junca-j-r21.webmanifest",
+  "junca-symbol-r20-192.png",
+  "junca-symbol-r20-512.png",
+  "junca-symbol-r20-maskable-512.png",
+  "junca-symbol-r20-apple-touch.png",
+  "junca-symbol-r20.svg",
+  "junca-symbol-r20.webmanifest",
+];
+const rootAssets = new Set(await readdir(dist));
+for (const retiredAsset of retiredAssets) {
+  if (rootAssets.has(retiredAsset)) failures.push(`retired install asset remains: ${retiredAsset}`);
+  if (home.includes(retiredAsset)) failures.push(`/: retired install asset reference remains: ${retiredAsset}`);
+}
 const favicon = await readFile(join(dist, "favicon.svg"), "utf8");
 if (!favicon.includes('data-symbol="JUNCA Official Symbol"')) failures.push("favicon does not declare the official symbol");
 if (!favicon.includes('data-rendering="non-distorting-resize"')) failures.push("favicon symbol rendering contract is missing");
@@ -216,14 +231,6 @@ const expectedSymbolDigests = new Map([
   ["icon-512.png", "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"],
   ["icon-maskable-512.png", "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"],
   ["apple-touch-icon.png", "1eb5fb801e45366beabf85cc724ac4686864f805b64540c23e8a36aeaf2903f5"],
-  ["junca-symbol-r20-192.png", "48db3873676c0b70969b47b067a51907d8b69bb2c6b231253bb83a767b7604f7"],
-  ["junca-symbol-r20-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
-  ["junca-symbol-r20-maskable-512.png", "d93ca49d87da8098423d7afa2be3d4ec7af5a042c115e30896a20be55d1567c5"],
-  ["junca-symbol-r20-apple-touch.png", "30aaf78297a8dd8077025eefc3d7b4bf613fd1ab955dd1d47858f9d797ecec88"],
-  ["junca-j-r21-192.png", "6588f3699cc6d5d3c6fdf2ea557221e519d929063c4d12a9ffb3c2ef38265fdf"],
-  ["junca-j-r21-512.png", "6a4dade831a4a9b6e72761a172b713ccddc8d904ab0f2fea34a17d5cf3993172"],
-  ["junca-j-r21-maskable-512.png", "6a4dade831a4a9b6e72761a172b713ccddc8d904ab0f2fea34a17d5cf3993172"],
-  ["junca-j-r21-apple-touch.png", "b851abc4eed6991b3dae2914422b9ae3ecb32913e85283dca1452e124248a675"],
 ]);
 for (const [name, expected] of expectedSymbolDigests) {
   const path = name === "official-junca-symbol.png"

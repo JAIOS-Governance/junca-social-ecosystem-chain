@@ -210,9 +210,12 @@ jobs:
               --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
             cmp "docs/technical-reference/dist/${asset}" "/tmp/${asset//\//-}"
           done
+          release_token="$(jq -er '.release | gsub("\\."; "")' docs/technical-reference/dist/release-manifest.json)"
+          revision_token="$(jq -er '.revision | ascii_downcase' docs/technical-reference/dist/release-manifest.json)"
+          cache_token="${release_token}-${revision_token}"
           grep -F 'rel="canonical" href="https://docs.jaios-governance.org/"' /tmp/home.html
-          grep -F 'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260727-r26"' /tmp/home.html
-          grep -F 'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260727-r26"' /tmp/home.html
+          grep -F "rel=\"manifest\" href=\"https://docs.jaios-governance.org/manifest.webmanifest?v=${cache_token}\"" /tmp/home.html
+          grep -F "rel=\"apple-touch-icon\" href=\"https://docs.jaios-governance.org/apple-touch-icon.png?v=${cache_token}\"" /tmp/home.html
           manifest_headers="$(curl --fail --silent --show-error --head \
             "https://docs.jaios-governance.org/manifest.webmanifest")"
           grep -i '^content-type: application/manifest+json' <<< "${manifest_headers}"

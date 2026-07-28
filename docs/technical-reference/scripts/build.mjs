@@ -105,6 +105,22 @@ const governanceLinkStyle = [
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await cp(snapshot, dist, { recursive: true });
+for (const retiredAsset of [
+  "junca-j-r21-192.png",
+  "junca-j-r21-512.png",
+  "junca-j-r21-maskable-512.png",
+  "junca-j-r21-apple-touch.png",
+  "junca-j-r21.svg",
+  "junca-j-r21.webmanifest",
+  "junca-symbol-r20-192.png",
+  "junca-symbol-r20-512.png",
+  "junca-symbol-r20-maskable-512.png",
+  "junca-symbol-r20-apple-touch.png",
+  "junca-symbol-r20.svg",
+  "junca-symbol-r20.webmanifest",
+]) {
+  await rm(join(dist, retiredAsset), { force: true });
+}
 await cp(officialWordmarkSource, join(dist, "junca-chain-official-wordmark.png"));
 await cp(
   join(snapshot, "official-brand-lockup-r29.js"),
