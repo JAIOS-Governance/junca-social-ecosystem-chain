@@ -1,0 +1,97 @@
+name: JUNCA Public Testnet Continuity Evidence
+
+on:
+  pull_request:
+    paths:
+      - "scripts/ops/public_testnet_continuity.py"
+      - "tests/test_public_testnet_continuity.py"
+      - ".github/workflows/junca-public-testnet-continuity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/ops/public_testnet_continuity.py"
+      - "tests/test_public_testnet_continuity.py"
+      - ".github/workflows/junca-public-testnet-continuity.yml"
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      require_advancement:
+        description: "Require finalized height advancement during the observation window"
+        required: true
+        default: true
+        type: boolean
+      samples:
+        description: "Number of evidence samples"
+        required: true
+        default: "3"
+        type: string
+      interval_seconds:
+        description: "Seconds between samples"
+        required: true
+        default: "30"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-public-testnet-continuity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate continuity evidence contract
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/ops/public_testnet_continuity.py
+          python -m unittest tests.test_public_testnet_continuity -v
+
+  live-continuity-readback:
+    if: github.event_name != 'pull_request'
+    needs: contract-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SAMPLES: ${{ inputs.samples || '3' }}
+      INTERVAL_SECONDS: ${{ inputs.interval_seconds || '30' }}
+      REQUIRE_ADVANCEMENT: ${{ github.event_name != 'workflow_dispatch' || inputs.require_advancement }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Collect Public Testnet continuity evidence
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/public-testnet-continuity
+          advancement_flag="--require-advancement"
+          if [ "${REQUIRE_ADVANCEMENT}" = "false" ]; then
+            advancement_flag=""
+          fi
+          python scripts/ops/public_testnet_continuity.py \
+            --source-sha "${GITHUB_SHA}" \
+            --samples "${SAMPLES}" \
+            --interval-seconds "${INTERVAL_SECONDS}" \
+            --output artifacts/public-testnet-continuity/evidence.json \
+            ${advancement_flag}
+
+      - name: Upload continuity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-public-testnet-continuity-${{ github.run_id }}
+          path: artifacts/public-testnet-continuity/
+          if-no-files-found: error
+          retention-days: 30
