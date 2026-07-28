@@ -66,6 +66,8 @@ jobs:
           docker compose -f docker/local-network/compose.yaml config --quiet
 
       - name: Run three-validator finality and recovery acceptance
+        env:
+          JUNCA_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/dev/local-network.sh test
 
       - name: Upload local network evidence
