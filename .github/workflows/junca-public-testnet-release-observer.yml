@@ -10,14 +10,14 @@ on:
       - "JUNCA Runtime Release Manifest Gate"
       - "JUNCA Validator Foundation Release"
       - "JUNCA Public Testnet Continuity Evidence"
-    types: [completed]
+    types: [requested, in_progress, completed]
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: junca-public-testnet-release-observer-${{ github.event.workflow_run.id }}
+  group: junca-public-testnet-release-observer-${{ github.event.workflow_run.id }}-${{ github.event.action }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
+      OBSERVED_ACTION: ${{ github.event.action }}
       OBSERVED_NAME: ${{ github.event.workflow_run.name }}
       OBSERVED_RUN_ID: ${{ github.event.workflow_run.id }}
       OBSERVED_RUN_URL: ${{ github.event.workflow_run.html_url }}
@@ -46,15 +47,22 @@ jobs:
           [[ "$OBSERVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$OBSERVED_RUN_URL" == "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}" ]]
 
-          case "$OBSERVED_CONCLUSION" in
-            success) result="VERIFIED" ;;
-            failure) result="REJECTED" ;;
-            cancelled) result="CANCELLED" ;;
-            timed_out) result="TIMED_OUT" ;;
-            action_required) result="ACTION_REQUIRED" ;;
-            skipped) result="SKIPPED" ;;
-            neutral) result="NEUTRAL" ;;
-            *) echo "Unsupported workflow conclusion: $OBSERVED_CONCLUSION" >&2; exit 1 ;;
+          case "$OBSERVED_ACTION" in
+            requested) result="RUN_REQUESTED" ;;
+            in_progress) result="RUNNING" ;;
+            completed)
+              case "$OBSERVED_CONCLUSION" in
+                success) result="VERIFIED" ;;
+                failure) result="REJECTED" ;;
+                cancelled) result="CANCELLED" ;;
+                timed_out) result="TIMED_OUT" ;;
+                action_required) result="ACTION_REQUIRED" ;;
+                skipped) result="SKIPPED" ;;
+                neutral) result="NEUTRAL" ;;
+                *) echo "Unsupported workflow conclusion: $OBSERVED_CONCLUSION" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unsupported workflow action: $OBSERVED_ACTION" >&2; exit 1 ;;
           esac
 
           case "$OBSERVED_NAME" in
@@ -93,7 +101,6 @@ jobs:
               ;;
           esac
 
-          # Issue #266 is the compact append-only ledger for every release phase.
           issues="266 ${issues}"
 
           main_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
@@ -108,16 +115,17 @@ jobs:
 
           - Phase: \`${phase}\`
           - Result: **${result}**
+          - Workflow action: \`${OBSERVED_ACTION}\`
           - Workflow: \`${OBSERVED_NAME}\`
           - Run ID: \`${OBSERVED_RUN_ID}\`
           - Run: ${OBSERVED_RUN_URL}
-          - Event: \`${OBSERVED_EVENT}\`
+          - Trigger event: \`${OBSERVED_EVENT}\`
           - Source SHA: \`${OBSERVED_HEAD_SHA}\`
           - Source binding: \`${source_binding}\`
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          This record reports workflow evidence only. It does not independently declare continuous Public Testnet operation unless the continuity and rollout acceptance gates also succeed.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. This record does not independently declare continuous Public Testnet operation unless rollout and continuity acceptance both succeed.
 
           Safety boundary:
           - Public Testnet / No Monetary Value

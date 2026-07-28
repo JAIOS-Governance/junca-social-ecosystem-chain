@@ -90,6 +90,10 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(workflow_name, self.observer_workflow)
         for value in (
+            "types: [requested, in_progress, completed]",
+            'requested) result="RUN_REQUESTED"',
+            'in_progress) result="RUNNING"',
+            'completed)',
             "issues: write",
             "head_repository.full_name == github.repository",
             "head_branch == 'main'",
