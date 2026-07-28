@@ -14,57 +14,43 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      TARGET_SHA: 2e5ffdc87e5b713d4022165f894776fb0131ea20
-      READBACK_GENERATION: "6"
+      READBACK_GENERATION: "7"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read exact-source release and patch workflows
+      - name: Read every patch-controller run
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$READBACK_GENERATION" = "6"
+          test "$READBACK_GENERATION" = "7"
           mkdir -p artifacts/v2-release-readback
-          for workflow in \
-            apply-evidence-bound-live-prefix-patch.yml \
-            junca-hardened-immutable-candidate-release-v2.yml \
-            junca-hardened-immutable-candidate-release.yml \
-            junca-validator-ami-build.yml \
-            junca-runtime-release-evidence-collector-v2.yml \
-            junca-runtime-release-evidence-collector.yml \
-            junca-runtime-release-manifest-gate.yml \
-            junca-validator-foundation-release.yml \
-            junca-public-testnet-continuity.yml; do
-            target="artifacts/v2-release-readback/${workflow%.yml}.json"
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?per_page=100" \
-              | jq -s --arg source "$TARGET_SHA" '[
-                  .[].workflow_runs[] |
-                  select(.head_sha == $source) |
-                  {
-                    id,
-                    name,
-                    path,
-                    status,
-                    conclusion,
-                    event,
-                    head_branch,
-                    head_sha,
-                    run_number,
-                    run_attempt,
-                    created_at,
-                    updated_at,
-                    html_url
-                  }
-                ] | unique_by(.id) | sort_by(.created_at)' \
-              > "$target"
-          done
-          jq -s 'add | unique_by(.id) | sort_by(.created_at)' \
-            artifacts/v2-release-readback/*.json \
-            > artifacts/v2-release-readback/all-runs.json
-          jq -e 'length >= 1' artifacts/v2-release-readback/all-runs.json
-          cat artifacts/v2-release-readback/all-runs.json
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/apply-evidence-bound-live-prefix-patch.yml/runs?per_page=100" \
+            | jq -s '[
+                .[].workflow_runs[] |
+                {
+                  id,
+                  name,
+                  display_title,
+                  path,
+                  status,
+                  conclusion,
+                  event,
+                  head_branch,
+                  head_sha,
+                  run_number,
+                  run_attempt,
+                  created_at,
+                  updated_at,
+                  html_url,
+                  check_suite_url,
+                  jobs_url
+                }
+              ] | unique_by(.id) | sort_by(.created_at) | reverse | .[:30]' \
+            > artifacts/v2-release-readback/controller-runs.json
+          jq -e 'length >= 1' artifacts/v2-release-readback/controller-runs.json
+          cat artifacts/v2-release-readback/controller-runs.json
 
       - uses: actions/upload-artifact@v4
         with:
