@@ -1,0 +1,103 @@
+name: JUNCA V2 Baseline Replay
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-v2-baseline-replay.yml"
+      - "scripts/junca_runtime_release_evidence_collector.py"
+      - "scripts/junca_runtime_release_evidence_collector_drift.py"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact failed baseline inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: junca-runtime-readback-failure-v2-30408499456
+          path: evidence
+          github-token: ${{ github.token }}
+          run-id: 30408499456
+
+      - name: Verify replay input identities
+        run: |
+          set -euo pipefail
+          test -f evidence/ami/junca-validator-ami-build.json
+          test -f evidence/state-migration/junca-validator-state-migration.json
+          test -f evidence/readback/bootstrap-outputs.json
+          test -f evidence/readback/public-testnet-outputs.json
+          test -f evidence/readback/images.json
+          test -f evidence/readback/instances.json
+          test -f evidence/readback/volumes.json
+          test -f evidence/readback/snapshots.json
+          test -f evidence/readback/endpoint-acceptance.json
+          jq -e '
+            .status == "PASS" and
+            .checks.health == "PASS" and
+            .checks.explorer.result == "PASS" and
+            .checks.safe_rpc.result == "PASS" and
+            .checks.unsafe_rpc_rejection.result == "PASS"
+          ' evidence/readback/endpoint-acceptance.json
+
+      - name: Replay collector with complete diagnostics
+        run: |
+          set -u
+          mkdir -p evidence/release evidence/replay
+          set +e
+          python scripts/junca_runtime_release_evidence_collector_drift.py \
+            --candidate-ami evidence/ami/junca-validator-ami-build.json \
+            --bootstrap-outputs evidence/readback/bootstrap-outputs.json \
+            --public-testnet-outputs evidence/readback/public-testnet-outputs.json \
+            --images evidence/readback/images.json \
+            --instances evidence/readback/instances.json \
+            --volumes evidence/readback/volumes.json \
+            --snapshots evidence/readback/snapshots.json \
+            --endpoint-acceptance evidence/readback/endpoint-acceptance.json \
+            --migration-evidence evidence/state-migration/junca-validator-state-migration.json \
+            --expected-migration-run-id 30301559973 \
+            --expected-migration-head-sha a854085ef1ed790b47771a9fd00fbfab67e248c8 \
+            --expected-migration-request-sha256 a80c7abb0fe2291bcc651685136183d69b977b3ca7312ec170c449983dde55e6 \
+            --expected-source-commit 71e3f5fa190c1baefa1a2f37d4004af55af733d0 \
+            --output-dir evidence/release \
+            > evidence/replay/stdout.log \
+            2> evidence/replay/stderr.log
+          code=$?
+          set -e
+          printf '%s\n' "$code" > evidence/replay/exit-code.txt
+          find evidence/release -maxdepth 1 -type f -printf '%f\n' \
+            | sort > evidence/replay/release-files.txt
+          for path in evidence/release/*.json; do
+            if [[ -f "$path" ]]; then
+              jq -S . "$path" > "evidence/replay/$(basename "$path")"
+            fi
+          done
+          echo "collector_exit_code=$code"
+          cat evidence/replay/stdout.log
+          cat evidence/replay/stderr.log
+          cat evidence/replay/release-files.txt
+
+      - name: Upload replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-v2-baseline-replay-${{ github.run_id }}
+          path: evidence/replay/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce replay result
+        if: always()
+        run: |
+          set -euo pipefail
+          code="$(cat evidence/replay/exit-code.txt)"
+          cat evidence/replay/stdout.log
+          cat evidence/replay/stderr.log
+          test "$code" = 0
+          test "$(find evidence/release -maxdepth 1 -type f | wc -l)" = 3
