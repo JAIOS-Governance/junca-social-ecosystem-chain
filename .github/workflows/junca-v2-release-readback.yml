@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read exact-source release workflows
+      - name: Read exact-source release workflows and Foundation durations
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -57,10 +57,30 @@ jobs:
               > "$target"
           done
           jq -s 'add | unique_by(.id) | sort_by(.created_at)' \
-            artifacts/v2-release-readback/*.json \
+            artifacts/v2-release-readback/junca-*.json \
             > artifacts/v2-release-readback/all-runs.json
           jq -e 'length >= 2' artifacts/v2-release-readback/all-runs.json
+
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/junca-validator-foundation-release.yml/runs?branch=main&per_page=100" \
+            | jq -s '[
+                .[].workflow_runs[] |
+                select(.status == "completed") |
+                {
+                  id,
+                  conclusion,
+                  head_sha,
+                  created_at,
+                  updated_at,
+                  duration_seconds:
+                    ((.updated_at | fromdateiso8601) -
+                     (.created_at | fromdateiso8601)),
+                  html_url
+                }
+              ] | unique_by(.id) | sort_by(.created_at) | reverse | .[:30]' \
+            > artifacts/v2-release-readback/foundation-durations.json
           cat artifacts/v2-release-readback/all-runs.json
+          cat artifacts/v2-release-readback/foundation-durations.json
 
       - uses: actions/upload-artifact@v4
         with:
