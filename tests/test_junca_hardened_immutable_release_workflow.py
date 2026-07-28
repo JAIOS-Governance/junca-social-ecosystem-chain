@@ -100,6 +100,8 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             'issues="244 248"',
             'issues="244 249"',
             'issues="266 ${issues}"',
+            '"repos/${GITHUB_REPOSITORY}/issues/269"',
+            "--method PATCH",
             "issues/${issue}/comments",
             "EXACT_CURRENT_MAIN",
             "Mainnet Changed: false",
