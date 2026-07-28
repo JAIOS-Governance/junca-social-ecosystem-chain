@@ -138,10 +138,13 @@ jobs:
           EOF
           )"
 
-          # Issue #269 is the single current-state record; Issue #266 retains history.
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/issues/269" \
-            -f body="$body" >/dev/null
+          # Historical runs remain append-only in Issue #266. Only the exact
+          # current-main source may replace the single current-state Issue #269.
+          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/269" \
+              -f body="$body" >/dev/null
+          fi
 
           for issue in $issues; do
             gh api --method POST \
