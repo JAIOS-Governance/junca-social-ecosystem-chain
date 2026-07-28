@@ -1,0 +1,252 @@
+{
+  "schema_version": "junca-mainnet-development-gap-matrix/v1",
+  "base_sha": "83be65751058638e4bdcc589fdae854fcca35f56",
+  "domains": [
+    {
+      "domain": "protocol",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/protocol_kernel.py",
+        "jaios/social_ecosystem_chain/node_pipeline.py",
+        "PR #219 canonical protocol commitments and architecture"
+      ],
+      "remaining": [
+        "integrate canonical header/body commitments into runtime",
+        "cross-language golden vectors",
+        "protocol compatibility and migration rules"
+      ],
+      "completion_gate": "Protocol specification, deterministic vectors and runtime integration accepted"
+    },
+    {
+      "domain": "consensus-finality",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/finality.py",
+        "jaios/social_ecosystem_chain/consensus_signing_journal.py",
+        "PR #217 liveness and recovery",
+        "PR #224 deterministic leader and round policy"
+      ],
+      "remaining": [
+        "integrate leader and round policy",
+        "Byzantine and partition acceptance",
+        "dynamic validator-set finality"
+      ],
+      "completion_gate": "Safety, liveness, failover and Byzantine acceptance pass"
+    },
+    {
+      "domain": "execution-state",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/protocol_kernel.py",
+        "jaios/social_ecosystem_chain/state_store.py",
+        "PR #220 execution module contracts"
+      ],
+      "remaining": [
+        "production execution adapter",
+        "event/log model",
+        "online state migration and production storage engine"
+      ],
+      "completion_gate": "Versioned execution, state migration and persistence acceptance pass"
+    },
+    {
+      "domain": "transaction-lifecycle",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/mempool.py",
+        "PR #222 replay-protected transaction domain",
+        "PR #229 bounded Mainnet transaction pool"
+      ],
+      "remaining": [
+        "production signature recovery",
+        "transaction RPC policy",
+        "end-to-end receipt and event integration"
+      ],
+      "completion_gate": "Admission, gossip, execution, receipt and replay acceptance pass"
+    },
+    {
+      "domain": "validator-network",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/validator_runtime.py",
+        "jaios/social_ecosystem_chain/sync_finality.py",
+        "PR #221 governed validator lifecycle"
+      ],
+      "remaining": [
+        "admission and removal runtime integration",
+        "key ceremony and rotation",
+        "multi-region 9-validator acceptance"
+      ],
+      "completion_gate": "Governed validator lifecycle and distributed topology accepted"
+    },
+    {
+      "domain": "p2p-networking",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/validator_node.py private validator transport",
+        "PR #228 peer identity and replay guard"
+      ],
+      "remaining": [
+        "peer discovery and scoring",
+        "block and transaction gossip",
+        "anti-eclipse, backpressure and DoS acceptance"
+      ],
+      "completion_gate": "Adversarial multi-region P2P acceptance passes"
+    },
+    {
+      "domain": "rpc",
+      "status": "PARTIAL",
+      "evidence": [
+        "jaios/social_ecosystem_chain/validator_node.py read-only RPC",
+        "jaios/social_ecosystem_chain/rpc_connector.py"
+      ],
+      "remaining": [
+        "node-role-separated Mainnet RPC",
+        "authenticated transaction submission",
+        "quotas, versioning and abuse controls"
+      ],
+      "completion_gate": "Read, transaction and administrative RPC boundaries accepted"
+    },
+    {
+      "domain": "runtime-upgrade",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "PR #225 governed upgrade state machine"
+      ],
+      "remaining": [
+        "migration executor",
+        "Public Testnet upgrade rehearsal",
+        "rollback and post-upgrade evidence"
+      ],
+      "completion_gate": "Governed rehearsal, rollback and activation compatibility accepted"
+    },
+    {
+      "domain": "governance",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "GOVERNANCE.md",
+        "governance/repository-boundary.json",
+        "PR #225 independent upgrade gates"
+      ],
+      "remaining": [
+        "genesis governance package",
+        "emergency authority implementation",
+        "constitutional compatibility and audit integration"
+      ],
+      "completion_gate": "Governance, emergency and audit acceptance pass"
+    },
+    {
+      "domain": "security",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "SECURITY.md",
+        "jaios/social_ecosystem_chain/consensus_signing_journal.py",
+        "PR #222 transaction replay security",
+        "docs/mainnet/threat-model-v1.md"
+      ],
+      "remaining": [
+        "penetration test",
+        "key compromise recovery rehearsal",
+        "supply-chain and infrastructure security acceptance"
+      ],
+      "completion_gate": "Threat, cryptography, penetration and incident acceptance pass"
+    },
+    {
+      "domain": "performance-scalability",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/architecture.py",
+        "PR #231 performance acceptance evaluator"
+      ],
+      "remaining": [
+        "reproducible load harness",
+        "24-hour or longer observation",
+        "chaos, state-growth and upgrade-rehearsal evidence"
+      ],
+      "completion_gate": "All performance evaluator checks pass on production topology"
+    },
+    {
+      "domain": "explorer-indexer",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "jaios/social_ecosystem_chain/event_indexer.py",
+        "PR #226 finalized block, transaction and address index"
+      ],
+      "remaining": [
+        "event and state query integration",
+        "checkpoint and live runtime synchronization",
+        "public API and explorer acceptance"
+      ],
+      "completion_gate": "Complete finalized-only history and explorer contract accepted"
+    },
+    {
+      "domain": "sdk-application-integration",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "PR #227 SDK and JUNCA PLATFORM APP compatibility contract"
+      ],
+      "remaining": [
+        "typed client implementation",
+        "package publication",
+        "JUNCA PLATFORM APP end-to-end conformance"
+      ],
+      "completion_gate": "SDK conformance and application integration acceptance pass"
+    },
+    {
+      "domain": "interoperability",
+      "status": "PARTIAL",
+      "evidence": [
+        "jaios/social_ecosystem_chain/interoperability.py",
+        "jaios/social_ecosystem_chain/bridge_protocol.py",
+        "jaios/social_ecosystem_chain/relayer_journal.py"
+      ],
+      "remaining": [
+        "production external-finality adapter",
+        "relayer governance and key rotation",
+        "bridge security review and paused-by-default deployment acceptance"
+      ],
+      "completion_gate": "Interoperability security acceptance passes while bridge remains gated"
+    },
+    {
+      "domain": "immutable-infrastructure",
+      "status": "ACTIVE_IMPLEMENTATION",
+      "evidence": [
+        "existing Public Testnet immutable AMI and Terraform workflows",
+        "PR #223 Terraform no-destroy guard"
+      ],
+      "remaining": [
+        "Mainnet multi-region topology",
+        "full/read/archive/indexer node infrastructure",
+        "serial rollout and disaster-recovery acceptance"
+      ],
+      "completion_gate": "Immutable Mainnet infrastructure, no-destroy and rollback accepted"
+    },
+    {
+      "domain": "mainnet-release-candidate",
+      "status": "ACCEPTANCE_PENDING",
+      "evidence": [
+        "PR #230 fail-closed Mainnet Release Candidate gate"
+      ],
+      "remaining": [
+        "all domain gates PASS",
+        "immutable evidence package",
+        "Mainnet Genesis Candidate and CEO Final Approval"
+      ],
+      "completion_gate": "Release Candidate gate reports ready with complete evidence"
+    },
+    {
+      "domain": "production-acceptance",
+      "status": "ACCEPTANCE_PENDING",
+      "evidence": [
+        "Issue #218 Mainnet Development Program Integration Board",
+        "PR #230 production-acceptance gate definition"
+      ],
+      "remaining": [
+        "security acceptance",
+        "governance acceptance",
+        "performance and recovery acceptance",
+        "controlled activation and post-launch monitoring"
+      ],
+      "completion_gate": "CEO Final Approval and controlled Mainnet activation complete"
+    }
+  ]
+}
