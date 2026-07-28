@@ -1,0 +1,58 @@
+groups:
+  - name: junca-validator-runtime
+    rules:
+      - alert: JuncaValidatorUnavailable
+        expr: junca_validator_up != 1
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "JUNCA validator health evidence is unavailable"
+
+      - alert: JuncaValidatorRecoveryRequired
+        expr: junca_validator_recovery_required == 1
+        for: 10s
+        labels:
+          severity: warning
+        annotations:
+          summary: "JUNCA validator requires finalized-state recovery"
+
+      - alert: JuncaFinalizedHeightDivergence
+        expr: junca_network_height_divergence > 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "JUNCA validator finalized heights diverge"
+
+      - alert: JuncaCertificateDivergence
+        expr: junca_network_certificate_converged != 1
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "JUNCA validators report conflicting certificates"
+
+      - alert: JuncaStrictQuorumUnavailable
+        expr: min(junca_validator_authenticated_vote_count) < min(junca_validator_required_vote_count)
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "JUNCA current proposal has not reached strict quorum"
+
+      - alert: JuncaEvidenceStale
+        expr: time() - min(junca_validator_evidence_timestamp_seconds) > 30
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "JUNCA validator evidence is stale"
+
+      - alert: JuncaSafetyBoundaryChanged
+        expr: min(junca_network_safety_boundary) != 1
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "JUNCA Mainnet, asset or bridge safety boundary changed"
