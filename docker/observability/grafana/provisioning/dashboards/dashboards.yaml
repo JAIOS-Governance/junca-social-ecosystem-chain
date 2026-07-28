@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: JUNCA Protocol Observability
+    orgId: 1
+    folder: JUNCA Chain
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

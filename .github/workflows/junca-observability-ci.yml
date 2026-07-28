@@ -1,0 +1,63 @@
+name: JUNCA Protocol Observability CI
+
+on:
+  pull_request:
+    paths:
+      - "scripts/observability/**"
+      - "tests/test_junca_metrics_exporter.py"
+      - "docker/observability/**"
+      - ".github/workflows/junca-observability-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/observability/**"
+      - "tests/test_junca_metrics_exporter.py"
+      - "docker/observability/**"
+      - ".github/workflows/junca-observability-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-observability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-observability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate exporter contracts
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/observability/junca_metrics_exporter.py
+          python -m unittest tests.test_junca_metrics_exporter -v
+
+      - name: Validate configuration and dashboard syntax
+        run: |
+          set -euo pipefail
+          docker compose -f docker/observability/compose.yaml config --quiet
+          python -m json.tool docker/observability/grafana/dashboards/junca-validator-runtime.json >/dev/null
+
+      - name: Validate Prometheus configuration and rules
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${PWD}/docker/observability:/etc/prometheus:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.5.0 \
+            check config /etc/prometheus/prometheus.yaml
+          docker run --rm \
+            -v "${PWD}/docker/observability:/etc/prometheus:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.5.0 \
+            check rules /etc/prometheus/junca-rules.yaml
+
+      - name: Build exporter container
+        run: docker build -f docker/observability/Dockerfile.exporter -t junca-observability-exporter:test .

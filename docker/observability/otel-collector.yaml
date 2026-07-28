@@ -1,0 +1,31 @@
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: junca-validator-evidence
+          scrape_interval: 5s
+          static_configs:
+            - targets: ["junca-metrics-exporter:9108"]
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+  batch:
+    timeout: 5s
+
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:9464"
+    namespace: ""
+    send_timestamps: true
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]

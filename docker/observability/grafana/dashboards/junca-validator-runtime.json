@@ -1,0 +1,69 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Validator Availability",
+      "id": 1,
+      "datasource": {"type": "prometheus", "uid": "junca-prometheus"},
+      "targets": [{"expr": "sum(junca_validator_up)", "legendFormat": "Healthy validators"}],
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Finalized Height",
+      "id": 2,
+      "datasource": {"type": "prometheus", "uid": "junca-prometheus"},
+      "targets": [{"expr": "junca_network_finalized_height_min", "legendFormat": "Finalized height"}],
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Height Divergence",
+      "id": 3,
+      "datasource": {"type": "prometheus", "uid": "junca-prometheus"},
+      "targets": [{"expr": "junca_network_height_divergence", "legendFormat": "Height difference"}],
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Certificate Convergence",
+      "id": 4,
+      "datasource": {"type": "prometheus", "uid": "junca-prometheus"},
+      "targets": [{"expr": "junca_network_certificate_converged", "legendFormat": "Converged"}],
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Finalized Height by Validator",
+      "id": 5,
+      "datasource": {"type": "prometheus", "uid": "junca-prometheus"},
+      "targets": [{"expr": "junca_validator_finalized_height", "legendFormat": "{{validator}}"}],
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 6}
+    },
+    {
+      "type": "timeseries",
+      "title": "Authenticated Votes / Required Votes",
+      "id": 6,
+      "datasource": {"type": "prometheus", "uid": "junca-prometheus"},
+      "targets": [
+        {"expr": "junca_validator_authenticated_vote_count", "legendFormat": "{{validator}} accepted"},
+        {"expr": "junca_validator_required_vote_count", "legendFormat": "{{validator}} required"}
+      ],
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 6}
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "tags": ["JUNCA", "development", "validator", "evidence"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timezone": "utc",
+  "title": "JUNCA Validator Runtime Evidence",
+  "uid": "junca-validator-runtime",
+  "version": 1
+}
