@@ -997,8 +997,7 @@ write_live_rollout_prefix_readback() {
       assets_moved: false,
       bridge_activated: false
     }' > artifacts/live-prefix-readback.json
-  python -m jaios.social_ecosystem_chain.rolling_compatibility \
-    --mode live-prefix \
+  python scripts/junca_live_rollout_prefix_gate.py \
     --evidence artifacts/live-prefix-readback.json \
     --output artifacts/live-prefix-decision.json
 }
