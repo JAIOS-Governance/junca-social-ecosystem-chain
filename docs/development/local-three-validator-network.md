@@ -16,7 +16,7 @@ acceptance.
 
 ```bash
 make local-network-up
-make local-network-status  # use the direct script status command until this alias is added
+make local-network-status
 ```
 
 Current validator health endpoints:
