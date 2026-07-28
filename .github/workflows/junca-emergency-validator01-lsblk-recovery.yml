@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           jq -n --arg runtime "$RUNTIME_B64" '{commands:[
             "set -euo pipefail",
-            "device=$(lsblk -dnpo NAME,SERIAL | awk $2==\"vol0277b6a13ecf87efe\"\x27{print $1}\x27); test -b $device",
+            "device=/dev/$(lsblk -ndo NAME,SERIAL | grep vol0277b6a13ecf87efe | head -1 | cut -d\\  -f1); test -b $device",
             "install -d -m 0750 /var/lib/junca; mountpoint -q /var/lib/junca || mount -o noatime,nosuid,nodev $device /var/lib/junca; test -f /var/lib/junca/state.sqlite",
             "printf %s " + ($runtime|@sh) + " | base64 -d > /etc/junca/runtime.env; chmod 0640 /etc/junca/runtime.env",
             "systemctl daemon-reload; systemctl enable junca-validator.service; systemctl reset-failed junca-validator.service || true; systemctl restart junca-validator.service",
