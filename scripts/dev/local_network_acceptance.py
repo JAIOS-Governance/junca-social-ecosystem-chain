@@ -16,6 +16,7 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = ROOT / "docker/local-network/compose.yaml"
+ARTIFACT_DIR = ROOT / "artifacts/local-network"
 ENDPOINTS = {
     "validator-01": "http://127.0.0.1:18545/health",
     "validator-02": "http://127.0.0.1:18546/health",
@@ -41,6 +42,28 @@ def snapshot(validators: tuple[str, ...]) -> dict[str, dict[str, object]]:
     return {validator_id: read_health(validator_id) for validator_id in validators}
 
 
+def write_diagnostic(
+    *,
+    label: str,
+    value: dict[str, dict[str, object]] | None,
+    error: Exception | None,
+) -> None:
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "junca-local-network-diagnostic/v1",
+        "label": label,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "snapshot": value,
+        "error": None if error is None else f"{type(error).__name__}: {error}",
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
+    (ARTIFACT_DIR / "diagnostic.json").write_text(
+        json.dumps(payload, sort_keys=True, indent=2) + "\n"
+    )
+
+
 def wait_for(
     operation: Callable[[], dict[str, dict[str, object]]],
     predicate: Callable[[dict[str, dict[str, object]]], bool],
@@ -50,14 +73,24 @@ def wait_for(
 ) -> dict[str, dict[str, object]]:
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
+    last_value: dict[str, dict[str, object]] | None = None
+    next_report = 0.0
     while time.monotonic() < deadline:
         try:
-            value = operation()
-            if predicate(value):
-                return value
+            last_value = operation()
+            last_error = None
+            if predicate(last_value):
+                return last_value
+            if time.monotonic() >= next_report:
+                print(json.dumps({"label": label, "snapshot": last_value}, sort_keys=True))
+                next_report = time.monotonic() + 5
         except (OSError, RuntimeError, URLError, json.JSONDecodeError) as exc:
             last_error = exc
+            if time.monotonic() >= next_report:
+                print(json.dumps({"label": label, "error": str(exc)}, sort_keys=True))
+                next_report = time.monotonic() + 5
         time.sleep(1)
+    write_diagnostic(label=label, value=last_value, error=last_error)
     message = f"timed out waiting for {label}"
     if last_error is not None:
         message += f": {last_error}"
@@ -101,7 +134,7 @@ def main() -> int:
     baseline = wait_for(
         lambda: snapshot(all_validators),
         lambda value: converged(value, 1),
-        timeout=180,
+        timeout=90,
         label="initial authenticated finality",
     )
     baseline_height = int(baseline["validator-01"]["head_height"])
@@ -121,13 +154,14 @@ def main() -> int:
     if any(
         int(item["head_height"]) != stalled_height for item in stalled_end.values()
     ):
+        write_diagnostic(label="strict quorum violation", value=stalled_end, error=None)
         raise RuntimeError("two validators advanced finality without strict quorum")
 
     compose("start", "validator-03")
     recovered = wait_for(
         lambda: snapshot(all_validators),
         lambda value: converged(value, stalled_height + 1),
-        timeout=180,
+        timeout=90,
         label="validator restart recovery and resumed finality",
     )
 
@@ -151,7 +185,7 @@ def main() -> int:
     }
     encoded = (json.dumps(evidence, sort_keys=True, indent=2) + "\n").encode()
     evidence["evidence_sha256"] = hashlib.sha256(encoded).hexdigest()
-    target = ROOT / "artifacts/local-network/acceptance.json"
+    target = ARTIFACT_DIR / "acceptance.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(evidence, sort_keys=True, indent=2) + "\n")
     print(target)
