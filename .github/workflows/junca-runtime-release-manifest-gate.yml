@@ -51,7 +51,10 @@ jobs:
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Evidence Collector" and
-            .path == ".github/workflows/junca-runtime-release-evidence-collector.yml" and
+            (
+              .path == ".github/workflows/junca-runtime-release-evidence-collector.yml" or
+              .path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
+            ) and
             .event == "workflow_dispatch" and
             .head_branch == "main" and
             .repository.full_name == $repository and
