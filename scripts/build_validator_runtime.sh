@@ -24,6 +24,10 @@ install -m 0755 "${repo_root}/scripts/junca-public-gateway" \
   "${output_dir}/usr/local/bin/junca-public-gateway"
 install -m 0644 "${repo_root}/packaging/systemd/junca-validator.service" \
   "${output_dir}/etc/systemd/system/junca-validator.service"
+install -m 0644 "${repo_root}/packaging/systemd/junca-public-rpc.service" \
+  "${output_dir}/etc/systemd/system/junca-public-rpc.service"
+install -m 0644 "${repo_root}/packaging/systemd/junca-public-explorer.service" \
+  "${output_dir}/etc/systemd/system/junca-public-explorer.service"
 
 python3 - "${output_dir}/usr/local/bin/junca-chain-node" <<'PY'
 from pathlib import Path
@@ -49,6 +53,7 @@ PY
 
 (cd "${output_dir}" && find usr etc -type f -print0 | sort -z | xargs -0 sha256sum \
   >SHA256SUMS)
+python3 "${repo_root}/scripts/verify_validator_runtime_layout.py" "${output_dir}"
 
 archive="${output_dir}.tar.gz"
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \

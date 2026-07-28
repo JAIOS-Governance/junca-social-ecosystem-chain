@@ -7,8 +7,9 @@ on:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
       - "jaios/social_ecosystem_chain/validator_node.py"
       - "jaios/social_ecosystem_chain/**"
-      - "packaging/systemd/junca-validator.service"
+      - "packaging/systemd/**"
       - "scripts/build_validator_runtime.sh"
+      - "scripts/verify_validator_runtime_layout.py"
       - "scripts/generate_junca_public_testnet_genesis.py"
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
@@ -20,8 +21,9 @@ on:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
       - "jaios/social_ecosystem_chain/validator_node.py"
       - "jaios/social_ecosystem_chain/**"
-      - "packaging/systemd/junca-validator.service"
+      - "packaging/systemd/**"
       - "scripts/build_validator_runtime.sh"
+      - "scripts/verify_validator_runtime_layout.py"
       - "scripts/generate_junca_public_testnet_genesis.py"
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
@@ -47,6 +49,7 @@ jobs:
         run: |
           python -m unittest \
             tests.test_junca_validator_artifacts \
+            tests.test_validator_runtime_layout \
             tests.test_junca_social_ecosystem_chain_validator_node -v
 
       - name: Build deterministic runtime and canonical zero-allocation genesis
@@ -54,6 +57,7 @@ jobs:
           set -euo pipefail
           rm -rf dist/validator-runtime
           bash scripts/build_validator_runtime.sh dist/validator-runtime
+          python scripts/verify_validator_runtime_layout.py dist/validator-runtime
           python scripts/generate_junca_public_testnet_genesis.py \
             --validator validator-01 \
             --validator validator-02 \

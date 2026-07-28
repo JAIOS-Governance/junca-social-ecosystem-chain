@@ -31,12 +31,12 @@ for (const route of routes) {
     "JAIOS Institutional Governance",
     "Public Testnet",
     "Public Testnet Endpoints Active",
-    "Public endpoints are active. Runtime acceptance is pending.",
+    "Public services restored. Continuous block production remains under review.",
     "Finality",
     "Certificate observed · 3 / 3",
     "Chain ID",
     "20260723",
-    "Pending · head not advancing",
+    "Under review · head at 1",
     'href="https://jaios-governance.org/"',
     'class="jaios-institutional-link"',
     'href="https://explorer.jaios-governance.org/"',
@@ -45,8 +45,8 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260727-r29"',
-    'src="/official-brand-lockup-r29.js?v=20260727-r29"',
+    'src="/junca-chain-official-wordmark.png?v=20260728-r30"',
+    'src="/official-brand-lockup-r30.js?v=20260728-r30"',
     'alt="JUNCA"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
@@ -59,10 +59,10 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260727-r26"',
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260727-r26"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260727-r26"',
-  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260727-r26"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260728-r30"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260728-r30"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260728-r30"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260728-r30"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -70,9 +70,9 @@ for (const required of [
   "Chain Core",
   "Implemented / CI Verified",
   "AWS Runtime",
-  "Runtime Acceptance Pending",
+  "Continuous Production Under Review",
   "Assets Moved",
-  "Revision · 2026.07.27 / R29",
+  "Revision · 2026.07.28 / R30",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -88,11 +88,14 @@ if (!home.includes(".wordmark img{display:block;width:190px")) {
 if (!home.includes(".site-header .header-explorer-link{display:none!important}")) {
   failures.push("mobile header must hide the desktop Explorer shortcut");
 }
-if (!home.includes("grid-template-columns:minmax(0,1fr) auto!important")) {
+if (!home.includes("grid-template-columns:minmax(0,1fr) 48px!important")) {
   failures.push("mobile header must remain a two-column brand/menu layout");
 }
-if (!home.includes("max-width:min(150px,52vw)")) {
+if (!home.includes("width:132px;max-width:44vw")) {
   failures.push("mobile JUNCA wordmark viewport guard missing");
+}
+if (!home.includes(".menu-toggle span:last-child{position:absolute")) {
+  failures.push("mobile menu label collision guard missing");
 }
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
 for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
@@ -103,7 +106,7 @@ for (const required of [
   "Certified Finality and Validator Epoch Safety",
   "strict greater-than-two-thirds voting power",
   "Old-epoch validator proofs are rejected",
-  "400 / 400 automated tests passed",
+  "613 / 613 automated tests passed",
 ]) {
   if (!protocol.includes(required)) failures.push(`/protocol: missing ${required}`);
 }
@@ -123,7 +126,7 @@ const evidence = await readFile(join(dist, "evidence", "index.html"), "utf8");
 for (const required of [
   "Documentation Publication Evidence",
   "Network Runtime Evidence",
-  "34d838b8a59c",
+  "052598647079",
   "/pull/51",
   "/pull/76",
   "30224301657",
@@ -142,8 +145,10 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R29") failures.push("release manifest revision must be R29");
-if (releaseManifest.runtime_status !== "PENDING") failures.push("release manifest runtime acceptance must remain pending");
+if (releaseManifest.revision !== "R30") failures.push("release manifest revision must be R30");
+if (releaseManifest.runtime_status !== "PUBLIC_SERVICES_RESTORED_CONTINUOUS_PRODUCTION_UNDER_REVIEW") {
+  failures.push("release manifest must separate restored services from block production review");
+}
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
 if (releaseManifest.runtime_evidence?.total_power !== 3) failures.push("verified finality quorum is missing");
@@ -155,9 +160,9 @@ const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanife
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
-  "/icon-192.png?v=20260727-r26",
-  "/icon-512.png?v=20260727-r26",
-  "/icon-maskable-512.png?v=20260727-r26",
+  "/icon-192.png?v=20260728-r30",
+  "/icon-512.png?v=20260728-r30",
+  "/icon-maskable-512.png?v=20260728-r30",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
@@ -172,7 +177,7 @@ const officialWordmarkDigest = createHash("sha256").update(officialWordmark).dig
 if (officialWordmarkDigest !== "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c89226e086049728ac") {
   failures.push("official flattened JUNCA wordmark digest mismatch");
 }
-const brandRuntime = await readFile(join(dist, "official-brand-lockup-r29.js"), "utf8");
+const brandRuntime = await readFile(join(dist, "official-brand-lockup-r30.js"), "utf8");
 for (const required of [
   "data-official-junca-wordmark",
   "MutationObserver",
