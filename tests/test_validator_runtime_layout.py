@@ -27,6 +27,45 @@ class ValidatorRuntimeLayoutTests(unittest.TestCase):
     def test_complete_runtime_passes(self) -> None:
         verify(self.output)
 
+    def test_installed_validator_entrypoint_has_runtime_import_binding(self) -> None:
+        entrypoint = self.output / "usr/local/bin/junca-chain-node"
+        text = entrypoint.read_text(encoding="utf-8")
+        self.assertEqual(
+            text.count("sys.path.insert(0, '/usr/local/lib/junca')"),
+            1,
+        )
+        self.assertIn("RecoveringBoundedFinalityLoop", text)
+
+    def test_missing_entrypoint_import_binding_fails_closed(self) -> None:
+        entrypoint = self.output / "usr/local/bin/junca-chain-node"
+        entrypoint.write_text(
+            entrypoint.read_text(encoding="utf-8").replace(
+                "sys.path.insert(0, '/usr/local/lib/junca')",
+                "pass",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "entrypoint import binding"):
+            verify(self.output)
+
+    def test_missing_liveness_module_fails_closed(self) -> None:
+        module = (
+            self.output
+            / "usr/local/lib/junca/jaios/social_ecosystem_chain/validator_liveness.py"
+        )
+        module.unlink()
+        with self.assertRaisesRegex(ValueError, "liveness module"):
+            verify(self.output)
+
+    def test_invalid_packaged_python_fails_closed(self) -> None:
+        module = (
+            self.output
+            / "usr/local/lib/junca/jaios/social_ecosystem_chain/validator_liveness.py"
+        )
+        module.write_text("def broken(:\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Python source is invalid"):
+            verify(self.output)
+
     def test_missing_gateway_unit_fails_closed(self) -> None:
         (self.output / "etc/systemd/system/junca-public-rpc.service").unlink()
         with self.assertRaisesRegex(ValueError, "required regular file missing"):

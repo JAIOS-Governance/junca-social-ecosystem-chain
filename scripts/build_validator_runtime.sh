@@ -29,26 +29,28 @@ install -m 0644 "${repo_root}/packaging/systemd/junca-public-rpc.service" \
 install -m 0644 "${repo_root}/packaging/systemd/junca-public-explorer.service" \
   "${output_dir}/etc/systemd/system/junca-public-explorer.service"
 
-python3 - "${output_dir}/usr/local/bin/junca-chain-node" <<'PY'
+# Installed entrypoints execute from /usr/local/bin while the immutable Python
+# package lives under /usr/local/lib/junca. Inject one exact import root after
+# the shebang independent of the entrypoint's internal import style.
+python3 - \
+  "${output_dir}/usr/local/bin/junca-chain-node" \
+  "${output_dir}/usr/local/bin/junca-public-gateway" <<'PY'
 from pathlib import Path
-path = Path(__import__("sys").argv[1])
-text = path.read_text()
-path.write_text(text.replace(
-    "from jaios.social_ecosystem_chain.validator_node import main",
-    "import sys\nsys.path.insert(0, '/usr/local/lib/junca')\n"
-    "from jaios.social_ecosystem_chain.validator_node import main",
-))
-PY
+import sys
 
-python3 - "${output_dir}/usr/local/bin/junca-public-gateway" <<'PY'
-from pathlib import Path
-path = Path(__import__("sys").argv[1])
-text = path.read_text()
-path.write_text(text.replace(
-    "from jaios.social_ecosystem_chain.public_gateway import main",
-    "import sys\nsys.path.insert(0, '/usr/local/lib/junca')\n"
-    "from jaios.social_ecosystem_chain.public_gateway import main",
-))
+binding = "sys.path.insert(0, '/usr/local/lib/junca')"
+for name in sys.argv[1:]:
+    path = Path(name)
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    if not lines or not lines[0].startswith("#!"):
+        raise SystemExit(f"runtime entrypoint has no shebang: {path}")
+    if binding not in text:
+        lines[1:1] = ["import sys\n", binding + "\n"]
+    rendered = "".join(lines)
+    if rendered.count(binding) != 1:
+        raise SystemExit(f"runtime entrypoint import binding is not unique: {path}")
+    path.write_text(rendered, encoding="utf-8")
 PY
 
 (cd "${output_dir}" && find usr etc -type f -print0 | sort -z | xargs -0 sha256sum \
