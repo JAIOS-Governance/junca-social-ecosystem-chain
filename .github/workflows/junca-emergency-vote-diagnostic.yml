@@ -15,16 +15,14 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
           aws-region: us-east-1
-          role-session-name: junca-gateway-readiness-${{ github.run_id }}
-      - name: Verify redundant gateway readiness
+          role-session-name: junca-gateway-inventory-${{ github.run_id }}
+      - name: Inventory canonical public gateway
         run: |
           set -euo pipefail
-          for instance in i-055763640261c47df i-054811d49cce9017b; do
-            cat > /tmp/gateway.json <<'JSON'
-          {"commands":["systemctl is-active junca-validator.service junca-public-rpc-gateway.service junca-public-explorer-gateway.service || true","systemctl cat junca-public-rpc-gateway.service junca-public-explorer-gateway.service || true","ss -ltnp | grep -E ':(8080|8081|8545|30303)' || true","for port in 8080 8081; do echo PORT=$port; curl -sS -i --max-time 5 http://127.0.0.1:$port/health || true; done"]}
+          cat > /tmp/gateway.json <<'JSON'
+          {"commands":["systemctl list-unit-files | grep -E 'junca.*(gateway|explorer|rpc)' || true","systemctl list-units --type=service | grep junca || true","for unit in $(systemctl list-unit-files --no-legend | awk '/junca.*(gateway|explorer|rpc)/ {print $1}'); do echo UNIT=$unit; systemctl cat $unit; done","ss -ltnp | grep -E ':(8080|8081|8545|30303)' || true","find /usr/local/bin /etc/junca -maxdepth 2 -type f | sort | grep -E '(gateway|explorer|rpc)' || true"]}
           JSON
-            command_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters file:///tmp/gateway.json --query Command.CommandId --output text)"
-            for attempt in $(seq 1 20); do status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"; case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac; sleep 2; done
-            echo "===== $instance ====="
-            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query '[Status,StandardOutputContent,StandardErrorContent]' --output text
-          done
+          instance=i-015288fae43f2b40f
+          command_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters file:///tmp/gateway.json --query Command.CommandId --output text)"
+          for attempt in $(seq 1 20); do status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"; case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac; sleep 2; done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query '[Status,StandardOutputContent,StandardErrorContent]' --output text
