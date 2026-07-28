@@ -63,6 +63,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
         store = self._store()
         machine = self._machine()
         store.initialize_genesis(machine)
+
         receipt = machine.apply_block(
             height=1,
             timestamp=100,
@@ -71,12 +72,14 @@ class FinalizedStateStoreTests(unittest.TestCase):
             signature_verifier=accept,
         )
         store.persist_finalized(machine, receipt)
+
         restored = store.load_latest()
         self.assertEqual(restored.height, 1)
         self.assertEqual(restored.timestamp, 100)
         self.assertEqual(restored.state_root, machine.state_root)
         self.assertEqual(restored.get("identity", "profiles/alice"), b"Alice")
         self.assertEqual(restored.expected_nonce(SENDER), 1)
+
         evidence = store.head_evidence()
         self.assertEqual(evidence["snapshot_count"], 2)
         self.assertEqual(evidence["height"], 1)
@@ -88,6 +91,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
         machine = self._machine()
         store.initialize_genesis(machine)
         store.initialize_genesis(machine)
+
         receipt = machine.apply_block(
             height=1,
             timestamp=100,
@@ -97,12 +101,14 @@ class FinalizedStateStoreTests(unittest.TestCase):
         )
         store.persist_finalized(machine, receipt)
         store.persist_finalized(machine, receipt)
+
         with sqlite3.connect(self.path) as connection:
             connection.execute(
                 "UPDATE finalized_snapshots SET state_root = ? WHERE height = 1",
                 ("0x" + ("44" * 32),),
             )
             connection.commit()
+
         with self.assertRaisesRegex(
             FinalizedStateStoreError,
             "conflicting finalized snapshot",
@@ -113,6 +119,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
         store = self._store()
         machine = self._machine()
         store.initialize_genesis(machine)
+
         receipt = machine.apply_block(
             height=1,
             timestamp=100,
@@ -134,6 +141,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
             "receipt height does not match",
         ):
             store.persist_finalized(machine, forged_gap)
+
         store.persist_finalized(machine, receipt)
         second = machine.apply_block(
             height=2,
@@ -159,6 +167,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
 
     def test_store_binding_mismatch_fails_closed(self) -> None:
         self._store()
+
         with self.assertRaisesRegex(
             FinalizedStateStoreError,
             "metadata binding mismatch",
@@ -174,6 +183,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
         store = self._store()
         machine = self._machine()
         store.initialize_genesis(machine)
+
         with sqlite3.connect(self.path) as connection:
             row = connection.execute(
                 "SELECT snapshot FROM finalized_snapshots WHERE height = 0"
@@ -190,6 +200,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
                 (tampered,),
             )
             connection.commit()
+
         with self.assertRaisesRegex(
             FinalizedStateStoreError,
             "byte hash mismatch",
@@ -200,6 +211,7 @@ class FinalizedStateStoreTests(unittest.TestCase):
         store = self._store()
         machine = self._machine()
         store.initialize_genesis(machine)
+
         receipt = machine.apply_block(
             height=1,
             timestamp=100,
@@ -216,18 +228,91 @@ class FinalizedStateStoreTests(unittest.TestCase):
             transaction_receipt_hashes=receipt.transaction_receipt_hashes,
             resource_units_used=receipt.resource_units_used,
         )
+
         with self.assertRaisesRegex(
             FinalizedStateStoreError,
             "parent state root",
         ):
             store.persist_finalized(machine, forged)
+
         self.assertEqual(store.head_evidence()["height"], 0)
+
+    def test_missing_intermediate_height_is_rejected(self) -> None:
+        store = self._store()
+        machine = self._machine()
+        store.initialize_genesis(machine)
+
+        machine.apply_block(
+            height=1,
+            timestamp=100,
+            parent_state_root=machine.state_root,
+            transactions=(self._tx(0, "profiles/alice", b"Alice"),),
+            signature_verifier=accept,
+        )
+        second = machine.apply_block(
+            height=2,
+            timestamp=200,
+            parent_state_root=machine.state_root,
+            transactions=(self._tx(1, "profiles/bob", b"Bob"),),
+            signature_verifier=accept,
+        )
+
+        with self.assertRaisesRegex(
+            FinalizedStateStoreError,
+            "height must be contiguous",
+        ):
+            store.persist_finalized(machine, second)
+
+    def test_snapshot_digest_row_tampering_is_detected(self) -> None:
+        store = self._store()
+        machine = self._machine()
+        store.initialize_genesis(machine)
+
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "UPDATE finalized_snapshots SET snapshot_digest = ? WHERE height = 0",
+                ("0x" + ("77" * 32),),
+            )
+            connection.commit()
+
+        with self.assertRaisesRegex(
+            FinalizedStateStoreError,
+            "snapshot digest binding mismatch",
+        ):
+            store.load_latest()
+
+    def test_block_receipt_tampering_is_detected(self) -> None:
+        store = self._store()
+        machine = self._machine()
+        store.initialize_genesis(machine)
+        receipt = machine.apply_block(
+            height=1,
+            timestamp=100,
+            parent_state_root=machine.state_root,
+            transactions=(self._tx(0, "profiles/alice", b"Alice"),),
+            signature_verifier=accept,
+        )
+        store.persist_finalized(machine, receipt)
+
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "UPDATE finalized_snapshots SET block_receipt_hash = ? WHERE height = 1",
+                ("0x" + ("88" * 32),),
+            )
+            connection.commit()
+
+        with self.assertRaisesRegex(
+            FinalizedStateStoreError,
+            "block receipt hash mismatch",
+        ):
+            store.load_latest()
 
     def test_safety_boundary_is_preserved(self) -> None:
         store = self._store()
         machine = self._machine()
         store.initialize_genesis(machine)
         evidence = store.head_evidence()
+
         self.assertEqual(
             evidence["activation_status"],
             "MAINNET_CANDIDATE_NOT_ACTIVATED",
