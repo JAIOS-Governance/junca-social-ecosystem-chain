@@ -37,8 +37,14 @@ def _hex(value: bytes) -> str:
 
 
 def _unhex(value: object, field: str) -> bytes:
-    if not isinstance(value, str) or not _HASH.fullmatch(value.lower()):
-        raise AuthenticatedStateTreeError(f"{field} must be a 32-byte hash")
+    if (
+        not isinstance(value, str)
+        or value != value.lower()
+        or not _HASH.fullmatch(value)
+    ):
+        raise AuthenticatedStateTreeError(
+            f"{field} must be a canonical lowercase 32-byte hash"
+        )
     return bytes.fromhex(value[2:])
 
 
@@ -231,3 +237,24 @@ def verify_state_proof(root_hash: str, proof: StateProof) -> bool:
         else:
             node = _node_hash(node, sibling)
     return node == root
+
+
+def verify_state_proof_for_key(
+    root_hash: str,
+    *,
+    namespace: str,
+    key: str,
+    expected_value: bytes | None,
+    proof: StateProof,
+) -> bool:
+    """Verify a proof against the caller's exact key and expected value context."""
+
+    expected_key_hash = state_key_hash(namespace, key)
+    if proof.key_hash != expected_key_hash:
+        return False
+    expected_value_hash = (
+        None if expected_value is None else state_value_hash(expected_value)
+    )
+    if proof.value_hash != expected_value_hash:
+        return False
+    return verify_state_proof(root_hash, proof)
