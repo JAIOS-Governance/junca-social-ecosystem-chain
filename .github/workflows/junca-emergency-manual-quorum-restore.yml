@@ -1,0 +1,73 @@
+name: JUNCA Emergency Manual Quorum Restore
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/junca-emergency-manual-quorum-restore.yml]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+          aws-region: us-east-1
+          role-session-name: junca-manual-quorum-${{ github.run_id }}
+      - name: Broadcast authenticated votes
+        run: |
+          set -euo pipefail
+          instances=(i-015288fae43f2b40f i-055763640261c47df i-054811d49cce9017b)
+          for instance in "${instances[@]}"; do
+            cat > /tmp/vote.json <<'JSON'
+          {"commands":["curl -fsS -H 'Content-Type: application/json' --data '{\"jsonrpc\":\"2.0\",\"method\":\"junca_broadcastVote\",\"params\":[],\"id\":1}' http://127.0.0.1:8545/"]}
+          JSON
+            command_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters file:///tmp/vote.json --query Command.CommandId --output text)"
+            aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance"
+            result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance")"
+            jq -r '.StandardOutputContent,.StandardErrorContent' <<<"$result"
+            jq -e '.Status=="Success"' <<<"$result"
+            sleep 3
+          done
+      - name: Verify matching certificates
+        run: |
+          set -euo pipefail
+          instances=(i-015288fae43f2b40f i-055763640261c47df i-054811d49cce9017b)
+          cat > /tmp/check.json <<'JSON'
+          {"commands":["curl -fsS http://127.0.0.1:8545/health"]}
+          JSON
+          command_id="$(aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/check.json --query Command.CommandId --output text)"
+          : > /tmp/certificates
+          for instance in "${instances[@]}"; do
+            aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance"
+            body="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query StandardOutputContent --output text)"
+            echo "$body" | jq .
+            echo "$body" | jq -er '.consensus.last_certificate | select(.signed_power==3 and .total_power==3 and .height>=2 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false) | .certificate_hash' >> /tmp/certificates
+          done
+          test "$(sort -u /tmp/certificates | wc -l)" -eq 1
+      - name: Restore three public targets
+        run: |
+          set -euo pipefail
+          explorer='arn:aws:elasticloadbalancing:us-east-1:595710543956:targetgroup/junca-testnet-explorer/6be62899db298ed0'
+          rpc='arn:aws:elasticloadbalancing:us-east-1:595710543956:targetgroup/junca-testnet-rpc/f73d122c59c17130'
+          aws elbv2 register-targets --target-group-arn "$explorer" --targets Id=i-055763640261c47df,Port=3000 Id=i-054811d49cce9017b,Port=3000
+          aws elbv2 register-targets --target-group-arn "$rpc" --targets Id=i-055763640261c47df,Port=8546 Id=i-054811d49cce9017b,Port=8546
+          aws elbv2 wait target-in-service --target-group-arn "$explorer" --targets Id=i-055763640261c47df,Port=3000 Id=i-054811d49cce9017b,Port=3000
+          aws elbv2 wait target-in-service --target-group-arn "$rpc" --targets Id=i-055763640261c47df,Port=8546 Id=i-054811d49cce9017b,Port=8546
+      - name: Verify public redundancy
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            curl -fsS https://explorer.jaios-governance.org/explorer.json -o /tmp/x
+            curl -fsS https://health.jaios-governance.org/health -o /tmp/h
+            curl -fsS -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' https://rpc.jaios-governance.org/ -o /tmp/r
+            jq -e '.status=="ready" and .head.height>=2 and .head.signed_power==3 and .head.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/x
+            jq -e '.status=="healthy" and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/h
+            jq -e '.result=="0x1352773"' /tmp/r
+            sleep 2
+          done
