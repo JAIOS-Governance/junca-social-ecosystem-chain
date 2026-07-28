@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the canonical validator with the isolated development signer adapter."""
+"""Run the canonical validator with isolated development-only adapters."""
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ from jaios.social_ecosystem_chain.development_signer import (
     DEVELOPMENT_MODE_ENV,
     DeterministicDevelopmentKmsAdapter,
 )
+from jaios.social_ecosystem_chain.finality_gossip import (
+    ReliableAuthenticatedVoteGossip,
+)
 
 
 def main() -> int:
@@ -18,6 +21,7 @@ def main() -> int:
             "local network entrypoint requires JUNCA_LOCAL_DEVELOPMENT=1"
         )
     validator_node.AwsKmsSecp256k1Adapter = DeterministicDevelopmentKmsAdapter
+    validator_node.PrivateVpcPeerTransport = ReliableAuthenticatedVoteGossip
     return validator_node.main()
 
 
