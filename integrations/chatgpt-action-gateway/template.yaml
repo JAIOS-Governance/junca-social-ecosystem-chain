@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Read-only ChatGPT Action gateway for JUNCA Chain explorer and CI evidence.
+
+Parameters:
+  ActionApiKeySecretArn:
+    Type: String
+    Description: ARN of a Secrets Manager secret containing the X-JAIOS-Action-Key value.
+  GitHubTokenSecretArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional ARN of a fine-grained GitHub token secret with read-only Actions and
+      Metadata access to JAIOS-Governance/junca-social-ecosystem-chain.
+  ExplorerStatusUrl:
+    Type: String
+    Default: https://explorer.jaios-governance.org/explorer.json
+
+Conditions:
+  HasGitHubTokenSecret: !Not [!Equals [!Ref GitHubTokenSecretArn, ""]]
+
+Resources:
+  ActionGatewayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: src/handler.handler
+      CodeUri: .
+      MemorySize: 256
+      Timeout: 30
+      ReservedConcurrentExecutions: 5
+      Environment:
+        Variables:
+          ACTION_API_KEY_SECRET_ARN: !Ref ActionApiKeySecretArn
+          GITHUB_TOKEN_SECRET_ARN: !If
+            - HasGitHubTokenSecret
+            - !Ref GitHubTokenSecretArn
+            - !Ref AWS::NoValue
+          GITHUB_REPOSITORY: JAIOS-Governance/junca-social-ecosystem-chain
+          GITHUB_API_VERSION: "2022-11-28"
+          EXPLORER_STATUS_URL: !Ref ExplorerStatusUrl
+      Policies:
+        - Statement:
+            - Sid: ReadActionKeySecret
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref ActionApiKeySecretArn
+            - !If
+              - HasGitHubTokenSecret
+              - Sid: ReadGitHubTokenSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref GitHubTokenSecretArn
+              - !Ref AWS::NoValue
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+
+  ActionGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ActionGatewayFunction}
+      RetentionInDays: 30
+
+Outputs:
+  ActionGatewayUrl:
+    Description: Replace the server URL in openapi.yaml with this exact URL without a trailing slash.
+    Value: !GetAtt ActionGatewayFunctionUrl.FunctionUrl
