@@ -18,6 +18,7 @@ const prohibited = [
   "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
   "Public Testnet Runtime Active", "Runtime Verified", "Live Acceptance Verified", "Automation Active · PASS",
   "Continuous block production remains under review", "No public endpoint is asserted",
+  "PENDING", "pending", "保留中",
 ];
 const failures = [];
 const secondaryIndex = secondaryTranslationIndex();
@@ -45,7 +46,7 @@ for (const route of routes) {
     "Chain ID",
     "20260723",
     "Block Timestamp",
-    "PENDING",
+    "NOT CURRENTLY PUBLISHED",
     "PR #237 · MERGED",
     "PR #236 · OPEN DRAFT",
     'href="https://chain.jaios-governance.org/"',
@@ -216,7 +217,16 @@ if (releaseManifest.runtime_evidence?.total_power !== 3) failures.push("verified
 if (releaseManifest.runtime_evidence?.mainnet_changed !== false) failures.push("mainnet boundary is missing");
 if (releaseManifest.runtime_evidence?.assets_moved !== false) failures.push("asset movement boundary is missing");
 if (releaseManifest.runtime_evidence?.bridge_activated !== false) failures.push("bridge boundary is missing");
-if (releaseManifest.runtime_evidence?.block_timestamp !== "PENDING") failures.push("raw block timestamp state is missing");
+if (releaseManifest.runtime_evidence?.block_timestamp !== "NOT_CURRENTLY_PUBLISHED") failures.push("public block timestamp classification is missing");
+if (releaseManifest.runtime_evidence?.block_timestamp_public_label !== "NOT CURRENTLY PUBLISHED") {
+  failures.push("English block timestamp label is missing");
+}
+if (releaseManifest.runtime_evidence?.block_timestamp_public_label_ja !== "現在は公開対象外") {
+  failures.push("Japanese block timestamp label is missing");
+}
+if (releaseManifest.runtime_evidence?.mainnet_activation_authorized !== false) {
+  failures.push("mainnet activation authorization boundary is missing");
+}
 if (releaseManifest.runtime_evidence?.block_activity_conclusion !== "NOT_INFERRED_FROM_FINALIZED_HEIGHT") {
   failures.push("elapsed height must not be interpreted as a service failure");
 }
