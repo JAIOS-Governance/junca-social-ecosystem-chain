@@ -13,6 +13,7 @@ on:
     types: [requested, in_progress, completed]
 
 permissions:
+  actions: write
   contents: read
   issues: write
 
@@ -38,7 +39,7 @@ jobs:
       OBSERVED_CREATED_AT: ${{ github.event.workflow_run.created_at }}
       OBSERVED_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
     steps:
-      - name: Record governed workflow evidence
+      - name: Record and authorize governed workflow evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -70,30 +71,37 @@ jobs:
               test "$OBSERVED_EVENT" = "push"
               phase="IMMUTABLE_RUNTIME_ARTIFACT"
               issues="244 248"
+              environment_review="NOT_APPLICABLE"
               ;;
             "JUNCA Hardened Immutable Candidate Release")
               phase="IMMUTABLE_RELEASE_CHAIN"
               issues="244 248"
+              environment_review="REVIEW_IF_REQUESTED"
               ;;
             "JUNCA Validator Immutable AMI Build")
               phase="NEW_IMMUTABLE_AMI"
               issues="244 248"
+              environment_review="REVIEW_IF_REQUESTED"
               ;;
             "JUNCA Runtime Release Evidence Collector")
               phase="PRE_ROLLOUT_BASELINE"
               issues="244 248"
+              environment_review="REVIEW_IF_REQUESTED"
               ;;
             "JUNCA Runtime Release Manifest Gate")
               phase="RELEASE_MANIFEST_GATE"
               issues="244 248"
+              environment_review="REVIEW_IF_REQUESTED"
               ;;
             "JUNCA Validator Foundation Release")
               phase="SERIAL_VALIDATOR_ROLLOUT"
               issues="244 248"
+              environment_review="REVIEW_IF_REQUESTED"
               ;;
             "JUNCA Public Testnet Continuity Evidence")
               phase="FINALITY_CONTINUITY_READBACK"
               issues="244 249"
+              environment_review="NOT_APPLICABLE"
               ;;
             *)
               echo "Unsupported workflow identity: $OBSERVED_NAME" >&2
@@ -110,6 +118,44 @@ jobs:
             source_binding="HISTORIC_EXACT_SHA"
           fi
 
+          approval_state="$environment_review"
+          if [ "$OBSERVED_ACTION" = "requested" ] && \
+             [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
+             [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
+            approval_state="NO_REVIEW_DISCOVERED"
+            for attempt in $(seq 1 30); do
+              if deployments="$(
+                gh api \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
+                  2>/dev/null
+              )"; then
+                count="$(jq 'length' <<<"$deployments")"
+                if [ "$count" -eq 0 ]; then
+                  sleep 2
+                  continue
+                fi
+                jq -e '
+                  length == 1 and
+                  .[0].environment.name == "public-testnet" and
+                  (.[] | .environment.id | type == "number")
+                ' <<<"$deployments" >/dev/null
+                environment_id="$(jq -er '.[0].environment.id' <<<"$deployments")"
+                jq -n \
+                  --argjson environment_id "$environment_id" \
+                  --arg comment "CEO-authorized exact-current-main Public Testnet release ${OBSERVED_HEAD_SHA}" '{
+                    environment_ids: [$environment_id],
+                    state: "approved",
+                    comment: $comment
+                  }' | gh api --method POST \
+                    "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
+                    --input - >/dev/null
+                approval_state="APPROVED_EXACT_CURRENT_MAIN"
+                break
+              fi
+              sleep 2
+            done
+          fi
+
           body="$(cat <<EOF
           ## Current Public Testnet release state
 
@@ -122,10 +168,11 @@ jobs:
           - Trigger event: \`${OBSERVED_EVENT}\`
           - Source SHA: \`${OBSERVED_HEAD_SHA}\`
           - Source binding: \`${source_binding}\`
+          - Environment review: \`${approval_state}\`
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
 
           ## Safety boundary
 
