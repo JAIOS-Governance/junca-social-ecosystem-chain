@@ -1,0 +1,65 @@
+name: JUNCA Developer Environment CI
+
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+      - "Makefile"
+      - "scripts/dev/**"
+      - "docs/development/ENVIRONMENT.md"
+      - ".github/workflows/junca-developer-environment-ci.yml"
+      - "jaios/social_ecosystem_chain/**"
+      - "scripts/build_validator_runtime.sh"
+      - "scripts/generate_junca_public_testnet_genesis.py"
+      - "scripts/verify_validator_runtime_layout.py"
+      - "tests/**"
+  push:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - "Makefile"
+      - "scripts/dev/**"
+      - "docs/development/ENVIRONMENT.md"
+      - ".github/workflows/junca-developer-environment-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-developer-environment-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  developer-environment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate development configuration
+        run: |
+          set -euo pipefail
+          python -m json.tool .devcontainer/devcontainer.json >/dev/null
+          bash -n scripts/dev/doctor.sh
+          bash -n scripts/dev/test.sh
+          make help
+
+      - name: Run governed development acceptance
+        run: |
+          set -euo pipefail
+          make doctor
+          make dev-test
+
+      - name: Verify clean safety boundary
+        run: |
+          set -euo pipefail
+          test ! -e .env
+          test ! -e .env.local
+          test ! -e validator.key
+          test ! -e private.key
+          test ! -e seed.txt
+          git diff --exit-code
