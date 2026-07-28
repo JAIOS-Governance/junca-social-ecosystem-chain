@@ -1,0 +1,65 @@
+name: JUNCA Local Network Simulation CI
+
+on:
+  pull_request:
+    paths:
+      - "docker/local-network/**"
+      - "jaios/social_ecosystem_chain/development_signer.py"
+      - "scripts/dev/junca-local-network-node"
+      - "scripts/dev/local-network.sh"
+      - "scripts/dev/local_network_acceptance.py"
+      - "tests/test_junca_development_signer.py"
+      - "Makefile"
+      - ".github/workflows/junca-local-network-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docker/local-network/**"
+      - "jaios/social_ecosystem_chain/development_signer.py"
+      - "scripts/dev/junca-local-network-node"
+      - "scripts/dev/local-network.sh"
+      - "scripts/dev/local_network_acceptance.py"
+      - "tests/test_junca_development_signer.py"
+      - "Makefile"
+      - ".github/workflows/junca-local-network-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-local-network-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-network-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate isolated signer and operations syntax
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_junca_development_signer -v
+          python -m py_compile \
+            jaios/social_ecosystem_chain/development_signer.py \
+            scripts/dev/junca-local-network-node \
+            scripts/dev/local_network_acceptance.py
+          bash -n scripts/dev/local-network.sh
+          docker compose -f docker/local-network/compose.yaml config --quiet
+
+      - name: Run three-validator finality and recovery acceptance
+        run: bash scripts/dev/local-network.sh test
+
+      - name: Upload local network evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-local-network-evidence-${{ github.run_id }}
+          path: artifacts/local-network/
+          if-no-files-found: warn
+          retention-days: 30
