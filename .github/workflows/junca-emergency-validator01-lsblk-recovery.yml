@@ -1,0 +1,90 @@
+name: JUNCA Emergency Validator 01 EBS Recovery
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/junca-emergency-validator01-lsblk-recovery.yml]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      ROLE: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator01-ebs-${{ github.run_id }}
+
+      - name: Read canonical runtime environment
+        run: |
+          set -euo pipefail
+          command_id="$(aws ssm send-command --instance-ids i-055763640261c47df --document-name AWS-RunShellScript --parameters 'commands=["base64 -w0 /etc/junca/runtime.env"]' --query Command.CommandId --output text)"
+          aws ssm wait command-executed --command-id "$command_id" --instance-id i-055763640261c47df
+          result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id i-055763640261c47df)"
+          jq -er .StandardOutputContent <<<"$result" | base64 -d > /tmp/runtime.env
+          sed -i -E 's/^VALIDATOR_ID=.*/VALIDATOR_ID=validator-01/' /tmp/runtime.env
+          sed -i -E 's|^SIGNER_RESOURCE_ARN=.*|SIGNER_RESOURCE_ARN=arn:aws:kms:us-east-1:595710543956:key/72960fd3-1860-41b7-bd2f-4f5b682805d1|' /tmp/runtime.env
+          sed -i -E 's/^NODE_ARTIFACT_SHA256=.*/NODE_ARTIFACT_SHA256=6441304649985de9a12c8758584785e0e0cc980b793fb735a1c5f0cffba70f14/' /tmp/runtime.env
+          echo "RUNTIME_B64=$(base64 -w0 /tmp/runtime.env)" >> "$GITHUB_ENV"
+
+      - name: Mount retained state and start validator 01
+        run: |
+          set -euo pipefail
+          jq -n --arg runtime "$RUNTIME_B64" '{commands:[
+            "set -euo pipefail",
+            "device=$(lsblk -dnpo NAME,SERIAL | awk $2==\"vol0277b6a13ecf87efe\"\x27{print $1}\x27); test -b $device",
+            "install -d -m 0750 /var/lib/junca; mountpoint -q /var/lib/junca || mount -o noatime,nosuid,nodev $device /var/lib/junca; test -f /var/lib/junca/state.sqlite",
+            "printf %s " + ($runtime|@sh) + " | base64 -d > /etc/junca/runtime.env; chmod 0640 /etc/junca/runtime.env",
+            "systemctl daemon-reload; systemctl enable junca-validator.service; systemctl reset-failed junca-validator.service || true; systemctl restart junca-validator.service",
+            "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health && exit 0; sleep 2; done; systemctl status junca-validator.service --no-pager -l; journalctl -u junca-validator.service --no-pager -n 120; exit 1"
+          ]}' > /tmp/recover.json
+          command_id="$(aws ssm send-command --instance-ids i-015288fae43f2b40f --document-name AWS-RunShellScript --parameters file:///tmp/recover.json --query Command.CommandId --output text)"
+          for attempt in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id i-015288fae43f2b40f --query Status --output text 2>/dev/null || true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 2
+          done
+          result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id i-015288fae43f2b40f)"
+          jq -r '.Status, .StandardOutputContent, .StandardErrorContent' <<<"$result"
+          jq -e '.Status == "Success"' <<<"$result"
+
+      - name: Re-establish 3 of 3 finality and public Gateways
+        run: |
+          set -euo pipefail
+          instances=(i-015288fae43f2b40f i-055763640261c47df i-054811d49cce9017b)
+          now="$(date +%s)"; epoch="$(( ((now + 120 + 29) / 30) * 30 ))"
+          jq -n --arg epoch "$epoch" '{commands:[
+            "set -euo pipefail",
+            "sed -i -E s/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=true/ /etc/junca/runtime.env; sed -i -E s/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=30/ /etc/junca/runtime.env; sed -i -E s/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=" + $epoch + "/ /etc/junca/runtime.env",
+            "systemctl restart junca-validator.service",
+            "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health >/dev/null && exit 0; sleep 2; done; exit 1"
+          ]}' > /tmp/finality.json
+          command_id="$(aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/finality.json --query Command.CommandId --output text)"
+          for instance in "${instances[@]}"; do aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance" || true; done
+          sleep 150
+          jq -n '{commands:["systemctl restart junca-public-rpc.service junca-public-explorer.service"]}' > /tmp/gateway.json
+          aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/gateway.json >/dev/null
+          for attempt in $(seq 1 60); do
+            e="$(curl -sS -o /tmp/e -w '%{http_code}' https://explorer.jaios-governance.org/ || true)"
+            h="$(curl -sS -o /tmp/h -w '%{http_code}' https://health.jaios-governance.org/health || true)"
+            r="$(curl -sS -o /tmp/r -w '%{http_code}' -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' https://rpc.jaios-governance.org/ || true)"
+            if [[ "$e" == 200 && "$h" == 200 && "$r" == 200 ]]; then
+              jq -e '.status=="healthy" and .consensus.last_certificate.signed_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/h
+              jq -e '.result=="0x1352f63"' /tmp/r
+              exit 0
+            fi
+            test "$attempt" -lt 60; sleep 5
+          done
