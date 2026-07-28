@@ -3,6 +3,10 @@ import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  secondaryLanguageMeta,
+  secondaryTranslationIndex,
+} from "../src/secondary-language.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
@@ -13,8 +17,10 @@ const prohibited = [
   "CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled",
   "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
   "Public Testnet Runtime Active", "Runtime Verified", "Live Acceptance Verified", "Automation Active · PASS",
+  "Continuous block production remains under review", "No public endpoint is asserted",
 ];
 const failures = [];
+const secondaryIndex = secondaryTranslationIndex();
 
 for (const route of routes) {
   const file = route === "/" ? join(dist, "index.html") : join(dist, route.slice(1), "index.html");
@@ -30,13 +36,21 @@ for (const route of routes) {
     "JUNCA Social Ecosystem Chain",
     "JAIOS Institutional Governance",
     "Public Testnet",
-    "Public Testnet Endpoints Active",
-    "Public services restored. Continuous block production remains under review.",
+    "Governed Read-only Operations",
+    "Verified operational evidence, presented without inference.",
     "Finality",
-    "Certificate observed · 3 / 3",
+    "READY · READ-ONLY",
+    "3 / 3",
+    "Finalized Height",
     "Chain ID",
     "20260723",
-    "Under review · head at 1",
+    "Block Timestamp",
+    "PENDING",
+    "PR #237 · MERGED",
+    "PR #236 · OPEN DRAFT",
+    'href="https://chain.jaios-governance.org/"',
+    'href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/237"',
+    'href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/236"',
     'href="https://jaios-governance.org/"',
     'class="jaios-institutional-link"',
     'href="https://explorer.jaios-governance.org/"',
@@ -45,8 +59,13 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260728-r30"',
-    'src="/official-brand-lockup-r30.js?v=20260728-r30"',
+    'src="/junca-chain-official-wordmark.png?v=20260728-r31"',
+    'src="/official-brand-lockup-r31.js?v=20260728-r31"',
+    'src="/docs-controls-r31.js?v=20260728-r31"',
+    'src="/secondary-language.js?v=20260728-r31"',
+    'href="/favicon.ico"',
+    'id="secondary-language-select"',
+    'English remains the fixed primary language.',
     'alt="JUNCA"',
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
@@ -54,15 +73,54 @@ for (const route of routes) {
   for (const term of prohibited) {
     if (html.toLowerCase().includes(term.toLowerCase())) failures.push(`${route}: prohibited public claim ${term}`);
   }
+  if (!html.startsWith('<!DOCTYPE html><html lang="en">')) {
+    failures.push(`${route}: English must remain the fixed document language`);
+  }
+  if (/<html[^>]*\bdir=["']rtl["']/.test(html)) {
+    failures.push(`${route}: RTL must not be applied to the English document root`);
+  }
+  for (const [value, { label }] of Object.entries(secondaryLanguageMeta)) {
+    if (!html.includes(`<option value="${value}">${label}</option>`)) {
+      failures.push(`${route}: missing secondary-language option ${value}`);
+    }
+  }
+  const secondaryElements = [...html.matchAll(
+    /<([a-z][\w-]*)([^>]*\blang="ja"[^>]*\bdata-secondary-copy[^>]*\bdata-secondary-key="([^"]+)"[^>]*)>([\s\S]*?)<\/\1>/gi,
+  )];
+  if (secondaryElements.length === 0) {
+    failures.push(`${route}: no build-time secondary-language elements found`);
+  }
+  for (const [, , , key, japanese] of secondaryElements) {
+    const record = secondaryIndex.get(japanese);
+    if (!record) failures.push(`${route}: untranslated Japanese source ${japanese}`);
+    else if (record.key !== key) failures.push(`${route}: secondary-language key mismatch for ${japanese}`);
+  }
+  const authoredJapaneseCount = [...html.matchAll(/\blang="ja"/g)].length;
+  if (secondaryElements.length !== authoredJapaneseCount) {
+    failures.push(`${route}: ${authoredJapaneseCount - secondaryElements.length} Japanese elements lack static multilingual coverage`);
+  }
+}
+const secondaryRuntime = await readFile(join(dist, "secondary-language.js"), "utf8");
+for (const required of [
+  "junca-docs-secondary-language",
+  "data-secondary-copy",
+  "data-secondary-key",
+  "window.localStorage",
+  'element.dir = "rtl"',
+  'element.removeAttribute("dir")',
+]) {
+  if (!secondaryRuntime.includes(required)) failures.push(`secondary-language runtime missing ${required}`);
+}
+if (secondaryRuntime.includes("MutationObserver")) {
+  failures.push("secondary-language runtime must not depend on DOM observation");
 }
 const home = await readFile(join(dist, "index.html"), "utf8");
-if (home.length > 90000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
+if (home.length > 100000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260728-r30"',
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260728-r30"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260728-r30"',
-  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260728-r30"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260728-r31"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260728-r31"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260728-r31"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -70,9 +128,9 @@ for (const required of [
   "Chain Core",
   "Implemented / CI Verified",
   "AWS Runtime",
-  "Continuous Production Under Review",
+  "Read-only Operations",
   "Assets Moved",
-  "Revision · 2026.07.28 / R30",
+  "Revision · 2026.07.28 / R31",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -97,6 +155,7 @@ if (!home.includes("width:132px;max-width:44vw")) {
 if (!home.includes(".menu-toggle span:last-child{position:absolute")) {
   failures.push("mobile menu label collision guard missing");
 }
+if (!home.includes("body.docs-menu-open{overflow:hidden}")) failures.push("mobile body-scroll lock style missing");
 if (!css.includes(":focus-visible")) failures.push("keyboard focus style missing");
 for (const required of [".release-status", ".finality-brief", ".developer-modules", ".evidence-tracks"]) {
   if (!css.includes(required)) failures.push(`approved design stylesheet missing ${required}`);
@@ -106,14 +165,16 @@ for (const required of [
   "Certified Finality and Validator Epoch Safety",
   "strict greater-than-two-thirds voting power",
   "Old-epoch validator proofs are rejected",
-  "613 / 613 automated tests passed",
+  "Developer Environment CI verified",
 ]) {
   if (!protocol.includes(required)) failures.push(`/protocol: missing ${required}`);
 }
 const implementation = await readFile(join(dist, "implementation", "index.html"), "utf8");
 for (const required of [
   "Public Testnet Network Configuration",
-  "Read-only Endpoint Active",
+  "<code>20260723</code>",
+  "explorer.jaios-governance.org",
+  "Transaction submission is disabled",
   "Getting Started",
   "Smart Contract Deployment",
   "Token Standard",
@@ -126,12 +187,9 @@ const evidence = await readFile(join(dist, "evidence", "index.html"), "utf8");
 for (const required of [
   "Documentation Publication Evidence",
   "Network Runtime Evidence",
-  "052598647079",
-  "/pull/51",
-  "/pull/76",
-  "30224301657",
-  "30211341527",
-  "30212766916",
+  "6de0979b9725",
+  "/pull/237",
+  "/pull/236",
 ]) {
   if (!evidence.includes(required)) failures.push(`/evidence: missing ${required}`);
 }
@@ -145,9 +203,12 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R30") failures.push("release manifest revision must be R30");
-if (releaseManifest.runtime_status !== "PUBLIC_SERVICES_RESTORED_CONTINUOUS_PRODUCTION_UNDER_REVIEW") {
-  failures.push("release manifest must separate restored services from block production review");
+if (releaseManifest.revision !== "R31") failures.push("release manifest revision must be R31");
+if (releaseManifest.chain_source_commit !== "6de0979b97254c5b4777ede8c82378fd4e143137") {
+  failures.push("release manifest must bind the canonical PR #237 merge commit");
+}
+if (releaseManifest.runtime_status !== "VERIFIED_READY_READ_ONLY") {
+  failures.push("release manifest must record the verified read-only runtime state");
 }
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
 if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
@@ -155,14 +216,24 @@ if (releaseManifest.runtime_evidence?.total_power !== 3) failures.push("verified
 if (releaseManifest.runtime_evidence?.mainnet_changed !== false) failures.push("mainnet boundary is missing");
 if (releaseManifest.runtime_evidence?.assets_moved !== false) failures.push("asset movement boundary is missing");
 if (releaseManifest.runtime_evidence?.bridge_activated !== false) failures.push("bridge boundary is missing");
+if (releaseManifest.runtime_evidence?.block_timestamp !== "PENDING") failures.push("raw block timestamp state is missing");
+if (releaseManifest.runtime_evidence?.block_activity_conclusion !== "NOT_INFERRED_FROM_FINALIZED_HEIGHT") {
+  failures.push("elapsed height must not be interpreted as a service failure");
+}
+if (releaseManifest.development_governance?.canonical_foundation?.pull_request !== 237) {
+  failures.push("PR #237 canonical development foundation is missing");
+}
+if (releaseManifest.development_governance?.auxiliary_gateway?.state !== "OPEN_DRAFT_UNMERGED_UNDEPLOYED") {
+  failures.push("PR #236 auxiliary gateway boundary is missing");
+}
 await readFile(join(dist, "manifest.webmanifest"), "utf8");
 const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanifest"), "utf8"));
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
-  "/icon-192.png?v=20260728-r30",
-  "/icon-512.png?v=20260728-r30",
-  "/icon-maskable-512.png?v=20260728-r30",
+  "/icon-192.png?v=20260728-r31",
+  "/icon-512.png?v=20260728-r31",
+  "/icon-maskable-512.png?v=20260728-r31",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
@@ -172,12 +243,13 @@ await readFile(join(dist, "icon-192.png"));
 await readFile(join(dist, "icon-512.png"));
 await readFile(join(dist, "icon-maskable-512.png"));
 await readFile(join(dist, "apple-touch-icon.png"));
+await readFile(join(dist, "favicon.ico"));
 const officialWordmark = await readFile(join(dist, "junca-chain-official-wordmark.png"));
 const officialWordmarkDigest = createHash("sha256").update(officialWordmark).digest("hex");
 if (officialWordmarkDigest !== "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c89226e086049728ac") {
   failures.push("official flattened JUNCA wordmark digest mismatch");
 }
-const brandRuntime = await readFile(join(dist, "official-brand-lockup-r30.js"), "utf8");
+const brandRuntime = await readFile(join(dist, "official-brand-lockup-r31.js"), "utf8");
 for (const required of [
   "data-official-junca-wordmark",
   "MutationObserver",
@@ -185,6 +257,10 @@ for (const required of [
   ".footer-brand-lockup",
 ]) {
   if (!brandRuntime.includes(required)) failures.push(`official brand hydration guard missing ${required}`);
+}
+const docsControls = await readFile(join(dist, "docs-controls-r31.js"), "utf8");
+for (const required of ["Escape", "docs-menu-open", "aria-expanded", "menuButton.focus()"]) {
+  if (!docsControls.includes(required)) failures.push(`mobile menu control missing ${required}`);
 }
 if (!home.includes('class="official-product-name"')) failures.push("/: official product-name lockup missing");
 if (!home.includes('class="official-brand-lockup"')) failures.push("/: documentation brand lockup missing");
