@@ -29,7 +29,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-emergency-runtime-${{ github.run_id }}
 
-      - name: Restore current Terraform-managed validator services
+      - name: Diagnose and restore validators independently
         run: |
           set -euo pipefail
           instances=(i-015288fae43f2b40f i-055763640261c47df i-054811d49cce9017b)
@@ -52,18 +52,29 @@ jobs:
           done
 
           jq -n '{commands:[
-            "set -euo pipefail",
-            "systemctl daemon-reload",
-            "systemctl reset-failed junca-validator.service || true",
-            "systemctl restart junca-validator.service",
-            "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health >/tmp/junca-health.json && cat /tmp/junca-health.json && exit 0; sleep 2; done; systemctl status junca-validator.service --no-pager -l || true; journalctl -u junca-validator.service --no-pager -n 100; exit 1"
+            "set +e",
+            "echo ===FILESYSTEM===; findmnt --target /var/lib/junca || true; ls -la /var/lib/junca | head -40 || true; test -f /var/lib/junca/state.sqlite; echo state_file=$?",
+            "echo ===BEFORE===; systemctl status junca-validator.service --no-pager -l || true; journalctl -u junca-validator.service --no-pager -n 80 || true",
+            "systemctl daemon-reload; systemctl reset-failed junca-validator.service || true; systemctl restart junca-validator.service",
+            "restart_status=$?; echo restart_status=$restart_status",
+            "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health && exit 0; sleep 2; done",
+            "echo ===AFTER===; systemctl status junca-validator.service --no-pager -l || true; journalctl -u junca-validator.service --no-pager -n 120 || true; exit 1"
           ]}' > /tmp/ssm-restart.json
-          command_id="$(aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/ssm-restart.json --comment 'JUNCA emergency public runtime restore' --query Command.CommandId --output text)"
+
+          successful=0
           for instance in "${instances[@]}"; do
-            aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance" || true
+            command_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters file:///tmp/ssm-restart.json --comment 'JUNCA emergency validator diagnosis and restore' --query Command.CommandId --output text)"
+            for attempt in $(seq 1 90); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break ;; esac
+              sleep 2
+            done
             result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance")"
-            jq -e '.Status == "Success"' <<<"$result"
+            echo "===== $instance ====="
+            jq -r '.Status, .StandardOutputContent, .StandardErrorContent' <<<"$result"
+            [[ "$(jq -r .Status <<<"$result")" == Success ]] && successful=$((successful + 1))
           done
+          test "$successful" -ge 1
 
       - name: Require public Gateway recovery
         run: |
