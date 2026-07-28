@@ -16,25 +16,32 @@ REQUIRED_FILES = {
     "etc/systemd/system/junca-public-explorer.service": 0,
 }
 
+COMMON_SERVICE_CONTRACTS = (
+    "User=junca",
+    "Group=junca",
+    "Restart=on-failure",
+    "NoNewPrivileges=true",
+    "WantedBy=multi-user.target",
+)
+
 SERVICE_CONTRACTS = {
-    "etc/systemd/system/junca-validator.service": (
-        "User=junca",
-        "Group=junca",
+    "etc/systemd/system/junca-validator.service": COMMON_SERVICE_CONTRACTS
+    + (
         "EnvironmentFile=/etc/junca/runtime.env",
         "--http.addr 127.0.0.1",
         "--http.port 8545",
         "ReadWritePaths=/var/lib/junca /var/log/junca",
     ),
-    "etc/systemd/system/junca-public-rpc.service": (
-        "User=junca",
-        "Group=junca",
+    "etc/systemd/system/junca-public-rpc.service": COMMON_SERVICE_CONTRACTS
+    + (
         "Requires=junca-validator.service",
+        "--http.addr 0.0.0.0",
         "--http.port 8546",
     ),
-    "etc/systemd/system/junca-public-explorer.service": (
-        "User=junca",
-        "Group=junca",
+    "etc/systemd/system/junca-public-explorer.service": COMMON_SERVICE_CONTRACTS
+    + (
         "Requires=junca-validator.service",
+        "--http.addr 0.0.0.0",
         "--http.port 3000",
     ),
 }
@@ -60,13 +67,24 @@ def verify(root: Path) -> None:
     sums_path = root / "SHA256SUMS"
     if not sums_path.is_file() or sums_path.is_symlink():
         raise ValueError("SHA256SUMS is missing")
+    entries: set[str] = set()
     for line in sums_path.read_text(encoding="utf-8").splitlines():
         digest, relative = line.split(maxsplit=1)
         relative = relative.lstrip("*")
+        if relative in entries:
+            raise ValueError(f"duplicate runtime digest entry: {relative}")
+        entries.add(relative)
         path = root / relative
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"runtime digest path is invalid: {relative}")
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != digest:
             raise ValueError(f"runtime digest mismatch: {relative}")
+
+    required_digest_paths = set(REQUIRED_FILES)
+    if not required_digest_paths <= entries:
+        missing = sorted(required_digest_paths - entries)
+        raise ValueError(f"required runtime digest entries missing: {missing}")
 
 
 def main() -> int:

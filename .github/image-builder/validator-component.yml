@@ -20,6 +20,7 @@ phases:
             - install -m 0644 /tmp/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz
             - tar -xzf /opt/junca/validator-runtime.tar.gz -C /
             - install -m 0644 /tmp/genesis.json /etc/junca/genesis.json
+            - systemctl enable junca-validator.service junca-public-rpc.service junca-public-explorer.service
             - rm -f /tmp/validator-runtime.tar.gz /tmp/genesis.json
   - name: validate
     steps:
@@ -35,9 +36,16 @@ phases:
             - getent group junca
             - test "$(stat -c '%U:%G' /var/log/junca)" = "root:root"
             - systemd-analyze verify /etc/systemd/system/junca-validator.service /etc/systemd/system/junca-public-rpc.service /etc/systemd/system/junca-public-explorer.service
+            - test "$(systemctl is-enabled junca-validator.service)" = enabled
+            - test "$(systemctl is-enabled junca-public-rpc.service)" = enabled
+            - test "$(systemctl is-enabled junca-public-explorer.service)" = enabled
             - grep -Fxq 'User=junca' /etc/systemd/system/junca-validator.service
             - grep -Fxq 'User=junca' /etc/systemd/system/junca-public-rpc.service
             - grep -Fxq 'User=junca' /etc/systemd/system/junca-public-explorer.service
+            - grep -Fxq 'Restart=on-failure' /etc/systemd/system/junca-validator.service
+            - grep -Fxq 'Restart=on-failure' /etc/systemd/system/junca-public-rpc.service
+            - grep -Fxq 'Restart=on-failure' /etc/systemd/system/junca-public-explorer.service
+            - grep -Fq -- '--http.port 8545' /etc/systemd/system/junca-validator.service
             - grep -Fq -- '--http.port 3000' /etc/systemd/system/junca-public-explorer.service
             - grep -Fq -- '--http.port 8546' /etc/systemd/system/junca-public-rpc.service
             - echo "__NODE_SHA256__  /opt/junca/validator-runtime.tar.gz" | sha256sum --check
