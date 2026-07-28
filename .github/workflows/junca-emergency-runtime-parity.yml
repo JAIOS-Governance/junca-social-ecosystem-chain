@@ -40,7 +40,7 @@ jobs:
             test "$status" = Success
           }
           for instance in i-055763640261c47df i-054811d49cce9017b; do
-            init_payload="$(jq -cn --arg c 'set -e; rm -f /tmp/junca-runtime.b64 /tmp/junca-runtime.tar.gz; : > /tmp/junca-runtime.b64' '{commands:[$c]}')"
+            init_payload="$(jq -cn --arg c 'set -e; systemctl start junca-validator.service || true; rm -f /tmp/junca-runtime.b64 /tmp/junca-runtime.tar.gz; : > /tmp/junca-runtime.b64' '{commands:[$c]}')"
             send_and_wait "$instance" "$init_payload"
             for chunk in /tmp/junca-runtime.chunk.*; do
               data="$(cat "$chunk")"
@@ -53,14 +53,14 @@ jobs:
           echo '${archive_sha}  /tmp/junca-runtime.tar.gz' | sha256sum -c -
           rollback=/var/lib/junca/runtime-rollbacks/${GITHUB_RUN_ID}
           rm -rf /tmp/junca-runtime-stage
-          mkdir -p /tmp/junca-runtime-stage \"\$rollback\"
+          mkdir -p /tmp/junca-runtime-stage "\$rollback"
           tar -xzf /tmp/junca-runtime.tar.gz -C /tmp/junca-runtime-stage
           test -f /tmp/junca-runtime-stage/jaios/social_ecosystem_chain/validator_node.py
           systemctl stop junca-validator.service
-          cp -a /usr/local/lib/junca/jaios \"\$rollback/jaios\"
-          cp -a /var/lib/junca/state.sqlite \"\$rollback/state.sqlite\"
-          test ! -e /var/lib/junca/state.sqlite-wal || cp -a /var/lib/junca/state.sqlite-wal \"\$rollback/state.sqlite-wal\"
-          test ! -e /var/lib/junca/state.sqlite-shm || cp -a /var/lib/junca/state.sqlite-shm \"\$rollback/state.sqlite-shm\"
+          cp -a /usr/local/lib/junca/jaios "\$rollback/jaios"
+          cp -a /var/lib/junca/state.sqlite "\$rollback/state.sqlite"
+          test ! -e /var/lib/junca/state.sqlite-wal || cp -a /var/lib/junca/state.sqlite-wal "\$rollback/state.sqlite-wal"
+          test ! -e /var/lib/junca/state.sqlite-shm || cp -a /var/lib/junca/state.sqlite-shm "\$rollback/state.sqlite-shm"
           rm -rf /usr/local/lib/junca/jaios.next
           cp -a /tmp/junca-runtime-stage/jaios /usr/local/lib/junca/jaios.next
           mv /usr/local/lib/junca/jaios /usr/local/lib/junca/jaios.previous
@@ -69,13 +69,13 @@ jobs:
           systemctl start junca-validator.service
           ok=false
           for attempt in \$(seq 1 30); do
-            if health=\$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null) && grep -q '\"automatic_finality_enabled\":true' <<<\"\$health\"; then ok=true; echo \"\$health\"; break; fi
+            if health=\$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null) && grep -q '"automatic_finality_enabled":true' <<<"\$health"; then ok=true; echo "\$health"; break; fi
             sleep 2
           done
           if ! \$ok; then
             systemctl stop junca-validator.service || true
             rm -rf /usr/local/lib/junca/jaios
-            cp -a \"\$rollback/jaios\" /usr/local/lib/junca/jaios
+            cp -a "\$rollback/jaios" /usr/local/lib/junca/jaios
             systemctl start junca-validator.service || true
             echo 'runtime parity acceptance failed; rollback restored' >&2
             exit 1
