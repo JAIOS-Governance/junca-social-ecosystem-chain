@@ -5,21 +5,21 @@ import { useMemo, useState } from "react";
 type Status = "READY" | "CONDITIONAL" | "BLOCKED" | "NOT APPLICABLE";
 
 const capabilityRows = [
-  ["Smart contract execution", "DApp and asset logic", "Enterprise / Developer", "Pending Verification", "Compatibility evidence required"],
+  ["Smart contract execution", "DApp and asset logic", "Enterprise / Developer", "Verification in Progress", "Compatibility evidence required"],
   ["Fungible token issuance", "Utility, access, points", "Enterprise / Issuer", "Planned", "Token standard not yet verified"],
   ["NFT issuance", "Membership, certificate, provenance", "Brand / IP / Region", "Planned", "NFT standard not yet verified"],
-  ["Wallet integration", "Signing and asset access", "Partner / User", "Pending Verification", "Candidate Chain ID only"],
-  ["Public RPC / WebSocket", "Network connection", "Developer / Integrator", "Pending Deployment", "No public endpoint released"],
-  ["Explorer verification", "Transaction and contract evidence", "All partners", "Pending Deployment", "Runtime parity gate required"],
-  ["Faucet", "Test asset distribution", "Developer", "Pending Deployment", "Rate-limit acceptance required"],
-  ["Ethereum / ERC interoperability", "ERC-20 and ERC-721 cross-network route", "Integrator / Custodian", "Planned · BLOCKED", "Target Ethereum network binding and contracts Pending Verification"],
+  ["Wallet integration", "Signing and asset access", "Partner / User", "Verification in Progress", "Candidate Chain ID only"],
+  ["Public RPC / WebSocket", "Network connection", "Developer / Integrator", "Not Yet Published", "No public endpoint released"],
+  ["Explorer verification", "Transaction and contract evidence", "All partners", "Not Yet Published", "Runtime parity gate required"],
+  ["Faucet", "Test asset distribution", "Developer", "Not Yet Published", "Rate-limit acceptance required"],
+  ["Ethereum / ERC interoperability", "ERC-20 and ERC-721 cross-network route", "Integrator / Custodian", "Planned · BLOCKED", "Target Ethereum network binding and contracts Verification in Progress"],
   ["BSC Testnet interoperability", "ERC-20/BEP-20 and ERC-721 route control", "Integrator / Custodian", "Implemented · BLOCKED", "No deployed route or asset movement"],
   ["TRON Shasta interoperability", "ERC-20/TRC-20 and ERC-721/TRC-721 route control", "Integrator / Custodian", "Implemented · BLOCKED", "TVM and Shasta deployment verification required"],
   ["Scalability profile", "Capacity planning", "Institutional", "Target Only", "Load and chaos tests incomplete"],
 ];
 
 const interoperabilityRoutes = [
-  ["JUNCA ↔ Ethereum / ERC", "ERC-20 / ERC-721", "Target network binding Pending Verification", "lock / mint / burn / release", "BLOCKED"],
+  ["JUNCA ↔ Ethereum / ERC", "ERC-20 / ERC-721", "Target network binding Verification in Progress", "lock / mint / burn / release", "BLOCKED"],
   ["JUNCA → BSC Testnet", "ERC-20 ↔ BEP-20", "BSC Chain ID 97", "lock / mint / burn / release", "BLOCKED"],
   ["JUNCA → BSC Testnet", "ERC-721 ↔ BSC-compatible ERC-721", "BSC Chain ID 97", "lock / mint / burn / release", "BLOCKED"],
   ["JUNCA ↔ TRON Shasta", "ERC-20 ↔ TRC-20", "Network ID tron-shasta", "lock / mint / burn / release", "BLOCKED"],
@@ -273,7 +273,7 @@ export default function Home() {
           <a href="#security"><span>10</span><strong>Security</strong><small>Risk and control evidence</small></a>
           <a href="#resources"><span>11</span><strong>References</strong><small>Canonical technical sources</small></a>
           <a href="#readiness"><span>12</span><strong>Readiness</strong><small>Release classification</small></a>
-          <a href="#evidence"><span>13</span><strong>Evidence Matrix</strong><small>Known, pending and blocked</small></a>
+          <a href="#evidence"><span>13</span><strong>Evidence Matrix</strong><small>Known, under verification and blocked</small></a>
         </nav>
       </section>
 
@@ -306,7 +306,7 @@ export default function Home() {
           <table>
             <thead><tr><th>Capability</th><th>Use</th><th>Audience</th><th>Status</th><th>Condition</th></tr></thead>
             <tbody>
-              {capabilityRows.map((row) => <tr key={row[0]}>{row.map((cell, i) => <td key={cell}>{i === 3 ? <Badge tone={cell.includes("Pending") || cell === "Planned" ? "gold" : "neutral"}>{cell}</Badge> : cell}</td>)}</tr>)}
+              {capabilityRows.map((row) => <tr key={row[0]}>{row.map((cell, i) => <td key={cell}>{i === 3 ? <Badge tone={cell.includes("Verification") || cell.includes("Not Yet Published") || cell === "Planned" ? "gold" : "neutral"}>{cell}</Badge> : cell}</td>)}</tr>)}
             </tbody>
           </table>
         </div>
@@ -328,7 +328,7 @@ export default function Home() {
           </article>
           <article>
             <h3>Compatibility gate</h3>
-            <p>Token standards, contract upgrade patterns and tooling remain <strong>Pending Verification</strong> until tested against the current client build.</p>
+            <p>Token standards, contract upgrade patterns and tooling remain <strong>Verification in Progress</strong> until tested against the current client build.</p>
             <p lang="ja">対応規格と開発ツールは、現行クライアント上の実行確認後に確定します。</p>
           </article>
         </div>
@@ -434,7 +434,7 @@ export default function Home() {
                 ["Regional ecosystem token", "Asset and settlement events", "Local operating rules", "Governance and compliance", "Planned"],
                 ["Digital certificate", "Digest and status", "Evidence file", "Issuer and revocation", "Planned"],
                 ["Community participation", "Participation receipt", "Personal data and moderation", "Data minimization", "Planned"],
-                ["DApp / marketplace", "Contract events", "Search, content, support", "Platform and contract admin", "Pending Verification"],
+                ["DApp / marketplace", "Contract events", "Search, content, support", "Platform and contract admin", "Verification in Progress"],
               ].map((row) => <tr key={row[0]}>{row.map((cell, i) => <td key={cell}>{i === 4 ? <Badge tone="gold">{cell}</Badge> : cell}</td>)}</tr>)}
             </tbody>
           </table>
@@ -448,7 +448,7 @@ export default function Home() {
           <div>
             <ol className="steps">
               <li><span>01</span><div><strong>Prerequisites</strong><p>Node.js 22+, an approved wallet, test-only account, source control and a secrets-safe environment.</p></div></li>
-              <li><span>02</span><div><strong>Network configuration</strong><p>Candidate Chain ID: <code>20260723</code>. RPC, WS, Explorer, Faucet and currency symbol: <b>Pending Verification / not publicly released</b>.</p></div></li>
+              <li><span>02</span><div><strong>Network configuration</strong><p>Candidate Chain ID: <code>20260723</code>. RPC, WS, Explorer, Faucet and currency symbol: <b>Verification in Progress / not currently published</b>.</p></div></li>
               <li><span>03</span><div><strong>Contract toolchain</strong><p>Solidity/EVM compatibility, token standards and compiler targets must pass client-level tests before a deployment example is published.</p></div></li>
               <li><span>04</span><div><strong>Release evidence</strong><p>Compile, unit test, negative test, security review, testnet deployment, Explorer verification and monitoring evidence form one release packet.</p></div></li>
             </ol>
@@ -509,8 +509,8 @@ export default function Home() {
           <a href="https://ethereum.org/developers/docs/standards/" target="_blank" rel="noreferrer"><span>Ethereum standards</span><strong>ERC Technical Standards</strong><small>ERC-20, ERC-721 and application-level conventions</small></a>
           <a href="https://docs.bnbchain.org/bnb-smart-chain/" target="_blank" rel="noreferrer"><span>BNB Smart Chain</span><strong>BSC Technical Documentation</strong><small>Network and application reference</small></a>
           <a href="https://developers.tron.network/docs/token-standards-overview" target="_blank" rel="noreferrer"><span>TRON standards</span><strong>TRC Technical Standards</strong><small>TRC-20 and TRC-721 reference</small></a>
-          <div><span>Network status</span><strong>Pending Deployment</strong><small>No public RPC, WS, Explorer or Faucet link is released here.</small></div>
-          <div><span>SDK / API</span><strong>Pending Verification</strong><small>Publication follows tested repository availability.</small></div>
+          <div><span>Network status</span><strong>Not Yet Published</strong><small>No public RPC, WS, Explorer or Faucet link is released here.</small></div>
+          <div><span>SDK / API</span><strong>Verification in Progress</strong><small>Publication follows tested repository availability.</small></div>
         </div>
       </section>
 
@@ -541,7 +541,7 @@ export default function Home() {
         <div className="evidence-grid">
           <article><Badge>Verified in source</Badge><h3>Control architecture</h3><p>Canonical name, institutional governance label, fail-closed release policy, candidate chain configuration and three-validator topology.</p></article>
           <article><Badge tone="gold">Target only</Badge><h3>Scale profile</h3><p>Throughput, finality, latency, availability and nine-validator production topology are targets, not public claims.</p></article>
-          <article><Badge tone="gold">Pending verification</Badge><h3>Partner stack</h3><p>Smart-contract compatibility, token/NFT standards, SDK/API, wallet, compiler and verification toolchain.</p></article>
+          <article><Badge tone="gold">Verification in progress</Badge><h3>Partner stack</h3><p>Smart-contract compatibility, token/NFT standards, SDK/API, wallet, compiler and verification toolchain.</p></article>
           <article><Badge>Implemented in source</Badge><h3>Ethereum / ERC, BSC & TRON control plane</h3><p>Route validation, message-state engine, simulation, replay controls and testnet bridge contract. No deployment or asset movement.</p></article>
           <article><Badge tone="block">Blocked</Badge><h3>Public release</h3><p>Custody-bound validator addresses, runtime observations, public endpoints, Explorer parity, rollback and independent readback.</p></article>
         </div>
