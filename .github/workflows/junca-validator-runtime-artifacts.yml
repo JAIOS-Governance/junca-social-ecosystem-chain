@@ -111,8 +111,11 @@ jobs:
               assets_moved: false,
               bridge_activated: false
             }' > artifacts/evidence/runtime-build.json
-          sha256sum artifacts/evidence/runtime-build.json \
-            > artifacts/evidence/SHA256SUMS
+          (
+            cd artifacts/evidence
+            sha256sum runtime-build.json > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
 
       - name: Upload complete validator runtime
         uses: actions/upload-artifact@v4
