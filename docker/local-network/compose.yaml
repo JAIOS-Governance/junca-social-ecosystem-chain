@@ -2,8 +2,8 @@ name: junca-local-network
 
 x-validator-environment: &validator-environment
   JUNCA_LOCAL_DEVELOPMENT: "1"
-  TESTNET_BLOCK_INTERVAL_SECONDS: "5"
-  TESTNET_SLOT_EPOCH_SECONDS: "1"
+  TESTNET_BLOCK_INTERVAL_SECONDS: "0"
+  TESTNET_SLOT_EPOCH_SECONDS: "0"
   VALIDATOR_SIGNER_BINDINGS: >-
     validator-01=arn:aws:kms:local:000000000000:key/validator-01,
     validator-02=arn:aws:kms:local:000000000000:key/validator-02,
@@ -76,7 +76,6 @@ services:
       - 0.0.0.0
       - --http.port
       - "8545"
-      - --mine
     ports:
       - "18545:8545"
     volumes:
@@ -101,7 +100,6 @@ services:
       - 0.0.0.0
       - --http.port
       - "8545"
-      - --mine
     ports:
       - "18546:8545"
     volumes:
@@ -126,7 +124,6 @@ services:
       - 0.0.0.0
       - --http.port
       - "8545"
-      - --mine
     ports:
       - "18547:8545"
     volumes:
