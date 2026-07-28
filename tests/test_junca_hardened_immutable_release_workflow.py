@@ -95,6 +95,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             "head_branch == 'main'",
             'issues="244 248"',
             'issues="244 249"',
+            'issues="266 ${issues}"',
             "issues/${issue}/comments",
             "EXACT_CURRENT_MAIN",
             "Mainnet Changed: false",
