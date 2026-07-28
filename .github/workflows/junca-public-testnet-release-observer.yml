@@ -111,7 +111,7 @@ jobs:
           fi
 
           body="$(cat <<EOF
-          ## Public Testnet workflow evidence
+          ## Current Public Testnet release state
 
           - Phase: \`${phase}\`
           - Result: **${result}**
@@ -125,9 +125,10 @@ jobs:
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. This record does not independently declare continuous Public Testnet operation unless rollout and continuity acceptance both succeed.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
 
-          Safety boundary:
+          ## Safety boundary
+
           - Public Testnet / No Monetary Value
           - Transaction submission disabled
           - Mainnet Changed: false
@@ -136,6 +137,11 @@ jobs:
           - Mainnet Activation Authorized: false
           EOF
           )"
+
+          # Issue #269 is the single current-state record; Issue #266 retains history.
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/issues/269" \
+            -f body="$body" >/dev/null
 
           for issue in $issues; do
             gh api --method POST \
