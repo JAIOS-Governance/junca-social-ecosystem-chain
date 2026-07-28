@@ -1,0 +1,66 @@
+name: Apply Evidence-bound Live Prefix Patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-evidence-bound-live-prefix-patch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/evidence-bound-live-prefix
+          fetch-depth: 0
+
+      - name: Replace only the initial live-prefix compatibility invocation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/junca_public_testnet_foundation.sh")
+          text = path.read_text(encoding="utf-8")
+          old = '''  python -m jaios.social_ecosystem_chain.rolling_compatibility \\
+    --mode live-prefix \\
+    --evidence artifacts/live-prefix-readback.json \\
+    --output artifacts/live-prefix-decision.json
+'''
+          new = '''  python scripts/junca_live_rollout_prefix_gate.py \\
+    --evidence artifacts/live-prefix-readback.json \\
+    --output artifacts/live-prefix-decision.json
+'''
+          if text.count(old) != 1:
+              raise SystemExit("initial live-prefix invocation is not exact one")
+          updated = text.replace(old, new)
+          if updated.count(
+              "python -m jaios.social_ecosystem_chain.rolling_compatibility"
+          ) != 1:
+              raise SystemExit("later canonical rolling gate was modified")
+          if updated.count(
+              "python scripts/junca_live_rollout_prefix_gate.py"
+          ) != 1:
+              raise SystemExit("evidence-bound gate was not installed exactly once")
+          path.write_text(updated, encoding="utf-8")
+          PY
+          bash -n scripts/junca_public_testnet_foundation.sh
+          git diff --check
+          test "$(grep -c 'junca_live_rollout_prefix_gate.py' \
+            scripts/junca_public_testnet_foundation.sh)" = 1
+          test "$(grep -c 'python -m jaios.social_ecosystem_chain.rolling_compatibility' \
+            scripts/junca_public_testnet_foundation.sh)" = 1
+
+      - name: Commit exact Branch patch
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/junca_public_testnet_foundation.sh
+          git commit -m "Bind Foundation preflight to evidence-bound live prefix"
+          git push origin HEAD:fix/evidence-bound-live-prefix
