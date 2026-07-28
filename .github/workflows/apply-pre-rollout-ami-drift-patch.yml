@@ -6,12 +6,21 @@ on:
       - fix/pre-rollout-ami-drift-evidence
     paths:
       - ".github/workflows/apply-pre-rollout-ami-drift-patch.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-pre-rollout-ami-drift-patch.yml"
+      - "scripts/junca_runtime_release_evidence_collector_drift.py"
+      - "tests/test_junca_runtime_release_ami_drift.py"
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
