@@ -1,0 +1,25 @@
+[Unit]
+Description=JUNCA Public Testnet Finalized-only Explorer
+After=network-online.target junca-validator.service
+Wants=network-online.target
+Requires=junca-validator.service
+
+[Service]
+Type=simple
+User=junca
+Group=junca
+ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 3000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

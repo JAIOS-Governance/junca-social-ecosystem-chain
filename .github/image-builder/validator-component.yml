@@ -9,7 +9,9 @@ phases:
         inputs:
           commands:
             - set -euo pipefail
-            - install -d -m 0755 /opt/junca /etc/junca
+            - install -d -m 0755 /opt/junca /etc/junca /var/log/junca
+            - getent group junca >/dev/null || groupadd --system junca
+            - id -u junca >/dev/null 2>&1 || useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
             - dnf install -y python3-boto3
             - aws s3 cp s3://__BUCKET__/validator-runtime.tar.gz /tmp/validator-runtime.tar.gz
             - aws s3 cp s3://__BUCKET__/genesis.json /tmp/genesis.json
@@ -27,7 +29,17 @@ phases:
           commands:
             - set -euo pipefail
             - test -x /usr/local/bin/junca-chain-node
+            - test -x /usr/local/bin/junca-public-gateway
             - test -s /etc/junca/genesis.json
+            - id -u junca
+            - getent group junca
+            - test "$(stat -c '%U:%G' /var/log/junca)" = "root:root"
+            - systemd-analyze verify /etc/systemd/system/junca-validator.service /etc/systemd/system/junca-public-rpc.service /etc/systemd/system/junca-public-explorer.service
+            - grep -Fxq 'User=junca' /etc/systemd/system/junca-validator.service
+            - grep -Fxq 'User=junca' /etc/systemd/system/junca-public-rpc.service
+            - grep -Fxq 'User=junca' /etc/systemd/system/junca-public-explorer.service
+            - grep -Fq -- '--http.port 3000' /etc/systemd/system/junca-public-explorer.service
+            - grep -Fq -- '--http.port 8546' /etc/systemd/system/junca-public-rpc.service
             - echo "__NODE_SHA256__  /opt/junca/validator-runtime.tar.gz" | sha256sum --check
             - echo "__GENESIS_SHA256__  /etc/junca/genesis.json" | sha256sum --check
             - python3 -c 'import json; d=json.load(open("/etc/junca/genesis.json")); assert d["network"] == "public-testnet"; assert d["notice"] == "Public Testnet / No Monetary Value"; assert d["validator_ids"] == ["validator-01", "validator-02", "validator-03"]'

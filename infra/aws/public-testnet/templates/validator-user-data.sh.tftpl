@@ -3,6 +3,9 @@ set -euo pipefail
 umask 027
 
 install -d -m 0750 /etc/junca /var/lib/junca /var/log/junca
+getent group junca >/dev/null || groupadd --system junca
+id -u junca >/dev/null 2>&1 || \
+  useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
 
 %{ if validator_state_required ~}
 validator_state_volume_id='${validator_state_volume_id}'
@@ -77,6 +80,7 @@ TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch_seconds}
 BRIDGE_ACTIVATED=false
 EOF
 chmod 0640 /etc/junca/runtime.env
+chown root:junca /etc/junca/runtime.env
 
 # The approved AMI must provide /usr/local/bin/junca-chain-node and /etc/junca/genesis.json.
 # No private key, mnemonic or signer secret is written by this bootstrap.
@@ -98,6 +102,8 @@ ConditionPathExists=/var/lib/junca/state.sqlite
 
 [Service]
 Type=simple
+User=junca
+Group=junca
 EnvironmentFile=/etc/junca/runtime.env
 %{ if validator_state_required ~}
 ExecStartPre=/usr/bin/test -f /var/lib/junca/state.sqlite
@@ -125,6 +131,8 @@ Requires=junca-validator.service
 
 [Service]
 Type=simple
+User=junca
+Group=junca
 ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 8546
 Restart=on-failure
 RestartSec=5
@@ -145,6 +153,8 @@ Requires=junca-validator.service
 
 [Service]
 Type=simple
+User=junca
+Group=junca
 ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 3000
 Restart=on-failure
 RestartSec=5
@@ -163,5 +173,17 @@ systemctl enable junca-validator-state.service
 %{ endif ~}
 systemctl enable --now junca-validator.service
 systemctl enable --now junca-public-rpc.service junca-public-explorer.service
+
+for port in 8545 8546 3000; do
+  for attempt in $(seq 1 60); do
+    if ss -lntH "sport = :$port" | grep -q .; then
+      break
+    fi
+    test "$attempt" -lt 60
+    sleep 2
+  done
+done
+curl -fsS http://127.0.0.1:8545/health >/dev/null
+curl -fsS http://127.0.0.1:3000/health >/dev/null
 
 logger -t junca-bootstrap "validator=${validator_id} governance=JAIOS_Institutional_Governance log_group=${cloudwatch_log_name} state=started"
