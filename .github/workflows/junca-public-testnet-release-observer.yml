@@ -93,6 +93,9 @@ jobs:
               ;;
           esac
 
+          # Issue #266 is the compact append-only ledger for every release phase.
+          issues="266 ${issues}"
+
           main_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           if [ "$main_head" = "$OBSERVED_HEAD_SHA" ]; then
             source_binding="EXACT_CURRENT_MAIN"
