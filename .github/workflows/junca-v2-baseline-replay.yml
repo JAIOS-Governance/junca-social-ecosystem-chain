@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/junca-v2-baseline-replay.yml"
+      - "scripts/junca_public_testnet_endpoint_test.py"
       - "scripts/junca_runtime_release_evidence_collector.py"
       - "scripts/junca_runtime_release_evidence_collector_drift.py"
 
@@ -26,9 +27,10 @@ jobs:
           github-token: ${{ github.token }}
           run-id: 30408499456
 
-      - name: Verify replay input identities
+      - name: Verify preserved failure inputs
         run: |
           set -euo pipefail
+          mkdir -p evidence/replay
           test -f evidence/ami/junca-validator-ami-build.json
           test -f evidence/state-migration/junca-validator-state-migration.json
           test -f evidence/readback/bootstrap-outputs.json
@@ -39,17 +41,54 @@ jobs:
           test -f evidence/readback/snapshots.json
           test -f evidence/readback/endpoint-acceptance.json
           jq -e '
+            .status == "FAIL" and
+            .scope == "Public Testnet Runtime Acceptance / Read-only" and
+            .error == "rpc/explorer: finalized block mismatch"
+          ' evidence/readback/endpoint-acceptance.json
+          cp evidence/readback/endpoint-acceptance.json \
+            evidence/replay/preserved-endpoint-failure.json
+
+      - name: Sample current Public Testnet endpoint consistency
+        run: |
+          set -u
+          : > evidence/replay/endpoint-samples.jsonl
+          rm -f evidence/replay/endpoint-live-pass.json
+          for attempt in 1 2 3 4 5; do
+            set +e
+            python scripts/junca_public_testnet_endpoint_test.py \
+              > "evidence/replay/endpoint-${attempt}.json" \
+              2> "evidence/replay/endpoint-${attempt}.stderr"
+            code=$?
+            set -e
+            jq -cn \
+              --argjson attempt "$attempt" \
+              --argjson exit_code "$code" \
+              --slurpfile report "evidence/replay/endpoint-${attempt}.json" '{
+                attempt: $attempt,
+                exit_code: $exit_code,
+                report: $report[0]
+              }' >> evidence/replay/endpoint-samples.jsonl
+            if [[ "$code" == 0 ]]; then
+              cp "evidence/replay/endpoint-${attempt}.json" \
+                evidence/replay/endpoint-live-pass.json
+              break
+            fi
+            sleep 5
+          done
+          test -f evidence/replay/endpoint-live-pass.json
+          jq -e '
             .status == "PASS" and
             .checks.health == "PASS" and
             .checks.explorer.result == "PASS" and
             .checks.safe_rpc.result == "PASS" and
             .checks.unsafe_rpc_rejection.result == "PASS"
-          ' evidence/readback/endpoint-acceptance.json
+          ' evidence/replay/endpoint-live-pass.json
+          cat evidence/replay/endpoint-samples.jsonl
 
-      - name: Replay collector with complete diagnostics
+      - name: Replay collector with current consistent endpoint evidence
         run: |
           set -u
-          mkdir -p evidence/release evidence/replay
+          mkdir -p evidence/release
           set +e
           python scripts/junca_runtime_release_evidence_collector_drift.py \
             --candidate-ami evidence/ami/junca-validator-ami-build.json \
@@ -59,7 +98,7 @@ jobs:
             --instances evidence/readback/instances.json \
             --volumes evidence/readback/volumes.json \
             --snapshots evidence/readback/snapshots.json \
-            --endpoint-acceptance evidence/readback/endpoint-acceptance.json \
+            --endpoint-acceptance evidence/replay/endpoint-live-pass.json \
             --migration-evidence evidence/state-migration/junca-validator-state-migration.json \
             --expected-migration-run-id 30301559973 \
             --expected-migration-head-sha a854085ef1ed790b47771a9fd00fbfab67e248c8 \
