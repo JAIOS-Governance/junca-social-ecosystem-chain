@@ -12,21 +12,21 @@
 ## Purpose
 
 This specification defines a deterministic, atomic state-transition and
-snapshot boundary for JUNCA Social Ecosystem Chain Mainnet Candidate
-development. It is an implementation primitive, not a Mainnet activation or an
-asset issuance mechanism.
+finalized persistence boundary for JUNCA Social Ecosystem Chain Mainnet
+Candidate development. It is an implementation primitive, not a Mainnet
+activation or an asset issuance mechanism.
 
 ## Chain identity binding
 
-Every transaction and snapshot is bound to:
+Every transaction, snapshot and persistent store is bound to:
 
 - positive `chain_id`;
 - exact 32-byte `genesis_hash`;
 - semantic `protocol_version`;
-- canonical schema version.
+- canonical state and storage schema versions.
 
-A transaction for another chain, genesis or protocol version is rejected before
-any state mutation.
+A transaction or persistent store for another chain, genesis or protocol
+version is rejected before any state mutation.
 
 ## State model
 
@@ -94,7 +94,7 @@ Block receipts commit to:
 - ordered transaction-receipt hashes;
 - aggregate resource units.
 
-## Persistence and recovery
+## Snapshot persistence and recovery
 
 Canonical snapshots contain:
 
@@ -109,6 +109,31 @@ The snapshot envelope includes a domain-separated digest. Restore rejects
 malformed data, duplicate keys or nonces, digest mismatch, state-root mismatch,
 schema mismatch or altered safety boundaries.
 
+## Finalized SQLite WAL ledger
+
+`FinalizedStateStore` provides a transactional persistence foundation for
+finalized snapshots.
+
+The store:
+
+- uses SQLite WAL mode, `synchronous=FULL`, foreign-key enforcement and a bounded busy timeout;
+- binds immutable metadata to chain ID, genesis hash, protocol version and schema versions;
+- requires a canonical genesis snapshot before finalized blocks are persisted;
+- requires contiguous finalized height and increasing timestamps;
+- binds every persisted block to the previous state root, current state root,
+  block receipt hash, snapshot digest and raw snapshot SHA-256;
+- accepts only an exact duplicate as idempotent and rejects a conflicting record
+  for an existing height;
+- executes writes inside `BEGIN IMMEDIATE` transactions with rollback on error;
+- validates snapshot byte integrity, snapshot digest, state root and chain binding
+  during restore;
+- exposes database integrity, WAL mode and finalized-head evidence without
+  representing the Candidate as activated.
+
+This is a finalized snapshot ledger foundation. Production scale storage,
+incremental authenticated trees, pruning and multi-node snapshot distribution
+remain separate acceptance work.
+
 ## Security properties implemented
 
 - chain/genesis/protocol replay separation;
@@ -119,6 +144,9 @@ schema mismatch or altered safety boundaries.
 - atomic transaction and block rollback;
 - bounded state value, operation, transaction-resource and block-resource size;
 - deterministic snapshot integrity verification;
+- transactional finalized-height continuity;
+- persistent receipt and snapshot provenance binding;
+- store metadata mismatch rejection;
 - no implicit Mainnet, asset or bridge activation.
 
 ## Integration residual
@@ -129,11 +157,11 @@ This primitive remains to be integrated with:
 - the Mainnet mempool candidate;
 - execution-module adapters and receipt/event production;
 - consensus block proposal and certified finality;
-- authenticated storage/database implementation;
-- snapshot distribution and restore governance;
+- incremental authenticated state-tree storage and pruning;
+- snapshot distribution, restore authorization and recovery governance;
 - runtime upgrade/migration rehearsal;
 - Explorer/Indexer ingestion;
-- Mainnet QA, Security and Production Acceptance.
+- Mainnet QA, Security, Performance and Production Acceptance.
 
 No integration residual may be represented as completed until corresponding
 code, CI and runtime evidence exist.
