@@ -24,6 +24,7 @@ on:
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
+      - ".github/workflows/junca-public-testnet-release-observer.yml"
   pull_request:
     paths:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
@@ -46,6 +47,7 @@ on:
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
+      - ".github/workflows/junca-public-testnet-release-observer.yml"
   # Manual dispatch remains available for release-control-only changes that
   # must rebind otherwise identical immutable runtime bytes to the new commit.
   # Acceptance timing fixes are rebound through this immutable-input contract.
