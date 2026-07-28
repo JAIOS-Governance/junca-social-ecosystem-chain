@@ -1,0 +1,70 @@
+name: JUNCA V2 Release Readback
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-v2-release-readback.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  readback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_SHA: eac0d1378c95843f68f58efa1217b42619ee627b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read exact-source release workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/v2-release-readback
+          for workflow in \
+            junca-hardened-immutable-candidate-release-v2.yml \
+            junca-hardened-immutable-candidate-release.yml \
+            junca-validator-ami-build.yml \
+            junca-runtime-release-evidence-collector-v2.yml \
+            junca-runtime-release-evidence-collector.yml \
+            junca-runtime-release-manifest-gate.yml \
+            junca-validator-foundation-release.yml \
+            junca-public-testnet-continuity.yml; do
+            target="artifacts/v2-release-readback/${workflow%.yml}.json"
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=100" \
+              | jq -s --arg source "$TARGET_SHA" '[
+                  .[].workflow_runs[] |
+                  select(.head_sha == $source) |
+                  {
+                    id,
+                    name,
+                    path,
+                    status,
+                    conclusion,
+                    event,
+                    head_sha,
+                    run_number,
+                    run_attempt,
+                    created_at,
+                    updated_at,
+                    html_url
+                  }
+                ] | unique_by(.id) | sort_by(.created_at)' \
+              > "$target"
+          done
+          jq -s 'add | unique_by(.id) | sort_by(.created_at)' \
+            artifacts/v2-release-readback/*.json \
+            > artifacts/v2-release-readback/all-runs.json
+          jq -e 'length >= 2' artifacts/v2-release-readback/all-runs.json
+          cat artifacts/v2-release-readback/all-runs.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-v2-release-readback-${{ github.run_id }}
+          path: artifacts/v2-release-readback/
+          if-no-files-found: error
+          retention-days: 7
