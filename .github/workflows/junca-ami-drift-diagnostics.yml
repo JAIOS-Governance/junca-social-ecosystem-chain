@@ -1,0 +1,103 @@
+name: JUNCA AMI Drift Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-ami-drift-diagnostics.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  readback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      CANDIDATE_AMI: ami-09f90a9a8cfc030d9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5095561587653c7089448a91f8fdf43abda4cdd2
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-ami-drift-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Read approved and actual validator AMIs
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/ami-drift
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/bootstrap.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true"
+          terraform -chdir=infra/aws/bootstrap output -json \
+            > artifacts/ami-drift/bootstrap-outputs.json
+          state_kms_key_arn="$(jq -er .state_kms_key_arn.value artifacts/ami-drift/bootstrap-outputs.json)"
+          lock_table="$(jq -er .lock_table.value artifacts/ami-drift/bootstrap-outputs.json)"
+          terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$lock_table" \
+            -backend-config="encrypt=true" \
+            -backend-config="kms_key_id=$state_kms_key_arn"
+          terraform -chdir=infra/aws/public-testnet output -json \
+            > artifacts/ami-drift/public-testnet-outputs.json
+          mapfile -t instances < <(jq -er '.validator_instance_ids.value[]' artifacts/ami-drift/public-testnet-outputs.json)
+          test "${#instances[@]}" = 3
+          aws ec2 describe-instances --instance-ids "${instances[@]}" \
+            > artifacts/ami-drift/instances.json
+          approved_ami="$(jq -er '.approved_node_ami_readback.value.id' artifacts/ami-drift/public-testnet-outputs.json)"
+          jq -n \
+            --arg approved_ami "$approved_ami" \
+            --arg candidate_ami "$CANDIDATE_AMI" \
+            --slurpfile instances artifacts/ami-drift/instances.json '{
+              schema_version: "junca-ami-drift-readback/v1",
+              approved_terraform_ami: $approved_ami,
+              candidate_ami: $candidate_ami,
+              validators: [
+                $instances[0].Reservations[].Instances[] |
+                {
+                  instance_id: .InstanceId,
+                  image_id: .ImageId,
+                  state: .State.Name,
+                  name: ([.Tags[]? | select(.Key == "Name") | .Value] | first // null)
+                }
+              ] | sort_by(.instance_id),
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > artifacts/ami-drift/readback.json
+          jq -e '
+            (.approved_terraform_ami | test("^ami-[0-9a-f]{8,17}$")) and
+            (.candidate_ami | test("^ami-[0-9a-f]{8,17}$")) and
+            (.validators | length == 3) and
+            ([.validators[].instance_id] | unique | length == 3) and
+            ([.validators[].state] | unique == ["running"]) and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/ami-drift/readback.json
+          cat artifacts/ami-drift/readback.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junca-ami-drift-diagnostics-${{ github.run_id }}
+          path: artifacts/ami-drift/
+          if-no-files-found: error
+          retention-days: 7
