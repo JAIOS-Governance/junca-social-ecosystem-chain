@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Live, read-only acceptance checks for JUNCA Public Testnet endpoints.
 
-This script is intentionally separate from the unit-test suite because it
-performs external HTTPS requests.  It never submits a transaction; the only
-unsafe request is a method-name probe whose required result is rejection.
+Each atomic sample requires the health, explorer and RPC surfaces to describe the
+same finalized block. The CLI performs a small, bounded series of complete
+samples because independently refreshed read-only surfaces can briefly cross a
+finalization boundary. A failed atomic sample is never accepted or normalized;
+every failure reason and the accepted sample number are retained in the emitted
+evidence.
+
+This script never submits a transaction. The only unsafe requests are method-name
+probes whose required result is rejection.
 """
 
 from __future__ import annotations
@@ -11,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
@@ -43,10 +50,23 @@ UNSAFE_RPC_METHODS = (
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
 HEALTH_SCHEMA = "junca-public-gateway-health/v1"
 EXPLORER_SCHEMA = "junca-public-explorer/v3"
+MAX_SAMPLE_ATTEMPTS = 10
+MAX_SAMPLE_INTERVAL_SECONDS = 60.0
+DEFAULT_SAMPLE_ATTEMPTS = 5
+DEFAULT_SAMPLE_INTERVAL_SECONDS = 5.0
 
 
 class AcceptanceError(RuntimeError):
     """Raised when a public endpoint violates its acceptance contract."""
+
+
+class BoundedAcceptanceError(AcceptanceError):
+    """Raised after every bounded atomic sample has failed."""
+
+    def __init__(self, samples: list[dict[str, Any]]) -> None:
+        self.samples = samples
+        final_error = samples[-1]["error"] if samples else "no samples executed"
+        super().__init__(str(final_error))
 
 
 @dataclass(frozen=True)
@@ -56,6 +76,8 @@ class HttpResponse:
 
 
 Transport = Callable[[str, str, Mapping[str, Any] | None], HttpResponse]
+AtomicSample = Callable[[], Mapping[str, Any]]
+Sleeper = Callable[[float], None]
 
 
 def https_json_transport(
@@ -99,7 +121,9 @@ def _verify_boundaries(body: Mapping[str, Any], endpoint: str) -> None:
         _require(body.get(field) is False, f"{endpoint}: {field} must be false")
 
 
-def _rpc_payload(request_id: str, method: str, params: list[Any]) -> Mapping[str, Any]:
+def _rpc_payload(
+    request_id: str, method: str, params: list[Any]
+) -> Mapping[str, Any]:
     return {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -108,7 +132,11 @@ def _rpc_payload(request_id: str, method: str, params: list[Any]) -> Mapping[str
     }
 
 
-def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, Any]:
+def run_acceptance(
+    transport: Transport = https_json_transport,
+) -> Mapping[str, Any]:
+    """Run one complete, atomic endpoint-consistency sample."""
+
     checks: dict[str, Any] = {}
 
     health = transport("GET", HEALTH_URL, None)
@@ -117,7 +145,10 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
         health.body.get("schema_version") == HEALTH_SCHEMA,
         "health: unsupported schema_version",
     )
-    _require(health.body.get("status") == "healthy", "health: status is not healthy")
+    _require(
+        health.body.get("status") == "healthy",
+        "health: status is not healthy",
+    )
     _require(health.body.get("read_only") is True, "health: read_only must be true")
     _verify_boundaries(health.body, "health")
     checks["health"] = "PASS"
@@ -128,7 +159,10 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
         explorer.body.get("schema_version") == EXPLORER_SCHEMA,
         "explorer: v3 schema is required",
     )
-    _require(explorer.body.get("status") == "ready", "explorer: status is not ready")
+    _require(
+        explorer.body.get("status") == "ready",
+        "explorer: status is not ready",
+    )
     _require(
         explorer.body.get("finalized_only") is True,
         "explorer: finalized_only must be true",
@@ -207,9 +241,14 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
     safe_results: dict[str, Any] = {}
     for index, (method, params) in enumerate(SAFE_RPC_METHODS.items(), start=1):
         request_id = f"safe-{index}"
-        response = transport("POST", RPC_URL, _rpc_payload(request_id, method, params))
+        response = transport(
+            "POST", RPC_URL, _rpc_payload(request_id, method, params)
+        )
         _require(response.status == 200, f"rpc {method}: expected HTTP 200")
-        _require(response.body.get("jsonrpc") == "2.0", f"rpc {method}: invalid version")
+        _require(
+            response.body.get("jsonrpc") == "2.0",
+            f"rpc {method}: invalid version",
+        )
         _require(response.body.get("id") == request_id, f"rpc {method}: id mismatch")
         _require("result" in response.body, f"rpc {method}: result is missing")
         _require("error" not in response.body, f"rpc {method}: unexpected error")
@@ -244,11 +283,16 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
         and len(transactions) == head["transaction_count"],
         "rpc/explorer: transaction count mismatch",
     )
-    checks["safe_rpc"] = {"result": "PASS", "methods": sorted(safe_results)}
+    checks["safe_rpc"] = {
+        "result": "PASS",
+        "methods": sorted(safe_results),
+    }
 
     for index, method in enumerate(UNSAFE_RPC_METHODS, start=1):
         request_id = f"unsafe-{index}"
-        response = transport("POST", RPC_URL, _rpc_payload(request_id, method, []))
+        response = transport(
+            "POST", RPC_URL, _rpc_payload(request_id, method, [])
+        )
         _require(response.status == 403, f"rpc {method}: expected HTTP 403")
         error = response.body.get("error")
         _require(isinstance(error, Mapping), f"rpc {method}: error is missing")
@@ -279,34 +323,143 @@ def run_acceptance(transport: Transport = https_json_transport) -> Mapping[str, 
     }
 
 
+def run_bounded_acceptance(
+    sample: AtomicSample | None = None,
+    *,
+    attempts: int = DEFAULT_SAMPLE_ATTEMPTS,
+    interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
+    sleeper: Sleeper = time.sleep,
+) -> Mapping[str, Any]:
+    """Run bounded full-consistency samples without weakening one sample."""
+
+    if isinstance(attempts, bool) or not isinstance(attempts, int):
+        raise ValueError("attempts must be an integer")
+    if not 1 <= attempts <= MAX_SAMPLE_ATTEMPTS:
+        raise ValueError(f"attempts must be between 1 and {MAX_SAMPLE_ATTEMPTS}")
+    if isinstance(interval_seconds, bool) or not isinstance(
+        interval_seconds, (int, float)
+    ):
+        raise ValueError("interval_seconds must be numeric")
+    interval = float(interval_seconds)
+    if not 0 <= interval <= MAX_SAMPLE_INTERVAL_SECONDS:
+        raise ValueError(
+            "interval_seconds must be between 0 and "
+            f"{MAX_SAMPLE_INTERVAL_SECONDS:g}"
+        )
+
+    atomic_sample = sample or run_acceptance
+    samples: list[dict[str, Any]] = []
+    for attempt in range(1, attempts + 1):
+        sample_started_at = datetime.now(timezone.utc).isoformat()
+        try:
+            report = dict(atomic_sample())
+        except AcceptanceError as exc:
+            samples.append(
+                {
+                    "attempt": attempt,
+                    "status": "FAIL",
+                    "observed_at": sample_started_at,
+                    "error": str(exc),
+                }
+            )
+            if attempt < attempts:
+                sleeper(interval)
+            continue
+
+        samples.append(
+            {
+                "attempt": attempt,
+                "status": "PASS",
+                "observed_at": report.get("observed_at", sample_started_at),
+                "finalized_head": report.get("finalized_head"),
+            }
+        )
+        report["sampling"] = {
+            "schema_version": "junca-public-endpoint-sampling/v1",
+            "strategy": "BOUNDED_FULL_CONSISTENCY_SAMPLES",
+            "max_attempts": attempts,
+            "interval_seconds": interval,
+            "accepted_attempt": attempt,
+            "sample_count": len(samples),
+            "samples": samples,
+        }
+        return report
+
+    raise BoundedAcceptanceError(samples)
+
+
+def _failure_report(
+    error: AcceptanceError,
+    *,
+    attempts: int,
+    interval_seconds: float,
+) -> Mapping[str, Any]:
+    samples = error.samples if isinstance(error, BoundedAcceptanceError) else []
+    return {
+        "status": "FAIL",
+        "scope": "Public Testnet Runtime Acceptance / Read-only",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "endpoints": {
+            "health": HEALTH_URL,
+            "explorer": EXPLORER_URL,
+            "rpc": RPC_URL,
+        },
+        "error": str(error),
+        "sampling": {
+            "schema_version": "junca-public-endpoint-sampling/v1",
+            "strategy": "BOUNDED_FULL_CONSISTENCY_SAMPLES",
+            "max_attempts": attempts,
+            "interval_seconds": float(interval_seconds),
+            "accepted_attempt": None,
+            "sample_count": len(samples),
+            "samples": samples,
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--compact", action="store_true", help="emit compact JSON instead of indented JSON"
+        "--compact",
+        action="store_true",
+        help="emit compact JSON instead of indented JSON",
+    )
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=DEFAULT_SAMPLE_ATTEMPTS,
+        help="maximum complete endpoint-consistency samples",
+    )
+    parser.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=DEFAULT_SAMPLE_INTERVAL_SECONDS,
+        help="delay between failed complete samples",
     )
     args = parser.parse_args()
     try:
-        report = run_acceptance()
-    except AcceptanceError as exc:
+        report = run_bounded_acceptance(
+            attempts=args.attempts,
+            interval_seconds=args.interval_seconds,
+        )
+    except (AcceptanceError, ValueError) as exc:
+        if isinstance(exc, ValueError) and not isinstance(exc, AcceptanceError):
+            parser.error(str(exc))
+        report = _failure_report(
+            exc,
+            attempts=args.attempts,
+            interval_seconds=args.interval_seconds,
+        )
         print(
             json.dumps(
-                {
-                    "status": "FAIL",
-                    "scope": "Public Testnet Runtime Acceptance / Read-only",
-                    "observed_at": datetime.now(timezone.utc).isoformat(),
-                    "endpoints": {
-                        "health": HEALTH_URL,
-                        "explorer": EXPLORER_URL,
-                        "rpc": RPC_URL,
-                    },
-                    "error": str(exc),
-                },
+                report,
                 ensure_ascii=False,
                 indent=None if args.compact else 2,
                 sort_keys=True,
             )
         )
         return 1
+
     print(
         json.dumps(
             report,
