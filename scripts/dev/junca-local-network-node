@@ -6,6 +6,9 @@ from __future__ import annotations
 import os
 
 from jaios.social_ecosystem_chain import validator_node
+from jaios.social_ecosystem_chain.development_liveness import (
+    DevelopmentRecoveringBoundedFinalityLoop,
+)
 from jaios.social_ecosystem_chain.development_signer import (
     DEVELOPMENT_MODE_ENV,
     DeterministicDevelopmentKmsAdapter,
@@ -24,6 +27,7 @@ def main() -> int:
     validator_node.AwsKmsSecp256k1Adapter = DeterministicDevelopmentKmsAdapter
     validator_node.PublicTestnetConsensus = GossipAwarePublicTestnetConsensus
     validator_node.PrivateVpcPeerTransport = ReliableAuthenticatedVoteGossip
+    validator_node.BoundedFinalityLoop = DevelopmentRecoveringBoundedFinalityLoop
     return validator_node.main()
 
 
