@@ -10,6 +10,8 @@ from tests import test_junca_runtime_release_evidence_collector as canonical_tes
 
 
 DRIFT_AMI = "ami-22222222222222222"
+ROTATED_INSTANCE = "i-22222222222222222"
+ROTATED_ROOT = "vol-22222222222222222"
 
 
 class RuntimeReleaseAmiDriftTests(unittest.TestCase):
@@ -33,6 +35,22 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             expected_source_commit=canonical_test.COMMIT,
             output_dir=output,
         )
+
+    @staticmethod
+    def rotate_first_validator(values):
+        current = values["instances"]["Reservations"][0]["Instances"][0]
+        original_instance = current["InstanceId"]
+        original_root = current["BlockDeviceMappings"][0]["Ebs"]["VolumeId"]
+        values["public"]["validator_instance_ids"]["value"][0] = (
+            ROTATED_INSTANCE
+        )
+        current["InstanceId"] = ROTATED_INSTANCE
+        current["ImageId"] = DRIFT_AMI
+        current["BlockDeviceMappings"][0]["Ebs"]["VolumeId"] = ROTATED_ROOT
+        values["volumes"]["Volumes"][0]["Attachments"][0][
+            "InstanceId"
+        ] = ROTATED_INSTANCE
+        return original_instance, original_root
 
     def test_records_exact_pre_rollout_ami_drift_without_hiding_it(self):
         values = canonical_test.fixture()
@@ -71,6 +89,50 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             explorer["observed_validator_runtimes"], validators
         )
         self.assertEqual(ebs["observed_validator_runtimes"], validators)
+        self.assertEqual(
+            manifest["migration_lineage_state"],
+            "RETAINED_STATE_LINEAGE_VERIFIED",
+        )
+        self.assertTrue(
+            manifest["migration_retained_state_lineage_verified"]
+        )
+
+    def test_records_instance_and_root_rotation_with_retained_state(self):
+        values = canonical_test.fixture()
+        original_instance, original_root = self.rotate_first_validator(values)
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, explorer_path, ebs_path = self.collect(
+                values, Path(directory)
+            )
+            manifest = json.loads(manifest_path.read_text())
+            explorer = json.loads(explorer_path.read_text())
+            ebs = json.loads(ebs_path.read_text())
+
+        self.assertTrue(manifest["migration_instance_rotation_detected"])
+        self.assertTrue(
+            manifest["migration_root_volume_rotation_detected"]
+        )
+        original = manifest["migration_original_validator_mappings"][0]
+        current = manifest["migration_current_validator_mappings"][0]
+        self.assertEqual(original["instance_id"], original_instance)
+        self.assertEqual(original["root_volume_id"], original_root)
+        self.assertEqual(current["instance_id"], ROTATED_INSTANCE)
+        self.assertEqual(current["root_volume_id"], ROTATED_ROOT)
+        for field in (
+            "validator_id",
+            "signer_arn",
+            "state_volume_id",
+            "rollback_snapshot_id",
+        ):
+            self.assertEqual(original[field], current[field])
+        self.assertEqual(
+            explorer["migration_current_validator_mappings"],
+            manifest["migration_current_validator_mappings"],
+        )
+        self.assertEqual(
+            ebs["migration_original_validator_mappings"],
+            manifest["migration_original_validator_mappings"],
+        )
 
     def test_rejects_candidate_ami_already_present_before_rollout(self):
         values = canonical_test.fixture()
@@ -92,12 +154,49 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             ):
                 self.collect(values, Path(directory))
 
-    def test_canonical_collector_hook_is_restored_after_collection(self):
+    def test_rejects_migration_signer_lineage_change(self):
         values = canonical_test.fixture()
-        original = drift.collector.verify_instances
+        values["migration_evidence"]["validator_mappings"][0][
+            "signer_arn"
+        ] = "arn:aws:kms:us-east-1:595710543956:key/changed-signer"
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                drift.collector.EvidenceError, "signer_arn:mismatch"
+            ):
+                self.collect(values, Path(directory))
+
+    def test_rejects_migration_state_volume_lineage_change(self):
+        values = canonical_test.fixture()
+        values["migration_evidence"]["validator_mappings"][0][
+            "state_volume_id"
+        ] = "vol-33333333333333333"
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                drift.collector.EvidenceError, "state_volume_id:mismatch"
+            ):
+                self.collect(values, Path(directory))
+
+    def test_rejects_migration_snapshot_root_lineage_change(self):
+        values = canonical_test.fixture()
+        values["migration_evidence"]["validator_mappings"][0][
+            "root_volume_id"
+        ] = "vol-33333333333333333"
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                drift.collector.EvidenceError, "snapshot_root:mismatch"
+            ):
+                self.collect(values, Path(directory))
+
+    def test_canonical_collector_hooks_are_restored_after_collection(self):
+        values = canonical_test.fixture()
+        original_instances = drift.collector.verify_instances
+        original_migration = drift.collector.verify_migration_evidence
         with tempfile.TemporaryDirectory() as directory:
             self.collect(values, Path(directory))
-        self.assertIs(drift.collector.verify_instances, original)
+        self.assertIs(drift.collector.verify_instances, original_instances)
+        self.assertIs(
+            drift.collector.verify_migration_evidence, original_migration
+        )
 
     def test_v2_workflow_uses_drift_wrapper_and_preserves_diagnostics(self):
         workflow = (
@@ -109,7 +208,16 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("environment: public-testnet", workflow)
-        self.assertIn("junca-runtime-release-evidence-${{ github.run_id }}", workflow)
+        self.assertIn(
+            "junca-runtime-release-evidence-${{ github.run_id }}", workflow
+        )
+        self.assertIn(
+            'migration_lineage_state == "RETAINED_STATE_LINEAGE_VERIFIED"',
+            workflow,
+        )
+        self.assertIn(
+            ".migration_retained_state_lineage_verified == true", workflow
+        )
         for path in (
             "evidence/readback/bootstrap-outputs.json",
             "evidence/readback/public-testnet-outputs.json",
