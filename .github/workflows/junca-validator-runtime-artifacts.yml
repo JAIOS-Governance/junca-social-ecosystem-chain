@@ -8,28 +8,44 @@ on:
       - "jaios/social_ecosystem_chain/validator_node.py"
       - "jaios/social_ecosystem_chain/**"
       - "packaging/systemd/**"
+      - "config/junca_hardened_immutable_candidate_policy.json"
       - "scripts/build_validator_runtime.sh"
       - "scripts/verify_validator_runtime_layout.py"
       - "scripts/generate_junca_public_testnet_genesis.py"
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
+      - "scripts/junca_hardened_immutable_candidate_policy.py"
+      - "scripts/junca_dispatch_workflow_and_wait.sh"
       - "tests/test_junca_validator_artifacts.py"
+      - "tests/test_validator_runtime_layout.py"
+      - "tests/test_junca_hardened_immutable_candidate_policy.py"
+      - "tests/test_junca_hardened_immutable_release_workflow.py"
+      - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
+      - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
   pull_request:
     paths:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
       - "jaios/social_ecosystem_chain/validator_node.py"
       - "jaios/social_ecosystem_chain/**"
       - "packaging/systemd/**"
+      - "config/junca_hardened_immutable_candidate_policy.json"
       - "scripts/build_validator_runtime.sh"
       - "scripts/verify_validator_runtime_layout.py"
       - "scripts/generate_junca_public_testnet_genesis.py"
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
+      - "scripts/junca_hardened_immutable_candidate_policy.py"
+      - "scripts/junca_dispatch_workflow_and_wait.sh"
       - "tests/test_junca_validator_artifacts.py"
+      - "tests/test_validator_runtime_layout.py"
+      - "tests/test_junca_hardened_immutable_candidate_policy.py"
+      - "tests/test_junca_hardened_immutable_release_workflow.py"
+      - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
+      - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
   # Manual dispatch remains available for release-control-only changes that
   # must rebind otherwise identical immutable runtime bytes to the new commit.
   # Acceptance timing fixes are rebound through this immutable-input contract.
@@ -50,7 +66,13 @@ jobs:
           python -m unittest \
             tests.test_junca_validator_artifacts \
             tests.test_validator_runtime_layout \
+            tests.test_junca_hardened_immutable_candidate_policy \
+            tests.test_junca_hardened_immutable_release_workflow \
             tests.test_junca_social_ecosystem_chain_validator_node -v
+          python scripts/junca_hardened_immutable_candidate_policy.py \
+            --policy config/junca_hardened_immutable_candidate_policy.json \
+            --candidate-source-commit "$GITHUB_SHA"
+          bash -n scripts/junca_dispatch_workflow_and_wait.sh
 
       - name: Build deterministic runtime and canonical zero-allocation genesis
         run: |
@@ -72,7 +94,8 @@ jobs:
           jq -n \
             --arg source_commit "$GITHUB_SHA" \
             --arg node_sha256 "$node_sha256" \
-            --arg genesis_sha256 "$genesis_sha256" '{
+            --arg genesis_sha256 "$genesis_sha256" \
+            --arg policy_sha256 "$(jq -er .policy_sha256 config/junca_hardened_immutable_candidate_policy.json)" '{
               schema_version: "junca-validator-runtime-build/v1",
               state: "IMMUTABLE_INPUTS_VERIFIED",
               governance: "JAIOS Institutional Governance",
@@ -80,6 +103,7 @@ jobs:
               source_commit: $source_commit,
               node_artifact_sha256: $node_sha256,
               genesis_sha256: $genesis_sha256,
+              hardened_candidate_policy_sha256: $policy_sha256,
               validator_ids: ["validator-01", "validator-02", "validator-03"],
               mainnet_changed: false,
               assets_moved: false,
