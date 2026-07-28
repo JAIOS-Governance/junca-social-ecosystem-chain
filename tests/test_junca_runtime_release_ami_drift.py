@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 import tempfile
@@ -46,6 +45,8 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text())
             explorer = json.loads(explorer_path.read_text())
             ebs = json.loads(ebs_path.read_text())
+            explorer_digest = drift.collector.digest(explorer_path)
+            ebs_digest = drift.collector.digest(ebs_path)
 
         self.assertTrue(manifest["runtime_ami_drift_detected"])
         self.assertFalse(manifest["candidate_ami_preexisting"])
@@ -63,13 +64,9 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
         self.assertFalse(validators[0]["terraform_approved_ami"])
         self.assertTrue(validators[1]["terraform_approved_ami"])
         self.assertEqual(
-            manifest["explorer_baseline_sha256"],
-            drift.collector.digest(explorer_path),
+            manifest["explorer_baseline_sha256"], explorer_digest
         )
-        self.assertEqual(
-            manifest["ebs_baseline_sha256"],
-            drift.collector.digest(ebs_path),
-        )
+        self.assertEqual(manifest["ebs_baseline_sha256"], ebs_digest)
         self.assertEqual(
             explorer["observed_validator_runtimes"], validators
         )
@@ -102,15 +99,17 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             self.collect(values, Path(directory))
         self.assertIs(drift.collector.verify_instances, original)
 
-    def test_workflow_uses_drift_wrapper_and_preserves_exact_diagnostics(self):
+    def test_v2_workflow_uses_drift_wrapper_and_preserves_diagnostics(self):
         workflow = (
             Path(__file__).resolve().parents[1]
-            / ".github/workflows/junca-runtime-release-evidence-collector.yml"
+            / ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "python scripts/junca_runtime_release_evidence_collector_drift.py",
             workflow,
         )
+        self.assertIn("environment: public-testnet", workflow)
+        self.assertIn("junca-runtime-release-evidence-${{ github.run_id }}", workflow)
         for path in (
             "evidence/readback/bootstrap-outputs.json",
             "evidence/readback/public-testnet-outputs.json",
@@ -118,6 +117,7 @@ class RuntimeReleaseAmiDriftTests(unittest.TestCase):
             "evidence/readback/instances.json",
             "evidence/readback/volumes.json",
             "evidence/readback/snapshots.json",
+            "evidence/readback/endpoint-acceptance.json",
         ):
             self.assertIn(path, workflow)
 
