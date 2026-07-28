@@ -8,6 +8,7 @@ from jaios.social_ecosystem_chain.authenticated_state_tree import (
     StateProof,
     state_key_hash,
     verify_state_proof,
+    verify_state_proof_for_key,
 )
 
 
@@ -115,6 +116,47 @@ class AuthenticatedStateTreeTests(unittest.TestCase):
         old_proof = tree.prove("identity", "profiles/alice")
         tree.set("identity", "profiles/alice", b"Alice-v2")
         self.assertFalse(verify_state_proof(tree.root_hash, old_proof))
+
+    def test_contextual_verifier_rejects_wrong_key_or_value(self) -> None:
+        tree = SparseMerkleStateTree({"identity:profiles/alice": b"Alice"})
+        proof = tree.prove("identity", "profiles/alice")
+        self.assertTrue(
+            verify_state_proof_for_key(
+                tree.root_hash,
+                namespace="identity",
+                key="profiles/alice",
+                expected_value=b"Alice",
+                proof=proof,
+            )
+        )
+        self.assertFalse(
+            verify_state_proof_for_key(
+                tree.root_hash,
+                namespace="identity",
+                key="profiles/bob",
+                expected_value=b"Alice",
+                proof=proof,
+            )
+        )
+        self.assertFalse(
+            verify_state_proof_for_key(
+                tree.root_hash,
+                namespace="identity",
+                key="profiles/alice",
+                expected_value=b"Mallory",
+                proof=proof,
+            )
+        )
+
+    def test_noncanonical_hash_encoding_is_rejected(self) -> None:
+        tree = SparseMerkleStateTree({"identity:profiles/alice": b"Alice"})
+        proof = tree.prove("identity", "profiles/alice")
+        with self.assertRaisesRegex(AuthenticatedStateTreeError, "canonical lowercase"):
+            StateProof(
+                key_hash=proof.key_hash.upper().replace("0X", "0x"),
+                value_hash=proof.value_hash,
+                siblings=proof.siblings,
+            )
 
     def test_safety_evidence_preserves_activation_boundary(self) -> None:
         evidence = SparseMerkleStateTree().as_evidence()
