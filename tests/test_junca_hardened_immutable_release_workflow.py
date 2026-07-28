@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/junca-hardened-immutable-candidate-release.yml"
 RUNTIME_WORKFLOW = ROOT / ".github/workflows/junca-validator-runtime-artifacts.yml"
+OBSERVER_WORKFLOW = ROOT / ".github/workflows/junca-public-testnet-release-observer.yml"
 DISPATCH = ROOT / "scripts/junca_dispatch_workflow_and_wait.sh"
 IMAGE_COMPONENT = ROOT / ".github/image-builder/validator-component.yml"
 USER_DATA = ROOT / "infra/aws/public-testnet/templates/validator-user-data.sh.tftpl"
@@ -17,6 +18,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.runtime_workflow = RUNTIME_WORKFLOW.read_text(encoding="utf-8")
+        cls.observer_workflow = OBSERVER_WORKFLOW.read_text(encoding="utf-8")
         cls.dispatch = DISPATCH.read_text(encoding="utf-8")
         cls.image_component = IMAGE_COMPONENT.read_text(encoding="utf-8")
         cls.user_data = USER_DATA.read_text(encoding="utf-8")
@@ -50,18 +52,44 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('.conclusion == "success"', self.dispatch)
         self.assertIn('.head_sha == $head', self.dispatch)
         self.assertIn('.repository.full_name == $repository', self.dispatch)
-        self.assertIn("test \"$count\" -le 1", self.dispatch)
+        self.assertIn('test "$count" -le 1', self.dispatch)
 
     def test_runtime_artifact_contract_triggers_new_release_chain(self) -> None:
-        self.assertIn(
+        for workflow_path in (
             ".github/workflows/junca-hardened-immutable-candidate-release.yml",
-            self.runtime_workflow,
-        )
+            ".github/workflows/junca-public-testnet-release-observer.yml",
+        ):
+            self.assertIn(workflow_path, self.runtime_workflow)
         self.assertIn(
             "tests.test_junca_hardened_immutable_candidate_policy",
             self.runtime_workflow,
         )
         self.assertIn("hardened_candidate_policy_sha256", self.runtime_workflow)
+
+    def test_release_observer_records_governed_workflow_evidence(self) -> None:
+        for workflow_name in (
+            "JUNCA Validator Runtime Artifacts",
+            "JUNCA Hardened Immutable Candidate Release",
+            "JUNCA Validator Immutable AMI Build",
+            "JUNCA Runtime Release Evidence Collector",
+            "JUNCA Runtime Release Manifest Gate",
+            "JUNCA Validator Foundation Release",
+            "JUNCA Public Testnet Continuity Evidence",
+        ):
+            self.assertIn(workflow_name, self.observer_workflow)
+        for value in (
+            "issues: write",
+            "head_repository.full_name == github.repository",
+            "head_branch == 'main'",
+            "issues/244/comments",
+            "issues/248/comments",
+            "issues/249/comments",
+            "EXACT_CURRENT_MAIN",
+            "Mainnet Changed: false",
+            "Assets Moved: false",
+            "Bridge Activated: false",
+        ):
+            self.assertIn(value, self.observer_workflow)
 
     def test_ami_and_boot_contract_cover_all_three_services(self) -> None:
         for service in (
@@ -69,7 +97,12 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             "junca-public-rpc.service",
             "junca-public-explorer.service",
         ):
-            self.assertIn(f"systemctl enable {service}" if service == "junca-validator.service" else service, self.image_component)
+            self.assertIn(
+                f"systemctl enable {service}"
+                if service == "junca-validator.service"
+                else service,
+                self.image_component,
+            )
             self.assertIn(f"systemctl is-enabled {service}", self.image_component)
             self.assertIn(service, self.user_data)
         for port in ("8545", "8546", "3000"):
