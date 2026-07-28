@@ -24,6 +24,8 @@ case "${command}" in
     ;;
   test)
     cleanup() {
+      "${compose[@]}" ps --all > \
+        "${repo_root}/artifacts/local-network/docker-compose-ps.log" 2>&1 || true
       "${compose[@]}" logs --no-color > \
         "${repo_root}/artifacts/local-network/docker-compose.log" 2>&1 || true
       "${compose[@]}" down --volumes --remove-orphans || true
@@ -32,7 +34,8 @@ case "${command}" in
     trap cleanup EXIT
     "${compose[@]}" config --quiet
     "${compose[@]}" up -d --build
-    python3 "${repo_root}/scripts/dev/local_network_acceptance.py"
+    python3 "${repo_root}/scripts/dev/local_network_acceptance.py" 2>&1 | \
+      tee "${repo_root}/artifacts/local-network/acceptance.log"
     ;;
   help|*)
     cat <<'EOF'
