@@ -5,16 +5,22 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/apply-evidence-bound-live-prefix-patch.yml"
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: read
 
 jobs:
   apply:
+    if: >-
+      github.event_name == 'push' ||
+      github.event.issue.title == 'EXECUTE_EVIDENCE_BOUND_LIVE_PREFIX_PATCH'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      PATCH_GENERATION: "2"
+      PATCH_GENERATION: "3"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,7 +30,7 @@ jobs:
       - name: Replace only the initial live-prefix compatibility invocation
         run: |
           set -euo pipefail
-          test "$PATCH_GENERATION" = "2"
+          test "$PATCH_GENERATION" = "3"
           python - <<'PY'
           from pathlib import Path
 
