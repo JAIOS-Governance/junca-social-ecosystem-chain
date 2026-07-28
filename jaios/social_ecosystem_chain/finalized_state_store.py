@@ -100,14 +100,25 @@ class FinalizedStateStore:
                     parent_state_root TEXT,
                     state_root TEXT NOT NULL,
                     block_receipt_hash TEXT,
+                    block_receipt_json BLOB,
                     snapshot_digest TEXT NOT NULL,
                     snapshot_sha256 TEXT NOT NULL,
                     snapshot BLOB NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     CHECK (
-                        (height = 0 AND parent_state_root IS NULL AND block_receipt_hash IS NULL)
+                        (
+                            height = 0
+                            AND parent_state_root IS NULL
+                            AND block_receipt_hash IS NULL
+                            AND block_receipt_json IS NULL
+                        )
                         OR
-                        (height > 0 AND parent_state_root IS NOT NULL AND block_receipt_hash IS NOT NULL)
+                        (
+                            height > 0
+                            AND parent_state_root IS NOT NULL
+                            AND block_receipt_hash IS NOT NULL
+                            AND block_receipt_json IS NOT NULL
+                        )
                     )
                 );
 
@@ -153,6 +164,7 @@ class FinalizedStateStore:
                     parent_state_root=None,
                     state_root=machine.state_root,
                     block_receipt_hash=None,
+                    block_receipt_json=None,
                     snapshot_digest=snapshot_digest,
                     snapshot=snapshot,
                 )
@@ -161,8 +173,9 @@ class FinalizedStateStore:
                 """
                 INSERT INTO finalized_snapshots(
                     height, timestamp, parent_state_root, state_root,
-                    block_receipt_hash, snapshot_digest, snapshot_sha256, snapshot
-                ) VALUES(0, 0, NULL, ?, NULL, ?, ?, ?)
+                    block_receipt_hash, block_receipt_json,
+                    snapshot_digest, snapshot_sha256, snapshot
+                ) VALUES(0, 0, NULL, ?, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     machine.state_root,
@@ -191,6 +204,11 @@ class FinalizedStateStore:
 
         snapshot, snapshot_digest = self._snapshot_evidence(machine)
         receipt_hash = receipt.receipt_hash
+        receipt_json = json.dumps(
+            receipt.as_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
         with self._transaction() as connection:
             current = connection.execute(
                 "SELECT * FROM finalized_snapshots WHERE height = ?",
@@ -203,6 +221,7 @@ class FinalizedStateStore:
                     parent_state_root=receipt.parent_state_root,
                     state_root=receipt.state_root,
                     block_receipt_hash=receipt_hash,
+                    block_receipt_json=receipt_json,
                     snapshot_digest=snapshot_digest,
                     snapshot=snapshot,
                 )
@@ -224,8 +243,9 @@ class FinalizedStateStore:
                 """
                 INSERT INTO finalized_snapshots(
                     height, timestamp, parent_state_root, state_root,
-                    block_receipt_hash, snapshot_digest, snapshot_sha256, snapshot
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    block_receipt_hash, block_receipt_json,
+                    snapshot_digest, snapshot_sha256, snapshot
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     receipt.height,
@@ -233,6 +253,7 @@ class FinalizedStateStore:
                     receipt.parent_state_root,
                     receipt.state_root,
                     receipt_hash,
+                    receipt_json,
                     snapshot_digest,
                     _hash_bytes(snapshot),
                     snapshot,
@@ -302,9 +323,16 @@ class FinalizedStateStore:
         if _hash_bytes(snapshot) != row["snapshot_sha256"]:
             raise FinalizedStateStoreError("persisted snapshot byte hash mismatch")
         try:
+            envelope = json.loads(snapshot)
+        except json.JSONDecodeError as exc:
+            raise FinalizedStateStoreError("persisted snapshot envelope is invalid") from exc
+        if envelope.get("snapshot_digest") != row["snapshot_digest"]:
+            raise FinalizedStateStoreError("persisted snapshot digest binding mismatch")
+        try:
             machine = StateMachine.restore_snapshot(snapshot)
         except StateTransitionError as exc:
             raise FinalizedStateStoreError("persisted snapshot validation failed") from exc
+        self._verify_block_receipt_row(row)
         self._validate_machine_binding(machine)
         if machine.height != row["height"]:
             raise FinalizedStateStoreError("persisted snapshot height mismatch")
@@ -313,6 +341,55 @@ class FinalizedStateStore:
         if machine.state_root != row["state_root"]:
             raise FinalizedStateStoreError("persisted snapshot state root mismatch")
         return machine
+
+    def _verify_block_receipt_row(self, row: sqlite3.Row) -> None:
+        if row["height"] == 0:
+            if row["block_receipt_hash"] is not None or row["block_receipt_json"] is not None:
+                raise FinalizedStateStoreError("genesis receipt binding is invalid")
+            return
+        try:
+            payload = json.loads(bytes(row["block_receipt_json"]).decode("utf-8"))
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FinalizedStateStoreError("persisted block receipt is invalid") from exc
+        expected_fields = {
+            "height",
+            "timestamp",
+            "parent_state_root",
+            "state_root",
+            "transaction_hashes",
+            "transaction_receipt_hashes",
+            "resource_units_used",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_fields:
+            raise FinalizedStateStoreError("persisted block receipt payload is invalid")
+        try:
+            receipt = BlockReceipt(
+                height=payload["height"],
+                timestamp=payload["timestamp"],
+                parent_state_root=payload["parent_state_root"],
+                state_root=payload["state_root"],
+                transaction_hashes=tuple(payload["transaction_hashes"]),
+                transaction_receipt_hashes=tuple(payload["transaction_receipt_hashes"]),
+                resource_units_used=payload["resource_units_used"],
+            )
+        except (TypeError, ValueError) as exc:
+            raise FinalizedStateStoreError("persisted block receipt fields are invalid") from exc
+        canonical = json.dumps(
+            receipt.as_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if canonical != bytes(row["block_receipt_json"]):
+            raise FinalizedStateStoreError("persisted block receipt encoding is not canonical")
+        if receipt.receipt_hash != row["block_receipt_hash"]:
+            raise FinalizedStateStoreError("persisted block receipt hash mismatch")
+        if (
+            receipt.height != row["height"]
+            or receipt.timestamp != row["timestamp"]
+            or receipt.parent_state_root != row["parent_state_root"]
+            or receipt.state_root != row["state_root"]
+        ):
+            raise FinalizedStateStoreError("persisted block receipt row binding mismatch")
 
     def _validate_machine_binding(self, machine: StateMachine) -> None:
         if not isinstance(machine, StateMachine):
@@ -332,6 +409,7 @@ class FinalizedStateStore:
         parent_state_root: str | None,
         state_root: str,
         block_receipt_hash: str | None,
+        block_receipt_json: bytes | None,
         snapshot_digest: str,
         snapshot: bytes,
     ) -> None:
@@ -340,6 +418,7 @@ class FinalizedStateStore:
             "parent_state_root": parent_state_root,
             "state_root": state_root,
             "block_receipt_hash": block_receipt_hash,
+            "block_receipt_json": block_receipt_json,
             "snapshot_digest": snapshot_digest,
             "snapshot_sha256": _hash_bytes(snapshot),
             "snapshot": snapshot,
