@@ -16,14 +16,20 @@ on:
       - "scripts/junca_validator_artifact_handoff.py"
       - "scripts/junca_hardened_immutable_candidate_policy.py"
       - "scripts/junca_dispatch_workflow_and_wait.sh"
+      - "scripts/junca_runtime_release_evidence_collector_drift.py"
       - "tests/test_junca_validator_artifacts.py"
       - "tests/test_validator_runtime_layout.py"
       - "tests/test_junca_hardened_immutable_candidate_policy.py"
       - "tests/test_junca_hardened_immutable_release_workflow.py"
+      - "tests/test_junca_runtime_release_ami_drift.py"
+      - "tests/test_junca_hardened_release_v2.py"
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
+      - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
+      - ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
+      - ".github/workflows/junca-runtime-release-manifest-gate.yml"
       - ".github/workflows/junca-public-testnet-release-observer.yml"
   pull_request:
     paths:
@@ -39,14 +45,20 @@ on:
       - "scripts/junca_validator_artifact_handoff.py"
       - "scripts/junca_hardened_immutable_candidate_policy.py"
       - "scripts/junca_dispatch_workflow_and_wait.sh"
+      - "scripts/junca_runtime_release_evidence_collector_drift.py"
       - "tests/test_junca_validator_artifacts.py"
       - "tests/test_validator_runtime_layout.py"
       - "tests/test_junca_hardened_immutable_candidate_policy.py"
       - "tests/test_junca_hardened_immutable_release_workflow.py"
+      - "tests/test_junca_runtime_release_ami_drift.py"
+      - "tests/test_junca_hardened_release_v2.py"
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
+      - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
+      - ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
+      - ".github/workflows/junca-runtime-release-manifest-gate.yml"
       - ".github/workflows/junca-public-testnet-release-observer.yml"
   # Manual dispatch remains available for release-control-only changes that
   # must rebind otherwise identical immutable runtime bytes to the new commit.
@@ -70,6 +82,8 @@ jobs:
             tests.test_validator_runtime_layout \
             tests.test_junca_hardened_immutable_candidate_policy \
             tests.test_junca_hardened_immutable_release_workflow \
+            tests.test_junca_runtime_release_ami_drift \
+            tests.test_junca_hardened_release_v2 \
             tests.test_junca_social_ecosystem_chain_validator_node -v
           python scripts/junca_hardened_immutable_candidate_policy.py \
             --policy config/junca_hardened_immutable_candidate_policy.json \
