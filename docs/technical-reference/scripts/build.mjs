@@ -81,9 +81,9 @@ const runtimePanel = [
   '<div><dt>Chain ID</dt><dd>20260723</dd></div>',
   '<div><dt>Transactions</dt><dd>0</dd></div>',
   '<div><dt>Peer Count</dt><dd>0</dd></div>',
-  '<div><dt>Block Timestamp</dt><dd>PENDING</dd></div></dl>',
-  '<p class="live-runtime-boundary">A pending block timestamp is reported as evidence state, not as a service-failure conclusion. ',
-  'Mainnet changed: false · Assets moved: false · Bridge activated: false.</p>',
+  '<div><dt>Block Timestamp</dt><dd>NOT CURRENTLY PUBLISHED</dd></div></dl>',
+  '<p class="live-runtime-boundary">The block timestamp is not currently published in this evidence view. This status does not indicate a runtime error. ',
+  'Mainnet Changed: false · Assets Moved: false · Bridge Activated: false · Mainnet Activation Authorized: false.</p>',
   '<div class="runtime-evidence-actions"><a href="https://chain.jaios-governance.org/api/operational">Operational API ↗</a>',
   '<a href="https://explorer.jaios-governance.org/explorer.json">Explorer JSON ↗</a></div>',
   '</section>',
@@ -269,6 +269,20 @@ for (const route of routes) {
       .replaceAll("Runtime Unverified", "Operational Evidence Available")
       .replaceAll("Runtime unverified", "operational evidence available")
       .replaceAll("Public endpoint pending", "Read-only evidence access")
+      .replaceAll("Pending Verification", "Verification in Progress")
+      .replaceAll("Pending verification", "Verification in progress")
+      .replaceAll("Pending Deployment", "Not Yet Published")
+      .replaceAll("Runtime Binding Pending", "Verification in Progress")
+      .replaceAll("pending verification", "verification in progress")
+      .replaceAll("pending acceptance", "acceptance in progress")
+      .replaceAll("pending runtime evidence", "runtime verification in progress")
+      .replaceAll("Known, pending and blocked", "Known, under verification and blocked")
+      .replaceAll("verified, targeted, pending and blocked", "verified, targeted, under-verification and blocked")
+      .replaceAll("Verified, targeted, pending and blocked", "Verified, targeted, under-verification and blocked")
+      .replaceAll("Meaning of verified, targeted, pending and blocked", "Meaning of verified, targeted, under-verification and blocked")
+      .replaceAll("FINALITY_PENDING", "FINALITY_VERIFICATION")
+      .replaceAll("finality_pending", "finality_verification")
+      .replaceAll("保留中", "検証継続中")
       .replaceAll("No public endpoint is asserted", "Read-only evidence access is available; transaction submission remains disabled")
       .replaceAll("Three-validator quorum and advancing head require live evidence", "Three-validator finality quorum is observed; advancing-head activity is reported separately")
       .replaceAll("RPC parity and contract verification are not yet accepted", "Explorer and RPC evidence remain read-only and independently inspectable")
@@ -359,7 +373,9 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
     chain_id: 20260723,
     transaction_count: 0,
     peer_count: 0,
-    block_timestamp: "PENDING",
+    block_timestamp: "NOT_CURRENTLY_PUBLISHED",
+    block_timestamp_public_label: "NOT CURRENTLY PUBLISHED",
+    block_timestamp_public_label_ja: "現在は公開対象外",
     block_activity_conclusion: "NOT_INFERRED_FROM_FINALIZED_HEIGHT",
     source_evidence: {
       operational_api: "https://chain.jaios-governance.org/api/operational",
@@ -370,6 +386,7 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
     mainnet_changed: false,
     assets_moved: false,
     bridge_activated: false,
+    mainnet_activation_authorized: false,
   },
   development_governance: {
     canonical_foundation: {
