@@ -62,9 +62,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      SAMPLES: ${{ github.event.inputs.samples || '3' }}
-      INTERVAL_SECONDS: ${{ github.event.inputs.interval_seconds || '30' }}
-      REQUIRE_ADVANCEMENT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.require_advancement || 'true' }}
+      SAMPLES: ${{ inputs.samples || '3' }}
+      INTERVAL_SECONDS: ${{ inputs.interval_seconds || '30' }}
+      REQUIRE_ADVANCEMENT: ${{ github.event_name != 'workflow_dispatch' || inputs.require_advancement }}
     steps:
       - uses: actions/checkout@v4
 
