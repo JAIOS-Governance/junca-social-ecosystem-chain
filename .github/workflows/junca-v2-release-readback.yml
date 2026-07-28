@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      READBACK_GENERATION: "9"
+      READBACK_GENERATION: "10"
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +23,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$READBACK_GENERATION" = "9"
+          test "$READBACK_GENERATION" = "10"
           mkdir -p artifacts/v2-release-readback
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/apply-live-prefix-patch-v2.yml/runs?per_page=100" \
