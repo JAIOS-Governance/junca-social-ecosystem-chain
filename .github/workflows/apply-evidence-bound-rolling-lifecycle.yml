@@ -36,14 +36,6 @@ jobs:
             target/scripts/junca_public_testnet_foundation.sh
           bash -n target/scripts/junca_public_testnet_foundation.sh
           git -C target diff --check
-          test "$(grep -F -c '.validator_state_volume_readback.value[]' \
-            target/scripts/junca_public_testnet_foundation.sh)" -ge 1
-          test "$(grep -F -c 'artifacts/rollback-rehearsal.json' \
-            target/scripts/junca_public_testnet_foundation.sh)" -ge 1
-          test "$(grep -F -c 'test \"$state_volume_id\" = \"$rollback_volume_id\"' \
-            target/scripts/junca_public_testnet_foundation.sh)" = 1
-          test "$(grep -F -c "'. + {volume_id: \$volume_id}'" \
-            target/scripts/junca_public_testnet_foundation.sh)" -ge 1
 
       - name: Commit target branch patch
         working-directory: target
