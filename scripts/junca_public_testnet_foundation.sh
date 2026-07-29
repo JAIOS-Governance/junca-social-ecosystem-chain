@@ -1419,14 +1419,10 @@ if [[ "$rolling_release" == "true" ]]; then
   automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
   validator_block_interval_seconds="${VALIDATOR_BLOCK_INTERVAL_SECONDS:-}"
   validator_slot_epoch_seconds="${VALIDATOR_SLOT_EPOCH_SECONDS:-}"
-  validator_bootstrap_slot_epochs_json="${
-    VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON:-}"
-  rolling_resume_prior_slot_epoch_seconds="${
-    ROLLING_RESUME_PRIOR_SLOT_EPOCH_SECONDS:-0}"
-  rolling_epoch_renewal_performed="${
-    ROLLING_EPOCH_RENEWAL_PERFORMED:-false}"
-  rolling_epoch_renewal_prefix_count="${
-    ROLLING_EPOCH_RENEWAL_PREFIX_COUNT:-0}"
+  validator_bootstrap_slot_epochs_json="${VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON:-}"
+  rolling_resume_prior_slot_epoch_seconds="${ROLLING_RESUME_PRIOR_SLOT_EPOCH_SECONDS:-0}"
+  rolling_epoch_renewal_performed="${ROLLING_EPOCH_RENEWAL_PERFORMED:-false}"
+  rolling_epoch_renewal_prefix_count="${ROLLING_EPOCH_RENEWAL_PREFIX_COUNT:-0}"
   test "$automatic_finality_enabled" = "true"
   test "$validator_block_interval_seconds" = "30"
   [[ "$validator_slot_epoch_seconds" =~ ^[0-9]+$ ]]
