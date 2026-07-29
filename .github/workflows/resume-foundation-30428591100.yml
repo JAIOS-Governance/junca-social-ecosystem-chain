@@ -24,6 +24,10 @@ jobs:
       AMI_RUN_ID: "30427620603"
       MANIFEST_GATE_RUN_ID: "30428572546"
       RESUME_RUN_ID: "30428591100"
+      RETAINED_RESUME_ARTIFACT_ID: "8714646236"
+      RETAINED_RESUME_ARTIFACT_DIGEST: sha256:572f451e5e555786bcbcf4943a014e219f914e82e83d94767e4ddc215166a0b4
+      DUPLICATE_ATTEMPT_ARTIFACT_ID: "8714715997"
+      DUPLICATE_ATTEMPT_ARTIFACT_DIGEST: sha256:9f930ec4eee127cbfef9638da6d65755e863222dcc0a75002a6aa8c323149c32
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,6 +67,55 @@ jobs:
             .head_sha == $source and
             .head_branch == "main"
           ' <<<"$resume"
+
+      - name: Remove only the duplicate attempt artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          retained="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETAINED_RESUME_ARTIFACT_ID}")"
+          jq -e \
+            --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
+            --arg digest "$RETAINED_RESUME_ARTIFACT_DIGEST" \
+            --argjson run_id "$RESUME_RUN_ID" '
+              .id == 8714646236 and
+              .name == $name and
+              .digest == $digest and
+              .expired == false and
+              .workflow_run.id == $run_id
+            ' <<<"$retained"
+
+          duplicate="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}")"
+          jq -e \
+            --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
+            --arg digest "$DUPLICATE_ATTEMPT_ARTIFACT_DIGEST" \
+            --argjson run_id "$RESUME_RUN_ID" '
+              .id == 8714715997 and
+              .name == $name and
+              .digest == $digest and
+              .expired == false and
+              .workflow_run.id == $run_id
+            ' <<<"$duplicate"
+
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}"
+          if gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
+            >/dev/null 2>&1
+          then
+            echo "duplicate attempt artifact still exists" >&2
+            exit 1
+          fi
+
+          retained_after="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETAINED_RESUME_ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "$RETAINED_RESUME_ARTIFACT_DIGEST" \
+            --argjson run_id "$RESUME_RUN_ID" '
+              .id == 8714646236 and
+              .digest == $digest and
+              .expired == false and
+              .workflow_run.id == $run_id
+            ' <<<"$retained_after"
 
       - name: Resume exact serial validator rollout
         id: foundation
