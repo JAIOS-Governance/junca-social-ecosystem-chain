@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Evaluate an evidence-bound live prefix before a serial validator rollout.
+"""Evaluate evidence-bound state during a serial validator rollout.
 
-The canonical rolling gate historically assumed that every non-target validator
-must share one Terraform previous runtime and AMI. Emergency in-place recovery
-can leave a healthy validator on a different, fully observed runtime before the
-next immutable rollout. This gate binds each validator to its own captured
-baseline and permits only an exact transition from that baseline to the target.
-It does not alter Terraform, AWS resources, state, keys, Mainnet, assets, or the
-bridge.
+The canonical rolling gate assumes every non-target validator shares one previous
+runtime and AMI. Emergency in-place recovery can leave a healthy validator on a
+different, fully observed runtime before the next immutable rollout. This module
+binds every validator to its own captured baseline and permits only an exact,
+ordered transition from that baseline to the immutable target.
+
+Two modes are exposed:
+
+* ``live-prefix`` recovers at most one completed-but-uncommitted replacement
+  before any runtime configuration mutation.
+* ``rolling`` governs the full serial replacement and finality activation
+  lifecycle from the captured baseline.
+
+Neither mode changes Terraform, AWS resources, durable state, keys, Mainnet,
+assets, or the bridge.
 """
 
 from __future__ import annotations
@@ -27,7 +35,7 @@ from jaios.social_ecosystem_chain import rolling_compatibility as canonical
 
 
 class EvidenceBoundPrefixError(ValueError):
-    """Raised when a live prefix cannot safely advance."""
+    """Raised when an evidence-bound rollout observation cannot advance."""
 
 
 def _require(condition: bool, message: str) -> None:
@@ -36,7 +44,10 @@ def _require(condition: bool, message: str) -> None:
 
 
 def _text(value: object, field: str) -> str:
-    _require(isinstance(value, str) and bool(value.strip()), f"{field} is required")
+    _require(
+        isinstance(value, str) and bool(value.strip()),
+        f"{field} is required",
+    )
     return value.strip()
 
 
@@ -74,14 +85,33 @@ def _finality_tuple(
             f"{label} disabled finality requires zero interval",
         )
         _require(
-            epoch in (None, 0),
-            f"{label} disabled finality requires zero epoch",
+            epoch in (None, 0) or (isinstance(epoch, int) and epoch > 0),
+            f"{label} disabled finality epoch is invalid",
         )
     return enabled, interval, epoch
 
 
+def _target_finality_phase(
+    item: Mapping[str, Any],
+    requested_epoch: int,
+    label: str,
+) -> str:
+    state = _finality_tuple(item, label)
+    if state[0] is False and state[1] == 0 and state[2] in (None, 0):
+        return "QUIESCED"
+    if state == (False, 0, requested_epoch):
+        return "EPOCH_CONFIGURED"
+    if state == (True, 30, requested_epoch):
+        return "ENABLED"
+    raise EvidenceBoundPrefixError(
+        f"{label} target finality state is outside the canonical lifecycle"
+    )
+
+
 def _ordered(
-    value: object, order: tuple[str, str, str], field: str
+    value: object,
+    order: tuple[str, str, str],
+    field: str,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
     if (
         not isinstance(value, Sequence)
@@ -100,13 +130,32 @@ def _ordered(
     return by_id[order[0]], by_id[order[1]], by_id[order[2]]
 
 
-def evaluate_live_rollout_prefix_v2(
+def _common(
     evidence: Mapping[str, Any],
-) -> Mapping[str, Any]:
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    tuple[str, str, str],
+    tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]],
+    tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]],
+    Mapping[str, Mapping[str, Any]],
+    int,
+    int,
+]:
     target = _text(evidence.get("target_version"), "target_version")
     target_ami = _text(evidence.get("target_ami_id"), "target_ami_id")
     previous = _text(evidence.get("previous_version"), "previous_version")
     previous_ami = _text(evidence.get("previous_ami_id"), "previous_ami_id")
+    _require(
+        canonical.SHA256.fullmatch(target) is not None,
+        "target runtime digest is invalid",
+    )
+    _require(
+        canonical.SHA256.fullmatch(previous) is not None,
+        "previous runtime digest is invalid",
+    )
     _require(
         target != previous,
         "target and previous runtime versions must differ",
@@ -171,6 +220,113 @@ def evaluate_live_rollout_prefix_v2(
         <= canonical.MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS,
         "canonical slot epoch is outside the bounded safety window",
     )
+    return (
+        target,
+        target_ami,
+        previous,
+        previous_ami,
+        order,
+        current_validators,
+        baseline_validators,
+        rollback_by_id,
+        evidence_count,
+        requested_epoch,
+    )
+
+
+def _baseline_binding(
+    *,
+    index: int,
+    validator_id: str,
+    baseline: Mapping[str, Any],
+    rollback: Mapping[str, Any],
+    target: str,
+    target_ami: str,
+    evidence_count: int,
+    requested_epoch: int,
+) -> dict[str, Any]:
+    baseline_instance = str(baseline.get("instance_id", ""))
+    _require(
+        canonical.INSTANCE.fullmatch(baseline_instance) is not None,
+        f"{validator_id} evidence instance id is invalid",
+    )
+    _require(
+        baseline.get("volume_id") == rollback.get("volume_id"),
+        f"{validator_id} evidence rollback volume binding mismatch",
+    )
+    canonical._validator_health(baseline, rollback)
+
+    baseline_runtime = _text(
+        baseline.get("runtime_version"),
+        f"{validator_id}.baseline_runtime_version",
+    )
+    baseline_ami = _text(
+        baseline.get("ami_id"),
+        f"{validator_id}.baseline_ami_id",
+    )
+    _require(
+        canonical.SHA256.fullmatch(baseline_runtime) is not None,
+        f"{validator_id} baseline runtime digest is invalid",
+    )
+    _require(
+        canonical.AMI.fullmatch(baseline_ami) is not None,
+        f"{validator_id} baseline AMI is invalid",
+    )
+    baseline_is_target = baseline_runtime == target
+    _require(
+        baseline_is_target == (index < evidence_count),
+        f"{validator_id} evidence prefix does not match updated count",
+    )
+    if baseline_is_target:
+        _require(
+            baseline_ami == target_ami,
+            f"{validator_id} target baseline AMI mismatch",
+        )
+        phase = _target_finality_phase(
+            baseline,
+            requested_epoch,
+            f"{validator_id} baseline",
+        )
+        canonical._finality_provenance(baseline, target_runtime=True)
+    else:
+        _require(
+            baseline_ami != target_ami,
+            f"{validator_id} non-target baseline uses candidate AMI",
+        )
+        _finality_tuple(baseline, f"{validator_id} baseline")
+        canonical._finality_provenance(baseline, target_runtime=False)
+        phase = "BASELINE"
+    return {
+        "validator_id": validator_id,
+        "runtime_version": baseline_runtime,
+        "ami_id": baseline_ami,
+        "instance_id": baseline_instance,
+        "volume_id": baseline.get("volume_id"),
+        "target_runtime": baseline_is_target,
+        "automatic_finality_enabled": baseline.get(
+            "automatic_finality_enabled"
+        ),
+        "block_interval_seconds": baseline.get("block_interval_seconds"),
+        "slot_epoch_seconds": baseline.get("slot_epoch_seconds"),
+        "finality_phase": phase,
+    }
+
+
+def evaluate_live_rollout_prefix_v2(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    (
+        target,
+        target_ami,
+        _previous,
+        _previous_ami,
+        order,
+        current_validators,
+        baseline_validators,
+        rollback_by_id,
+        evidence_count,
+        requested_epoch,
+    ) = _common(evidence)
 
     updated: list[bool] = []
     current_heads: set[tuple[int, str, str]] = set()
@@ -180,72 +336,29 @@ def evaluate_live_rollout_prefix_v2(
         current = current_validators[index]
         baseline = baseline_validators[index]
         rollback = rollback_by_id[validator_id]
+        binding = _baseline_binding(
+            index=index,
+            validator_id=validator_id,
+            baseline=baseline,
+            rollback=rollback,
+            target=target,
+            target_ami=target_ami,
+            evidence_count=evidence_count,
+            requested_epoch=requested_epoch,
+        )
+        baseline_bindings.append(binding)
 
         current_instance = str(current.get("instance_id", ""))
-        baseline_instance = str(baseline.get("instance_id", ""))
         _require(
             canonical.INSTANCE.fullmatch(current_instance) is not None,
             f"{validator_id} live instance id is invalid",
         )
         _require(
-            canonical.INSTANCE.fullmatch(baseline_instance) is not None,
-            f"{validator_id} evidence instance id is invalid",
-        )
-        _require(
             current.get("volume_id") == rollback.get("volume_id"),
             f"{validator_id} live rollback volume binding mismatch",
         )
-        _require(
-            baseline.get("volume_id") == rollback.get("volume_id"),
-            f"{validator_id} evidence rollback volume binding mismatch",
-        )
-
-        canonical._validator_health(baseline, rollback)
         canonical._validator_health(current, rollback)
-        canonical._finality_provenance(baseline, target_runtime=False)
         current_heads.add(canonical._head(current))
-
-        baseline_runtime = _text(
-            baseline.get("runtime_version"),
-            f"{validator_id}.baseline_runtime_version",
-        )
-        baseline_ami = _text(
-            baseline.get("ami_id"),
-            f"{validator_id}.baseline_ami_id",
-        )
-        _require(
-            canonical.SHA256.fullmatch(baseline_runtime) is not None,
-            f"{validator_id} baseline runtime digest is invalid",
-        )
-        _require(
-            canonical.AMI.fullmatch(baseline_ami) is not None,
-            f"{validator_id} baseline AMI is invalid",
-        )
-        baseline_is_target = baseline_runtime == target
-        _require(
-            baseline_is_target == (index < evidence_count),
-            f"{validator_id} evidence prefix does not match updated count",
-        )
-        if baseline_is_target:
-            _require(
-                baseline_ami == target_ami,
-                f"{validator_id} target baseline AMI mismatch",
-            )
-            _require(
-                _finality_tuple(baseline, f"{validator_id} baseline")
-                == (True, 30, requested_epoch),
-                f"{validator_id} target baseline epoch mismatch",
-            )
-            canonical._finality_provenance(
-                baseline,
-                target_runtime=True,
-            )
-        else:
-            _require(
-                baseline_ami != target_ami,
-                f"{validator_id} non-target baseline uses candidate AMI",
-            )
-            _finality_tuple(baseline, f"{validator_id} baseline")
 
         current_runtime = _text(
             current.get("runtime_version"),
@@ -264,7 +377,7 @@ def evaluate_live_rollout_prefix_v2(
             f"{validator_id} live AMI is invalid",
         )
         _require(
-            current_runtime in (baseline_runtime, target),
+            current_runtime in (binding["runtime_version"], target),
             f"{validator_id} has an unexpected runtime version",
         )
         is_target = current_runtime == target
@@ -273,37 +386,56 @@ def evaluate_live_rollout_prefix_v2(
                 current_ami == target_ami,
                 f"{validator_id} target AMI mismatch",
             )
-            _require(
-                _finality_tuple(current, validator_id)
-                == (True, 30, requested_epoch),
-                f"{validator_id} candidate finality epoch drifted",
-            )
+            _target_finality_phase(current, requested_epoch, validator_id)
             canonical._finality_provenance(current, target_runtime=True)
+            if binding["target_runtime"]:
+                _require(
+                    current_instance == binding["instance_id"],
+                    f"{validator_id} committed target instance changed",
+                )
+                _require(
+                    _finality_tuple(current, validator_id)
+                    == (
+                        binding["automatic_finality_enabled"],
+                        binding["block_interval_seconds"],
+                        binding["slot_epoch_seconds"],
+                    ),
+                    f"{validator_id} committed target finality state drifted",
+                )
+            else:
+                _require(
+                    current_instance != binding["instance_id"],
+                    f"{validator_id} target runtime did not replace its "
+                    "evidence-bound instance",
+                )
         else:
             _require(
-                current_ami == baseline_ami,
+                binding["target_runtime"] is False,
+                f"{validator_id} committed target reverted to baseline runtime",
+            )
+            _require(
+                current_runtime == binding["runtime_version"],
+                f"{validator_id} runtime drifted from evidence",
+            )
+            _require(
+                current_ami == binding["ami_id"],
                 f"{validator_id} runtime and evidence AMI binding mismatch",
             )
             _require(
+                current_instance == binding["instance_id"],
+                f"{validator_id} changed outside the recoverable live prefix",
+            )
+            _require(
                 _finality_tuple(current, validator_id)
-                == _finality_tuple(
-                    baseline,
-                    f"{validator_id} baseline",
+                == (
+                    binding["automatic_finality_enabled"],
+                    binding["block_interval_seconds"],
+                    binding["slot_epoch_seconds"],
                 ),
                 f"{validator_id} non-target finality state drifted from evidence",
             )
             canonical._finality_provenance(current, target_runtime=False)
         updated.append(is_target)
-        baseline_bindings.append(
-            {
-                "validator_id": validator_id,
-                "runtime_version": baseline_runtime,
-                "ami_id": baseline_ami,
-                "instance_id": baseline_instance,
-                "volume_id": baseline.get("volume_id"),
-                "target_runtime": baseline_is_target,
-            }
-        )
 
     _require(
         len(current_heads) == 1,
@@ -318,21 +450,6 @@ def evaluate_live_rollout_prefix_v2(
         evidence_count <= live_count <= min(evidence_count + 1, 3),
         "live prefix must equal the evidence prefix or its one next validator",
     )
-
-    for index, validator_id in enumerate(order):
-        current_id = str(current_validators[index].get("instance_id"))
-        baseline_id = str(baseline_validators[index].get("instance_id"))
-        if index < evidence_count or index >= live_count:
-            _require(
-                current_id == baseline_id,
-                f"{validator_id} changed outside the recoverable live prefix",
-            )
-        else:
-            _require(
-                current_id != baseline_id,
-                f"{validator_id} target runtime did not replace its "
-                "evidence-bound instance",
-            )
 
     return {
         "schema_version": "junca-validator-live-prefix/v2",
@@ -349,6 +466,177 @@ def evaluate_live_rollout_prefix_v2(
     }
 
 
+def evaluate_evidence_bound_rolling_compatibility(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    (
+        target,
+        target_ami,
+        _previous,
+        _previous_ami,
+        order,
+        current_validators,
+        baseline_validators,
+        rollback_by_id,
+        evidence_count,
+        requested_epoch,
+    ) = _common(evidence)
+    _require(
+        evidence.get("fallback_active") is False,
+        "fallback must remain inactive",
+    )
+
+    updated: list[bool] = []
+    finality_states: list[tuple[bool, int, int | None]] = []
+    current_heads: set[tuple[int, str, str]] = set()
+    baseline_bindings: list[dict[str, Any]] = []
+
+    for index, validator_id in enumerate(order):
+        current = current_validators[index]
+        baseline = baseline_validators[index]
+        rollback = rollback_by_id[validator_id]
+        binding = _baseline_binding(
+            index=index,
+            validator_id=validator_id,
+            baseline=baseline,
+            rollback=rollback,
+            target=target,
+            target_ami=target_ami,
+            evidence_count=evidence_count,
+            requested_epoch=requested_epoch,
+        )
+        baseline_bindings.append(binding)
+
+        current_instance = str(current.get("instance_id", ""))
+        _require(
+            canonical.INSTANCE.fullmatch(current_instance) is not None,
+            f"{validator_id} live instance id is invalid",
+        )
+        _require(
+            current.get("volume_id") == rollback.get("volume_id"),
+            f"{validator_id} live rollback volume binding mismatch",
+        )
+        canonical._validator_health(current, rollback)
+        current_heads.add(canonical._head(current))
+
+        current_runtime = _text(
+            current.get("runtime_version"),
+            f"{validator_id}.runtime_version",
+        )
+        current_ami = _text(
+            current.get("ami_id"),
+            f"{validator_id}.ami_id",
+        )
+        _require(
+            canonical.SHA256.fullmatch(current_runtime) is not None,
+            f"{validator_id} live runtime digest is invalid",
+        )
+        _require(
+            canonical.AMI.fullmatch(current_ami) is not None,
+            f"{validator_id} live AMI is invalid",
+        )
+        is_target = current_runtime == target
+        if is_target:
+            _require(
+                current_ami == target_ami,
+                f"{validator_id} target AMI mismatch",
+            )
+            _target_finality_phase(current, requested_epoch, validator_id)
+            canonical._finality_provenance(current, target_runtime=True)
+            if binding["target_runtime"]:
+                _require(
+                    current_instance == binding["instance_id"],
+                    f"{validator_id} committed target instance changed",
+                )
+            else:
+                _require(
+                    current_instance != binding["instance_id"],
+                    f"{validator_id} target runtime did not replace its "
+                    "evidence-bound instance",
+                )
+        else:
+            _require(
+                binding["target_runtime"] is False,
+                f"{validator_id} committed target reverted to baseline runtime",
+            )
+            _require(
+                current_runtime == binding["runtime_version"],
+                f"{validator_id} runtime drifted from evidence",
+            )
+            _require(
+                current_ami == binding["ami_id"],
+                f"{validator_id} runtime and evidence AMI binding mismatch",
+            )
+            _require(
+                current_instance == binding["instance_id"],
+                f"{validator_id} non-target instance drifted from evidence",
+            )
+            canonical._finality_provenance(current, target_runtime=False)
+        updated.append(is_target)
+        finality_states.append(_finality_tuple(current, validator_id))
+
+    _require(
+        len(current_heads) == 1,
+        "validators disagree on finalized head or certificate",
+    )
+    _require(
+        updated == sorted(updated, reverse=True),
+        "validator update order is not contiguous",
+    )
+    updated_count = sum(updated)
+    _require(
+        updated_count >= evidence_count,
+        "live target prefix is behind the evidence-bound prefix",
+    )
+
+    if updated_count < 3:
+        _require(
+            all(
+                state[0] is False
+                and state[1] == 0
+                and state[2] in (None, 0)
+                for state in finality_states
+            ),
+            "finality and slot epoch must remain quiesced during rolling update",
+        )
+        state = "READY_FOR_NEXT_VALIDATOR"
+        next_validator: str | None = order[updated_count]
+    elif all(
+        value[0] is False
+        and value[1] == 0
+        and value[2] in (None, 0)
+        for value in finality_states
+    ):
+        state = "READY_FOR_SLOT_EPOCH"
+        next_validator = None
+    elif all(
+        value == (False, 0, requested_epoch) for value in finality_states
+    ):
+        state = "READY_FOR_FINALITY_ENABLE"
+        next_validator = None
+    elif all(
+        value == (True, 30, requested_epoch) for value in finality_states
+    ):
+        state = "ACCEPTED"
+        next_validator = None
+    else:
+        raise EvidenceBoundPrefixError(
+            "three target validators have a mixed or non-canonical finality state"
+        )
+
+    return {
+        "schema_version": "junca-validator-rolling-compatibility/v1",
+        "state": state,
+        "updated_count": updated_count,
+        "next_validator": next_validator,
+        "baseline_updated_count": evidence_count,
+        "baseline_bindings": baseline_bindings,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
+
+
 def _read(path: str | Path) -> dict[str, Any]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -358,13 +646,20 @@ def _read(path: str | Path) -> dict[str, Any]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=("live-prefix", "rolling"),
+        default="live-prefix",
+    )
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:
-        decision = evaluate_live_rollout_prefix_v2(
-            _read(args.evidence)
-        )
+        evidence = _read(args.evidence)
+        if args.mode == "rolling":
+            decision = evaluate_evidence_bound_rolling_compatibility(evidence)
+        else:
+            decision = evaluate_live_rollout_prefix_v2(evidence)
     except (
         OSError,
         json.JSONDecodeError,
@@ -372,8 +667,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         canonical.RollingCompatibilityError,
     ) as exc:
         result = {
-            "schema_version": "junca-validator-live-prefix/v2",
-            "state": "EVIDENCE_BOUND_PREFIX_REJECTED",
+            "schema_version": (
+                "junca-validator-rolling-compatibility/v1"
+                if args.mode == "rolling"
+                else "junca-validator-live-prefix/v2"
+            ),
+            "state": (
+                "EVIDENCE_BOUND_ROLLING_REJECTED"
+                if args.mode == "rolling"
+                else "EVIDENCE_BOUND_PREFIX_REJECTED"
+            ),
             "reason": str(exc),
             "mainnet_changed": False,
             "assets_moved": False,

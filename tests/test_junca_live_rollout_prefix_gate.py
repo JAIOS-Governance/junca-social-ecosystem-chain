@@ -5,6 +5,7 @@ import unittest
 
 from scripts.junca_live_rollout_prefix_gate import (
     EvidenceBoundPrefixError,
+    evaluate_evidence_bound_rolling_compatibility,
     evaluate_live_rollout_prefix_v2,
 )
 from tests.test_junca_validator_rolling_compatibility import evidence
@@ -41,47 +42,73 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
         value["previous_ami_id"] = PREVIOUS_AMI
         value["evidence_updated_count"] = 0
         value["evidence_validators"] = copy.deepcopy(value["validators"])
+        value["fallback_active"] = False
         return value
 
     @staticmethod
-    def set_target(validator, *, instance_id: str):
+    def set_finality(
+        validator,
+        *,
+        enabled: bool,
+        interval: int,
+        epoch: int,
+    ):
         validator.update(
             {
-                "instance_id": instance_id,
-                "runtime_version": TARGET,
-                "ami_id": TARGET_AMI,
-                "automatic_finality_enabled": True,
-                "block_interval_seconds": 30,
-                "slot_epoch_seconds": TARGET_EPOCH,
+                "automatic_finality_enabled": enabled,
+                "block_interval_seconds": interval,
+                "slot_epoch_seconds": epoch,
             }
         )
         for source in ("runtime_env", "health"):
             validator["finality_readback"][source].update(
                 {
-                    "automatic_finality_enabled": True,
-                    "block_interval_seconds": 30,
-                    "slot_epoch_seconds": TARGET_EPOCH,
+                    "automatic_finality_enabled": enabled,
+                    "block_interval_seconds": interval,
+                    "slot_epoch_seconds": epoch,
                 }
+            )
+
+    def set_target(
+        self,
+        validator,
+        *,
+        instance_id: str,
+        enabled: bool = True,
+        interval: int = 30,
+        epoch: int = TARGET_EPOCH,
+    ):
+        validator.update(
+            {
+                "instance_id": instance_id,
+                "runtime_version": TARGET,
+                "ami_id": TARGET_AMI,
+            }
+        )
+        self.set_finality(
+            validator,
+            enabled=enabled,
+            interval=interval,
+            epoch=epoch,
+        )
+
+    def set_heterogeneous_emergency_baseline(self, value):
+        for item in (
+            value["validators"][0],
+            value["evidence_validators"][0],
+        ):
+            item["runtime_version"] = EMERGENCY
+            item["ami_id"] = EMERGENCY_AMI
+            self.set_finality(
+                item,
+                enabled=True,
+                interval=30,
+                epoch=1_900_000_000,
             )
 
     def test_accepts_heterogeneous_evidence_bound_start(self):
         value = self.fixture()
-        current = value["validators"][0]
-        baseline = value["evidence_validators"][0]
-        for item in (current, baseline):
-            item["runtime_version"] = EMERGENCY
-            item["ami_id"] = EMERGENCY_AMI
-            item["automatic_finality_enabled"] = True
-            item["block_interval_seconds"] = 30
-            item["slot_epoch_seconds"] = 1_900_000_000
-            for source in ("runtime_env", "health"):
-                item["finality_readback"][source].update(
-                    {
-                        "automatic_finality_enabled": True,
-                        "block_interval_seconds": 30,
-                        "slot_epoch_seconds": 1_900_000_000,
-                    }
-                )
+        self.set_heterogeneous_emergency_baseline(value)
 
         decision = evaluate_live_rollout_prefix_v2(value)
         self.assertEqual(decision["state"], "EVIDENCE_BOUND_PREFIX_ACCEPTED")
@@ -93,6 +120,11 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
         self.assertEqual(
             decision["baseline_bindings"][0]["ami_id"], EMERGENCY_AMI
         )
+        self.assertTrue(
+            decision["baseline_bindings"][0][
+                "automatic_finality_enabled"
+            ]
+        )
 
     def test_accepts_one_next_target_replacement(self):
         value = self.fixture()
@@ -100,13 +132,67 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
         baseline["runtime_version"] = EMERGENCY
         baseline["ami_id"] = EMERGENCY_AMI
         self.set_target(
-            value["validators"][0], instance_id="i-0000000000000000a"
+            value["validators"][0],
+            instance_id="i-0000000000000000a",
         )
 
         decision = evaluate_live_rollout_prefix_v2(value)
         self.assertEqual(decision["live_updated_count"], 1)
         self.assertEqual(decision["recovered_uncommitted_count"], 1)
         self.assertEqual(decision["next_validator"], "validator-02")
+
+    def test_accepts_quiesced_uncommitted_target_replacement(self):
+        value = self.fixture()
+        self.set_target(
+            value["validators"][0],
+            instance_id="i-0000000000000000a",
+            enabled=False,
+            interval=0,
+            epoch=0,
+        )
+        decision = evaluate_live_rollout_prefix_v2(value)
+        self.assertEqual(decision["live_updated_count"], 1)
+
+    def test_accepts_committed_target_prefix_only_without_drift(self):
+        value = self.fixture()
+        value["evidence_updated_count"] = 1
+        for source in (
+            value["evidence_validators"][0],
+            value["validators"][0],
+        ):
+            self.set_target(
+                source,
+                instance_id="i-0000000000000000a",
+                enabled=False,
+                interval=0,
+                epoch=0,
+            )
+        decision = evaluate_live_rollout_prefix_v2(value)
+        self.assertEqual(decision["live_updated_count"], 1)
+        self.assertEqual(decision["recovered_uncommitted_count"], 0)
+
+    def test_rejects_committed_target_finality_drift(self):
+        value = self.fixture()
+        value["evidence_updated_count"] = 1
+        self.set_target(
+            value["evidence_validators"][0],
+            instance_id="i-0000000000000000a",
+            enabled=False,
+            interval=0,
+            epoch=0,
+        )
+        self.set_target(
+            value["validators"][0],
+            instance_id="i-0000000000000000a",
+            enabled=False,
+            interval=0,
+            epoch=TARGET_EPOCH,
+        )
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError,
+            "committed target finality state drifted",
+        ):
+            evaluate_live_rollout_prefix_v2(value)
 
     def test_rejects_unknown_runtime_not_bound_to_baseline_or_target(self):
         value = self.fixture()
@@ -137,17 +223,12 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
 
     def test_rejects_non_target_finality_drift(self):
         value = self.fixture()
-        value["validators"][0]["automatic_finality_enabled"] = True
-        value["validators"][0]["block_interval_seconds"] = 30
-        value["validators"][0]["slot_epoch_seconds"] = 1_900_000_000
-        for source in ("runtime_env", "health"):
-            value["validators"][0]["finality_readback"][source].update(
-                {
-                    "automatic_finality_enabled": True,
-                    "block_interval_seconds": 30,
-                    "slot_epoch_seconds": 1_900_000_000,
-                }
-            )
+        self.set_finality(
+            value["validators"][0],
+            enabled=True,
+            interval=30,
+            epoch=1_900_000_000,
+        )
         with self.assertRaisesRegex(
             EvidenceBoundPrefixError, "finality state drifted"
         ):
@@ -167,7 +248,8 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
     def test_rejects_gap_in_target_prefix(self):
         value = self.fixture()
         self.set_target(
-            value["validators"][1], instance_id="i-0000000000000000f"
+            value["validators"][1],
+            instance_id="i-0000000000000000f",
         )
         with self.assertRaisesRegex(
             EvidenceBoundPrefixError, "update order is not contiguous"
@@ -181,6 +263,181 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
             EvidenceBoundPrefixError, "rollback volume binding mismatch"
         ):
             evaluate_live_rollout_prefix_v2(value)
+
+
+class EvidenceBoundRollingLifecycleTests(EvidenceBoundLivePrefixTests):
+    def rolling_fixture(self):
+        value = self.fixture()
+        self.set_heterogeneous_emergency_baseline(value)
+        for validator in value["validators"]:
+            self.set_finality(
+                validator,
+                enabled=False,
+                interval=0,
+                epoch=0,
+            )
+        return value
+
+    def test_quiesced_heterogeneous_start_is_ready_for_validator_one(self):
+        value = self.rolling_fixture()
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "READY_FOR_NEXT_VALIDATOR")
+        self.assertEqual(decision["updated_count"], 0)
+        self.assertEqual(decision["next_validator"], "validator-01")
+        self.assertEqual(
+            decision["baseline_bindings"][0]["runtime_version"], EMERGENCY
+        )
+
+    def test_one_target_is_ready_for_validator_two(self):
+        value = self.rolling_fixture()
+        self.set_target(
+            value["validators"][0],
+            instance_id="i-0000000000000000a",
+            enabled=False,
+            interval=0,
+            epoch=0,
+        )
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "READY_FOR_NEXT_VALIDATOR")
+        self.assertEqual(decision["updated_count"], 1)
+        self.assertEqual(decision["next_validator"], "validator-02")
+
+    def test_three_quiesced_targets_are_ready_for_slot_epoch(self):
+        value = self.rolling_fixture()
+        for index, validator in enumerate(value["validators"], start=10):
+            self.set_target(
+                validator,
+                instance_id=f"i-{index:017x}",
+                enabled=False,
+                interval=0,
+                epoch=0,
+            )
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "READY_FOR_SLOT_EPOCH")
+        self.assertEqual(decision["updated_count"], 3)
+        self.assertIsNone(decision["next_validator"])
+
+    def test_three_epoch_configured_targets_are_ready_for_enable(self):
+        value = self.rolling_fixture()
+        for index, validator in enumerate(value["validators"], start=10):
+            self.set_target(
+                validator,
+                instance_id=f"i-{index:017x}",
+                enabled=False,
+                interval=0,
+                epoch=TARGET_EPOCH,
+            )
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "READY_FOR_FINALITY_ENABLE")
+
+    def test_three_enabled_targets_are_accepted(self):
+        value = self.rolling_fixture()
+        for index, validator in enumerate(value["validators"], start=10):
+            self.set_target(
+                validator,
+                instance_id=f"i-{index:017x}",
+                enabled=True,
+                interval=30,
+                epoch=TARGET_EPOCH,
+            )
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "ACCEPTED")
+
+    def test_resume_target_prefix_can_continue(self):
+        value = self.rolling_fixture()
+        value["evidence_updated_count"] = 1
+        for source in (
+            value["evidence_validators"][0],
+            value["validators"][0],
+        ):
+            self.set_target(
+                source,
+                instance_id="i-0000000000000000a",
+                enabled=False,
+                interval=0,
+                epoch=0,
+            )
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "READY_FOR_NEXT_VALIDATOR")
+        self.assertEqual(decision["updated_count"], 1)
+        self.assertEqual(decision["baseline_updated_count"], 1)
+
+    def test_rejects_non_target_runtime_ami_or_instance_drift(self):
+        cases = (
+            ("runtime_version", "d" * 64, "runtime drifted"),
+            ("ami_id", EMERGENCY_AMI, "AMI binding mismatch"),
+            ("instance_id", "i-0000000000000000f", "instance drifted"),
+        )
+        for field, invalid, message in cases:
+            with self.subTest(field=field):
+                value = self.rolling_fixture()
+                value["validators"][1][field] = invalid
+                with self.assertRaisesRegex(
+                    EvidenceBoundPrefixError,
+                    message,
+                ):
+                    evaluate_evidence_bound_rolling_compatibility(value)
+
+    def test_rejects_target_without_instance_replacement(self):
+        value = self.rolling_fixture()
+        self.set_target(
+            value["validators"][0],
+            instance_id=value["evidence_validators"][0]["instance_id"],
+            enabled=False,
+            interval=0,
+            epoch=0,
+        )
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError,
+            "did not replace",
+        ):
+            evaluate_evidence_bound_rolling_compatibility(value)
+
+    def test_rejects_mixed_finality_during_rollout(self):
+        value = self.rolling_fixture()
+        self.set_target(
+            value["validators"][0],
+            instance_id="i-0000000000000000a",
+            enabled=True,
+            interval=30,
+            epoch=TARGET_EPOCH,
+        )
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError,
+            "must remain quiesced",
+        ):
+            evaluate_evidence_bound_rolling_compatibility(value)
+
+    def test_rejects_mixed_finality_after_three_targets(self):
+        value = self.rolling_fixture()
+        for index, validator in enumerate(value["validators"], start=10):
+            self.set_target(
+                validator,
+                instance_id=f"i-{index:017x}",
+                enabled=False,
+                interval=0,
+                epoch=TARGET_EPOCH,
+            )
+        self.set_finality(
+            value["validators"][2],
+            enabled=True,
+            interval=30,
+            epoch=TARGET_EPOCH,
+        )
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError,
+            "mixed or non-canonical",
+        ):
+            evaluate_evidence_bound_rolling_compatibility(value)
+
+    def test_rejects_fallback_activation(self):
+        value = self.rolling_fixture()
+        value["fallback_active"] = True
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError,
+            "fallback",
+        ):
+            evaluate_evidence_bound_rolling_compatibility(value)
 
 
 if __name__ == "__main__":
