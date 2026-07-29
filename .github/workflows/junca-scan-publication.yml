@@ -82,8 +82,21 @@ jobs:
             echo "RUNTIME_ACCEPTANCE_SHA256=$(jq -er .public_services_acceptance_readback.value.runtime_evidence_sha256 artifacts/before-outputs.json)"
           } >> "$GITHUB_ENV"
 
-      - name: Publish scan DNS, TLS and ALB route
-        run: bash scripts/junca_public_testnet_release.sh
+      - name: Read back existing public service route
+        run: |
+          set -euo pipefail
+          cp artifacts/before-outputs.json artifacts/public-release-outputs.json
+          jq -e '
+            .deployment_stage.value == "public-services" and
+            .public_rpc_url.value == "https://rpc.jaios-governance.org" and
+            .explorer_url.value == "https://explorer.jaios-governance.org" and
+            .health_url.value == "https://health.jaios-governance.org" and
+            (.validator_instance_ids.value | length) == 3 and
+            .public_services_acceptance_readback.value.enabled == true and
+            .runtime_boundary.value.mainnet_changed == false and
+            .runtime_boundary.value.assets_moved == false and
+            .runtime_boundary.value.bridge_activated == false
+          ' artifacts/public-release-outputs.json
 
       - name: Deploy approved Explorer surface with rollback
         run: |
