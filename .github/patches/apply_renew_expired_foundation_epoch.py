@@ -33,7 +33,7 @@ def main() -> int:
         variables,
         [
             (
-                '''variable "validator_slot_epoch_seconds" {
+                r'''variable "validator_slot_epoch_seconds" {
   description = "Shared Unix epoch for the canonical 30-second validator slots. Zero is allowed only while automatic finality is disabled."
   type        = number
   default     = 0
@@ -48,7 +48,7 @@ def main() -> int:
   }
 }
 ''',
-                '''variable "validator_slot_epoch_seconds" {
+                r'''variable "validator_slot_epoch_seconds" {
   description = "Shared Unix epoch for the canonical 30-second validator slots. Zero is allowed only while automatic finality is disabled."
   type        = number
   default     = 0
@@ -93,10 +93,10 @@ variable "validator_bootstrap_slot_epoch_seconds" {
         runtime,
         [
             (
-                '''  health_hostname       = "health.${var.domain_name}"
+                r'''  health_hostname       = "health.${var.domain_name}"
 }
 ''',
-                '''  health_hostname       = "health.${var.domain_name}"
+                r'''  health_hostname       = "health.${var.domain_name}"
   validator_bootstrap_slot_epochs = (
     var.validator_bootstrap_slot_epoch_seconds == null
     ? [for _ in range(3) : var.validator_slot_epoch_seconds]
@@ -107,13 +107,13 @@ variable "validator_bootstrap_slot_epoch_seconds" {
                 "bootstrap epoch local",
             ),
             (
-                '''    slot_epoch_seconds = (
+                r'''    slot_epoch_seconds = (
       var.automatic_finality_enabled
       ? var.validator_slot_epoch_seconds
       : 0
     )
 ''',
-                '''    slot_epoch_seconds = (
+                r'''    slot_epoch_seconds = (
       var.automatic_finality_enabled
       ? local.validator_bootstrap_slot_epochs[count.index]
       : 0
@@ -122,7 +122,7 @@ variable "validator_bootstrap_slot_epoch_seconds" {
                 "validator bootstrap user data",
             ),
             (
-                '''    precondition {
+                r'''    precondition {
       condition = (
         !var.automatic_finality_enabled ||
         (
@@ -138,7 +138,7 @@ variable "validator_bootstrap_slot_epoch_seconds" {
       condition = (
         !var.enable_validator_state_volumes ||
 ''',
-                '''    precondition {
+                r'''    precondition {
       condition = (
         !var.automatic_finality_enabled ||
         (
@@ -181,7 +181,7 @@ variable "validator_bootstrap_slot_epoch_seconds" {
         outputs,
         [
             (
-                '''output "automatic_finality_readback" {
+                r'''output "automatic_finality_readback" {
   description = "Terraform-canonical automatic finality settings shared by all three validators."
   value = {
     enabled                = var.automatic_finality_enabled
@@ -190,7 +190,7 @@ variable "validator_bootstrap_slot_epoch_seconds" {
   }
 }
 ''',
-                '''output "automatic_finality_readback" {
+                r'''output "automatic_finality_readback" {
   description = "Terraform-canonical automatic finality settings shared by all three validators."
   value = {
     enabled                = var.automatic_finality_enabled
@@ -219,14 +219,14 @@ output "validator_bootstrap_finality_readback" {
         workflow,
         [
             (
-                '''      resume_run_id:
+                r'''      resume_run_id:
         description: "Prior failed Foundation Release run ID, or 0 for a fresh rollout"
         required: false
         default: "0"
         type: string
       authorize_rollout:
 ''',
-                '''      resume_run_id:
+                r'''      resume_run_id:
         description: "Prior failed Foundation Release run ID, or 0 for a fresh rollout"
         required: false
         default: "0"
@@ -246,10 +246,10 @@ output "validator_bootstrap_finality_readback" {
                 "renewal workflow inputs",
             ),
             (
-                '''      ROLLING_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+                r'''      ROLLING_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       FOUNDATION_ROLLING_RELEASE: "true"
 ''',
-                '''      ROLLING_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+                r'''      ROLLING_RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       RENEW_EXPIRED_EPOCH: ${{ inputs.renew_expired_epoch }}
       RENEWAL_PRESERVE_PREFIX_COUNT: ${{ inputs.renewal_preserve_prefix_count }}
       FOUNDATION_ROLLING_RELEASE: "true"
@@ -257,7 +257,7 @@ output "validator_bootstrap_finality_readback" {
                 "renewal workflow environment",
             ),
             (
-                '''      - name: Generate one-time shared automatic finality epoch
+                r'''      - name: Generate one-time shared automatic finality epoch
         run: |
           set -euo pipefail
           interval=30
@@ -300,7 +300,7 @@ output "validator_bootstrap_finality_readback" {
             echo "VALIDATOR_SLOT_EPOCH_SECONDS=$slot_epoch"
           } >> "$GITHUB_ENV"
 ''',
-                '''      - name: Generate or renew the shared automatic finality epoch
+                r'''      - name: Generate or renew the shared automatic finality epoch
         run: |
           set -euo pipefail
           interval=30
@@ -434,7 +434,7 @@ output "validator_bootstrap_finality_readback" {
         foundation,
         [
             (
-                '''  automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
+                r'''  automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
   validator_block_interval_seconds="${VALIDATOR_BLOCK_INTERVAL_SECONDS:-}"
   validator_slot_epoch_seconds="${VALIDATOR_SLOT_EPOCH_SECONDS:-}"
   test "$automatic_finality_enabled" = "true"
@@ -445,7 +445,7 @@ output "validator_bootstrap_finality_readback" {
   test "$epoch_remaining" -le 7230
   test "$((validator_slot_epoch_seconds % 30))" -eq 0
 ''',
-                '''  automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
+                r'''  automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
   validator_block_interval_seconds="${VALIDATOR_BLOCK_INTERVAL_SECONDS:-}"
   validator_slot_epoch_seconds="${VALIDATOR_SLOT_EPOCH_SECONDS:-}"
   validator_bootstrap_slot_epochs_json="${
@@ -482,10 +482,10 @@ output "validator_bootstrap_finality_readback" {
                 "foundation renewal environment",
             ),
             (
-                '''  --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
+                r'''  --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
 ''',
-                '''  --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
+                r'''  --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
   --argjson validator_bootstrap_slot_epoch_seconds \
     "$validator_bootstrap_slot_epochs_json" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
@@ -493,10 +493,10 @@ output "validator_bootstrap_finality_readback" {
                 "bootstrap tfvars argument",
             ),
             (
-                '''    validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
+                r'''    validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
     enable_public_services: $enable_public_services,
 ''',
-                '''    validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
+                r'''    validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
     validator_bootstrap_slot_epoch_seconds:
       $validator_bootstrap_slot_epoch_seconds,
     enable_public_services: $enable_public_services,
@@ -504,10 +504,10 @@ output "validator_bootstrap_finality_readback" {
                 "bootstrap tfvars value",
             ),
             (
-                '''      --argjson validator_slot_epoch_seconds \
+                r'''      --argjson validator_slot_epoch_seconds \
         "$validator_slot_epoch_seconds" '
 ''',
-                '''      --argjson validator_slot_epoch_seconds \
+                r'''      --argjson validator_slot_epoch_seconds \
         "$validator_slot_epoch_seconds" \
       --argjson validator_bootstrap_slot_epochs \
         "$validator_bootstrap_slot_epochs_json" \
@@ -521,14 +521,14 @@ output "validator_bootstrap_finality_readback" {
                 "renewal resume jq arguments",
             ),
             (
-                '''        .automatic_finality == {
+                r'''        .automatic_finality == {
           block_interval_seconds: $validator_block_interval_seconds,
           slot_epoch_seconds: $validator_slot_epoch_seconds,
           minimum_remaining_seconds: 900,
           maximum_remaining_seconds: 7230
         } and
 ''',
-                '''        .automatic_finality.block_interval_seconds ==
+                r'''        .automatic_finality.block_interval_seconds ==
           $validator_block_interval_seconds and
         .automatic_finality.slot_epoch_seconds ==
           $rolling_resume_prior_slot_epoch_seconds and
@@ -574,7 +574,7 @@ output "validator_bootstrap_finality_readback" {
                 "renewal resume evidence validation",
             ),
             (
-                '''  evidence_bound_baseline_bindings="$(
+                r'''  evidence_bound_baseline_bindings="$(
     jq -ce '
       .baseline_bindings
       | select(
@@ -589,7 +589,7 @@ output "validator_bootstrap_finality_readback" {
 
   # Stop automatic finality before the next replacement. The observed target
 ''',
-                '''  evidence_bound_baseline_bindings="$(
+                r'''  evidence_bound_baseline_bindings="$(
     jq -ce '
       .baseline_bindings
       | select(
@@ -612,11 +612,11 @@ output "validator_bootstrap_finality_readback" {
                 "renewal live prefix binding",
             ),
             (
-                '''    --argjson validator_slot_epoch_seconds \
+                r'''    --argjson validator_slot_epoch_seconds \
       "$validator_slot_epoch_seconds" \
     --argjson updated_count "$updated_count" \
 ''',
-                '''    --argjson validator_slot_epoch_seconds \
+                r'''    --argjson validator_slot_epoch_seconds \
       "$validator_slot_epoch_seconds" \
     --argjson validator_bootstrap_slot_epochs \
       "$validator_bootstrap_slot_epochs_json" \
@@ -631,7 +631,7 @@ output "validator_bootstrap_finality_readback" {
                 "renewal resume writer arguments",
             ),
             (
-                '''      automatic_finality: {
+                r'''      automatic_finality: {
         block_interval_seconds: 30,
         slot_epoch_seconds: $validator_slot_epoch_seconds,
         minimum_remaining_seconds: 900,
@@ -639,7 +639,7 @@ output "validator_bootstrap_finality_readback" {
       },
       updated_count: $updated_count,
 ''',
-                '''      automatic_finality: {
+                r'''      automatic_finality: {
         block_interval_seconds: 30,
         slot_epoch_seconds: $validator_slot_epoch_seconds,
         minimum_remaining_seconds: 900,
@@ -667,11 +667,11 @@ output "validator_bootstrap_finality_readback" {
         compatibility,
         [
             (
-                '''        ".github/workflows/junca-validator-foundation-release.yml",
+                r'''        ".github/workflows/junca-validator-foundation-release.yml",
         ".github/workflows/junca-validator-public-testnet-orchestrator.yml",
         "config/junca_validator_ami_build_request.json",
 ''',
-                '''        ".github/workflows/junca-validator-foundation-release.yml",
+                r'''        ".github/workflows/junca-validator-foundation-release.yml",
         ".github/workflows/junca-validator-public-testnet-orchestrator.yml",
         "config/junca_validator_ami_build_request.json",
         "infra/aws/public-testnet/main.tf",
@@ -690,14 +690,14 @@ output "validator_bootstrap_finality_readback" {
         foundation_tests,
         [
             (
-                '''        self.assertIn(
+                r'''        self.assertIn(
             'can(regex("^ami-[0-9a-f]{8,17}$", var.node_ami_id))',
             self.runtime_variables,
         )
 
     def test_validator_roles_sign_only_with_their_assigned_key_but_verify_quorum(self) -> None:
 ''',
-                '''        self.assertIn(
+                r'''        self.assertIn(
             'can(regex("^ami-[0-9a-f]{8,17}$", var.node_ami_id))',
             self.runtime_variables,
         )
@@ -747,11 +747,11 @@ output "validator_bootstrap_finality_readback" {
         rolling_tests,
         [
             (
-                '''        value["comparison"].update(
+                r'''        value["comparison"].update(
             {
                 "status": "identical",
 ''',
-                '''        recovery_files = [
+                r'''        recovery_files = [
             ".github/workflows/junca-validator-foundation-release.yml",
             "infra/aws/public-testnet/main.tf",
             "infra/aws/public-testnet/outputs.tf",
@@ -780,9 +780,9 @@ output "validator_bootstrap_finality_readback" {
                 "recovery infrastructure positive test",
             ),
             (
-                '''                        "filename": "infra/aws/public-testnet/main.tf",
+                r'''                        "filename": "infra/aws/public-testnet/main.tf",
 ''',
-                '''                        "filename": "infra/aws/public-testnet/unsafe-new.tf",
+                r'''                        "filename": "infra/aws/public-testnet/unsafe-new.tf",
 ''',
                 "unexpected recovery file test",
             ),
