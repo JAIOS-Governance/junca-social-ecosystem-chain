@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/patches/apply_renew_expired_foundation_epoch.py"
+      - ".github/patches/repair_renewed_epoch_tests.py"
       - ".github/workflows/apply-renew-expired-foundation-epoch.yml"
 
 permissions:
@@ -42,8 +43,11 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile \
-            controller/.github/patches/apply_renew_expired_foundation_epoch.py
+            controller/.github/patches/apply_renew_expired_foundation_epoch.py \
+            controller/.github/patches/repair_renewed_epoch_tests.py
           python controller/.github/patches/apply_renew_expired_foundation_epoch.py \
+            target
+          python controller/.github/patches/repair_renewed_epoch_tests.py \
             target
           terraform fmt \
             target/infra/aws/public-testnet/main.tf \
