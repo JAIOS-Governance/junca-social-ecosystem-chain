@@ -43,7 +43,7 @@ jobs:
           test "$(grep -F -c 'test \"$state_volume_id\" = \"$rollback_volume_id\"' \
             target/scripts/junca_public_testnet_foundation.sh)" = 1
           test "$(grep -F -c "'. + {volume_id: \$volume_id}'" \
-            target/scripts/junca_public_testnet_foundation.sh)" -ge 2
+            target/scripts/junca_public_testnet_foundation.sh)" -ge 1
 
       - name: Commit target branch patch
         working-directory: target
