@@ -1,0 +1,87 @@
+name: Apply Renewed Foundation Epoch
+
+on:
+  pull_request:
+    paths:
+      - ".github/patches/apply_renew_expired_foundation_epoch.py"
+      - ".github/workflows/apply-renew-expired-foundation-epoch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout controller source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/renew-expired-foundation-epoch
+          path: target
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Apply exact expired-epoch recovery patch
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            controller/.github/patches/apply_renew_expired_foundation_epoch.py
+          python controller/.github/patches/apply_renew_expired_foundation_epoch.py \
+            target
+          terraform fmt \
+            target/infra/aws/public-testnet/main.tf \
+            target/infra/aws/public-testnet/variables.tf \
+            target/infra/aws/public-testnet/outputs.tf
+          terraform -chdir=target/infra/aws/public-testnet init \
+            -backend=false -input=false
+          terraform -chdir=target/infra/aws/public-testnet validate
+          bash -n target/scripts/junca_public_testnet_foundation.sh
+          (
+            cd target
+            python -m unittest -v \
+              tests.test_junca_social_ecosystem_chain_aws_foundation \
+              tests.test_junca_validator_rolling_compatibility
+          )
+          git -C target diff --check
+          test "$(git -C target diff --name-only | sort -u | wc -l)" = 8
+          test "$(grep -c 'RENEW_EXPIRED_QUIESCED_EPOCH' \
+            target/.github/workflows/junca-validator-foundation-release.yml)" -ge 2
+          test "$(grep -c 'validator_bootstrap_slot_epoch_seconds' \
+            target/infra/aws/public-testnet/variables.tf)" -ge 1
+          test "$(grep -c 'terraform_bootstrap:' \
+            target/scripts/junca_public_testnet_foundation.sh)" = 1
+
+      - name: Commit target branch recovery
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            infra/aws/public-testnet/main.tf \
+            infra/aws/public-testnet/variables.tf \
+            infra/aws/public-testnet/outputs.tf \
+            .github/workflows/junca-validator-foundation-release.yml \
+            scripts/junca_public_testnet_foundation.sh \
+            jaios/social_ecosystem_chain/rolling_compatibility.py \
+            tests/test_junca_social_ecosystem_chain_aws_foundation.py \
+            tests/test_junca_validator_rolling_compatibility.py
+          git commit -m "Renew expired Foundation epoch without replacing committed prefix"
+          git push origin HEAD:fix/renew-expired-foundation-epoch
