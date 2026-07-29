@@ -100,6 +100,7 @@ jobs:
           python -m py_compile \
             scripts/junca_live_rollout_prefix_gate.py \
             scripts/junca_public_testnet_endpoint_test.py
+          python scripts/junca_live_rollout_prefix_gate.py --help >/dev/null
           bash -n scripts/junca_dispatch_workflow_and_wait.sh
           bash -n scripts/junca_public_testnet_foundation.sh
 
