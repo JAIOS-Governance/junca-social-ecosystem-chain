@@ -72,7 +72,7 @@ jobs:
           test "$(grep -c 'terraform_bootstrap:' \
             target/scripts/junca_public_testnet_foundation.sh)" = 1
 
-      - name: Commit target branch recovery
+      - name: Commit non-workflow recovery files
         working-directory: target
         run: |
           set -euo pipefail
@@ -82,7 +82,6 @@ jobs:
             infra/aws/public-testnet/main.tf \
             infra/aws/public-testnet/variables.tf \
             infra/aws/public-testnet/outputs.tf \
-            .github/workflows/junca-validator-foundation-release.yml \
             scripts/junca_public_testnet_foundation.sh \
             jaios/social_ecosystem_chain/rolling_compatibility.py \
             tests/test_junca_social_ecosystem_chain_aws_foundation.py \
