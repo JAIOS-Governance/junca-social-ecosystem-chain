@@ -125,21 +125,22 @@ verify_rollback_snapshots() {
   local validator_state_json="$1"
   local output_path="$2"
   local -a snapshot_ids
+  local snapshot_ids_json
   local expected_ids
-  mapfile -t snapshot_ids < <(
-    jq -er '
+  snapshot_ids_json="$(
+    jq -ce '[
       .[].rollback_snapshot_id
       | select(
-          type == "string" and
-          test("^snap-[0-9a-f]{8,17}$")
-        )
-    ' <<<"$validator_state_json"
-  )
-  test "${#snapshot_ids[@]}" = 3
-  expected_ids="$(
-    printf '%s\n' "${snapshot_ids[@]}" |
-      jq -Rsc 'split("\n")[:-1] | sort | unique'
+        type == "string" and
+        test("^snap-[0-9a-f]{8,17}$")
+      )
+    ]' <<<"$validator_state_json"
   )"
+  test "$(jq -r 'length' <<<"$snapshot_ids_json")" = 3
+  for index in 0 1 2; do
+    snapshot_ids+=("$(jq -er ".[$index]" <<<"$snapshot_ids_json")")
+  done
+  expected_ids="$(jq -c 'sort | unique' <<<"$snapshot_ids_json")"
   test "$(jq -r 'length' <<<"$expected_ids")" = 3
   aws ec2 describe-snapshots \
     --snapshot-ids "${snapshot_ids[@]}" \

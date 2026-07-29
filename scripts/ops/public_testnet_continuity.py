@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
@@ -65,16 +66,32 @@ def _integer(value: Any, label: str) -> int:
     if isinstance(value, int):
         result = value
     elif isinstance(value, str):
-        text = value.strip()
-        try:
-            result = int(text, 16) if text.lower().startswith("0x") else int(text)
-        except ValueError as exc:
-            raise ContinuityError(f"{label} must be an integer") from exc
+        if re.fullmatch(r"[0-9]+", value):
+            result = int(value, 10)
+        elif re.fullmatch(r"0[xX][0-9a-fA-F]+", value):
+            result = int(value, 16)
+        else:
+            raise ContinuityError(f"{label} must be an integer")
     else:
         raise ContinuityError(f"{label} must be an integer")
     if result < 0:
         raise ContinuityError(f"{label} must not be negative")
     return result
+
+
+def _consistent_integer(
+    value: Mapping[str, Any], paths: Iterable[str], label: str
+) -> int:
+    observed = [
+        _integer(found, label)
+        for path in paths
+        if (found := _path(value, path)) is not None
+    ]
+    if not observed:
+        raise ContinuityError(f"{label} must be an integer")
+    if len(set(observed)) != 1:
+        raise ContinuityError(f"{label} evidence diverges")
+    return observed[0]
 
 
 def _boolean(value: Any, label: str) -> bool:
@@ -107,6 +124,7 @@ def _quorum(value: Mapping[str, Any]) -> tuple[int, int]:
             "runtime_evidence.signed_power",
             "consensus.signed_power",
             "consensus.last_certificate.signed_power",
+            "head.signed_power",
         ),
     )
     total = _first(
@@ -117,6 +135,7 @@ def _quorum(value: Mapping[str, Any]) -> tuple[int, int]:
             "runtime_evidence.total_power",
             "consensus.total_power",
             "consensus.last_certificate.total_power",
+            "head.total_power",
         ),
     )
     if signed is not None or total is not None:
@@ -124,7 +143,15 @@ def _quorum(value: Mapping[str, Any]) -> tuple[int, int]:
             raise ContinuityError("finality power evidence is incomplete")
         return _integer(signed, "signed_power"), _integer(total, "total_power")
 
-    ratio = _first(value, ("quorum", "finality.quorum", "runtime_evidence.quorum"))
+    ratio = _first(
+        value,
+        (
+            "quorum",
+            "finality.quorum",
+            "runtime_evidence.quorum",
+            "network.finality",
+        ),
+    )
     if isinstance(ratio, str) and "/" in ratio:
         left, right = ratio.split("/", 1)
         return _integer(left.strip(), "signed_power"), _integer(
@@ -139,16 +166,16 @@ def normalize_snapshot(
     if not isinstance(payload, Mapping):
         raise ContinuityError(f"{source} payload must be an object")
 
-    chain_id = _integer(
-        _first(
-            payload,
-            (
-                "chain_id",
-                "chainId",
-                "runtime_evidence.chain_id",
-                "network.chain_id",
-                "status.chain_id",
-            ),
+    chain_id = _consistent_integer(
+        payload,
+        (
+            "chain_id",
+            "chainId",
+            "runtime_evidence.chain_id",
+            "network.chain_id",
+            "network.chainId",
+            "network.chain_id_decimal",
+            "status.chain_id",
         ),
         f"{source} chain_id",
     )
@@ -161,6 +188,8 @@ def normalize_snapshot(
                 "height",
                 "runtime_evidence.finalized_height",
                 "consensus.head_height",
+                "network.height",
+                "head.height",
                 "status.finalized_height",
                 "latest.height",
             ),
@@ -176,6 +205,8 @@ def normalize_snapshot(
                 "block_hash",
                 "runtime_evidence.finalized_hash",
                 "consensus.head_hash",
+                "network.headHash",
+                "head.hash",
                 "latest.hash",
             ),
         ),
@@ -191,6 +222,8 @@ def normalize_snapshot(
                 "runtime_evidence.certificate_hash",
                 "consensus.last_certificate_hash",
                 "consensus.last_certificate.certificate_hash",
+                "network.certificateHash",
+                "head.certificate_hash",
             ),
         ),
         f"{source} certificate_hash",
@@ -204,16 +237,19 @@ def normalize_snapshot(
             "mainnet_changed",
             "runtime_evidence.mainnet_changed",
             "safety.mainnet_changed",
+            "network.mainnetChanged",
         ),
         "assets_moved": (
             "assets_moved",
             "runtime_evidence.assets_moved",
             "safety.assets_moved",
+            "network.assetsMoved",
         ),
         "bridge_activated": (
             "bridge_activated",
             "runtime_evidence.bridge_activated",
             "safety.bridge_activated",
+            "network.bridgeActivated",
         ),
     }
     safety: dict[str, bool] = {}
