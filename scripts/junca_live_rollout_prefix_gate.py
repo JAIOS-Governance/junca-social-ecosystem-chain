@@ -15,7 +15,13 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any, Mapping, Sequence
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from jaios.social_ecosystem_chain import rolling_compatibility as canonical
 
@@ -34,25 +40,43 @@ def _text(value: object, field: str) -> str:
     return value.strip()
 
 
-def _finality_tuple(item: Mapping[str, Any], label: str) -> tuple[bool, int, int | None]:
+def _finality_tuple(
+    item: Mapping[str, Any], label: str
+) -> tuple[bool, int, int | None]:
     enabled = item.get("automatic_finality_enabled")
     interval = item.get("block_interval_seconds")
     epoch = item.get("slot_epoch_seconds")
-    _require(isinstance(enabled, bool), f"{label} finality enabled state is invalid")
+    _require(
+        isinstance(enabled, bool),
+        f"{label} finality enabled state is invalid",
+    )
     _require(
         isinstance(interval, int) and not isinstance(interval, bool),
         f"{label} block interval is invalid",
     )
     _require(
-        epoch is None or (isinstance(epoch, int) and not isinstance(epoch, bool)),
+        epoch is None
+        or (isinstance(epoch, int) and not isinstance(epoch, bool)),
         f"{label} slot epoch is invalid",
     )
     if enabled:
-        _require(interval == 30, f"{label} enabled finality requires 30 seconds")
-        _require(isinstance(epoch, int) and epoch > 0, f"{label} enabled finality requires an epoch")
+        _require(
+            interval == 30,
+            f"{label} enabled finality requires 30 seconds",
+        )
+        _require(
+            isinstance(epoch, int) and epoch > 0,
+            f"{label} enabled finality requires an epoch",
+        )
     else:
-        _require(interval == 0, f"{label} disabled finality requires zero interval")
-        _require(epoch in (None, 0), f"{label} disabled finality requires zero epoch")
+        _require(
+            interval == 0,
+            f"{label} disabled finality requires zero interval",
+        )
+        _require(
+            epoch in (None, 0),
+            f"{label} disabled finality requires zero epoch",
+        )
     return enabled, interval, epoch
 
 
@@ -65,21 +89,40 @@ def _ordered(
         or len(value) != 3
         or any(not isinstance(item, Mapping) for item in value)
     ):
-        raise EvidenceBoundPrefixError(f"{field} must contain exactly three validators")
+        raise EvidenceBoundPrefixError(
+            f"{field} must contain exactly three validators"
+        )
     by_id = {item.get("validator_id"): item for item in value}
-    _require(set(by_id) == set(order) and len(by_id) == 3, f"{field} identity/order mismatch")
+    _require(
+        set(by_id) == set(order) and len(by_id) == 3,
+        f"{field} identity/order mismatch",
+    )
     return by_id[order[0]], by_id[order[1]], by_id[order[2]]
 
 
-def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str, Any]:
+def evaluate_live_rollout_prefix_v2(
+    evidence: Mapping[str, Any],
+) -> Mapping[str, Any]:
     target = _text(evidence.get("target_version"), "target_version")
     target_ami = _text(evidence.get("target_ami_id"), "target_ami_id")
     previous = _text(evidence.get("previous_version"), "previous_version")
     previous_ami = _text(evidence.get("previous_ami_id"), "previous_ami_id")
-    _require(target != previous, "target and previous runtime versions must differ")
-    _require(canonical.AMI.fullmatch(target_ami) is not None, "target AMI is invalid")
-    _require(canonical.AMI.fullmatch(previous_ami) is not None, "previous AMI is invalid")
-    _require(target_ami != previous_ami, "target and previous AMIs must differ")
+    _require(
+        target != previous,
+        "target and previous runtime versions must differ",
+    )
+    _require(
+        canonical.AMI.fullmatch(target_ami) is not None,
+        "target AMI is invalid",
+    )
+    _require(
+        canonical.AMI.fullmatch(previous_ami) is not None,
+        "previous AMI is invalid",
+    )
+    _require(
+        target_ami != previous_ami,
+        "target and previous AMIs must differ",
+    )
 
     _, rollback_previous, rollback_ami, rollback_by_id = canonical._rollback(
         evidence.get("rollback"), target, target_ami
@@ -89,10 +132,16 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
         "rollback runtime and AMI differ from previous binding",
     )
 
-    order = canonical._three_unique(evidence.get("update_order"), "update_order")
-    current_validators = _ordered(evidence.get("validators"), order, "validators")
+    order = canonical._three_unique(
+        evidence.get("update_order"), "update_order"
+    )
+    current_validators = _ordered(
+        evidence.get("validators"), order, "validators"
+    )
     baseline_validators = _ordered(
-        evidence.get("evidence_validators"), order, "evidence_validators"
+        evidence.get("evidence_validators"),
+        order,
+        "evidence_validators",
     )
 
     evidence_count = evidence.get("evidence_updated_count")
@@ -161,7 +210,8 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
             f"{validator_id}.baseline_runtime_version",
         )
         baseline_ami = _text(
-            baseline.get("ami_id"), f"{validator_id}.baseline_ami_id"
+            baseline.get("ami_id"),
+            f"{validator_id}.baseline_ami_id",
         )
         _require(
             canonical.SHA256.fullmatch(baseline_runtime) is not None,
@@ -186,7 +236,10 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
                 == (True, 30, requested_epoch),
                 f"{validator_id} target baseline epoch mismatch",
             )
-            canonical._finality_provenance(baseline, target_runtime=True)
+            canonical._finality_provenance(
+                baseline,
+                target_runtime=True,
+            )
         else:
             _require(
                 baseline_ami != target_ami,
@@ -195,9 +248,13 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
             _finality_tuple(baseline, f"{validator_id} baseline")
 
         current_runtime = _text(
-            current.get("runtime_version"), f"{validator_id}.runtime_version"
+            current.get("runtime_version"),
+            f"{validator_id}.runtime_version",
         )
-        current_ami = _text(current.get("ami_id"), f"{validator_id}.ami_id")
+        current_ami = _text(
+            current.get("ami_id"),
+            f"{validator_id}.ami_id",
+        )
         _require(
             canonical.SHA256.fullmatch(current_runtime) is not None,
             f"{validator_id} live runtime digest is invalid",
@@ -212,7 +269,10 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
         )
         is_target = current_runtime == target
         if is_target:
-            _require(current_ami == target_ami, f"{validator_id} target AMI mismatch")
+            _require(
+                current_ami == target_ami,
+                f"{validator_id} target AMI mismatch",
+            )
             _require(
                 _finality_tuple(current, validator_id)
                 == (True, 30, requested_epoch),
@@ -226,7 +286,10 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
             )
             _require(
                 _finality_tuple(current, validator_id)
-                == _finality_tuple(baseline, f"{validator_id} baseline"),
+                == _finality_tuple(
+                    baseline,
+                    f"{validator_id} baseline",
+                ),
                 f"{validator_id} non-target finality state drifted from evidence",
             )
             canonical._finality_provenance(current, target_runtime=False)
@@ -246,7 +309,10 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
         len(current_heads) == 1,
         "validators disagree on finalized head or certificate",
     )
-    _require(updated == sorted(updated, reverse=True), "validator update order is not contiguous")
+    _require(
+        updated == sorted(updated, reverse=True),
+        "validator update order is not contiguous",
+    )
     live_count = sum(updated)
     _require(
         evidence_count <= live_count <= min(evidence_count + 1, 3),
@@ -264,7 +330,8 @@ def evaluate_live_rollout_prefix_v2(evidence: Mapping[str, Any]) -> Mapping[str,
         else:
             _require(
                 current_id != baseline_id,
-                f"{validator_id} target runtime did not replace its evidence-bound instance",
+                f"{validator_id} target runtime did not replace its "
+                "evidence-bound instance",
             )
 
     return {
@@ -295,8 +362,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:
-        decision = evaluate_live_rollout_prefix_v2(_read(args.evidence))
-    except (OSError, json.JSONDecodeError, EvidenceBoundPrefixError, canonical.RollingCompatibilityError) as exc:
+        decision = evaluate_live_rollout_prefix_v2(
+            _read(args.evidence)
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+        EvidenceBoundPrefixError,
+        canonical.RollingCompatibilityError,
+    ) as exc:
         result = {
             "schema_version": "junca-validator-live-prefix/v2",
             "state": "EVIDENCE_BOUND_PREFIX_REJECTED",
