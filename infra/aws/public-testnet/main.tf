@@ -157,6 +157,11 @@ locals {
   explorer_hostname     = "explorer.${var.domain_name}"
   scan_hostname         = "scan.${var.domain_name}"
   health_hostname       = "health.${var.domain_name}"
+  validator_bootstrap_slot_epochs = (
+    var.validator_bootstrap_slot_epoch_seconds == null
+    ? [for _ in range(3) : var.validator_slot_epoch_seconds]
+    : var.validator_bootstrap_slot_epoch_seconds
+  )
 }
 
 resource "aws_sns_topic" "validator_alerts" {
@@ -479,7 +484,7 @@ resource "aws_instance" "validator" {
     )
     slot_epoch_seconds = (
       var.automatic_finality_enabled
-      ? var.validator_slot_epoch_seconds
+      ? local.validator_bootstrap_slot_epochs[count.index]
       : 0
     )
     validator_state_required = var.enable_validator_state_volumes
@@ -517,6 +522,23 @@ resource "aws_instance" "validator" {
         )
       )
       error_message = "Automatic finality requires a shared positive 30-second-boundary slot epoch."
+    }
+
+    precondition {
+      condition = (
+        length(local.validator_bootstrap_slot_epochs) == 3 &&
+        alltrue([
+          for epoch in local.validator_bootstrap_slot_epochs :
+          floor(epoch) == epoch &&
+          epoch % 30 == 0 &&
+          (
+            var.automatic_finality_enabled
+            ? epoch > 0
+            : epoch == 0
+          )
+        ])
+      )
+      error_message = "Validator bootstrap epochs must be exact-three, 30-second aligned, and consistent with the automatic-finality boundary."
     }
 
     precondition {

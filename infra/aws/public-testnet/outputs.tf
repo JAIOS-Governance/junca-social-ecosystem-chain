@@ -56,6 +56,16 @@ output "automatic_finality_readback" {
   }
 }
 
+output "validator_bootstrap_finality_readback" {
+  description = "Per-validator immutable bootstrap epochs, separated from the current runtime activation epoch."
+  value = [
+    for index, epoch in local.validator_bootstrap_slot_epochs : {
+      validator_id       = format("validator-%02d", index + 1)
+      slot_epoch_seconds = var.automatic_finality_enabled ? epoch : 0
+    }
+  ]
+}
+
 output "validator_state_volume_readback" {
   description = "Durable validator volume IDs and attachment state. Empty until the opt-in provisioning gate is enabled."
   value = [

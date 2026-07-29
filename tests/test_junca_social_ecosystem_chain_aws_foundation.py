@@ -243,6 +243,39 @@ class AwsFoundationTests(unittest.TestCase):
             self.runtime_variables,
         )
 
+    def test_bootstrap_epochs_are_separate_from_runtime_activation(self) -> None:
+        self.assertIn(
+            'variable "validator_bootstrap_slot_epoch_seconds"',
+            self.runtime_variables,
+        )
+        self.assertIn(
+            "local.validator_bootstrap_slot_epochs[count.index]",
+            self.runtime,
+        )
+        self.assertIn(
+            'output "validator_bootstrap_finality_readback"',
+            self.runtime_outputs,
+        )
+        self.assertIn(
+            "VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON",
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "RENEW_EXPIRED_QUIESCED_EPOCH",
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "validator_bootstrap_slot_epoch_seconds",
+            self.foundation_script,
+        )
+        self.assertIn(
+            "rolling_epoch_renewal_prefix_count",
+            self.foundation_script,
+        )
+        self.assertIn("terraform_bootstrap:", self.foundation_script)
+        self.assertIn("epoch_renewal:", self.foundation_script)
+        self.assertIn("user_data_replace_on_change = true", self.runtime)
+
     def test_validator_roles_sign_only_with_their_assigned_key_but_verify_quorum(self) -> None:
         signer_boundary = self.runtime.split(
             'resource "aws_iam_role_policy" "validator_signer_boundary"', 1
@@ -504,7 +537,7 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_foundation_generates_once_then_preserves_shared_slot_epoch(self) -> None:
         for required in (
-            "Generate one-time shared automatic finality epoch",
+            "Generate or renew the shared automatic finality epoch",
             "activation_delay=7200",
             "now + activation_delay + interval - 1",
             "VALIDATOR_BLOCK_INTERVAL_SECONDS=$interval",
@@ -1480,7 +1513,9 @@ class AwsFoundationTests(unittest.TestCase):
             'test "$remaining" -le "$maximum_remaining"',
             "minimum_remaining=900",
             "maximum_remaining=7230",
-            "A resume reuses this exact epoch",
+            "RENEW_EXPIRED_QUIESCED_EPOCH",
+            "prior_bootstrap_epochs=",
+            "ROLLING_EPOCH_RENEWAL_PERFORMED",
         ):
             self.assertIn(required, self.validator_foundation_release)
         for required in (
@@ -1493,14 +1528,16 @@ class AwsFoundationTests(unittest.TestCase):
             '$(date +%s)))"',
             'test "$epoch_remaining" -ge 900',
             'test "$epoch_remaining" -le 7230',
-            ".automatic_finality == {",
+            ".automatic_finality.slot_epoch_seconds ==",
+            "terraform_bootstrap.slot_epoch_seconds",
+            "epoch_renewal:",
         ):
             self.assertIn(required, self.foundation_script)
         resume_index = self.validator_foundation_release.index(
             "Resolve exact resumable rolling evidence"
         )
         epoch_index = self.validator_foundation_release.index(
-            "Generate one-time shared automatic finality epoch"
+            "Generate or renew the shared automatic finality epoch"
         )
         apply_index = self.validator_foundation_release.index(
             "scripts/junca_public_testnet_foundation.sh foundation-apply"

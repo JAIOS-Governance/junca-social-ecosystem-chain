@@ -152,6 +152,26 @@ variable "validator_slot_epoch_seconds" {
   }
 }
 
+variable "validator_bootstrap_slot_epoch_seconds" {
+  description = "Optional per-validator immutable bootstrap epochs. Null uses the shared runtime activation epoch for all validators."
+  type        = list(number)
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.validator_bootstrap_slot_epoch_seconds == null ? true : (
+      length(var.validator_bootstrap_slot_epoch_seconds) == 3 &&
+      alltrue([
+        for epoch in var.validator_bootstrap_slot_epoch_seconds :
+        epoch >= 0 &&
+        floor(epoch) == epoch &&
+        epoch % 30 == 0
+      ])
+    )
+    error_message = "validator_bootstrap_slot_epoch_seconds must be null or exactly three non-negative 30-second-boundary Unix timestamps."
+  }
+}
+
 variable "enable_validator_state_volumes" {
   description = "Require the already-provisioned retained EBS volumes to be mounted at /var/lib/junca by the validator runtime."
   type        = bool
