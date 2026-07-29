@@ -11,10 +11,35 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
-const release = "2026.07.28";
-const revision = "R31";
-const chainSource = "6de0979b97254c5b4777ede8c82378fd4e143137";
-const observedAt = "2026-07-28T15:44:23.017334+00:00";
+const release = "2026.07.29";
+const revision = "R32";
+const chainSource =
+  process.env.GITHUB_SHA ?? "cb8c3c0494b04c8e99b01ba9525db3b899f0d075";
+const canonicalFoundationCommit = "6de0979b97254c5b4777ede8c82378fd4e143137";
+const explorerUrl = "https://explorer.jaios-governance.org/explorer.json";
+const explorerResponse = await fetch(explorerUrl, {
+  cache: "no-store",
+  headers: { Accept: "application/json", "User-Agent": "JUNCA-Docs-Release/1.0" },
+  signal: AbortSignal.timeout(10_000),
+});
+if (!explorerResponse.ok) {
+  throw new Error(`Live Explorer readback failed with HTTP ${explorerResponse.status}`);
+}
+const explorer = await explorerResponse.json();
+if (
+  explorer?.status !== "ready" ||
+  explorer?.read_only !== true ||
+  explorer?.finalized_only !== true
+) {
+  throw new Error("Live Explorer readback did not satisfy the public evidence boundary");
+}
+const observedAt = String(explorer.observed_at);
+const head = explorer.head ?? {};
+const network = explorer.network ?? {};
+const publicValue = (value) =>
+  value === null || value === undefined || value === ""
+    ? "NOT CURRENTLY PUBLISHED"
+    : String(value);
 const officialWordmarkSource = join(root, "..", "..", "jaios", "social_ecosystem_chain", "assets", "junca-chain-logo-gold-on-navy.png");
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
 const secondaryIndex = secondaryTranslationIndex();
@@ -71,19 +96,23 @@ const runtimePanel = [
   '<section class="live-runtime-evidence" aria-labelledby="live-runtime-evidence-title">',
   '<div class="runtime-evidence-heading"><span class="runtime-live-mark"><i aria-hidden="true"></i>Governed readback</span>',
   '<small>Public Testnet · Read-only · No Monetary Value</small>',
-  '<h2 id="live-runtime-evidence-title">Verified operational evidence, presented without inference.</h2>',
+  '<h2 id="live-runtime-evidence-title">Measured runtime evidence, published from the current Explorer readback.</h2>',
   '<p lang="ja">実測済みの運用証跡を、推測を加えずに表示します。</p>',
   `<p>Explorer snapshot observed · ${observedAt}</p></div>`,
   '<dl><div><dt>Network</dt><dd>VERIFIED</dd></div>',
   '<div><dt>Runtime</dt><dd>READY · READ-ONLY</dd></div>',
-  '<div><dt>Finality</dt><dd>3 / 3</dd></div>',
-  '<div><dt>Finalized Height</dt><dd>1</dd></div>',
-  '<div><dt>Chain ID</dt><dd>20260723</dd></div>',
-  '<div><dt>Transactions</dt><dd>0</dd></div>',
-  '<div><dt>Peer Count</dt><dd>0</dd></div>',
+  `<div><dt>Finality</dt><dd>${publicValue(head.signed_power)} / ${publicValue(head.total_power)}</dd></div>`,
+  `<div><dt>Finalized Height</dt><dd>${publicValue(head.height)}</dd></div>`,
+  `<div><dt>Finalized Block Hash</dt><dd>${publicValue(head.hash)}</dd></div>`,
+  `<div><dt>Certificate Hash</dt><dd>${publicValue(head.certificate_hash)}</dd></div>`,
+  `<div><dt>State Root</dt><dd>${publicValue(head.state_root)}</dd></div>`,
+  `<div><dt>Chain ID</dt><dd>${publicValue(network.chain_id_decimal)}</dd></div>`,
+  `<div><dt>Client Version</dt><dd>${publicValue(network.client_version)}</dd></div>`,
+  `<div><dt>Transactions</dt><dd>${publicValue(head.transaction_count)}</dd></div>`,
+  `<div><dt>Peer Count</dt><dd>${publicValue(network.peer_count)}</dd></div>`,
   '<div><dt>Block Timestamp</dt><dd>NOT CURRENTLY PUBLISHED</dd></div></dl>',
-  '<p class="live-runtime-boundary">The block timestamp is not currently published in this evidence view. This status does not indicate a runtime error. ',
-  'Mainnet Changed: false · Assets Moved: false · Bridge Activated: false · Mainnet Activation Authorized: false.</p>',
+  '<p class="live-runtime-boundary">The block timestamp is not currently published in this evidence view. This is an evidence-publication boundary, not a runtime conclusion. ',
+  `Mainnet Changed: ${publicValue(explorer.mainnet_changed)} · Assets Moved: ${publicValue(explorer.assets_moved)} · Bridge Activated: ${publicValue(explorer.bridge_activated)} · Mainnet Activation Authorized: false.</p>`,
   '<div class="runtime-evidence-actions"><a href="https://chain.jaios-governance.org/api/operational">Operational API ↗</a>',
   '<a href="https://explorer.jaios-governance.org/explorer.json">Explorer JSON ↗</a></div>',
   '</section>',
@@ -156,7 +185,7 @@ const governanceLinkStyle = [
   '.live-runtime-evidence dl{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;margin:2rem 0;background:transparent}',
   '.live-runtime-evidence dl div{padding:1rem;background:rgba(5,19,35,.72);border:1px solid rgba(198,169,107,.22)}',
   '.live-runtime-evidence dt{font-size:.61rem}',
-  '.live-runtime-evidence dd{margin:.35rem 0 0;font-weight:700}.live-runtime-evidence a{color:#c6a96b}',
+  '.live-runtime-evidence dd{margin:.35rem 0 0;font-weight:700;overflow-wrap:anywhere}.live-runtime-evidence a{color:#c6a96b}',
   '.live-runtime-boundary{color:#a9b5c4}.live-runtime-evidence>p{max-width:780px}',
   '.runtime-evidence-actions{display:flex;flex-wrap:wrap;gap:.8rem}.runtime-evidence-actions a{',
   'display:inline-flex;padding:.72rem .9rem;border:1px solid rgba(198,169,107,.45);text-decoration:none}',
@@ -226,9 +255,9 @@ for (const retiredAsset of [
 await cp(officialWordmarkSource, join(dist, "junca-chain-official-wordmark.png"));
 await cp(
   join(snapshot, "official-brand-lockup-r29.js"),
-  join(dist, "official-brand-lockup-r31.js"),
+  join(dist, "official-brand-lockup-r32.js"),
 );
-await cp(join(root, "src", "docs-controls.js"), join(dist, "docs-controls-r31.js"));
+await cp(join(root, "src", "docs-controls.js"), join(dist, "docs-controls-r32.js"));
 await writeFile(
   join(dist, "secondary-language.js"),
   `${renderSecondaryLanguageRuntime()}\n`,
@@ -244,10 +273,10 @@ for (const route of routes) {
   }
   const decorated = decorateSecondaryCopy(
     source
-      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260728-r31" alt="JUNCA" width="190" height="57"></a>')
-      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260728-r31" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
-      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260728-r31" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
-      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260728-r31"></script></head>`)
+      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260729-r32" alt="JUNCA" width="190" height="57"></a>')
+      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260729-r32" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
+      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260729-r32" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
+      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260729-r32"></script></head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace("</header>", `</header>${secondaryLanguageToolbar}`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
@@ -257,11 +286,11 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.28 / R31")
-      .replaceAll("20260727-r29", "20260728-r31")
-      .replaceAll("official-brand-lockup-r29.js", "official-brand-lockup-r31.js")
-      .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-07-28"')
-      .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.28-R31"')
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.29 / R32")
+      .replaceAll("20260727-r29", "20260729-r32")
+      .replaceAll("official-brand-lockup-r29.js", "official-brand-lockup-r32.js")
+      .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-07-29"')
+      .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R32"')
       .replaceAll('"inLanguage":["en","ja"]', '"inLanguage":["en","ja","zh-Hans","es","it","ar"]')
       .replaceAll("Runtime Deployment in Progress", "Governed Read-only Operations")
       .replaceAll("Pending Live Acceptance", "Finality Certificate Observed")
@@ -301,10 +330,10 @@ for (const route of routes) {
       .replace('<tr><td>Finality Policy</td><td>Certified finality / strict &gt;2/3 voting power</td><td>Implemented in source; runtime evidence pending</td></tr>', '<tr><td>Finality Policy</td><td>Certified finality · 3 / 3 observed</td><td>Verified against the current read-only Explorer snapshot</td></tr>')
       .replaceAll("34d838b8a59c", "052598647079")
       .replaceAll("052598647079", "6de0979b9725")
-      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260728-r31")
-      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260728-r31")
-      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260728-r31")
-      .replace("</body>", '<script defer src="/docs-controls-r31.js?v=20260728-r31"></script></body>'),
+      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260729-r32")
+      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r32")
+      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r32")
+      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260729-r32"></script></body>'),
     route,
   );
   await writeFile(path, decorated, "utf8");
@@ -312,7 +341,7 @@ for (const route of routes) {
 const installManifestPath = join(dist, "manifest.webmanifest");
 const installManifest = JSON.parse(await readFile(installManifestPath, "utf8"));
 for (const icon of installManifest.icons) {
-  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260728-r31");
+  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260729-r32");
 }
 await writeFile(
   installManifestPath,
@@ -322,7 +351,7 @@ await writeFile(
 const sitemapPath = join(dist, "sitemap.xml");
 await writeFile(
   sitemapPath,
-  (await readFile(sitemapPath, "utf8")).replaceAll("<lastmod>2026-07-27</lastmod>", "<lastmod>2026-07-28</lastmod>"),
+  (await readFile(sitemapPath, "utf8")).replaceAll("<lastmod>2026-07-27</lastmod>", "<lastmod>2026-07-29</lastmod>"),
   "utf8",
 );
 const home404 = (await readFile(join(dist, "index.html"), "utf8"))
@@ -358,6 +387,9 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   revision,
   design_source: "Sites Version 15",
   chain_source_commit: chainSource,
+  development_source_commit: chainSource,
+  runtime_artifact_commit: null,
+  runtime_artifact_commit_status: "NOT_CURRENTLY_PUBLISHED",
   canonical_origin: "https://docs.jaios-governance.org",
   network_label: "Public Testnet / Read-only / Finalized / No Monetary Value",
   runtime_status: "VERIFIED_READY_READ_ONLY",
@@ -367,12 +399,17 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
     network: "VERIFIED",
     runtime: "READY_READ_ONLY",
     finality: "CERTIFICATE_OBSERVED",
-    finalized_height: 1,
-    signed_power: 3,
-    total_power: 3,
-    chain_id: 20260723,
-    transaction_count: 0,
-    peer_count: 0,
+    explorer_schema: publicValue(explorer.schema_version),
+    finalized_height: head.height,
+    finalized_hash: publicValue(head.hash),
+    certificate_hash: publicValue(head.certificate_hash),
+    state_root: publicValue(head.state_root),
+    signed_power: head.signed_power,
+    total_power: head.total_power,
+    chain_id: network.chain_id_decimal,
+    client_version: publicValue(network.client_version),
+    transaction_count: head.transaction_count,
+    peer_count: network.peer_count,
     block_timestamp: "NOT_CURRENTLY_PUBLISHED",
     block_timestamp_public_label: "NOT CURRENTLY PUBLISHED",
     block_timestamp_public_label_ja: "現在は公開対象外",
@@ -380,19 +417,20 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
     source_evidence: {
       operational_api: "https://chain.jaios-governance.org/api/operational",
       explorer_json: "https://explorer.jaios-governance.org/explorer.json",
-      exact_commit: chainSource,
-      repository_workflow: "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30373515280",
+      documentation_source_commit: chainSource,
+      runtime_artifact_commit: null,
+      runtime_artifact_commit_status: "NOT_CURRENTLY_PUBLISHED",
     },
-    mainnet_changed: false,
-    assets_moved: false,
-    bridge_activated: false,
+    mainnet_changed: explorer.mainnet_changed,
+    assets_moved: explorer.assets_moved,
+    bridge_activated: explorer.bridge_activated,
     mainnet_activation_authorized: false,
   },
   development_governance: {
     canonical_foundation: {
       pull_request: 237,
       state: "MERGED",
-      commit: chainSource,
+      commit: canonicalFoundationCommit,
       url: "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/237",
     },
     auxiliary_gateway: {
