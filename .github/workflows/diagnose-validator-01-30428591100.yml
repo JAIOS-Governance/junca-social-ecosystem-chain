@@ -1,0 +1,176 @@
+name: Diagnose Validator 01 After Partial Rollout
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/diagnose-validator-01-30428591100.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 20
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      EXPECTED_SOURCE_SHA: beea0c2e7b0a0f579dc335fffd5d829a90467f1d
+      EXPECTED_INSTANCE_ID: i-083280924b5536f17
+      EXPECTED_STATE_VOLUME_ID: vol-0277b6a13ecf87efe
+      EXPECTED_AMI_ID: ami-0bc2d7df2d0d42c50
+      EXPECTED_RUNTIME_SHA: 25ca7587390ea2a1c8360e42d32dbd99638db9bfdac83dd3a21c4d7bc375fc77
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-01-diagnostic-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Verify exact AWS and Terraform identity
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/diagnostic
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/bootstrap.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true"
+          terraform -chdir=infra/aws/bootstrap output -json \
+            > artifacts/diagnostic/bootstrap-outputs.json
+          state_kms_key_arn="$(jq -er .state_kms_key_arn.value artifacts/diagnostic/bootstrap-outputs.json)"
+          lock_table="$(jq -er .lock_table.value artifacts/diagnostic/bootstrap-outputs.json)"
+          terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET_NAME" \
+            -backend-config="key=public-testnet/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$lock_table" \
+            -backend-config="encrypt=true" \
+            -backend-config="kms_key_id=$state_kms_key_arn"
+          terraform -chdir=infra/aws/public-testnet output -json \
+            > artifacts/diagnostic/public-testnet-outputs.json
+          test "$(jq -er '.validator_instance_ids.value[0]' artifacts/diagnostic/public-testnet-outputs.json)" = "$EXPECTED_INSTANCE_ID"
+          test "$(jq -er '.validator_state_volume_readback.value[0].volume_id' artifacts/diagnostic/public-testnet-outputs.json)" = "$EXPECTED_STATE_VOLUME_ID"
+          aws ec2 describe-instances --instance-ids "$EXPECTED_INSTANCE_ID" \
+            > artifacts/diagnostic/instance.json
+          jq -e --arg instance "$EXPECTED_INSTANCE_ID" --arg ami "$EXPECTED_AMI_ID" '
+            .Reservations | length == 1 and
+            .[0].Instances | length == 1 and
+            .[0].Instances[0].InstanceId == $instance and
+            .[0].Instances[0].ImageId == $ami and
+            .[0].Instances[0].State.Name == "running"
+          ' artifacts/diagnostic/instance.json
+          aws ec2 describe-volumes --volume-ids "$EXPECTED_STATE_VOLUME_ID" \
+            > artifacts/diagnostic/state-volume.json
+          jq -e --arg instance "$EXPECTED_INSTANCE_ID" --arg volume "$EXPECTED_STATE_VOLUME_ID" '
+            .Volumes | length == 1 and
+            .[0].VolumeId == $volume and
+            .[0].Encrypted == true and
+            .[0].State == "in-use" and
+            .[0].Attachments | length == 1 and
+            .[0].Attachments[0].InstanceId == $instance and
+            .[0].Attachments[0].State == "attached"
+          ' artifacts/diagnostic/state-volume.json
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$EXPECTED_INSTANCE_ID" \
+            > artifacts/diagnostic/ssm-instance.json
+          jq -e --arg instance "$EXPECTED_INSTANCE_ID" '
+            .InstanceInformationList | length == 1 and
+            .[0].InstanceId == $instance and
+            .[0].PingStatus == "Online"
+          ' artifacts/diagnostic/ssm-instance.json
+
+      - name: Run read-only validator contract diagnostics
+        run: |
+          set -euo pipefail
+          cat > artifacts/diagnostic/commands.json <<'JSON'
+          {
+            "commands": [
+              "set +e",
+              "echo '=== IDENTITY ==='",
+              "hostname",
+              "cat /etc/machine-id",
+              "echo '=== CLOUD INIT ==='",
+              "cloud-init status --long 2>&1 || true",
+              "echo '=== SERVICE ==='",
+              "systemctl is-active junca-validator.service 2>&1 || true",
+              "systemctl status junca-validator.service --no-pager -l 2>&1 || true",
+              "echo '=== JOURNAL ==='",
+              "journalctl -u junca-validator.service -n 160 --no-pager 2>&1 || true",
+              "echo '=== MOUNT ==='",
+              "findmnt /var/lib/junca 2>&1 || true",
+              "mountpoint /var/lib/junca 2>&1 || true",
+              "ls -la /var/lib/junca 2>&1 || true",
+              "echo '=== SQLITE ==='",
+              "python3 - <<'PY'\nimport json, pathlib, sqlite3, traceback\np=pathlib.Path('/var/lib/junca/state.sqlite')\nprint(json.dumps({'exists':p.exists(),'is_symlink':p.is_symlink(),'size':p.stat().st_size if p.exists() else None}))\ntry:\n c=sqlite3.connect('file:/var/lib/junca/state.sqlite?mode=ro',uri=True)\n print('quick_check=',c.execute('PRAGMA quick_check').fetchone())\n print('tables=',c.execute(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\").fetchall())\n c.close()\nexcept Exception:\n traceback.print_exc()\nPY",
+              "echo '=== RUNTIME ENV ==='",
+              "test -f /etc/junca/runtime.env && stat /etc/junca/runtime.env || true",
+              "grep -E '^(NODE_ARTIFACT_SHA256|AUTOMATIC_FINALITY_ENABLED|TESTNET_BLOCK_INTERVAL_SECONDS|TESTNET_SLOT_EPOCH_SECONDS|VALIDATOR_ID|CHAIN_ID)=' /etc/junca/runtime.env 2>&1 || true",
+              "echo '=== EXPECTED RUNTIME ==='",
+              "runtime=$(sed -n 's/^NODE_ARTIFACT_SHA256=//p' /etc/junca/runtime.env 2>/dev/null); printf 'runtime=%s\\nlength=%s\\nexpected=%s\\n' \"$runtime\" \"$(printf %s \"$runtime\" | wc -c)\" '25ca7587390ea2a1c8360e42d32dbd99638db9bfdac83dd3a21c4d7bc375fc77'",
+              "echo '=== HEALTH ==='",
+              "curl -sv http://127.0.0.1:8545/health 2>&1 || true",
+              "echo '=== PORTS ==='",
+              "ss -lntp 2>&1 || true",
+              "echo '=== CLOUD INIT LOG TAIL ==='",
+              "tail -n 200 /var/log/cloud-init-output.log 2>&1 || true",
+              "exit 0"
+            ]
+          }
+          JSON
+          command_id="$(aws ssm send-command \
+            --instance-ids "$EXPECTED_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/diagnostic/commands.json \
+            --comment "JUNCA validator-01 read-only post-rollout diagnostics" \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/diagnostic/command-id.txt
+          for attempt in $(seq 1 60); do
+            status="$(aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$EXPECTED_INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || true)"
+            case "$status" in
+              Success|Failed|TimedOut|Cancelled|Cancelling)
+                break
+                ;;
+            esac
+            sleep 5
+          done
+          aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$EXPECTED_INSTANCE_ID" \
+            > artifacts/diagnostic/command-invocation.json
+          jq -e '.Status == "Success" and .ResponseCode == 0' \
+            artifacts/diagnostic/command-invocation.json
+          jq -r '.StandardOutputContent' \
+            artifacts/diagnostic/command-invocation.json \
+            > artifacts/diagnostic/stdout.log
+          jq -r '.StandardErrorContent' \
+            artifacts/diagnostic/command-invocation.json \
+            > artifacts/diagnostic/stderr.log
+          cat artifacts/diagnostic/stdout.log
+          cat artifacts/diagnostic/stderr.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-01-diagnostic-${{ github.run_id }}
+          path: artifacts/diagnostic/
+          if-no-files-found: error
+          retention-days: 30
