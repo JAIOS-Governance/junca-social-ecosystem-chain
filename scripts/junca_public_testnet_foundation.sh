@@ -1168,6 +1168,14 @@ write_rolling_resume_evidence() {
     --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" \
     --argjson validator_slot_epoch_seconds \
       "$validator_slot_epoch_seconds" \
+    --argjson validator_bootstrap_slot_epochs \
+      "$validator_bootstrap_slot_epochs_json" \
+    --argjson rolling_resume_prior_slot_epoch_seconds \
+      "$rolling_resume_prior_slot_epoch_seconds" \
+    --argjson rolling_epoch_renewal_performed \
+      "$rolling_epoch_renewal_performed" \
+    --argjson rolling_epoch_renewal_prefix_count \
+      "$rolling_epoch_renewal_prefix_count" \
     --argjson updated_count "$updated_count" \
     --argjson terraform_replacement_addresses \
       "$terraform_replacement_addresses_json" \
@@ -1203,6 +1211,16 @@ write_rolling_resume_evidence() {
         slot_epoch_seconds: $validator_slot_epoch_seconds,
         minimum_remaining_seconds: 900,
         maximum_remaining_seconds: 7230
+      },
+      terraform_bootstrap: {
+        slot_epoch_seconds: $validator_bootstrap_slot_epochs
+      },
+      epoch_renewal: {
+        performed: $rolling_epoch_renewal_performed,
+        prior_slot_epoch_seconds:
+          $rolling_resume_prior_slot_epoch_seconds,
+        preserved_target_prefix_count:
+          $rolling_epoch_renewal_prefix_count
       },
       updated_count: $updated_count,
       updated_validator_ids:
@@ -1401,9 +1419,32 @@ if [[ "$rolling_release" == "true" ]]; then
   automatic_finality_enabled="${AUTOMATIC_FINALITY_ENABLED:-}"
   validator_block_interval_seconds="${VALIDATOR_BLOCK_INTERVAL_SECONDS:-}"
   validator_slot_epoch_seconds="${VALIDATOR_SLOT_EPOCH_SECONDS:-}"
+  validator_bootstrap_slot_epochs_json="${
+    VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON:-}"
+  rolling_resume_prior_slot_epoch_seconds="${
+    ROLLING_RESUME_PRIOR_SLOT_EPOCH_SECONDS:-0}"
+  rolling_epoch_renewal_performed="${
+    ROLLING_EPOCH_RENEWAL_PERFORMED:-false}"
+  rolling_epoch_renewal_prefix_count="${
+    ROLLING_EPOCH_RENEWAL_PREFIX_COUNT:-0}"
   test "$automatic_finality_enabled" = "true"
   test "$validator_block_interval_seconds" = "30"
   [[ "$validator_slot_epoch_seconds" =~ ^[0-9]+$ ]]
+  [[ "$rolling_resume_prior_slot_epoch_seconds" =~ ^[0-9]+$ ]]
+  [[ "$rolling_epoch_renewal_prefix_count" =~ ^[0-3]$ ]]
+  case "$rolling_epoch_renewal_performed" in
+    true|false) ;;
+    *) echo "ROLLING_EPOCH_RENEWAL_PERFORMED must be true or false" >&2; exit 2 ;;
+  esac
+  jq -e '
+    type == "array" and length == 3 and
+    all(.[];
+      type == "number" and
+      floor == . and
+      . > 0 and
+      . % 30 == 0
+    )
+  ' <<<"$validator_bootstrap_slot_epochs_json" >/dev/null
   epoch_remaining="$((validator_slot_epoch_seconds - $(date +%s)))"
   test "$epoch_remaining" -ge 900
   test "$epoch_remaining" -le 7230
@@ -1479,6 +1520,8 @@ jq -n \
   --argjson validator_block_interval_seconds \
     "$validator_block_interval_seconds" \
   --argjson validator_slot_epoch_seconds "$validator_slot_epoch_seconds" \
+  --argjson validator_bootstrap_slot_epoch_seconds \
+    "$validator_bootstrap_slot_epochs_json" \
   --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
   --argjson validator_signer_arns "$signer_arns" \
   --argjson enable_public_services "$public_services_enabled" \
@@ -1507,6 +1550,8 @@ jq -n \
     automatic_finality_enabled: $automatic_finality_enabled,
     validator_block_interval_seconds: $validator_block_interval_seconds,
     validator_slot_epoch_seconds: $validator_slot_epoch_seconds,
+    validator_bootstrap_slot_epoch_seconds:
+      $validator_bootstrap_slot_epoch_seconds,
     enable_public_services: $enable_public_services,
     quorum_acceptance_sha256: (
       if $enable_public_services then $quorum_acceptance_sha256 else null end
@@ -1681,7 +1726,15 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
       --argjson validator_block_interval_seconds \
         "$validator_block_interval_seconds" \
       --argjson validator_slot_epoch_seconds \
-        "$validator_slot_epoch_seconds" '
+        "$validator_slot_epoch_seconds" \
+      --argjson validator_bootstrap_slot_epochs \
+        "$validator_bootstrap_slot_epochs_json" \
+      --argjson rolling_resume_prior_slot_epoch_seconds \
+        "$rolling_resume_prior_slot_epoch_seconds" \
+      --argjson rolling_epoch_renewal_performed \
+        "$rolling_epoch_renewal_performed" \
+      --argjson rolling_epoch_renewal_prefix_count \
+        "$rolling_epoch_renewal_prefix_count" '
         .schema_version == "junca-validator-rolling-resume/v1" and
         .repository == $repository and
         (.candidate.provenance_head_sha // .head_sha) ==
@@ -1696,12 +1749,48 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
         .candidate.request_sha256 == $request_sha256 and
         .candidate.manifest_decision_sha256 ==
           $manifest_decision_sha256 and
-        .automatic_finality == {
-          block_interval_seconds: $validator_block_interval_seconds,
-          slot_epoch_seconds: $validator_slot_epoch_seconds,
-          minimum_remaining_seconds: 900,
-          maximum_remaining_seconds: 7230
-        } and
+        .automatic_finality.block_interval_seconds ==
+          $validator_block_interval_seconds and
+        .automatic_finality.slot_epoch_seconds ==
+          $rolling_resume_prior_slot_epoch_seconds and
+        .automatic_finality.minimum_remaining_seconds == 900 and
+        .automatic_finality.maximum_remaining_seconds == 7230 and
+        (
+          (
+            .terraform_bootstrap.slot_epoch_seconds //
+            [
+              .automatic_finality.slot_epoch_seconds,
+              .automatic_finality.slot_epoch_seconds,
+              .automatic_finality.slot_epoch_seconds
+            ]
+          ) as $prior_bootstrap
+          | ($prior_bootstrap | type == "array" and length == 3) and
+            (
+              if $rolling_epoch_renewal_performed then
+                $validator_slot_epoch_seconds >
+                  $rolling_resume_prior_slot_epoch_seconds and
+                $rolling_epoch_renewal_prefix_count >= .updated_count and
+                $rolling_epoch_renewal_prefix_count <=
+                  ([.updated_count + 1, 3] | min) and
+                (
+                  [
+                    range(0; 3) as $index
+                    | if $index < $rolling_epoch_renewal_prefix_count
+                      then $validator_bootstrap_slot_epochs[$index] ==
+                        $prior_bootstrap[$index]
+                      else $validator_bootstrap_slot_epochs[$index] ==
+                        $validator_slot_epoch_seconds
+                      end
+                  ] | all
+                )
+              else
+                $validator_slot_epoch_seconds ==
+                  $rolling_resume_prior_slot_epoch_seconds and
+                $validator_bootstrap_slot_epochs == $prior_bootstrap and
+                $rolling_epoch_renewal_prefix_count == 0
+              end
+            )
+        ) and
         (.updated_count | type) == "number" and
         .updated_count >= 0 and .updated_count <= 3 and
         .updated_validator_ids ==
@@ -1766,6 +1855,11 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
         )
     ' artifacts/live-prefix-decision.json
   )"
+  if [[ "$rolling_epoch_renewal_performed" == "true" ]]; then
+    test "$live_updated_count" = "$rolling_epoch_renewal_prefix_count"
+  else
+    test "$rolling_epoch_renewal_prefix_count" = "0"
+  fi
 
   # Stop automatic finality before the next replacement. The observed target
   # prefix is bound strictly to the candidate artifact; only the remaining
