@@ -1035,6 +1035,11 @@ write_rolling_compatibility_evidence() {
   local expected_next="${2:-}"
   local -a current_instances
   local index
+  local validator_id
+  local state_volume_id
+  local rollback_volume_id
+  local observation_path
+  local enriched_observation_path
   terraform -chdir=infra/aws/public-testnet output -json \
     > artifacts/rolling-foundation-outputs.json
   mapfile -t current_instances < <(
@@ -1043,10 +1048,34 @@ write_rolling_compatibility_evidence() {
   )
   test "${#current_instances[@]}" = 3
   for index in 0 1 2; do
+    validator_id="validator-0$((index + 1))"
+    observation_path="artifacts/rolling-validator-$((index + 1)).json"
     capture_validator_observation \
-      "validator-0$((index + 1))" \
+      "$validator_id" \
       "${current_instances[$index]}" \
-      "artifacts/rolling-validator-$((index + 1)).json"
+      "$observation_path"
+    state_volume_id="$(
+      jq -er --arg validator_id "$validator_id" '
+        .validator_state_volume_readback.value[]
+        | select(.validator_id == $validator_id)
+        | .volume_id
+        | select(type == "string" and test("^vol-[0-9a-f]{8,17}$"))
+      ' artifacts/rolling-foundation-outputs.json
+    )"
+    rollback_volume_id="$(
+      jq -er --arg validator_id "$validator_id" '
+        .validators[]
+        | select(.validator_id == $validator_id)
+        | .volume_id
+        | select(type == "string" and test("^vol-[0-9a-f]{8,17}$"))
+      ' artifacts/rollback-rehearsal.json
+    )"
+    test "$state_volume_id" = "$rollback_volume_id"
+    enriched_observation_path="${observation_path%.json}.enriched.json"
+    jq --arg volume_id "$state_volume_id" \
+      '. + {volume_id: $volume_id}' \
+      "$observation_path" >"$enriched_observation_path"
+    mv "$enriched_observation_path" "$observation_path"
   done
   jq -s '.' artifacts/rolling-validator-{1,2,3}.json \
     > artifacts/rolling-validators.json
