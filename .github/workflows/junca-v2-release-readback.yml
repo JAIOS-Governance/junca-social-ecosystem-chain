@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      TARGET_SHA: 7e9760ee18abeb8f687089c2c504eb49fd3794b2
-      READBACK_GENERATION: "24"
+      TARGET_SHA: cb8c3c0494b04c8e99b01ba9525db3b899f0d075
+      READBACK_GENERATION: "25"
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +24,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$READBACK_GENERATION" = "24"
+          test "$READBACK_GENERATION" = "25"
           mkdir -p artifacts/v2-release-readback
           for workflow in \
             junca-hardened-immutable-candidate-release-v2.yml \
