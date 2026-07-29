@@ -1,0 +1,10 @@
+{
+  "parent_sha": "ebe71d976093704b800b1a450993a46756bf0ffb",
+  "base_tree_sha": "bc8b26c0c1e661581918dc9cd381183a4e5bcd00",
+  "workflow_path": ".github/workflows/junca-validator-foundation-release.yml",
+  "rendered_path": "recovery/rendered/junca-validator-foundation-release.yml",
+  "branch_ref_updated": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}
