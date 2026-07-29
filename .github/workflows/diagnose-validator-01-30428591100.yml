@@ -69,8 +69,8 @@ jobs:
           aws ec2 describe-instances --instance-ids "$EXPECTED_INSTANCE_ID" \
             > artifacts/diagnostic/instance.json
           jq -e --arg instance "$EXPECTED_INSTANCE_ID" --arg ami "$EXPECTED_AMI_ID" '
-            .Reservations | length == 1 and
-            .[0].Instances | length == 1 and
+            (.Reservations | length) == 1 and
+            (.[0].Instances | length) == 1 and
             .[0].Instances[0].InstanceId == $instance and
             .[0].Instances[0].ImageId == $ami and
             .[0].Instances[0].State.Name == "running"
@@ -78,11 +78,11 @@ jobs:
           aws ec2 describe-volumes --volume-ids "$EXPECTED_STATE_VOLUME_ID" \
             > artifacts/diagnostic/state-volume.json
           jq -e --arg instance "$EXPECTED_INSTANCE_ID" --arg volume "$EXPECTED_STATE_VOLUME_ID" '
-            .Volumes | length == 1 and
+            (.Volumes | length) == 1 and
             .[0].VolumeId == $volume and
             .[0].Encrypted == true and
             .[0].State == "in-use" and
-            .[0].Attachments | length == 1 and
+            (.[0].Attachments | length) == 1 and
             .[0].Attachments[0].InstanceId == $instance and
             .[0].Attachments[0].State == "attached"
           ' artifacts/diagnostic/state-volume.json
@@ -90,7 +90,7 @@ jobs:
             --filters "Key=InstanceIds,Values=$EXPECTED_INSTANCE_ID" \
             > artifacts/diagnostic/ssm-instance.json
           jq -e --arg instance "$EXPECTED_INSTANCE_ID" '
-            .InstanceInformationList | length == 1 and
+            (.InstanceInformationList | length) == 1 and
             .[0].InstanceId == $instance and
             .[0].PingStatus == "Online"
           ' artifacts/diagnostic/ssm-instance.json
