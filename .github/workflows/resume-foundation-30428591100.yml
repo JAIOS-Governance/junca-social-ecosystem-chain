@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
-      MAIN_SHA: 7e9760ee18abeb8f687089c2c504eb49fd3794b2
+      MAIN_SHA: cb8c3c0494b04c8e99b01ba9525db3b899f0d075
       CANDIDATE_SHA: beea0c2e7b0a0f579dc335fffd5d829a90467f1d
       AMI_RUN_ID: "30427620603"
       MANIFEST_GATE_RUN_ID: "30428572546"
@@ -90,11 +90,11 @@ jobs:
             ' <<<"$retained"
 
           set +e
-          duplicate="$(
+          duplicate="$({
             gh api \
               "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
               2>artifacts/duplicate-artifact-read-error.txt
-          )"
+          })"
           duplicate_status=$?
           set -e
           if [[ "$duplicate_status" == 0 ]]; then
@@ -140,7 +140,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          foundation_run_id="$(
+          foundation_run_id="$({
             bash scripts/junca_dispatch_workflow_and_wait.sh \
               --workflow-name "JUNCA Validator Foundation Release" \
               --workflow-path ".github/workflows/junca-validator-foundation-release.yml" \
@@ -153,7 +153,7 @@ jobs:
               --input "renew_expired_epoch=RENEW_EXPIRED_QUIESCED_EPOCH" \
               --input "renewal_preserve_prefix_count=1" \
               --input "authorize_rollout=PUBLIC_TESTNET_ROLLOUT"
-          )"
+          })"
           echo "foundation_run_id=$foundation_run_id" >> "$GITHUB_OUTPUT"
           mkdir -p artifacts/foundation
           gh run download "$foundation_run_id" \
@@ -192,7 +192,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          continuity_run_id="$(
+          continuity_run_id="$({
             bash scripts/junca_dispatch_workflow_and_wait.sh \
               --workflow-name "JUNCA Public Testnet Continuity Evidence" \
               --workflow-path ".github/workflows/junca-public-testnet-continuity.yml" \
@@ -202,7 +202,7 @@ jobs:
               --input "require_advancement=true" \
               --input "samples=3" \
               --input "interval_seconds=30"
-          )"
+          })"
           echo "continuity_run_id=$continuity_run_id" >> "$GITHUB_OUTPUT"
           mkdir -p artifacts/continuity
           gh run download "$continuity_run_id" \
