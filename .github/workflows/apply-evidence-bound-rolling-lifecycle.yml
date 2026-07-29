@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/patches/apply_evidence_bound_rolling_lifecycle.py"
+      - ".github/patches/fix_evidence_bound_lifecycle_ci.py"
       - ".github/workflows/apply-evidence-bound-rolling-lifecycle.yml"
 
 permissions:
@@ -29,12 +30,17 @@ jobs:
           path: target
           fetch-depth: 0
 
-      - name: Apply exact Foundation lifecycle patch
+      - name: Repair exact lifecycle CI contracts
         run: |
           set -euo pipefail
-          python controller/.github/patches/apply_evidence_bound_rolling_lifecycle.py \
-            target/scripts/junca_public_testnet_foundation.sh
+          python controller/.github/patches/fix_evidence_bound_lifecycle_ci.py \
+            target/scripts/junca_public_testnet_foundation.sh \
+            target/tests/test_junca_social_ecosystem_chain_aws_foundation.py
           bash -n target/scripts/junca_public_testnet_foundation.sh
+          python -m py_compile \
+            target/scripts/junca_live_rollout_prefix_gate.py \
+            target/tests/test_junca_live_rollout_prefix_gate.py \
+            target/tests/test_junca_social_ecosystem_chain_aws_foundation.py
           git -C target diff --check
           test "$(grep -c 'python scripts/junca_live_rollout_prefix_gate.py' \
             target/scripts/junca_public_testnet_foundation.sh)" = 2
@@ -43,12 +49,14 @@ jobs:
           test "$(grep -c 'evidence-bound-rollout-baseline.json' \
             target/scripts/junca_public_testnet_foundation.sh)" -ge 2
 
-      - name: Commit target branch patch
+      - name: Commit target branch repair
         working-directory: target
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/junca_public_testnet_foundation.sh
-          git commit -m "Carry evidence-bound baselines through validator rollout"
+          git add \
+            scripts/junca_public_testnet_foundation.sh \
+            tests/test_junca_social_ecosystem_chain_aws_foundation.py
+          git commit -m "Fix evidence-bound rolling lifecycle CI contracts"
           git push origin HEAD:fix/evidence-bound-rolling-lifecycle
