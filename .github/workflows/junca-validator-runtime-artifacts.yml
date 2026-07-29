@@ -15,7 +15,8 @@ on:
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
       - "scripts/junca_hardened_immutable_candidate_policy.py"
-      - "scripts/junca_dispatch_workflow_and_wait.sh"
+      - "scripts/junca_dispatch_workflow_and_wait.py"
+      - "scripts/junca_release_child_provenance.py"
       - "scripts/junca_runtime_release_evidence_collector_drift.py"
       - "scripts/junca_live_rollout_prefix_gate.py"
       - "scripts/junca_public_testnet_endpoint_test.py"
@@ -23,7 +24,7 @@ on:
       - "tests/test_junca_validator_artifacts.py"
       - "tests/test_validator_runtime_layout.py"
       - "tests/test_junca_hardened_immutable_candidate_policy.py"
-      - "tests/test_junca_hardened_immutable_release_workflow.py"
+      - "tests/test_junca_release_orchestration.py"
       - "tests/test_junca_runtime_release_ami_drift.py"
       - "tests/test_junca_hardened_release_v2.py"
       - "tests/test_junca_live_rollout_prefix_gate.py"
@@ -31,7 +32,6 @@ on:
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
-      - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
       - ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
       - ".github/workflows/junca-runtime-release-manifest-gate.yml"
@@ -49,7 +49,8 @@ on:
       - "scripts/junca-chain-node"
       - "scripts/junca_validator_artifact_handoff.py"
       - "scripts/junca_hardened_immutable_candidate_policy.py"
-      - "scripts/junca_dispatch_workflow_and_wait.sh"
+      - "scripts/junca_dispatch_workflow_and_wait.py"
+      - "scripts/junca_release_child_provenance.py"
       - "scripts/junca_runtime_release_evidence_collector_drift.py"
       - "scripts/junca_live_rollout_prefix_gate.py"
       - "scripts/junca_public_testnet_endpoint_test.py"
@@ -57,7 +58,7 @@ on:
       - "tests/test_junca_validator_artifacts.py"
       - "tests/test_validator_runtime_layout.py"
       - "tests/test_junca_hardened_immutable_candidate_policy.py"
-      - "tests/test_junca_hardened_immutable_release_workflow.py"
+      - "tests/test_junca_release_orchestration.py"
       - "tests/test_junca_runtime_release_ami_drift.py"
       - "tests/test_junca_hardened_release_v2.py"
       - "tests/test_junca_live_rollout_prefix_gate.py"
@@ -65,7 +66,6 @@ on:
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
-      - ".github/workflows/junca-hardened-immutable-candidate-release.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
       - ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
       - ".github/workflows/junca-runtime-release-manifest-gate.yml"
@@ -84,24 +84,26 @@ jobs:
 
       - name: Verify immutable artifact and safety contracts
         run: |
-          python -m unittest \
+          set -euo pipefail
+          python3 -m unittest \
             tests.test_junca_validator_artifacts \
             tests.test_validator_runtime_layout \
             tests.test_junca_hardened_immutable_candidate_policy \
-            tests.test_junca_hardened_immutable_release_workflow \
+            tests.test_junca_release_orchestration \
             tests.test_junca_runtime_release_ami_drift \
             tests.test_junca_hardened_release_v2 \
             tests.test_junca_live_rollout_prefix_gate \
             tests.test_junca_public_endpoint_sampling \
             tests.test_junca_social_ecosystem_chain_validator_node -v
-          python scripts/junca_hardened_immutable_candidate_policy.py \
+          python3 scripts/junca_hardened_immutable_candidate_policy.py \
             --policy config/junca_hardened_immutable_candidate_policy.json \
             --candidate-source-commit "$GITHUB_SHA"
-          python -m py_compile \
+          python3 -m py_compile \
+            scripts/junca_dispatch_workflow_and_wait.py \
+            scripts/junca_release_child_provenance.py \
             scripts/junca_live_rollout_prefix_gate.py \
             scripts/junca_public_testnet_endpoint_test.py
-          python scripts/junca_live_rollout_prefix_gate.py --help >/dev/null
-          bash -n scripts/junca_dispatch_workflow_and_wait.sh
+          python3 scripts/junca_live_rollout_prefix_gate.py --help >/dev/null
           bash -n scripts/junca_public_testnet_foundation.sh
 
       - name: Build deterministic runtime and canonical zero-allocation genesis

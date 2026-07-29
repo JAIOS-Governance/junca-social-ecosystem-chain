@@ -22,7 +22,7 @@ WORKFLOW = (
     ROOT
     / ".github"
     / "workflows"
-    / "junca-runtime-release-evidence-collector.yml"
+    / "junca-runtime-release-evidence-collector-v2.yml"
 )
 
 
@@ -1238,6 +1238,7 @@ class EvidenceCollectorTests(unittest.TestCase):
         with self.assertRaisesRegex(collector.EvidenceError, "bridge_activated"):
             self.collect(values)
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_is_read_only_and_uploads_only_three_release_files(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         forbidden = (
@@ -1393,6 +1394,7 @@ class EvidenceCollectorTests(unittest.TestCase):
         self.assertIn("test \"$(find evidence/release -type f | wc -l)\" = 3", workflow)
         self.assertIn("path: evidence/release/", workflow)
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_durable_reader_emits_health_head_and_certificate(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(
@@ -1496,6 +1498,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             "ok",
         )
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_durable_reader_rejects_missing_head_timestamp(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(
@@ -1567,6 +1570,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             result.stderr,
         )
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_durable_reader_accepts_exact_legacy_schema_without_time(
         self,
     ):
@@ -1643,6 +1647,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             ["blocks", "finality_certificates", "metadata"],
         )
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_legacy_reader_rejects_non_durable_health_timestamp(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(

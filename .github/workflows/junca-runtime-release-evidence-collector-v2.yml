@@ -1,4 +1,5 @@
 name: JUNCA Runtime Release Evidence Collector
+run-name: JSEC dispatch ${{ inputs.dispatch_token }}
 
 on:
   workflow_dispatch:
@@ -19,6 +20,18 @@ on:
         description: Exact 40-character source commit bound to the immutable AMI
         required: true
         type: string
+      dispatch_token:
+        description: Unique canonical-parent dispatch correlation token
+        required: true
+        type: string
+      orchestrator_run_id:
+        description: Canonical immutable-candidate parent run ID
+        required: true
+        type: string
+      orchestrator_run_attempt:
+        description: Canonical immutable-candidate parent run attempt
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -31,7 +44,9 @@ concurrency:
 
 jobs:
   collect:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref ==
+      format('refs/heads/release-candidate/{0}', inputs.source_commit)
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 25
@@ -45,28 +60,40 @@ jobs:
       MIGRATION_EVIDENCE_SHA256: ${{ inputs.migration_evidence_sha256 }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_commit }}
+
       - name: Verify immutable workflow provenance
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
         run: |
           set -euo pipefail
+          python3 scripts/junca_release_child_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --dispatch-token "$DISPATCH_TOKEN" \
+            --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT"
           [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$MIGRATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$MIGRATION_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_SHA" = "$SOURCE_COMMIT"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"
 
           ami_run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${AMI_RUN_ID}")"
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
-            --arg head "$SOURCE_COMMIT" '
+            --arg head "$SOURCE_COMMIT" \
+            --arg candidate_ref "release-candidate/$SOURCE_COMMIT" '
               .status == "completed" and
               .conclusion == "success" and
               .name == "JUNCA Validator Immutable AMI Build" and
               .path == ".github/workflows/junca-validator-ami-build.yml" and
               .event == "workflow_dispatch" and
-              .head_branch == "main" and
+              .head_branch == $candidate_ref and
               .head_sha == $head and
               .repository.full_name == $repository and
               .head_repository.full_name == $repository
@@ -86,10 +113,6 @@ jobs:
               .head_repository.full_name == $repository
             ' <<<"$migration_run_json"
           echo "MIGRATION_RUN_HEAD_SHA=$(jq -er .head_sha <<<"$migration_run_json")" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
 
       - uses: actions/download-artifact@v4
         with:

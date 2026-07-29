@@ -1,4 +1,5 @@
 name: JUNCA Runtime Release Manifest Gate
+run-name: JSEC dispatch ${{ inputs.dispatch_token }}
 
 on:
   workflow_dispatch:
@@ -19,6 +20,18 @@ on:
         description: Expected canonical genesis SHA-256
         required: true
         type: string
+      dispatch_token:
+        description: Unique canonical-parent dispatch correlation token
+        required: true
+        type: string
+      orchestrator_run_id:
+        description: Canonical immutable-candidate parent run ID
+        required: true
+        type: string
+      orchestrator_run_attempt:
+        description: Canonical immutable-candidate parent run attempt
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,28 +48,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_commit }}
 
       - name: Verify pre-rollout evidence run provenance
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
         run: |
           set -euo pipefail
+          python3 scripts/junca_release_child_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --dispatch-token "$DISPATCH_TOKEN" \
+            --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT"
           [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           evidence_run_json="$(gh api \
-            "repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}")"
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}")"
           jq -e \
-            --arg repository "${{ github.repository }}" '
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg candidate_ref "release-candidate/$SOURCE_COMMIT" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Evidence Collector" and
-            (
-              .path == ".github/workflows/junca-runtime-release-evidence-collector.yml" or
-              .path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
-            ) and
+            .path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == "main" and
+            .head_branch == $candidate_ref and
+            .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
           ' <<<"$evidence_run_json"
@@ -96,7 +119,7 @@ jobs:
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$NODE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          python scripts/junca_runtime_release_manifest_gate.py \
+          python3 scripts/junca_runtime_release_manifest_gate.py \
             --manifest downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json \
             --explorer-acceptance downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json \
             --ebs-migration downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json \

@@ -25,7 +25,13 @@ jobs:
   record:
     if: >-
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.head_branch == 'main'
+      (
+        github.event.workflow_run.head_branch == 'main' ||
+        startsWith(
+          github.event.workflow_run.head_branch,
+          'release-candidate/'
+        )
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
@@ -36,6 +42,7 @@ jobs:
       OBSERVED_EVENT: ${{ github.event.workflow_run.event }}
       OBSERVED_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
       OBSERVED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      OBSERVED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
       OBSERVED_CREATED_AT: ${{ github.event.workflow_run.created_at }}
       OBSERVED_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
     steps:
@@ -78,7 +85,7 @@ jobs:
               phase="IMMUTABLE_RELEASE_CHAIN"
               issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
-              workflow_path="junca-hardened-immutable-candidate-release.yml"
+              workflow_path="junca-hardened-immutable-candidate-release-v2.yml"
               ;;
             "JUNCA Validator Immutable AMI Build")
               phase="NEW_IMMUTABLE_AMI"
@@ -90,7 +97,7 @@ jobs:
               phase="PRE_ROLLOUT_BASELINE"
               issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
-              workflow_path="junca-runtime-release-evidence-collector.yml"
+              workflow_path="junca-runtime-release-evidence-collector-v2.yml"
               ;;
             "JUNCA Runtime Release Manifest Gate")
               phase="RELEASE_MANIFEST_GATE"
@@ -119,53 +126,22 @@ jobs:
           issues="266 ${issues}"
 
           main_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
-          if [ "$main_head" = "$OBSERVED_HEAD_SHA" ]; then
+          if [ "$main_head" = "$OBSERVED_HEAD_SHA" ] && \
+             [ "$OBSERVED_HEAD_BRANCH" = "main" ]; then
             source_binding="EXACT_CURRENT_MAIN"
+          elif [ "$OBSERVED_HEAD_BRANCH" = \
+            "release-candidate/$OBSERVED_HEAD_SHA" ]; then
+            source_binding="IMMUTABLE_CANDIDATE_REF"
           else
             source_binding="HISTORIC_EXACT_SHA"
           fi
 
           stale_run_cancellations=0
-          if [ "$OBSERVED_ACTION" = "requested" ] && \
-             [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
-             [ -n "$workflow_path" ]; then
-            runs="$(gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_path}/runs?branch=main&per_page=100")"
-            mapfile -t stale_run_ids < <(
-              jq -r \
-                --argjson current_id "$OBSERVED_RUN_ID" \
-                --arg main_head "$main_head" '
-                  .workflow_runs[] |
-                  select(.id != $current_id) |
-                  select(.head_sha != $main_head) |
-                  select(
-                    .status == "queued" or
-                    .status == "in_progress" or
-                    .status == "waiting" or
-                    .status == "requested" or
-                    .status == "pending"
-                  ) |
-                  .id
-                ' <<<"$runs" | sort -u
-            )
-            for stale_run_id in "${stale_run_ids[@]}"; do
-              [[ "$stale_run_id" =~ ^[1-9][0-9]*$ ]]
-              if gh api --method POST \
-                "repos/${GITHUB_REPOSITORY}/actions/runs/${stale_run_id}/cancel" \
-                >/dev/null 2>&1; then
-                stale_run_cancellations=$((stale_run_cancellations + 1))
-                continue
-              fi
-              stale_status="$(gh api \
-                "repos/${GITHUB_REPOSITORY}/actions/runs/${stale_run_id}" \
-                --jq .status)"
-              test "$stale_status" = "completed"
-            done
-          fi
 
           approval_state="$environment_review"
           if [ "$OBSERVED_ACTION" = "requested" ] && \
-             [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
+             { [ "$source_binding" = "EXACT_CURRENT_MAIN" ] || \
+               [ "$source_binding" = "IMMUTABLE_CANDIDATE_REF" ]; } && \
              [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
             approval_state="NO_REVIEW_DISCOVERED"
             for attempt in $(seq 1 60); do
@@ -187,14 +163,14 @@ jobs:
                 environment_id="$(jq -er '.[0].environment.id' <<<"$deployments")"
                 jq -n \
                   --argjson environment_id "$environment_id" \
-                  --arg comment "CEO-authorized exact-current-main Public Testnet release ${OBSERVED_HEAD_SHA}" '{
+                  --arg comment "CEO-authorized exact-source Public Testnet release ${OBSERVED_HEAD_SHA}" '{
                     environment_ids: [$environment_id],
                     state: "approved",
                     comment: $comment
                   }' | gh api --method POST \
                     "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
                     --input - >/dev/null
-                approval_state="APPROVED_EXACT_CURRENT_MAIN"
+                approval_state="APPROVED_EXACT_SOURCE"
                 break
               fi
               sleep 2
@@ -212,13 +188,14 @@ jobs:
           - Run: ${OBSERVED_RUN_URL}
           - Trigger event: \`${OBSERVED_EVENT}\`
           - Source SHA: \`${OBSERVED_HEAD_SHA}\`
+          - Execution ref: \`${OBSERVED_HEAD_BRANCH}\`
           - Source binding: \`${source_binding}\`
           - Stale release runs cancelled: \`${stale_run_cancellations}\`
           - Environment review: \`${approval_state}\`
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. Historical non-current release runs may be cancelled only when an allowlisted workflow is requested for the exact current-main SHA. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. In-flight immutable candidates are never cancelled merely because main advances; the canonical controller serializes them. Environment approval is permitted only for an exact current-main or exact immutable-candidate SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
 
           ## Safety boundary
 
@@ -233,7 +210,8 @@ jobs:
 
           # Historical runs remain append-only in Issue #266. Only the exact
           # current-main source may replace the single current-state Issue #269.
-          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
+          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ] || \
+             [ "$source_binding" = "IMMUTABLE_CANDIDATE_REF" ]; then
             gh api --method PATCH \
               "repos/${GITHUB_REPOSITORY}/issues/269" \
               -f body="$body" >/dev/null

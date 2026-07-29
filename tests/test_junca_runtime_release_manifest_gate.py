@@ -613,7 +613,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         self.assertIn("actions: read", workflow)
         self.assertNotIn("id-token: write", workflow)
         self.assertNotIn("contents: write", workflow)
-        self.assertIn("ref: ${{ github.sha }}", workflow)
+        self.assertIn("ref: ${{ inputs.source_commit }}", workflow)
         self.assertIn(
             "source_commit:\n"
             "        description: Exact 40-character source commit bound to the "
@@ -632,21 +632,25 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         self.assertNotIn("evidence_artifact_name:", workflow)
         self.assertIn("Verify pre-rollout evidence run provenance", workflow)
         self.assertIn(
-            '"repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}"',
+            '"repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}"',
             workflow,
         )
         for required in (
             '.status == "completed"',
             '.conclusion == "success"',
             '.name == "JUNCA Runtime Release Evidence Collector"',
-            '.path == ".github/workflows/junca-runtime-release-evidence-collector.yml"',
+            '.path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"',
             '.event == "workflow_dispatch"',
-            '.head_branch == "main"',
+            ".head_branch == $candidate_ref",
+            ".head_sha == $source_commit",
             ".repository.full_name == $repository",
             ".head_repository.full_name == $repository",
         ):
             self.assertIn(required, workflow)
-        self.assertNotIn(".head_sha == $source_commit", workflow)
+        self.assertNotIn(
+            ".github/workflows/junca-runtime-release-evidence-collector.yml",
+            workflow,
+        )
         self.assertEqual(
             workflow.count("uses: actions/download-artifact@v4"),
             1,

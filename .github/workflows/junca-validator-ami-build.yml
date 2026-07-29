@@ -1,4 +1,5 @@
 name: JUNCA Validator Immutable AMI Build
+run-name: JSEC dispatch ${{ inputs.dispatch_token }}
 
 on:
   workflow_dispatch:
@@ -32,6 +33,18 @@ on:
         required: false
         default: ""
         type: string
+      dispatch_token:
+        description: Unique canonical-parent dispatch correlation token
+        required: true
+        type: string
+      orchestrator_run_id:
+        description: Canonical immutable-candidate parent run ID
+        required: true
+        type: string
+      orchestrator_run_attempt:
+        description: Canonical immutable-candidate parent run attempt
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -64,6 +77,22 @@ jobs:
       PROVIDED_REQUEST_SHA256: ${{ inputs.request_sha256 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_commit }}
+
+      - name: Verify canonical parent and immutable execution ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_release_child_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --dispatch-token "$DISPATCH_TOKEN" \
+            --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT"
 
       - name: Canonicalize immutable request digest
         id: request
@@ -95,7 +124,7 @@ jobs:
               },
               request_sha256: ""
             }' > "$RUNNER_TEMP/junca-validator-ami-build-request.json"
-          python scripts/junca_validator_ami_build_request.py \
+          python3 scripts/junca_validator_ami_build_request.py \
             --request "$RUNNER_TEMP/junca-validator-ami-build-request.json" \
             --seal-missing-digest \
             --github-output "$GITHUB_OUTPUT"

@@ -19,24 +19,25 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         cls.manifest = MANIFEST.read_text(encoding="utf-8")
         cls.runtime = RUNTIME.read_text(encoding="utf-8")
 
-    def test_parent_is_exact_main_and_end_to_end(self) -> None:
+    def test_parent_is_exact_source_and_candidate_ready(self) -> None:
         for value in (
             "JUNCA Validator Runtime Artifacts",
             "workflow_run.conclusion == 'success'",
             "workflow_run.event == 'push'",
             "workflow_run.head_branch == 'main'",
             "head_repository.full_name == github.repository",
-            'test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"',
+            "release-candidate/$SOURCE_COMMIT",
+            "junca_dispatch_workflow_and_wait.py",
             ".github/workflows/junca-validator-ami-build.yml",
             ".github/workflows/junca-runtime-release-evidence-collector-v2.yml",
             ".github/workflows/junca-runtime-release-manifest-gate.yml",
-            ".github/workflows/junca-validator-foundation-release.yml",
-            ".github/workflows/junca-public-testnet-continuity.yml",
-            "PUBLIC_TESTNET_ROLLOUT",
-            "ACTIVE_ADVANCING",
-            "PUBLIC_TESTNET_ACTIVE_ADVANCING",
+            "PUBLIC_TESTNET_CANDIDATE_READY_FOR_SERIAL_ROLLOUT",
+            "serial_rollout_dispatched: false",
+            "continuity_dispatched: false",
         ):
             self.assertIn(value, self.parent)
+        self.assertNotIn("resume_run_id=0", self.parent)
+        self.assertNotIn("JUNCA Validator Foundation Release", self.parent)
 
     def test_parent_preserves_activation_boundaries(self) -> None:
         for value in (
@@ -76,22 +77,27 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, self.baseline)
 
-    def test_manifest_accepts_only_canonical_or_v2_collector(self) -> None:
-        self.assertIn(
-            '.path == ".github/workflows/junca-runtime-release-evidence-collector.yml" or',
-            self.manifest,
-        )
+    def test_manifest_accepts_only_exact_v2_collector(self) -> None:
         self.assertIn(
             '.path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"',
             self.manifest,
         )
         self.assertIn('.name == "JUNCA Runtime Release Evidence Collector"', self.manifest)
         self.assertIn('.conclusion == "success"', self.manifest)
+        self.assertIn(".head_sha == $source_commit", self.manifest)
+        self.assertIn(".head_branch == $candidate_ref", self.manifest)
+        self.assertNotIn(
+            ".github/workflows/junca-runtime-release-evidence-collector.yml",
+            self.manifest,
+        )
 
     def test_runtime_artifact_rebinds_v2_release_changes(self) -> None:
         for path in (
             '"scripts/junca_runtime_release_evidence_collector_drift.py"',
+            '"scripts/junca_dispatch_workflow_and_wait.py"',
+            '"scripts/junca_release_child_provenance.py"',
             '"tests/test_junca_runtime_release_ami_drift.py"',
+            '"tests/test_junca_release_orchestration.py"',
             '"tests/test_junca_hardened_release_v2.py"',
             '".github/workflows/junca-runtime-release-evidence-collector-v2.yml"',
             '".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"',
