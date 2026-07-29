@@ -107,6 +107,20 @@ def evidence():
         "finalized_only": True,
         "read_only": True,
         "unsafe_rpc_rejection": True,
+        "readback": {
+            "mode": "public_endpoints",
+            "observed_at": "2026-07-27T00:00:00Z",
+            "finalized_head": {
+                "height": 1,
+                "hash": "0x" + "4" * 64,
+            },
+            "checks": {
+                "health": "PASS",
+                "explorer": {"result": "PASS"},
+                "safe_rpc": {"result": "PASS"},
+                "unsafe_rpc_rejection": {"result": "PASS"},
+            },
+        },
         "release_boundary": dict(BOUNDARY),
     }
     volumes = [
@@ -129,6 +143,31 @@ def evidence():
         "state": "BASELINE_VERIFIED",
         "request_sha256": REQUEST,
         "migration_evidence_sha256": MIGRATION_DIGEST,
+        "migration_execution_binding": {
+            "repository":
+                "JAIOS-Governance/junca-social-ecosystem-chain",
+            "run_id": "1",
+            "head_sha": "4" * 40,
+            "migration_request_sha256": "5" * 64,
+        },
+        "migration_validator_mappings": [
+            {
+                "validator_id": f"validator-0{index}",
+                "instance_id": f"i-{index:017x}",
+                "signer_arn": signers[index - 1]["resource_arn"],
+                "state_volume_id": volumes[index - 1]["volume_id"],
+                "rollback_snapshot_id":
+                    volumes[index - 1]["rollback_snapshot_id"],
+                "root_volume_id": f"vol-{index + 3:017x}",
+            }
+            for index in range(1, 4)
+        ],
+        "migration_finalized_head": {
+            "height": 1,
+            "hash": "0x" + "4" * 64,
+            "certificate_hash": "0x" + "5" * 64,
+        },
+        "immutable_runtime_certificate_activation_pending": True,
         "observed_runtime": manifest["previous_runtime"],
         "migration_complete": True,
         "data_loss": False,
@@ -201,6 +240,67 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         decision = evaluate(*evidence())
         self.assertTrue(decision["accepted"])
         self.assertEqual(decision["decision"], "PROMOTION_GATE_PASS")
+
+    def test_unknown_security_semantics_fail_closed(self):
+        mutations = (
+            (
+                "manifest",
+                lambda manifest, explorer, ebs:
+                    manifest.__setitem__("transaction_submission_enabled", True),
+                "manifest.keys:not_exact",
+            ),
+            (
+                "explorer",
+                lambda manifest, explorer, ebs:
+                    explorer.__setitem__("unknown_policy", {"unsafe": True}),
+                "explorer.keys:not_exact",
+            ),
+            (
+                "ebs",
+                lambda manifest, explorer, ebs:
+                    ebs.__setitem__("mainnet_changed", True),
+                "ebs.keys:not_exact",
+            ),
+            (
+                "release_boundary",
+                lambda manifest, explorer, ebs:
+                    manifest["release_boundary"].__setitem__(
+                        "transaction_submission_enabled", True
+                    ),
+                "manifest.release_boundary.keys:not_exact",
+            ),
+            (
+                "ami_provenance",
+                lambda manifest, explorer, ebs:
+                    manifest["ami_provenance"].__setitem__(
+                        "UnknownPolicy", "allow"
+                    ),
+                "manifest.ami_provenance.keys:not_exact",
+            ),
+            (
+                "signer",
+                lambda manifest, explorer, ebs:
+                    manifest["signer_bindings"][0].__setitem__(
+                        "fallback_signer", True
+                    ),
+                "manifest.signer_binding.keys:not_exact",
+            ),
+            (
+                "volume",
+                lambda manifest, explorer, ebs:
+                    ebs["validator_volumes"][0].__setitem__(
+                        "replacement_allowed", True
+                    ),
+                "ebs.validator_volume.keys:not_exact",
+            ),
+        )
+        for label, mutate, expected in mutations:
+            manifest, explorer, ebs = evidence()
+            mutate(manifest, explorer, ebs)
+            with self.subTest(label=label):
+                decision = evaluate(manifest, explorer, ebs)
+                self.assertFalse(decision["accepted"])
+                self.assertIn(expected, decision["failures"])
 
     def test_old_runtime_cannot_be_promoted_as_new_candidate(self):
         manifest, explorer, ebs = evidence()
@@ -675,7 +775,12 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         self.assertNotIn("artifact-ids:", workflow)
         self.assertNotIn("merge-multiple:", workflow)
         self.assertIn(
-            'test "$(find downloaded-release-evidence -type f | wc -l)" = 3',
+            "find downloaded-release-evidence \\\n"
+            "              -mindepth 1 -maxdepth 1",
+            workflow,
+        )
+        self.assertIn(
+            "sha256sum junca-runtime-release-manifest-decision.json",
             workflow,
         )
         for evidence_file in (
@@ -685,6 +790,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         ):
             isolated_path = f"downloaded-release-evidence/{evidence_file}"
             self.assertIn(f"test -f {isolated_path}", workflow)
+            self.assertIn(f"test ! -L {isolated_path}", workflow)
             self.assertNotIn(f" evidence/{evidence_file}", workflow)
             self.assertIn(isolated_path, workflow)
 

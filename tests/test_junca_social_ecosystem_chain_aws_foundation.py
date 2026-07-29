@@ -461,6 +461,10 @@ class AwsFoundationTests(unittest.TestCase):
             self.validator_foundation_release,
         )
         self.assertIn(
+            "startsWith(github.ref, 'refs/heads/release-candidate/')",
+            self.validator_foundation_release,
+        )
+        self.assertNotIn(
             "github.ref == 'refs/heads/main'",
             self.validator_foundation_release,
         )
@@ -491,8 +495,20 @@ class AwsFoundationTests(unittest.TestCase):
             ".candidate.genesis_sha256 == $genesis_sha256",
             ".candidate.ami_id == $ami_id",
             '.decision == "PROMOTION_GATE_PASS"',
+            "sha256sum --strict --check SHA256SUMS",
+            "find artifacts/ami -mindepth 1 -maxdepth 1",
+            'test ! -L "$evidence"',
+            'test ! -L "$checksum"',
+            "(keys | sort) == ([",
+            ".source_commit == $candidate_head",
         ):
             self.assertIn(required, self.validator_foundation_release)
+        self.assertEqual(
+            self.validator_foundation_release.count(
+                "sha256sum --strict --check SHA256SUMS"
+            ),
+            2,
+        )
         provenance_index = self.validator_foundation_release.index(
             "Verify immutable AMI and manifest workflow provenance"
         )
@@ -1577,7 +1593,7 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.public_testnet_release)
 
-    def test_public_release_auto_source_is_only_successful_main_foundation(self) -> None:
+    def test_public_release_auto_source_is_only_successful_candidate_foundation(self) -> None:
         trigger = self.public_testnet_release.split(
             "permissions:", 1
         )[0]
@@ -1590,7 +1606,8 @@ class AwsFoundationTests(unittest.TestCase):
             "github.event.workflow_run.conclusion == 'success'",
             "github.event.workflow_run.name == "
             "'JUNCA Validator Foundation Release'",
-            "github.event.workflow_run.head_branch == 'main'",
+            "github.event.workflow_run.head_branch == format(",
+            "'release-candidate/{0}'",
             "github.event.workflow_run.head_repository.full_name == "
             "github.repository",
         ):
@@ -1611,7 +1628,7 @@ class AwsFoundationTests(unittest.TestCase):
             '.name == "JUNCA Validator Foundation Release"',
             '.path == ".github/workflows/junca-validator-foundation-release.yml"',
             '.event == "workflow_dispatch"',
-            '.head_branch == "main"',
+            '.head_branch == ("release-candidate/" + .head_sha)',
             ".repository.full_name == $repository",
             ".head_repository.full_name == $repository",
             "ref: ${{ steps.foundation.outputs.head_sha }}",

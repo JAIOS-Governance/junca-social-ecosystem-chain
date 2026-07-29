@@ -104,10 +104,16 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           test ! -L downloaded-release-evidence
-          test "$(find downloaded-release-evidence -type f | wc -l)" = 3
+          test "$(
+            find downloaded-release-evidence \
+              -mindepth 1 -maxdepth 1 | wc -l
+          )" = 3
           test -f downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json
           test -f downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json
           test -f downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json
 
       - name: Fail-closed release manifest decision
         env:
@@ -135,6 +141,11 @@ jobs:
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
           ' artifacts/junca-runtime-release-manifest-decision.json
+          (
+            cd artifacts
+            sha256sum junca-runtime-release-manifest-decision.json \
+              > SHA256SUMS
+          )
 
       - uses: actions/upload-artifact@v4
         if: always()

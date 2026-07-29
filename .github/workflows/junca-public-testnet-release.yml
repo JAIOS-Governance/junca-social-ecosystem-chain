@@ -25,12 +25,23 @@ jobs:
     if: >-
       (
         github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/main'
+        startsWith(github.ref, 'refs/heads/release-candidate/') &&
+        github.ref == format(
+          'refs/heads/release-candidate/{0}',
+          github.sha
+        )
       ) ||
       (
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.name == 'JUNCA Validator Foundation Release' &&
-        github.event.workflow_run.head_branch == 'main' &&
+        startsWith(
+          github.event.workflow_run.head_branch,
+          'release-candidate/'
+        ) &&
+        github.event.workflow_run.head_branch == format(
+          'release-candidate/{0}',
+          github.event.workflow_run.head_sha
+        ) &&
         github.event.workflow_run.head_repository.full_name == github.repository
       )
     runs-on: ubuntu-24.04
@@ -80,7 +91,7 @@ jobs:
               .name == "JUNCA Validator Foundation Release" and
               .path == ".github/workflows/junca-validator-foundation-release.yml" and
               .event == "workflow_dispatch" and
-              .head_branch == "main" and
+              .head_branch == ("release-candidate/" + .head_sha) and
               .repository.full_name == $repository and
               .head_repository.full_name == $repository and
               (.head_sha | test("^[0-9a-f]{40}$"))

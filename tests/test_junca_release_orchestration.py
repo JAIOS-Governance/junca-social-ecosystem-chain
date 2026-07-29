@@ -27,6 +27,8 @@ AMI = WORKFLOWS / "junca-validator-ami-build.yml"
 EVIDENCE = WORKFLOWS / "junca-runtime-release-evidence-collector-v2.yml"
 MANIFEST = WORKFLOWS / "junca-runtime-release-manifest-gate.yml"
 OBSERVER = WORKFLOWS / "junca-public-testnet-release-observer.yml"
+FOUNDATION = WORKFLOWS / "junca-validator-foundation-release.yml"
+PUBLIC_RELEASE = WORKFLOWS / "junca-public-testnet-release.yml"
 SHA = "a" * 40
 REF = f"release-candidate/{SHA}"
 
@@ -165,6 +167,35 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             "In-flight immutable candidates are never cancelled merely "
             "because main advances",
             text,
+        )
+
+    def test_serial_rollout_consumes_only_immutable_candidate_runs(self) -> None:
+        foundation = FOUNDATION.read_text(encoding="utf-8")
+        public_release = PUBLIC_RELEASE.read_text(encoding="utf-8")
+        for text in (foundation, public_release):
+            self.assertIn("refs/heads/release-candidate/", text)
+            self.assertIn(
+                '"release-candidate/" + .head_sha',
+                text,
+            )
+        self.assertEqual(
+            foundation.count(
+                '.head_branch == ("release-candidate/" + $head)'
+            ),
+            2,
+        )
+        self.assertIn(
+            'test "$GITHUB_REF" = '
+            '"refs/heads/release-candidate/$GITHUB_SHA"',
+            foundation,
+        )
+        self.assertEqual(
+            foundation.count("sha256sum --strict --check SHA256SUMS"),
+            2,
+        )
+        self.assertNotIn(
+            "github.ref == 'refs/heads/main'",
+            foundation,
         )
 
     def test_dispatch_inputs_reject_ambiguity_and_newlines(self) -> None:

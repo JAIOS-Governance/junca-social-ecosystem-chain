@@ -45,7 +45,11 @@ concurrency:
 jobs:
   deploy-and-accept:
     if: >-
-      github.ref == 'refs/heads/main' &&
+      startsWith(github.ref, 'refs/heads/release-candidate/') &&
+      github.ref == format(
+        'refs/heads/release-candidate/{0}',
+        github.sha
+      ) &&
       inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'
     runs-on: ubuntu-24.04
     environment: public-testnet
@@ -72,6 +76,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/release-candidate/$GITHUB_SHA"
+          test "$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/release-candidate/${GITHUB_SHA}" \
+              --jq .object.sha
+          )" = "$GITHUB_SHA"
           candidate_head="$GITHUB_SHA"
           if [[ "$ROLLING_RESUME_RUN_ID" != "0" ]]; then
             [[ "$ROLLING_RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
@@ -87,8 +98,8 @@ jobs:
                 .name == "JUNCA Validator Foundation Release" and
                 .path == ".github/workflows/junca-validator-foundation-release.yml" and
                 .event == "workflow_dispatch" and
-                .head_branch == "main" and
                 (.head_sha | test("^[0-9a-f]{40}$")) and
+                .head_branch == ("release-candidate/" + .head_sha) and
                 .repository.full_name == $repository and
                 .head_repository.full_name == $repository
               ' <<<"$resume_run"
@@ -168,7 +179,7 @@ jobs:
             .name == "JUNCA Validator Immutable AMI Build" and
             .path == ".github/workflows/junca-validator-ami-build.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == "main" and
+            .head_branch == ("release-candidate/" + $head) and
             .head_sha == $head and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -181,7 +192,7 @@ jobs:
             .name == "JUNCA Runtime Release Manifest Gate" and
             .path == ".github/workflows/junca-runtime-release-manifest-gate.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == "main" and
+            .head_branch == ("release-candidate/" + $head) and
             .head_sha == $head and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -205,34 +216,129 @@ jobs:
         run: |
           set -euo pipefail
           evidence=artifacts/ami/junca-validator-ami-build.json
-          jq -e '
+          checksum=artifacts/ami/SHA256SUMS
+          test ! -L artifacts/ami
+          test -f "$evidence"
+          test ! -L "$evidence"
+          test -f "$checksum"
+          test ! -L "$checksum"
+          test "$(
+            find artifacts/ami -mindepth 1 -maxdepth 1 | wc -l
+          )" = 2
+          (
+            cd artifacts/ami
+            test "$(wc -l < SHA256SUMS)" = 1
+            grep -Eq \
+              '^[0-9a-f]{64}  junca-validator-ami-build\.json$' \
+              SHA256SUMS
+            sha256sum --strict --check SHA256SUMS
+          )
+          jq -e --arg candidate_head "$ROLLING_CANDIDATE_HEAD_SHA" '
+            (keys | sort) == ([
+              "ami_id",
+              "assets_moved",
+              "bridge_activated",
+              "genesis_sha256",
+              "governance",
+              "image_builder_arn",
+              "mainnet_changed",
+              "network",
+              "node_artifact_sha256",
+              "notice",
+              "request_sha256",
+              "reused_existing_ami",
+              "schema_version",
+              "source_commit",
+              "source_run_id",
+              "state",
+              "terraform_state_changed"
+            ] | sort) and
+            .schema_version == "junca-validator-ami-build/v1" and
             .state == "AMI_VERIFIED" and
             .network == "Public Testnet" and
             .notice == "Public Testnet / No Monetary Value" and
+            .governance == "JAIOS Institutional Governance" and
+            .source_commit == $candidate_head and
+            (.source_run_id | type) == "string" and
+            (.source_run_id | test("^[1-9][0-9]*$")) and
+            (.ami_id | type) == "string" and
+            (.ami_id | test("^ami-[0-9a-f]{8,17}$")) and
+            (.node_artifact_sha256 | type) == "string" and
+            (.node_artifact_sha256 | test("^[0-9a-f]{64}$")) and
+            (.genesis_sha256 | type) == "string" and
+            (.genesis_sha256 | test("^[0-9a-f]{64}$")) and
+            (.request_sha256 | type) == "string" and
+            (.request_sha256 | test("^[0-9a-f]{64}$")) and
+            (.reused_existing_ami | type) == "boolean" and
             .terraform_state_changed == false and
             .mainnet_changed == false and
             .assets_moved == false and
             .bridge_activated == false
           ' "$evidence"
-          {
-            echo "NODE_AMI_ID=$(jq -er .ami_id "$evidence")"
-            echo "NODE_ARTIFACT_SHA256=$(jq -er .node_artifact_sha256 "$evidence")"
-            echo "GENESIS_SHA256=$(jq -er .genesis_sha256 "$evidence")"
-            echo "SOURCE_COMMIT=$(jq -er .source_commit "$evidence")"
-            echo "REQUEST_SHA256=$(jq -er .request_sha256 "$evidence")"
-          } >> "$GITHUB_ENV"
+          node_ami_id="$(jq -er '.ami_id' "$evidence")"
+          node_artifact_sha256="$(
+            jq -er '.node_artifact_sha256' "$evidence"
+          )"
+          genesis_sha256="$(jq -er '.genesis_sha256' "$evidence")"
+          source_commit="$(jq -er '.source_commit' "$evidence")"
+          request_sha256="$(jq -er '.request_sha256' "$evidence")"
 
           decision=artifacts/manifest/junca-runtime-release-manifest-decision.json
-          test "$(find artifacts/manifest -type f | wc -l)" = 1
+          decision_checksum=artifacts/manifest/SHA256SUMS
+          test ! -L artifacts/manifest
+          test -f "$decision"
+          test ! -L "$decision"
+          test -f "$decision_checksum"
+          test ! -L "$decision_checksum"
+          test "$(
+            find artifacts/manifest -mindepth 1 -maxdepth 1 | wc -l
+          )" = 2
+          (
+            cd artifacts/manifest
+            test "$(wc -l < SHA256SUMS)" = 1
+            grep -Eq \
+              '^[0-9a-f]{64}  junca-runtime-release-manifest-decision\.json$' \
+              SHA256SUMS
+            sha256sum --strict --check SHA256SUMS
+          )
           jq -e \
-            --arg source_commit "$(jq -er .source_commit "$evidence")" \
-            --arg node_sha256 "$(jq -er .node_artifact_sha256 "$evidence")" \
-            --arg genesis_sha256 "$(jq -er .genesis_sha256 "$evidence")" \
-            --arg ami_id "$(jq -er .ami_id "$evidence")" \
-            --arg request_sha256 "$(jq -er .request_sha256 "$evidence")" '
+            --arg source_commit "$source_commit" \
+            --arg node_sha256 "$node_artifact_sha256" \
+            --arg genesis_sha256 "$genesis_sha256" \
+            --arg ami_id "$node_ami_id" \
+            --arg request_sha256 "$request_sha256" '
+            (keys | sort) == ([
+              "accepted",
+              "baseline_mode",
+              "candidate",
+              "decision",
+              "failure_count",
+              "failures",
+              "phase",
+              "public_endpoint_acceptance",
+              "public_endpoint_outage_status",
+              "public_services_enabled",
+              "release_boundary",
+              "schema_version"
+            ] | sort) and
+            (.candidate | keys | sort) == ([
+              "ami_id",
+              "genesis_sha256",
+              "migration_evidence_sha256",
+              "node_artifact_sha256",
+              "request_sha256",
+              "source_commit"
+            ] | sort) and
+            (.release_boundary | keys | sort) == ([
+              "assets_moved",
+              "bridge_activated",
+              "mainnet_changed"
+            ] | sort) and
             .schema_version == "junca-runtime-release-manifest-decision/v1" and
             .accepted == true and
             .decision == "PROMOTION_GATE_PASS" and
+            .failure_count == 0 and
+            .failures == [] and
             .candidate.source_commit == $source_commit and
             .candidate.node_artifact_sha256 == $node_sha256 and
             .candidate.genesis_sha256 == $genesis_sha256 and
@@ -242,8 +348,18 @@ jobs:
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
           ' "$decision"
-          echo "MANIFEST_DECISION_SHA256=$(sha256sum "$decision" | cut -d' ' -f1)" \
-            >> "$GITHUB_ENV"
+          manifest_decision_sha256="$(
+            sha256sum "$decision" | cut -d' ' -f1
+          )"
+          [[ "$manifest_decision_sha256" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "NODE_AMI_ID=$node_ami_id"
+            echo "NODE_ARTIFACT_SHA256=$node_artifact_sha256"
+            echo "GENESIS_SHA256=$genesis_sha256"
+            echo "SOURCE_COMMIT=$source_commit"
+            echo "REQUEST_SHA256=$request_sha256"
+            echo "MANIFEST_DECISION_SHA256=$manifest_decision_sha256"
+          } >> "$GITHUB_ENV"
 
       - name: Resolve exact resumable rolling evidence
         if: inputs.resume_run_id != '0'

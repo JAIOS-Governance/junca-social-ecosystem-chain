@@ -17,6 +17,101 @@ ACCOUNT_ID = "595710543956"
 REGION = "us-east-1"
 VALIDATOR_IDS = ("validator-01", "validator-02", "validator-03")
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
+CANDIDATE_FIELDS = {
+    "source_commit",
+    "node_artifact_sha256",
+    "genesis_sha256",
+    "ami_id",
+}
+MANIFEST_FIELDS = CANDIDATE_FIELDS | {
+    "schema_version",
+    "state",
+    "network",
+    "notice",
+    "request_sha256",
+    "migration_evidence_sha256",
+    "baseline_mode",
+    "public_services_enabled",
+    "public_endpoint_acceptance",
+    "public_endpoint_outage",
+    "ami_provenance",
+    "signer_bindings",
+    "previous_runtime",
+    "explorer_baseline_sha256",
+    "ebs_baseline_sha256",
+    "release_boundary",
+}
+EXPLORER_FIELDS = CANDIDATE_FIELDS | {
+    "schema_version",
+    "baseline_mode",
+    "candidate_accepted",
+    "status",
+    "request_sha256",
+    "public_services_enabled",
+    "public_endpoint_acceptance",
+    "public_endpoint_outage",
+    "observed_runtime",
+    "finalized_only",
+    "read_only",
+    "unsafe_rpc_rejection",
+    "readback",
+    "release_boundary",
+}
+EBS_FIELDS = CANDIDATE_FIELDS | {
+    "schema_version",
+    "candidate_accepted",
+    "state",
+    "request_sha256",
+    "migration_evidence_sha256",
+    "migration_execution_binding",
+    "migration_validator_mappings",
+    "migration_finalized_head",
+    "immutable_runtime_certificate_activation_pending",
+    "observed_runtime",
+    "migration_complete",
+    "data_loss",
+    "validator_volumes",
+    "release_boundary",
+}
+AMI_PROVENANCE_FIELDS = {
+    "State",
+    "OwnerId",
+    "Region",
+    "SourceCommit",
+    "NodeArtifactSHA256",
+    "GenesisSHA256",
+    "RequestDigest",
+    "MainnetChanged",
+    "AssetsMoved",
+    "BridgeActivated",
+}
+SIGNER_FIELDS = {"validator_id", "resource_arn"}
+VOLUME_FIELDS = {
+    "validator_id",
+    "volume_id",
+    "rollback_snapshot_id",
+    "encrypted",
+    "volume_type",
+    "mount_path",
+    "filesystem_verified",
+    "state_store_integrity",
+    "finality_certificate_recovered",
+}
+MIGRATION_EXECUTION_FIELDS = {
+    "repository",
+    "run_id",
+    "head_sha",
+    "migration_request_sha256",
+}
+MIGRATION_MAPPING_FIELDS = {
+    "validator_id",
+    "instance_id",
+    "signer_arn",
+    "state_volume_id",
+    "rollback_snapshot_id",
+    "root_volume_id",
+}
+MIGRATION_HEAD_FIELDS = {"height", "hash", "certificate_hash"}
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 AMI = re.compile(r"ami-[0-9a-f]{8,17}")
@@ -40,11 +135,27 @@ def file_sha256(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _exact_keys(
+    source: Mapping[str, Any],
+    expected: set[str],
+    label: str,
+    failures: list[str],
+) -> None:
+    if set(source) != expected:
+        failures.append(f"{label}.keys:not_exact")
+
+
 def _boundary(source: Mapping[str, Any], name: str, failures: list[str]) -> None:
     boundary = source.get("release_boundary")
     if not isinstance(boundary, Mapping):
         failures.append(f"{name}.release_boundary:missing")
         return
+    _exact_keys(
+        boundary,
+        set(BOUNDARY_FIELDS),
+        f"{name}.release_boundary",
+        failures,
+    )
     for field in BOUNDARY_FIELDS:
         if boundary.get(field) is not False:
             failures.append(f"{name}.release_boundary.{field}:not_false")
@@ -122,15 +233,15 @@ def _private_ssm_baseline(
     finalized = readback.get("finalized_head")
     if not isinstance(finalized, Mapping):
         failures.append("private_ssm.finalized_head:missing")
-    elif (
-        not isinstance(finalized.get("height"), int)
-        or isinstance(finalized.get("height"), bool)
-        or finalized.get("height", 0) < 1
-        or HASH.fullmatch(str(finalized.get("hash"))) is None
-        or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
-    ):
-        failures.append("private_ssm.finalized_head:invalid")
     else:
+        if (
+            not isinstance(finalized.get("height"), int)
+            or isinstance(finalized.get("height"), bool)
+            or finalized.get("height", 0) < 1
+            or HASH.fullmatch(str(finalized.get("hash"))) is None
+            or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
+        ):
+            failures.append("private_ssm.finalized_head:invalid")
         timestamp_state = finalized.get("timestamp_state")
         timestamp = finalized.get("timestamp")
         expected_tables: list[str] | None
@@ -188,6 +299,22 @@ def _private_ssm_baseline(
 def _public_endpoint_outage(
     outage: Mapping[str, Any], failures: list[str]
 ) -> None:
+    _exact_keys(
+        outage,
+        {
+            "schema_version",
+            "status",
+            "public_services_enabled",
+            "public_endpoint_acceptance",
+            "observed_at",
+            "endpoint_test_exit_code",
+            "endpoint_test",
+            "observations",
+            *BOUNDARY_FIELDS,
+        },
+        "public_outage",
+        failures,
+    )
     if (
         outage.get("schema_version")
         != "junca-public-endpoint-outage/v1"
@@ -210,6 +337,13 @@ def _public_endpoint_outage(
         or not endpoint_test.get("error")
     ):
         failures.append("public_outage.endpoint_test:invalid")
+    if isinstance(endpoint_test, Mapping):
+        _exact_keys(
+            endpoint_test,
+            {"status", "error"},
+            "public_outage.endpoint_test",
+            failures,
+        )
     observations = outage.get("observations")
     expected = (
         (
@@ -235,6 +369,21 @@ def _public_endpoint_outage(
         for item, (name, method, url) in zip(
             observations, expected, strict=True
         ):
+            _exact_keys(
+                item,
+                {
+                    "name",
+                    "method",
+                    "url",
+                    "curl_exit_code",
+                    "http_status",
+                    "body_sha256",
+                    "body_base64",
+                    "stderr",
+                },
+                f"public_outage.{name}",
+                failures,
+            )
             curl_exit = item.get("curl_exit_code")
             http_status = item.get("http_status")
             body_sha256 = item.get("body_sha256")
@@ -287,6 +436,9 @@ def evaluate(
     expected_genesis_sha256: str,
 ) -> dict[str, Any]:
     failures: list[str] = []
+    _exact_keys(manifest, MANIFEST_FIELDS, "manifest", failures)
+    _exact_keys(explorer, EXPLORER_FIELDS, "explorer", failures)
+    _exact_keys(ebs, EBS_FIELDS, "ebs", failures)
     expected = (
         expected_source_commit,
         expected_artifact_sha256,
@@ -338,6 +490,12 @@ def evaluate(
     if not isinstance(provenance, Mapping):
         failures.append("manifest.ami_provenance:missing")
     else:
+        _exact_keys(
+            provenance,
+            AMI_PROVENANCE_FIELDS,
+            "manifest.ami_provenance",
+            failures,
+        )
         required_tags = {
             "State": "available",
             "OwnerId": ACCOUNT_ID,
@@ -359,6 +517,14 @@ def evaluate(
     if not isinstance(signers, list):
         failures.append("manifest.signer_bindings:missing")
     else:
+        for item in signers:
+            if isinstance(item, Mapping):
+                _exact_keys(
+                    item,
+                    SIGNER_FIELDS,
+                    "manifest.signer_binding",
+                    failures,
+                )
         identities = tuple(
             sorted(
                 item.get("validator_id", "")
@@ -386,6 +552,12 @@ def evaluate(
     if not isinstance(previous, Mapping):
         failures.append("manifest.previous_runtime:missing")
     else:
+        _exact_keys(
+            previous,
+            CANDIDATE_FIELDS,
+            "manifest.previous_runtime",
+            failures,
+        )
         previous_binding = _candidate_binding(previous)
         if previous_binding == expected:
             failures.append("manifest.previous_runtime:equals_candidate")
@@ -435,6 +607,24 @@ def evaluate(
             failures.append("public_endpoints.acceptance_binding:invalid")
         if explorer.get("unsafe_rpc_rejection") is not True:
             failures.append("explorer.unsafe_rpc_rejection:not_true")
+        readback = explorer.get("readback")
+        if not isinstance(readback, Mapping):
+            failures.append("public_endpoints.readback:missing")
+        else:
+            _exact_keys(
+                readback,
+                {"mode", "observed_at", "finalized_head", "checks"},
+                "public_endpoints.readback",
+                failures,
+            )
+            if (
+                readback.get("mode") != "public_endpoints"
+                or not isinstance(readback.get("observed_at"), str)
+                or not readback.get("observed_at")
+                or not isinstance(readback.get("finalized_head"), Mapping)
+                or not isinstance(readback.get("checks"), Mapping)
+            ):
+                failures.append("public_endpoints.readback:invalid")
     elif baseline_mode == "private_ssm":
         if public_endpoint_acceptance is not False:
             failures.append("private_ssm.public_endpoint_acceptance:not_false")
@@ -463,6 +653,13 @@ def evaluate(
         or _candidate_binding(observed_explorer) == expected
     ):
         failures.append("explorer.observed_runtime:not_distinct_baseline")
+    elif isinstance(observed_explorer, Mapping):
+        _exact_keys(
+            observed_explorer,
+            CANDIDATE_FIELDS,
+            "explorer.observed_runtime",
+            failures,
+        )
 
     if (
         ebs.get("schema_version")
@@ -487,6 +684,55 @@ def evaluate(
         or _candidate_binding(observed_ebs) == expected
     ):
         failures.append("ebs.observed_runtime:not_distinct_baseline")
+    elif isinstance(observed_ebs, Mapping):
+        _exact_keys(
+            observed_ebs,
+            CANDIDATE_FIELDS,
+            "ebs.observed_runtime",
+            failures,
+        )
+    migration_execution = ebs.get("migration_execution_binding")
+    if not isinstance(migration_execution, Mapping):
+        failures.append("ebs.migration_execution_binding:missing")
+    else:
+        _exact_keys(
+            migration_execution,
+            MIGRATION_EXECUTION_FIELDS,
+            "ebs.migration_execution_binding",
+            failures,
+        )
+    migration_mappings = ebs.get("migration_validator_mappings")
+    if (
+        not isinstance(migration_mappings, list)
+        or len(migration_mappings) != 3
+        or any(not isinstance(item, Mapping) for item in migration_mappings)
+    ):
+        failures.append("ebs.migration_validator_mappings:not_exact_three")
+    else:
+        for item in migration_mappings:
+            _exact_keys(
+                item,
+                MIGRATION_MAPPING_FIELDS,
+                "ebs.migration_validator_mapping",
+                failures,
+            )
+    migration_head = ebs.get("migration_finalized_head")
+    if not isinstance(migration_head, Mapping):
+        failures.append("ebs.migration_finalized_head:missing")
+    else:
+        _exact_keys(
+            migration_head,
+            MIGRATION_HEAD_FIELDS,
+            "ebs.migration_finalized_head",
+            failures,
+        )
+    if not isinstance(
+        ebs.get("immutable_runtime_certificate_activation_pending"),
+        bool,
+    ):
+        failures.append(
+            "ebs.immutable_runtime_certificate_activation_pending:not_bool"
+        )
     volumes = ebs.get("validator_volumes")
     if not isinstance(volumes, list):
         failures.append("ebs.validator_volumes:missing")
@@ -497,6 +743,12 @@ def evaluate(
         for item in volumes:
             if not isinstance(item, Mapping):
                 continue
+            _exact_keys(
+                item,
+                VOLUME_FIELDS,
+                "ebs.validator_volume",
+                failures,
+            )
             identities.append(item.get("validator_id"))
             volume_ids.append(item.get("volume_id"))
             snapshots.append(item.get("rollback_snapshot_id"))
