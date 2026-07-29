@@ -553,6 +553,16 @@ class AwsFoundationTests(unittest.TestCase):
                 or required in self.foundation_script
             )
 
+    def test_foundation_renewal_env_expansions_are_single_line_bash(self) -> None:
+        for required in (
+            'validator_bootstrap_slot_epochs_json="${VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON:-}"',
+            'rolling_resume_prior_slot_epoch_seconds="${ROLLING_RESUME_PRIOR_SLOT_EPOCH_SECONDS:-0}"',
+            'rolling_epoch_renewal_performed="${ROLLING_EPOCH_RENEWAL_PERFORMED:-false}"',
+            'rolling_epoch_renewal_prefix_count="${ROLLING_EPOCH_RENEWAL_PREFIX_COUNT:-0}"',
+        ):
+            self.assertIn(required, self.foundation_script)
+        self.assertNotIn('"${\n', self.foundation_script)
+
     def test_durable_state_mount_is_exact_existing_and_fail_closed(self) -> None:
         for required in (
             "user_data_replace_on_change = true",
