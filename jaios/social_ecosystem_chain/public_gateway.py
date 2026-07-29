@@ -20,6 +20,7 @@ from .explorer_page import EXPLORER_DOCUMENT
 
 NOTICE = "Public Testnet / No Monetary Value"
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_METHODS = frozenset(
     {
         "eth_blockNumber",
@@ -129,6 +130,8 @@ class PublicGateway:
         *,
         transport: Transport | None = None,
         runtime_artifact_commit: str | None = None,
+        genesis_sha256: str | None = None,
+        node_artifact_sha256: str | None = None,
     ) -> None:
         self.upstream = validate_upstream(upstream)
         if runtime_artifact_commit is not None and not COMMIT_SHA.fullmatch(
@@ -138,6 +141,16 @@ class PublicGateway:
                 "runtime artifact commit must be a lowercase 40-character SHA"
             )
         self.runtime_artifact_commit = runtime_artifact_commit
+        for label, digest in (
+            ("genesis SHA-256", genesis_sha256),
+            ("node artifact SHA-256", node_artifact_sha256),
+        ):
+            if digest is not None and not DIGEST_SHA256.fullmatch(digest):
+                raise PublicGatewayError(
+                    f"{label} must be a lowercase 64-character digest"
+                )
+        self.genesis_sha256 = genesis_sha256
+        self.node_artifact_sha256 = node_artifact_sha256
         self._transport = transport or (
             lambda _upstream, payload: http_transport(self.upstream, payload)
         )
@@ -218,6 +231,8 @@ class PublicGateway:
             "notice": NOTICE,
             "runtime_artifact": {
                 "source_commit": self.runtime_artifact_commit,
+                "genesis_sha256": self.genesis_sha256,
+                "node_artifact_sha256": self.node_artifact_sha256,
                 "evidence_source": "approved immutable validator runtime",
             },
             "finalized_only": True,
@@ -440,6 +455,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     gateway = PublicGateway(
         args.upstream,
         runtime_artifact_commit=os.environ.get("JUNCA_RUNTIME_ARTIFACT_COMMIT"),
+        genesis_sha256=os.environ.get("JUNCA_GENESIS_SHA256"),
+        node_artifact_sha256=os.environ.get("JUNCA_NODE_ARTIFACT_SHA256"),
     )
     server = ThreadingHTTPServer(
         (args.http_addr, args.http_port), make_handler(gateway)
