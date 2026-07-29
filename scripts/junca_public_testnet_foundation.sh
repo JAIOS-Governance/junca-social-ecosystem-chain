@@ -410,8 +410,10 @@ build_pre_rollout_finality_bindings() {
     all(.[]; type == "string" and test("^i-[0-9a-f]{8,17}$"))
   ' <<<"$instances_json" >/dev/null
   jq -e \
+    --argjson updated_count "$updated_count" \
     --argjson instances "$instances_json" \
     --arg target_artifact_sha256 "$target_artifact_sha256" '
+      . as $baseline |
       type == "array" and length == 3 and
       [.[].validator_id] ==
         ["validator-01", "validator-02", "validator-03"] and
@@ -425,9 +427,10 @@ build_pre_rollout_finality_bindings() {
         (.target_runtime | type == "boolean")
       ) and
       all(
-        range(0; 3) as $index;
+        range(0; 3);
+        . as $index |
         if $index < $updated_count then
-          .[$index].runtime_version == $target_artifact_sha256
+          $baseline[$index].runtime_version == $target_artifact_sha256
         else
           true
         end

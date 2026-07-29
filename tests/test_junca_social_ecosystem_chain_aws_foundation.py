@@ -585,7 +585,8 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_foundation_rollout_requires_per_validator_compatibility_gate(self) -> None:
         for required in (
-            "python -m jaios.social_ecosystem_chain.rolling_compatibility",
+            "python scripts/junca_live_rollout_prefix_gate.py",
+            "--mode rolling",
             "write_rolling_compatibility_evidence",
             "READY_FOR_NEXT_VALIDATOR",
             "READY_FOR_SLOT_EPOCH",
@@ -947,12 +948,24 @@ class AwsFoundationTests(unittest.TestCase):
 
         for updated_count in range(4):
             with self.subTest(updated_count=updated_count):
+                baseline = [
+                    {
+                        "validator_id": f"validator-0{index + 1}",
+                        "instance_id": instance_id,
+                        "runtime_version": (
+                            target if index < updated_count else previous
+                        ),
+                        "ami_id": "ami-11111111111111111",
+                        "target_runtime": index < updated_count,
+                    }
+                    for index, instance_id in enumerate(instances)
+                ]
                 result = run(
                     "build_pre_rollout_finality_bindings",
                     (
                         str(updated_count),
                         target,
-                        previous,
+                        json.dumps(baseline),
                         *instances,
                     ),
                 )
