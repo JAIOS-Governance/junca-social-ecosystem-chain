@@ -1,10 +1,6 @@
 name: JUNCA Social Ecosystem Chain AWS Canonical Readback
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
   workflow_dispatch:
     inputs:
       role_arn:
@@ -34,7 +30,7 @@ jobs:
       CANONICAL_REGION: us-east-1
       CANONICAL_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Enforce exact Public Testnet AWS boundary
         env:
           REQUESTED_ROLE_ARN: ${{ inputs.role_arn || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
@@ -45,7 +41,7 @@ jobs:
           test "$REQUESTED_ROLE_ARN" = "$CANONICAL_ROLE_ARN"
           test "$REQUESTED_ACCOUNT_ID" = "$CANONICAL_ACCOUNT_ID"
           test "$REQUESTED_REGION" = "$CANONICAL_REGION"
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ inputs.role_arn || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
           aws-region: ${{ inputs.aws_region || 'us-east-1' }}
@@ -89,7 +85,7 @@ jobs:
         run: |
           grep -q '"deployment_enabled": false' artifacts/aws-canonical-readback.json
           grep -q '"state": "CANONICAL_IDENTITY_VERIFIED_APPLY_BLOCKED"' artifacts/aws-canonical-readback.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-aws-canonical-readback-${{ github.run_id }}
           path: artifacts/aws-canonical-readback.json

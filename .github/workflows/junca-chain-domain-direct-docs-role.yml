@@ -2,14 +2,6 @@ name: JUNCA Chain Domain Direct Recovery via Docs Role
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - recovery/chain-domain-direct-docs-role
-    paths:
-      - .github/workflows/junca-chain-domain-direct-docs-role.yml
-      - .github/recovery-triggers/chain-domain-production.txt
-
 permissions:
   id-token: write
   contents: read
@@ -31,7 +23,7 @@ jobs:
       DOMAIN: chain.jaios-governance.org
     steps:
       - name: Configure canonical production role
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

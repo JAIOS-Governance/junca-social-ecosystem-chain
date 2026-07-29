@@ -15,7 +15,6 @@ import re
 import subprocess
 import sys
 import time
-import uuid
 from typing import Any, Iterable
 
 
@@ -24,6 +23,7 @@ REF_RE = re.compile(r"^release-candidate/[0-9a-f]{40}$")
 WORKFLOW_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$")
 INPUT_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RUN_ID_RE = re.compile(r"^[1-9][0-9]*$")
+TOKEN_RE = re.compile(r"^[1-9][0-9]*-[1-9][0-9]*-[0-9a-f]{32}$")
 
 
 class DispatchError(RuntimeError):
@@ -103,6 +103,8 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise DispatchError("dispatch ref is invalid")
     if args.dispatch_ref != f"release-candidate/{args.expected_head}":
         raise DispatchError("dispatch ref is not bound to expected head")
+    if not TOKEN_RE.fullmatch(args.dispatch_token):
+        raise DispatchError("dispatch token is invalid")
     if args.attempts < 1 or args.sleep_seconds < 1:
         raise DispatchError("attempts and sleep seconds must be positive")
 
@@ -279,10 +281,9 @@ def execute(args: argparse.Namespace) -> int:
     if not isinstance(workflow_id, int) or workflow_id < 1:
         raise DispatchError("workflow ID is invalid")
 
-    token = (
-        f"{parent_run_id}-{parent_run_attempt}-"
-        f"{uuid.uuid4().hex}"
-    )
+    token = args.dispatch_token
+    if not token.startswith(f"{parent_run_id}-{parent_run_attempt}-"):
+        raise DispatchError("dispatch token is not bound to this parent")
     display_title = f"JSEC dispatch {token}"
     inputs.update(
         {
@@ -346,7 +347,7 @@ def execute(args: argparse.Namespace) -> int:
         time.sleep(args.sleep_seconds)
 
     ensure_candidate_ref(github, args.dispatch_ref, args.expected_head)
-    return verify_completed_run(
+    completed_run_id = verify_completed_run(
         run,
         repository=repository,
         workflow_name=args.workflow_name,
@@ -355,6 +356,25 @@ def execute(args: argparse.Namespace) -> int:
         expected_head=args.expected_head,
         display_title=display_title,
     )
+    # Re-list at the final boundary. A second run reusing the public
+    # correlation token at any point after initial discovery makes the
+    # dispatch ambiguous and must invalidate the chain.
+    final_match = discover_run(
+        github,
+        workflow_id,
+        workflow_name=args.workflow_name,
+        workflow_path=args.workflow_path,
+        dispatch_ref=args.dispatch_ref,
+        expected_head=args.expected_head,
+        display_title=display_title,
+        dispatched_at=dispatched_at,
+    )
+    if final_match is None or final_match.get("id") != completed_run_id:
+        raise DispatchError(
+            "final child dispatch uniqueness verification failed: "
+            f"run_id={completed_run_id}"
+        )
+    return completed_run_id
 
 
 def parser() -> argparse.ArgumentParser:
@@ -363,6 +383,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--workflow-path", required=True)
     value.add_argument("--expected-head", required=True)
     value.add_argument("--dispatch-ref", required=True)
+    value.add_argument("--dispatch-token", required=True)
     value.add_argument("--attempts", type=int, default=240)
     value.add_argument("--sleep-seconds", type=int, default=15)
     value.add_argument("--input", action="append", default=[])

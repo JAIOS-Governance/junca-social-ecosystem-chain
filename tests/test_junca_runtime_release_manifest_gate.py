@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -38,6 +39,20 @@ BOUNDARY = {
 }
 REQUEST = "9" * 64
 MIGRATION_DIGEST = "7" * 64
+REQUEST_SCHEMA = "junca-validator-ami-build-request/v2"
+IMAGE_BUILDER_ARN = (
+    "arn:aws:imagebuilder:us-east-1:595710543956:"
+    "image/junca-validator-123/1.0.0/1"
+)
+PARENT_AMI = "ami-22222222222222222"
+PARENT_AMI_NAME = (
+    "al2023-ami-2023.12.20260724.0-kernel-6.18-x86_64"
+)
+DNF_RELEASEVER = "2023.12.20260724"
+BOTO3_NEVRA = "python3-boto3-0:1.40.31-1.amzn2023.0.1.noarch"
+BOTOCORE_NEVRA = (
+    "python3-botocore-0:1.40.31-1.amzn2023.0.1.noarch"
+)
 
 
 def binding():
@@ -79,6 +94,17 @@ def evidence():
             "NodeArtifactSHA256": ARTIFACT,
             "GenesisSHA256": GENESIS,
             "RequestDigest": REQUEST,
+            "RequestSchema": REQUEST_SCHEMA,
+            "ImageBuilderArn": IMAGE_BUILDER_ARN,
+            "ParentAMIId": PARENT_AMI,
+            "ParentAMIOwnerId": "137112412989",
+            "ParentAMIName": PARENT_AMI_NAME,
+            "ComponentSourceSHA256": "1" * 64,
+            "DependencyLockSHA256": "2" * 64,
+            "SupplyChainPolicySHA256": "3" * 64,
+            "DnfReleasever": DNF_RELEASEVER,
+            "Boto3NEVRA": BOTO3_NEVRA,
+            "BotocoreNEVRA": BOTOCORE_NEVRA,
             "MainnetChanged": "false",
             "AssetsMoved": "false",
             "BridgeActivated": "false",
@@ -103,7 +129,7 @@ def evidence():
         "candidate_accepted": False,
         "status": "BASELINE_VERIFIED",
         "request_sha256": REQUEST,
-        "observed_runtime": manifest["previous_runtime"],
+        "observed_runtime": copy.deepcopy(manifest["previous_runtime"]),
         "finalized_only": True,
         "read_only": True,
         "unsafe_rpc_rejection": True,
@@ -113,12 +139,29 @@ def evidence():
             "finalized_head": {
                 "height": 1,
                 "hash": "0x" + "4" * 64,
+                "timestamp": "0x1234",
+                "state_root": "0x" + "6" * 64,
+                "certificate_hash": "0x" + "5" * 64,
             },
             "checks": {
                 "health": "PASS",
-                "explorer": {"result": "PASS"},
-                "safe_rpc": {"result": "PASS"},
-                "unsafe_rpc_rejection": {"result": "PASS"},
+                "explorer": {
+                    "result": "PASS",
+                    "finalized_height": 1,
+                    "finalized_hash": "0x" + "4" * 64,
+                    "signed_power": 3,
+                    "total_power": 3,
+                    "certificate_hash": "0x" + "5" * 64,
+                    "peer_count": 0,
+                },
+                "safe_rpc": {
+                    "result": "PASS",
+                    "methods": list(gate.SAFE_RPC_METHODS),
+                },
+                "unsafe_rpc_rejection": {
+                    "result": "PASS",
+                    "methods": list(gate.UNSAFE_RPC_METHODS),
+                },
             },
         },
         "release_boundary": dict(BOUNDARY),
@@ -168,12 +211,54 @@ def evidence():
             "certificate_hash": "0x" + "5" * 64,
         },
         "immutable_runtime_certificate_activation_pending": True,
-        "observed_runtime": manifest["previous_runtime"],
+        "observed_runtime": copy.deepcopy(manifest["previous_runtime"]),
         "migration_complete": True,
         "data_loss": False,
         "validator_volumes": volumes,
         "release_boundary": dict(BOUNDARY),
     }
+    observed_runtimes = [
+        {
+            "validator_id": f"validator-0{index}",
+            "instance_id": f"i-{index:017x}",
+            "image_id": manifest["previous_runtime"]["ami_id"],
+            "state": "running",
+            "terraform_approved_ami": True,
+            "candidate_ami": False,
+            "root_volume_id": f"vol-{index + 3:017x}",
+        }
+        for index in range(1, 4)
+    ]
+    lineage = {
+        "observed_runtime_ami_state":
+            "EXACT_PRE_ROLLOUT_INVENTORY_NOT_CANDIDATE_ACCEPTANCE",
+        "observed_validator_runtimes": observed_runtimes,
+        "observed_runtime_ami_ids": [
+            manifest["previous_runtime"]["ami_id"]
+        ],
+        "runtime_ami_drift_detected": False,
+        "candidate_ami_preexisting": False,
+        "migration_lineage_state": "RETAINED_STATE_LINEAGE_VERIFIED",
+        "migration_retained_state_lineage_verified": True,
+        "migration_instance_rotation_detected": False,
+        "migration_root_volume_rotation_detected": False,
+        "migration_original_validator_mappings":
+            ebs["migration_validator_mappings"],
+        "migration_current_validator_mappings":
+            ebs["migration_validator_mappings"],
+        "migration_retained_state_volume_ids": [
+            item["volume_id"] for item in volumes
+        ],
+        "migration_retained_rollback_snapshot_ids": [
+            item["rollback_snapshot_id"] for item in volumes
+        ],
+        "migration_retained_signer_arns": [
+            item["resource_arn"] for item in signers
+        ],
+    }
+    manifest.update(copy.deepcopy(lineage))
+    explorer.update(copy.deepcopy(lineage))
+    ebs.update(copy.deepcopy(lineage))
     return manifest, explorer, ebs
 
 
@@ -235,11 +320,118 @@ def endpoint_outage():
     }
 
 
+def private_ssm_readback(
+    *,
+    timestamp_state="DURABLE_PERSISTED",
+    timestamp=2_000_000_000,
+):
+    tables = (
+        [
+            "block_timestamps",
+            "blocks",
+            "finality_certificates",
+            "metadata",
+        ]
+        if timestamp_state == "DURABLE_PERSISTED"
+        else ["blocks", "finality_certificates", "metadata"]
+    )
+    head = {
+        "height": 1,
+        "hash": "0x" + "4" * 64,
+        "timestamp": timestamp,
+        "timestamp_state": timestamp_state,
+        "certificate_hash": "0x" + "5" * 64,
+    }
+    return {
+        "mode": "private_ssm",
+        "scope": (
+            "Public Testnet Pre-rollout Baseline / Private SSM Read-only"
+        ),
+        "validator_count": 3,
+        "chain_id": 20260723,
+        "validators": [
+            {
+                "validator_id": f"validator-0{index}",
+                "instance_id": f"i-{index:017x}",
+                "signer_resource_digest": hashlib.sha256(
+                    (
+                        "arn:aws:kms:us-east-1:595710543956:key/"
+                        f"validator-0{index}"
+                    ).encode()
+                ).hexdigest(),
+                "runtime_certificate_state": "ACTIVATION_PENDING",
+                "durable_certificate_hash": head["certificate_hash"],
+                "durable_timestamp_state": timestamp_state,
+                "timestamp_schema_tables": tables,
+            }
+            for index in range(1, 4)
+        ],
+        "finalized_head": head,
+        "immutable_runtime_certificate_activation_pending": True,
+        "runtime_certificate_states": ["ACTIVATION_PENDING"] * 3,
+        "durable_certificate_binding": {
+            "height": head["height"],
+            "hash": head["hash"],
+            "certificate_hash": head["certificate_hash"],
+            "validator_count": 3,
+        },
+        "quorum": {
+            "signed_power": 3,
+            "total_power": 3,
+            "validator_ids": list(gate.VALIDATOR_IDS),
+        },
+    }
+
+
 class RuntimeReleaseManifestGateTests(unittest.TestCase):
     def test_complete_candidate_passes(self):
         decision = evaluate(*evidence())
         self.assertTrue(decision["accepted"])
         self.assertEqual(decision["decision"], "PROMOTION_GATE_PASS")
+        self.assertEqual(
+            decision["candidate"]["ami_supply_chain"],
+            {
+                "request_schema": REQUEST_SCHEMA,
+                "image_builder_arn": IMAGE_BUILDER_ARN,
+                "parent_ami_id": PARENT_AMI,
+                "parent_ami_owner_id": "137112412989",
+                "parent_ami_name": PARENT_AMI_NAME,
+                "component_source_sha256": "1" * 64,
+                "dependency_lock_sha256": "2" * 64,
+                "supply_chain_policy_sha256": "3" * 64,
+                "dnf_releasever": DNF_RELEASEVER,
+                "python3_boto3_nevra": BOTO3_NEVRA,
+                "python3_botocore_nevra": BOTOCORE_NEVRA,
+            },
+        )
+
+    def test_ami_supply_chain_provenance_is_fail_closed(self):
+        replacements = {
+            "RequestSchema": "junca-validator-ami-build-request/v1",
+            "ImageBuilderArn": "",
+            "ParentAMIId": "ami-invalid",
+            "ParentAMIOwnerId": "000000000000",
+            "ParentAMIName": "latest",
+            "ComponentSourceSHA256": "invalid",
+            "DependencyLockSHA256": "invalid",
+            "SupplyChainPolicySHA256": "invalid",
+            "DnfReleasever": "latest",
+            "Boto3NEVRA": "python3-boto3",
+            "BotocoreNEVRA": "python3-botocore",
+        }
+        for field, value in replacements.items():
+            with self.subTest(field=field):
+                manifest, explorer, ebs = evidence()
+                manifest["ami_provenance"][field] = value
+                decision = evaluate(manifest, explorer, ebs)
+                self.assertFalse(decision["accepted"])
+                self.assertTrue(
+                    any(
+                        f"manifest.ami_provenance.{field}" in failure
+                        for failure in decision["failures"]
+                    ),
+                    decision["failures"],
+                )
 
     def test_unknown_security_semantics_fail_closed(self):
         mutations = (
@@ -292,6 +484,138 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                         "replacement_allowed", True
                     ),
                 "ebs.validator_volume.keys:not_exact",
+            ),
+        )
+        for label, mutate, expected in mutations:
+            manifest, explorer, ebs = evidence()
+            mutate(manifest, explorer, ebs)
+            with self.subTest(label=label):
+                decision = evaluate(manifest, explorer, ebs)
+                self.assertFalse(decision["accepted"])
+                self.assertIn(expected, decision["failures"])
+
+    def test_security_relevant_values_fail_closed_when_tampered(self):
+        mutations = (
+            (
+                "public_head",
+                lambda manifest, explorer, ebs:
+                    explorer["readback"]["finalized_head"].__setitem__(
+                        "height", 0
+                    ),
+                "public_endpoints.finalized_head:invalid",
+            ),
+            (
+                "public_health",
+                lambda manifest, explorer, ebs:
+                    explorer["readback"]["checks"].__setitem__(
+                        "health", "FAIL"
+                    ),
+                "public_endpoints.health:not_pass",
+            ),
+            (
+                "public_observed_at",
+                lambda manifest, explorer, ebs:
+                    explorer["readback"].__setitem__(
+                        "observed_at", "not-a-time"
+                    ),
+                "public_endpoints.readback:invalid",
+            ),
+            (
+                "observed_runtime",
+                lambda manifest, explorer, ebs:
+                    explorer["observed_runtime"].__setitem__(
+                        "ami_id", "ami-22222222222222222"
+                    ),
+                "explorer.observed_runtime:mismatch",
+            ),
+            (
+                "migration_repository",
+                lambda manifest, explorer, ebs:
+                    ebs["migration_execution_binding"].__setitem__(
+                        "repository", "attacker/repository"
+                    ),
+                "ebs.migration_execution_binding:invalid",
+            ),
+            (
+                "migration_run_type",
+                lambda manifest, explorer, ebs:
+                    ebs["migration_execution_binding"].__setitem__(
+                        "run_id", 1
+                    ),
+                "ebs.migration_execution_binding:invalid",
+            ),
+            (
+                "migration_head",
+                lambda manifest, explorer, ebs:
+                    ebs["migration_finalized_head"].__setitem__(
+                        "certificate_hash", "invalid"
+                    ),
+                "ebs.migration_finalized_head:invalid",
+            ),
+            (
+                "activation_pending",
+                lambda manifest, explorer, ebs:
+                    ebs.__setitem__(
+                        "immutable_runtime_certificate_activation_pending",
+                        False,
+                    ),
+                (
+                    "ebs.immutable_runtime_certificate_activation_pending:"
+                    "not_true"
+                ),
+            ),
+            (
+                "candidate_preexisting",
+                lambda manifest, explorer, ebs: [
+                    item.__setitem__("candidate_ami_preexisting", True)
+                    for item in (manifest, explorer, ebs)
+                ],
+                "drift.candidate_ami_preexisting:not_false",
+            ),
+            (
+                "runtime_candidate",
+                lambda manifest, explorer, ebs: [
+                    item["observed_validator_runtimes"][0].__setitem__(
+                        "candidate_ami", True
+                    )
+                    for item in (manifest, explorer, ebs)
+                ],
+                "drift.observed_validator_runtimes:invalid",
+            ),
+            (
+                "terraform_approved_relation",
+                lambda manifest, explorer, ebs: [
+                    (
+                        item["observed_validator_runtimes"][0].__setitem__(
+                            "terraform_approved_ami", False
+                        ),
+                        item.__setitem__(
+                            "runtime_ami_drift_detected", True
+                        ),
+                    )
+                    for item in (manifest, explorer, ebs)
+                ],
+                "drift.observed_validator_runtimes:invalid",
+            ),
+            (
+                "retained_state",
+                lambda manifest, explorer, ebs: [
+                    item["migration_retained_state_volume_ids"].__setitem__(
+                        0, "vol-99999999999999999"
+                    )
+                    for item in (manifest, explorer, ebs)
+                ],
+                "lineage.retained_state_volume_ids:mismatch",
+            ),
+            (
+                "rotation_derivation",
+                lambda manifest, explorer, ebs: [
+                    item.__setitem__(
+                        "migration_instance_rotation_detected", True
+                    )
+                    for item in (manifest, explorer, ebs)
+                ],
+                "lineage.instance_rotation:mismatch",
             ),
         )
         for label, mutate, expected in mutations:
@@ -372,47 +696,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                 "public_services_enabled": False,
                 "public_endpoint_acceptance": False,
                 "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
-                "readback": {
-                    "mode": "private_ssm",
-                    "scope": (
-                        "Public Testnet Pre-rollout Baseline / "
-                        "Private SSM Read-only"
-                    ),
-                    "validator_count": 3,
-                    "chain_id": 8453,
-                    "validators": [
-                        {
-                            "validator_id": f"validator-0{index}",
-                            "instance_id": f"i-{index:017x}",
-                            "signer_resource_digest": f"{index}" * 64,
-                            "durable_timestamp_state":
-                                "DURABLE_PERSISTED",
-                            "timestamp_schema_tables": [
-                                "block_timestamps",
-                                "blocks",
-                                "finality_certificates",
-                                "metadata",
-                            ],
-                        }
-                        for index in range(1, 4)
-                    ],
-                    "finalized_head": {
-                        "height": 100,
-                        "hash": "0x" + "a" * 64,
-                        "timestamp": 2_000_000_000,
-                        "timestamp_state": "DURABLE_PERSISTED",
-                        "certificate_hash": "0x" + "b" * 64,
-                    },
-                    "quorum": {
-                        "signed_power": 3,
-                        "total_power": 3,
-                        "validator_ids": [
-                            "validator-01",
-                            "validator-02",
-                            "validator-03",
-                        ],
-                    },
-                },
+                "readback": private_ssm_readback(),
             }
         )
         decision = evaluate(manifest, explorer, ebs)
@@ -423,6 +707,18 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         manifest["baseline_mode"] = "private_ssm"
         manifest["public_services_enabled"] = False
         manifest["public_endpoint_acceptance"] = False
+        readback = private_ssm_readback()
+        readback["validators"][1]["instance_id"] = (
+            readback["validators"][0]["instance_id"]
+        )
+        readback["finalized_head"]["height"] = 0
+        readback["finalized_head"]["hash"] = "bad"
+        readback["finalized_head"]["certificate_hash"] = "bad"
+        readback["quorum"]["signed_power"] = 2
+        readback["quorum"]["validator_ids"] = [
+            "validator-01",
+            "validator-02",
+        ]
         explorer.update(
             {
                 "schema_version":
@@ -431,35 +727,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                 "public_services_enabled": False,
                 "public_endpoint_acceptance": False,
                 "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
-                "readback": {
-                    "mode": "private_ssm",
-                    "scope": (
-                        "Public Testnet Pre-rollout Baseline / "
-                        "Private SSM Read-only"
-                    ),
-                    "validator_count": 3,
-                    "validators": [
-                        {
-                            "validator_id": f"validator-0{index}",
-                            "instance_id": "i-00000000000000001",
-                            "signer_resource_digest": f"{index}" * 64,
-                        }
-                        for index in range(1, 4)
-                    ],
-                    "finalized_head": {
-                        "height": 0,
-                        "hash": "bad",
-                        "certificate_hash": "bad",
-                    },
-                    "quorum": {
-                        "signed_power": 2,
-                        "total_power": 3,
-                        "validator_ids": [
-                            "validator-01",
-                            "validator-02",
-                        ],
-                    },
-                },
+                "readback": readback,
             }
         )
         decision = evaluate(manifest, explorer, ebs)
@@ -471,6 +739,30 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         )
         self.assertIn(
             "private_ssm.quorum:not_exact_three", decision["failures"]
+        )
+
+    def test_private_ssm_rejects_signer_digest_not_bound_to_manifest(self):
+        manifest, explorer, ebs = evidence()
+        manifest["baseline_mode"] = "private_ssm"
+        manifest["public_services_enabled"] = False
+        manifest["public_endpoint_acceptance"] = False
+        readback = private_ssm_readback()
+        readback["validators"][1]["signer_resource_digest"] = "f" * 64
+        explorer.update(
+            {
+                "schema_version":
+                    "junca-private-ssm-pre-rollout-baseline/v1",
+                "baseline_mode": "private_ssm",
+                "public_services_enabled": False,
+                "public_endpoint_acceptance": False,
+                "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
+                "readback": readback,
+            }
+        )
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertIn(
+            "private_ssm.validators.signer_resource_digest:mismatch",
+            decision["failures"],
         )
 
     def test_public_outage_private_ssm_is_not_public_endpoint_acceptance(self):
@@ -493,43 +785,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                 "public_endpoint_acceptance": False,
                 "public_endpoint_outage": outage,
                 "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
-                "readback": {
-                    "mode": "private_ssm",
-                    "scope": (
-                        "Public Testnet Pre-rollout Baseline / "
-                        "Private SSM Read-only"
-                    ),
-                    "validator_count": 3,
-                    "chain_id": 20260723,
-                    "validators": [
-                        {
-                            "validator_id": f"validator-0{index}",
-                            "instance_id": f"i-{index:017x}",
-                            "signer_resource_digest": f"{index}" * 64,
-                            "durable_timestamp_state":
-                                "DURABLE_PERSISTED",
-                            "timestamp_schema_tables": [
-                                "block_timestamps",
-                                "blocks",
-                                "finality_certificates",
-                                "metadata",
-                            ],
-                        }
-                        for index in range(1, 4)
-                    ],
-                    "finalized_head": {
-                        "height": 100,
-                        "hash": "0x" + "a" * 64,
-                        "timestamp": 2_000_000_000,
-                        "timestamp_state": "DURABLE_PERSISTED",
-                        "certificate_hash": "0x" + "b" * 64,
-                    },
-                    "quorum": {
-                        "signed_power": 3,
-                        "total_power": 3,
-                        "validator_ids": list(gate.VALIDATOR_IDS),
-                    },
-                },
+                "readback": private_ssm_readback(),
             }
         )
         decision = evaluate(manifest, explorer, ebs)
@@ -549,11 +805,6 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         manifest["baseline_mode"] = "private_ssm"
         manifest["public_services_enabled"] = False
         manifest["public_endpoint_acceptance"] = False
-        legacy_tables = [
-            "blocks",
-            "finality_certificates",
-            "metadata",
-        ]
         explorer.update(
             {
                 "schema_version":
@@ -562,38 +813,10 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                 "public_services_enabled": False,
                 "public_endpoint_acceptance": False,
                 "unsafe_rpc_rejection": "NOT_APPLICABLE_PRIVATE_SSM",
-                "readback": {
-                    "mode": "private_ssm",
-                    "scope": (
-                        "Public Testnet Pre-rollout Baseline / "
-                        "Private SSM Read-only"
-                    ),
-                    "validator_count": 3,
-                    "chain_id": 20260723,
-                    "validators": [
-                        {
-                            "validator_id": f"validator-0{index}",
-                            "instance_id": f"i-{index:017x}",
-                            "signer_resource_digest": f"{index}" * 64,
-                            "durable_timestamp_state":
-                                "LEGACY_NOT_PERSISTED",
-                            "timestamp_schema_tables": legacy_tables,
-                        }
-                        for index in range(1, 4)
-                    ],
-                    "finalized_head": {
-                        "height": 100,
-                        "hash": "0x" + "a" * 64,
-                        "timestamp": None,
-                        "timestamp_state": "LEGACY_NOT_PERSISTED",
-                        "certificate_hash": "0x" + "b" * 64,
-                    },
-                    "quorum": {
-                        "signed_power": 3,
-                        "total_power": 3,
-                        "validator_ids": list(gate.VALIDATOR_IDS),
-                    },
-                },
+                "readback": private_ssm_readback(
+                    timestamp_state="LEGACY_NOT_PERSISTED",
+                    timestamp=None,
+                ),
             }
         )
         decision = evaluate(manifest, explorer, ebs)
@@ -752,7 +975,10 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             workflow,
         )
         self.assertEqual(
-            workflow.count("uses: actions/download-artifact@v4"),
+            workflow.count(
+                "uses: actions/download-artifact@"
+                "d3f86a106a0bac45b974a628896c90dbdf5c8093"
+            ),
             1,
         )
         self.assertEqual(

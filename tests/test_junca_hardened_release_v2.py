@@ -22,10 +22,16 @@ class HardenedReleaseV2Tests(unittest.TestCase):
     def test_parent_is_exact_source_and_candidate_ready(self) -> None:
         for value in (
             "JUNCA Validator Runtime Artifacts",
-            "workflow_run.conclusion == 'success'",
-            "workflow_run.event == 'push'",
-            "workflow_run.head_branch == 'main'",
-            "head_repository.full_name == github.repository",
+            "workflow_dispatch:",
+            "source_run_id:",
+            "parent_ami_id:",
+            "python3_boto3_nevra:",
+            "PUBLIC_TESTNET_IMMUTABLE_CANDIDATE",
+            '.event == "push"',
+            '.head_branch == "main"',
+            ".head_repository.full_name == $repository",
+            "ref: ${{ inputs.source_commit }}",
+            '"junca-validator-ami-build-request/v2"',
             "release-candidate/$SOURCE_COMMIT",
             "junca_dispatch_workflow_and_wait.py",
             ".github/workflows/junca-validator-ami-build.yml",
@@ -36,6 +42,8 @@ class HardenedReleaseV2Tests(unittest.TestCase):
             "continuity_dispatched: false",
         ):
             self.assertIn(value, self.parent)
+        self.assertNotIn("workflow_run:", self.parent)
+        self.assertNotIn("ami-amazon-linux-latest", self.parent)
         self.assertNotIn("resume_run_id=0", self.parent)
         self.assertNotIn("JUNCA Validator Foundation Release", self.parent)
 
@@ -92,20 +100,40 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         )
 
     def test_runtime_artifact_rebinds_v2_release_changes(self) -> None:
+        push_block = self.runtime.split("push:", 1)[1].split(
+            "pull_request:", 1
+        )[0]
+        self.assertIn("branches: [main]", push_block)
+        self.assertNotIn("paths:", push_block)
+        pull_request_block = self.runtime.split("pull_request:", 1)[1].split(
+            "workflow_dispatch:", 1
+        )[0]
         for path in (
             '"scripts/junca_runtime_release_evidence_collector_drift.py"',
             '"scripts/junca_dispatch_workflow_and_wait.py"',
             '"scripts/junca_release_child_provenance.py"',
+            '"scripts/junca_release_dispatch_attestation.py"',
+            '"scripts/junca_validator_ami_build_request.py"',
             '"tests/test_junca_runtime_release_ami_drift.py"',
             '"tests/test_junca_release_orchestration.py"',
             '"tests/test_junca_hardened_release_v2.py"',
+            '"tests/test_junca_validator_ami_build_request.py"',
+            '"config/junca_validator_ami_supply_chain_lock.json"',
             '".github/workflows/junca-runtime-release-evidence-collector-v2.yml"',
             '".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"',
             '".github/workflows/junca-runtime-release-manifest-gate.yml"',
         ):
-            self.assertGreaterEqual(self.runtime.count(path), 2)
+            self.assertEqual(pull_request_block.count(path), 1)
+        self.assertIn(
+            "scripts/junca_release_dispatch_attestation.py",
+            self.runtime.split("python3 -m py_compile", 1)[1],
+        )
         self.assertIn("tests.test_junca_hardened_release_v2", self.runtime)
         self.assertIn("tests.test_junca_runtime_release_ami_drift", self.runtime)
+        self.assertIn(
+            "tests.test_junca_validator_ami_build_request",
+            self.runtime,
+        )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.60"
+      version = "= 5.100.0"
     }
   }
 }
@@ -162,6 +162,43 @@ locals {
     ? [for _ in range(3) : var.validator_slot_epoch_seconds]
     : var.validator_bootstrap_slot_epoch_seconds
   )
+  validator_user_data = [
+    for index in range(3) :
+    templatefile("${path.module}/templates/validator-user-data.sh.tftpl", {
+      validator_id               = format("validator-%02d", index + 1)
+      chain_id                   = var.chain_id
+      genesis_sha256             = var.genesis_sha256
+      node_sha256                = var.node_artifact_sha256
+      automatic_finality_enabled = var.automatic_finality_enabled
+      block_interval_seconds = (
+        var.automatic_finality_enabled
+        ? var.validator_block_interval_seconds
+        : 0
+      )
+      slot_epoch_seconds = (
+        var.automatic_finality_enabled
+        ? local.validator_bootstrap_slot_epochs[index]
+        : 0
+      )
+      validator_state_required = var.enable_validator_state_volumes
+      validator_state_volume_id = (
+        var.enable_validator_state_volumes && var.provision_validator_state_volumes
+        ? aws_ebs_volume.validator_state[index].id
+        : ""
+      )
+      signer_arn = var.validator_signer_arns[index]
+      aws_region = var.aws_region
+      signer_bindings = join(",", [
+        for signer_index, arn in var.validator_signer_arns :
+        format("validator-%02d=%s", signer_index + 1, arn)
+      ])
+      peer_endpoints = join(",", [
+        for peer_index, address in local.validator_private_ips :
+        format("validator-%02d=%s:30303", peer_index + 1, address)
+      ])
+      cloudwatch_log_name = aws_cloudwatch_log_group.validator.name
+    })
+  ]
 }
 
 resource "aws_sns_topic" "validator_alerts" {
@@ -471,40 +508,7 @@ resource "aws_instance" "validator" {
     throughput  = 250
   }
 
-  user_data = templatefile("${path.module}/templates/validator-user-data.sh.tftpl", {
-    validator_id               = format("validator-%02d", count.index + 1)
-    chain_id                   = var.chain_id
-    genesis_sha256             = var.genesis_sha256
-    node_sha256                = var.node_artifact_sha256
-    automatic_finality_enabled = var.automatic_finality_enabled
-    block_interval_seconds = (
-      var.automatic_finality_enabled
-      ? var.validator_block_interval_seconds
-      : 0
-    )
-    slot_epoch_seconds = (
-      var.automatic_finality_enabled
-      ? local.validator_bootstrap_slot_epochs[count.index]
-      : 0
-    )
-    validator_state_required = var.enable_validator_state_volumes
-    validator_state_volume_id = (
-      var.enable_validator_state_volumes && var.provision_validator_state_volumes
-      ? aws_ebs_volume.validator_state[count.index].id
-      : ""
-    )
-    signer_arn = var.validator_signer_arns[count.index]
-    aws_region = var.aws_region
-    signer_bindings = join(",", [
-      for index, arn in var.validator_signer_arns :
-      format("validator-%02d=%s", index + 1, arn)
-    ])
-    peer_endpoints = join(",", [
-      for index, address in local.validator_private_ips :
-      format("validator-%02d=%s:30303", index + 1, address)
-    ])
-    cloudwatch_log_name = aws_cloudwatch_log_group.validator.name
-  })
+  user_data = local.validator_user_data[count.index]
 
   lifecycle {
     precondition {

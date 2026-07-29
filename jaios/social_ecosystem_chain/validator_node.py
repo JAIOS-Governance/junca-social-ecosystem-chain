@@ -54,6 +54,7 @@ GENESIS_SCHEMA = "junca-public-testnet-genesis/v1"
 CLIENT_VERSION = "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
 ZERO_HASH = "0x" + ("0" * 64)
 MANUAL_BLOCK_INTERVAL_SECONDS = 30
+PEER_OBSERVATION_WINDOW_SECONDS = 90
 
 
 class ValidatorNodeError(ValueError):
@@ -127,6 +128,7 @@ class PrivateVpcPeerTransport:
         validator_id: str,
         endpoints: Mapping[str, tuple[str, int]],
         receive_vote: Any,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.validator_id = _validator_id(validator_id)
         if set(endpoints) != set(sorted(endpoints)) or len(endpoints) != 3:
@@ -147,11 +149,51 @@ class PrivateVpcPeerTransport:
             normalized[identity] = endpoint
         if self.validator_id not in normalized or not callable(receive_vote):
             raise ValidatorNodeError("local validator and vote receiver are required")
+        if len(set(normalized.values())) != len(normalized):
+            raise ValidatorNodeError("peer endpoints must be unique")
         self.endpoints = normalized
         self.receive_vote = receive_vote
         self._server: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._clock = clock or __import__("time").monotonic
+        self._peer_observations: dict[str, float] = {}
+        self._peer_observations_lock = threading.Lock()
+
+    def observed_peer_count(self) -> int:
+        """Return recently authenticated, non-local protocol peers.
+
+        Configured endpoints and bare TCP handshakes are deliberately not
+        counted. A peer becomes observable only after its source IP and
+        validator identity agree and the canonical vote receiver accepts its
+        signed protocol frame.
+        """
+
+        cutoff = self._clock() - PEER_OBSERVATION_WINDOW_SECONDS
+        with self._peer_observations_lock:
+            expired = [
+                identity
+                for identity, observed_at in self._peer_observations.items()
+                if observed_at < cutoff
+            ]
+            for identity in expired:
+                del self._peer_observations[identity]
+            return len(self._peer_observations)
+
+    def _accept_peer_vote(
+        self,
+        source_validator_id: str,
+        packet: AuthenticatedVote,
+    ) -> None:
+        if (
+            source_validator_id == self.validator_id
+            or source_validator_id not in self.endpoints
+            or packet.validator_id != source_validator_id
+        ):
+            raise ValidatorNodeError("peer vote source identity mismatch")
+        self.receive_vote(packet)
+        with self._peer_observations_lock:
+            self._peer_observations[source_validator_id] = self._clock()
 
     def start(self) -> None:
         if self._server is not None:
@@ -189,15 +231,19 @@ class PrivateVpcPeerTransport:
 
     def _serve(self) -> None:
         assert self._server is not None
-        allowed_hosts = {host for identity, (host, _) in self.endpoints.items()
-                         if identity != self.validator_id}
+        source_by_host = {
+            host: identity
+            for identity, (host, _) in self.endpoints.items()
+            if identity != self.validator_id
+        }
         while not self._stop.is_set():
             try:
                 connection, address = self._server.accept()
             except (socket.timeout, OSError):
                 continue
             with connection:
-                if address[0] not in allowed_hosts:
+                source_validator_id = source_by_host.get(address[0])
+                if source_validator_id is None:
                     continue
                 connection.settimeout(3)
                 try:
@@ -209,7 +255,10 @@ class PrivateVpcPeerTransport:
                     value = json.loads(body)
                     if not isinstance(value, dict):
                         continue
-                    self.receive_vote(_authenticated_vote(value))
+                    self._accept_peer_vote(
+                        source_validator_id,
+                        _authenticated_vote(value),
+                    )
                 except (OSError, json.JSONDecodeError, ValidatorNodeError, ValueError):
                     continue
 
@@ -658,6 +707,11 @@ class NodeState:
         default_factory=threading.RLock, repr=False
     )
 
+    def observed_peer_count(self) -> int:
+        if self.peer_transport is None:
+            return self.peer_count
+        return self.peer_transport.observed_peer_count()
+
     def broadcast_vote(self, *, block_timestamp: int | None = None) -> dict[str, Any]:
         if self.consensus is None or self.kms is None or self.peer_transport is None:
             raise ValidatorNodeError("network consensus runtime is not configured")
@@ -739,6 +793,7 @@ class NodeState:
                 "signer_resource_digest": hashlib.sha256(
                     self.signer_resource.encode()
                 ).hexdigest(),
+                "peer_count": self.observed_peer_count(),
                 "private_key_material_accepted": False,
                 "automatic_finality_enabled": self.automatic_finality_enabled,
                 "block_interval_seconds": self.block_interval_seconds,
@@ -778,7 +833,7 @@ class NodeState:
         if method == "eth_blockNumber":
             return hex(head.height)
         if method == "net_peerCount":
-            return hex(self.peer_count)
+            return hex(self.observed_peer_count())
         if method == "web3_clientVersion":
             return CLIENT_VERSION
         if method == "eth_getBlockByNumber":

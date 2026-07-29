@@ -23,17 +23,6 @@ concurrency:
 
 jobs:
   preflight:
-    if: >-
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/main'
-      ) ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.name == 'JUNCA Public Testnet Release' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository
-      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -45,7 +34,34 @@ jobs:
       ami_id: ${{ steps.resolve.outputs.ami_id }}
       request_sha256: ${{ steps.resolve.outputs.request_sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Authorize exact soak trigger
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          WORKFLOW_RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name || '' }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              test "$GITHUB_REF" = "refs/heads/main"
+              ;;
+            workflow_run)
+              test "$WORKFLOW_RUN_CONCLUSION" = "success"
+              test "$WORKFLOW_RUN_NAME" = \
+                "JUNCA Public Testnet Release"
+              test "$WORKFLOW_RUN_HEAD_BRANCH" = "main"
+              test "$WORKFLOW_RUN_HEAD_REPOSITORY" = "$REPOSITORY"
+              ;;
+            *)
+              echo "::error::Unsupported soak event: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Resolve exact public release and immutable candidate
         id: resolve
         env:
@@ -68,8 +84,16 @@ jobs:
             .conclusion == "success" and
             .name == "JUNCA Public Testnet Release" and
             .path == ".github/workflows/junca-public-testnet-release.yml" and
-            .event == "workflow_run" and
-            .head_branch == "main" and
+            (
+              (
+                .event == "workflow_run" and
+                .head_branch == "main"
+              ) or
+              (
+                .event == "workflow_dispatch" and
+                (.head_branch | startswith("release-candidate/"))
+              )
+            ) and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
           ' <<<"$public_run_json"
@@ -99,15 +123,29 @@ jobs:
           [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
           [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]]
+          jq -e --arg source_commit "$source_commit" '
+            (
+              .event == "workflow_run" and
+              .head_branch == "main"
+            ) or
+            (
+              .event == "workflow_dispatch" and
+              .head_branch == ("release-candidate/" + $source_commit) and
+              .head_sha == $source_commit
+            )
+          ' <<<"$public_run_json"
           run_json="$(gh api \
             "repos/${{ github.repository }}/actions/runs/${foundation_run_id}")"
-          jq -e --arg repository "${{ github.repository }}" '
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg source_commit "$source_commit" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Validator Foundation Release" and
             .path == ".github/workflows/junca-validator-foundation-release.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == "main" and
+            .head_branch == ("release-candidate/" + $source_commit) and
+            .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
           ' <<<"$run_json"
@@ -240,15 +278,15 @@ jobs:
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-live-soak-readback-${{ github.run_id }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -349,7 +387,7 @@ jobs:
               bridge_activated: false
             }' > artifacts/final-runtime-readback.json
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: junca-public-testnet-live-soak-segment-*
           path: evidence/segments
@@ -400,7 +438,7 @@ jobs:
               > junca-public-testnet-live-soak.json.sha256
           )
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-public-testnet-live-soak-${{ github.run_id }}
           path: artifacts/

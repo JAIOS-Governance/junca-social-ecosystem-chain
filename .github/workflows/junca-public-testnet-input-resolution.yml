@@ -1,10 +1,6 @@
 name: JUNCA Public Testnet Input Resolution
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-public-testnet-input-resolution.yml"
   workflow_dispatch:
 
 permissions:
@@ -28,9 +24,9 @@ jobs:
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
       DOMAIN_NAME: jaios-governance.org
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -263,7 +259,7 @@ jobs:
             > artifacts/SHA256SUMS
           jq . artifacts/public-testnet-input-resolution.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-public-testnet-input-resolution-${{ github.run_id }}

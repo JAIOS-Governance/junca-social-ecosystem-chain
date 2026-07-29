@@ -1,10 +1,6 @@
 name: JUNCA POINT MEMBER OTP Relay Readback
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-point-member-otp-relay-readback.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +20,7 @@ jobs:
       EXECUTION_ROLE: JuncaPointMemberOtpRelayExecution
     steps:
       - name: Configure canonical AWS identity
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -94,7 +90,7 @@ jobs:
           PY
 
       - name: Upload non-secret readback evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-point-member-otp-relay-inspection-${{ github.run_id }}
           path: |

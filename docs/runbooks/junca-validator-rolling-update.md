@@ -4,6 +4,106 @@ This runbook is limited to the three Public Testnet validators. It does not
 authorize Terraform apply, deployment, Mainnet changes, asset movement, or
 bridge activation.
 
+## Fresh immutable-candidate handoff
+
+Do not run these commands until the protected `public-testnet` GitHub
+environment and the non-OIDC AWS bootstrap boundary have both been read back
+by an independent reviewer. Obtain the parent AMI ID, owner, immutable name,
+repository release and both package NEVRAs from the approved supply-chain
+record. Values named `latest`, blank values and values inferred from the
+repository policy file are prohibited.
+
+Dispatch the controller only from the exact successful runtime-artifact commit
+on `main`:
+
+```bash
+JSEC_REPOSITORY=JAIOS-Governance/junca-social-ecosystem-chain
+SOURCE_RUN_ID=REPLACE_WITH_SUCCESSFUL_RUNTIME_ARTIFACT_RUN_ID
+SOURCE_COMMIT=REPLACE_WITH_EXACT_40_CHARACTER_MAIN_COMMIT
+PARENT_AMI_ID=REPLACE_WITH_APPROVED_PARENT_AMI_ID
+PARENT_AMI_OWNER_ID=REPLACE_WITH_APPROVED_12_DIGIT_OWNER_ID
+PARENT_AMI_NAME=REPLACE_WITH_APPROVED_IMMUTABLE_PARENT_AMI_NAME
+DNF_RELEASEVER=REPLACE_WITH_APPROVED_EXACT_RELEASEVER
+PYTHON3_BOTO3_NEVRA=REPLACE_WITH_APPROVED_EXACT_NEVRA
+PYTHON3_BOTOCORE_NEVRA=REPLACE_WITH_APPROVED_EXACT_NEVRA
+
+[[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+[[ "$PARENT_AMI_ID" =~ ^ami-[0-9a-f]{8,17}$ ]]
+[[ "$PARENT_AMI_OWNER_ID" =~ ^[0-9]{12}$ ]]
+[[ "$PARENT_AMI_NAME" != REPLACE_WITH_* ]]
+[[ "$DNF_RELEASEVER" != REPLACE_WITH_* ]]
+[[ "$PYTHON3_BOTO3_NEVRA" != REPLACE_WITH_* ]]
+[[ "$PYTHON3_BOTOCORE_NEVRA" != REPLACE_WITH_* ]]
+
+gh workflow run junca-hardened-immutable-candidate-release-v2.yml \
+  --repo "$JSEC_REPOSITORY" \
+  --ref main \
+  -f source_run_id="$SOURCE_RUN_ID" \
+  -f source_commit="$SOURCE_COMMIT" \
+  -f parent_ami_id="$PARENT_AMI_ID" \
+  -f parent_ami_owner_id="$PARENT_AMI_OWNER_ID" \
+  -f parent_ami_name="$PARENT_AMI_NAME" \
+  -f dnf_releasever="$DNF_RELEASEVER" \
+  -f python3_boto3_nevra="$PYTHON3_BOTO3_NEVRA" \
+  -f python3_botocore_nevra="$PYTHON3_BOTOCORE_NEVRA" \
+  -f approval_phrase=PUBLIC_TESTNET_IMMUTABLE_CANDIDATE
+```
+
+Record the resulting controller run ID as `PARENT_RUN_ID`. After it completes
+successfully, download and verify the exact checksummed handoff. The
+controller's `manifest_run_id` maps unchanged to the Foundation input
+`manifest_gate_run_id`; never select a manifest run by name or recency.
+
+```bash
+PARENT_RUN_ID=REPLACE_WITH_SUCCESSFUL_CONTROLLER_RUN_ID
+[[ "$PARENT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+EVIDENCE_DIR="$(mktemp -d)"
+gh run download "$PARENT_RUN_ID" \
+  --repo "$JSEC_REPOSITORY" \
+  --name "junca-hardened-immutable-release-v2-${PARENT_RUN_ID}" \
+  --dir "$EVIDENCE_DIR"
+(
+  cd "$EVIDENCE_DIR/release-v2"
+  sha256sum --check SHA256SUMS
+)
+RELEASE_CHAIN="$EVIDENCE_DIR/release-v2/release-chain.json"
+jq -e \
+  --arg source_commit "$SOURCE_COMMIT" '
+    .schema_version == "junca-hardened-immutable-candidate/v3" and
+    .state == "PUBLIC_TESTNET_CANDIDATE_READY_FOR_SERIAL_ROLLOUT" and
+    .source_commit == $source_commit and
+    .candidate_ref == ("release-candidate/" + $source_commit) and
+    .serial_rollout_dispatched == false and
+    .continuity_dispatched == false and
+    .transaction_submission_enabled == false and
+    .mainnet_changed == false and
+    .assets_moved == false and
+    .bridge_activated == false and
+    .mainnet_activation_authorized == false
+  ' "$RELEASE_CHAIN"
+
+CANDIDATE_REF="$(jq -er .candidate_ref "$RELEASE_CHAIN")"
+AMI_RUN_ID="$(jq -er .ami_run_id "$RELEASE_CHAIN")"
+MANIFEST_GATE_RUN_ID="$(jq -er .manifest_run_id "$RELEASE_CHAIN")"
+```
+
+The controller intentionally does not dispatch a rollout. After a separate
+recorded rollout authorization, start a fresh Foundation run with the exact
+handoff IDs:
+
+```bash
+gh workflow run junca-validator-foundation-release.yml \
+  --repo "$JSEC_REPOSITORY" \
+  --ref "$CANDIDATE_REF" \
+  -f ami_run_id="$AMI_RUN_ID" \
+  -f manifest_gate_run_id="$MANIFEST_GATE_RUN_ID" \
+  -f resume_run_id=0 \
+  -f renew_expired_epoch=NONE \
+  -f renewal_preserve_prefix_count=0 \
+  -f authorize_rollout=PUBLIC_TESTNET_ROLLOUT
+```
+
 1. Record the target runtime version, its exact 40-character lowercase source
    commit, immutable artifact SHA-256, rollback version and rollback artifact
    SHA-256. Pass the recorded runtime commit as the release manifest gate's

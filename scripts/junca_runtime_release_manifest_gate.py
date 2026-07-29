@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -22,6 +23,22 @@ CANDIDATE_FIELDS = {
     "node_artifact_sha256",
     "genesis_sha256",
     "ami_id",
+}
+DRIFT_FIELDS = {
+    "observed_runtime_ami_state",
+    "observed_validator_runtimes",
+    "observed_runtime_ami_ids",
+    "runtime_ami_drift_detected",
+    "candidate_ami_preexisting",
+    "migration_lineage_state",
+    "migration_retained_state_lineage_verified",
+    "migration_instance_rotation_detected",
+    "migration_root_volume_rotation_detected",
+    "migration_original_validator_mappings",
+    "migration_current_validator_mappings",
+    "migration_retained_state_volume_ids",
+    "migration_retained_rollback_snapshot_ids",
+    "migration_retained_signer_arns",
 }
 MANIFEST_FIELDS = CANDIDATE_FIELDS | {
     "schema_version",
@@ -40,7 +57,7 @@ MANIFEST_FIELDS = CANDIDATE_FIELDS | {
     "explorer_baseline_sha256",
     "ebs_baseline_sha256",
     "release_boundary",
-}
+} | DRIFT_FIELDS
 EXPLORER_FIELDS = CANDIDATE_FIELDS | {
     "schema_version",
     "baseline_mode",
@@ -56,7 +73,7 @@ EXPLORER_FIELDS = CANDIDATE_FIELDS | {
     "unsafe_rpc_rejection",
     "readback",
     "release_boundary",
-}
+} | DRIFT_FIELDS
 EBS_FIELDS = CANDIDATE_FIELDS | {
     "schema_version",
     "candidate_accepted",
@@ -72,7 +89,7 @@ EBS_FIELDS = CANDIDATE_FIELDS | {
     "data_loss",
     "validator_volumes",
     "release_boundary",
-}
+} | DRIFT_FIELDS
 AMI_PROVENANCE_FIELDS = {
     "State",
     "OwnerId",
@@ -81,10 +98,48 @@ AMI_PROVENANCE_FIELDS = {
     "NodeArtifactSHA256",
     "GenesisSHA256",
     "RequestDigest",
+    "RequestSchema",
+    "ImageBuilderArn",
+    "ParentAMIId",
+    "ParentAMIOwnerId",
+    "ParentAMIName",
+    "ComponentSourceSHA256",
+    "DependencyLockSHA256",
+    "SupplyChainPolicySHA256",
+    "DnfReleasever",
+    "Boto3NEVRA",
+    "BotocoreNEVRA",
     "MainnetChanged",
     "AssetsMoved",
     "BridgeActivated",
 }
+AMI_SUPPLY_CHAIN_PROVENANCE = {
+    "request_schema": "RequestSchema",
+    "image_builder_arn": "ImageBuilderArn",
+    "parent_ami_id": "ParentAMIId",
+    "parent_ami_owner_id": "ParentAMIOwnerId",
+    "parent_ami_name": "ParentAMIName",
+    "component_source_sha256": "ComponentSourceSHA256",
+    "dependency_lock_sha256": "DependencyLockSHA256",
+    "supply_chain_policy_sha256": "SupplyChainPolicySHA256",
+    "dnf_releasever": "DnfReleasever",
+    "python3_boto3_nevra": "Boto3NEVRA",
+    "python3_botocore_nevra": "BotocoreNEVRA",
+}
+IMAGE_BUILDER_ARN = re.compile(
+    r"^arn:aws:imagebuilder:us-east-1:595710543956:"
+    r"image/[a-zA-Z0-9_-]+/[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$"
+)
+PARENT_AMI_NAME = re.compile(
+    r"^al2023-ami-2023\.[0-9]+\.[0-9]{8}\.[0-9]+-kernel-"
+    r"[0-9]+\.[0-9]+-x86_64$"
+)
+DNF_RELEASEVER = re.compile(r"^2023\.[0-9]+\.[0-9]{8}$")
+RPM_NEVRA = re.compile(
+    r"^[a-z0-9][a-z0-9+_.-]*-[0-9]+:"
+    r"[A-Za-z0-9][A-Za-z0-9+_.~^%-]*-"
+    r"[A-Za-z0-9][A-Za-z0-9+_.~^%-]*\.[a-z0-9_]+$"
+)
 SIGNER_FIELDS = {"validator_id", "resource_arn"}
 VOLUME_FIELDS = {
     "validator_id",
@@ -112,6 +167,89 @@ MIGRATION_MAPPING_FIELDS = {
     "root_volume_id",
 }
 MIGRATION_HEAD_FIELDS = {"height", "hash", "certificate_hash"}
+OBSERVED_RUNTIME_FIELDS = {
+    "validator_id",
+    "instance_id",
+    "image_id",
+    "state",
+    "terraform_approved_ami",
+    "candidate_ami",
+    "root_volume_id",
+}
+PUBLIC_FINALIZED_HEAD_FIELDS = {
+    "height",
+    "hash",
+    "timestamp",
+    "state_root",
+    "certificate_hash",
+}
+PUBLIC_EXPLORER_CHECK_FIELDS = {
+    "result",
+    "finalized_height",
+    "finalized_hash",
+    "signed_power",
+    "total_power",
+    "certificate_hash",
+    "peer_count",
+}
+PRIVATE_READBACK_FIELDS = {
+    "mode",
+    "scope",
+    "validator_count",
+    "chain_id",
+    "validators",
+    "finalized_head",
+    "immutable_runtime_certificate_activation_pending",
+    "runtime_certificate_states",
+    "durable_certificate_binding",
+    "quorum",
+}
+PRIVATE_VALIDATOR_FIELDS = {
+    "validator_id",
+    "instance_id",
+    "signer_resource_digest",
+    "durable_timestamp_state",
+    "timestamp_schema_tables",
+    "runtime_certificate_state",
+    "durable_certificate_hash",
+}
+PRIVATE_FINALIZED_HEAD_FIELDS = {
+    "height",
+    "hash",
+    "timestamp",
+    "timestamp_state",
+    "certificate_hash",
+}
+PRIVATE_DURABLE_BINDING_FIELDS = {
+    "height",
+    "hash",
+    "certificate_hash",
+    "validator_count",
+}
+PRIVATE_QUORUM_FIELDS = {
+    "signed_power",
+    "total_power",
+    "validator_ids",
+}
+SAFE_RPC_METHODS = (
+    "eth_blockNumber",
+    "eth_chainId",
+    "eth_getBlockByNumber",
+    "net_peerCount",
+    "web3_clientVersion",
+)
+UNSAFE_RPC_METHODS = (
+    "eth_sendTransaction",
+    "eth_sendRawTransaction",
+    "admin_peers",
+    "debug_traceBlock",
+    "personal_unlockAccount",
+    "miner_start",
+    "junca_health",
+    "junca_propose",
+    "junca_submitVote",
+    "junca_broadcastVote",
+)
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 AMI = re.compile(r"ami-[0-9a-f]{8,17}")
@@ -119,6 +257,7 @@ INSTANCE = re.compile(r"i-[0-9a-f]{8,17}")
 VOLUME = re.compile(r"vol-[0-9a-f]{8,17}")
 SNAPSHOT = re.compile(r"snap-[0-9a-f]{8,17}")
 HASH = re.compile(r"0x[0-9a-f]{64}")
+HEX_QUANTITY = re.compile(r"0x[0-9a-f]+")
 
 
 def read_object(path: str | Path) -> dict[str, Any]:
@@ -170,26 +309,394 @@ def _candidate_binding(source: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
     )
 
 
-def _private_ssm_baseline(
+def _valid_utc_observed_at(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
+def _public_endpoint_baseline(
     explorer: Mapping[str, Any], failures: list[str]
+) -> None:
+    readback = explorer.get("readback")
+    if not isinstance(readback, Mapping):
+        failures.append("public_endpoints.readback:missing")
+        return
+    _exact_keys(
+        readback,
+        {"mode", "observed_at", "finalized_head", "checks"},
+        "public_endpoints.readback",
+        failures,
+    )
+    if (
+        readback.get("mode") != "public_endpoints"
+        or not _valid_utc_observed_at(readback.get("observed_at"))
+    ):
+        failures.append("public_endpoints.readback:invalid")
+
+    finalized = readback.get("finalized_head")
+    if not isinstance(finalized, Mapping):
+        failures.append("public_endpoints.finalized_head:missing")
+    else:
+        _exact_keys(
+            finalized,
+            PUBLIC_FINALIZED_HEAD_FIELDS,
+            "public_endpoints.finalized_head",
+            failures,
+        )
+        if (
+            not isinstance(finalized.get("height"), int)
+            or isinstance(finalized.get("height"), bool)
+            or finalized.get("height", 0) < 1
+            or HASH.fullmatch(str(finalized.get("hash"))) is None
+            or HEX_QUANTITY.fullmatch(
+                str(finalized.get("timestamp"))
+            )
+            is None
+            or int(str(finalized.get("timestamp")), 16) <= 0
+            or HASH.fullmatch(str(finalized.get("state_root"))) is None
+            or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
+        ):
+            failures.append("public_endpoints.finalized_head:invalid")
+
+    checks = readback.get("checks")
+    if not isinstance(checks, Mapping):
+        failures.append("public_endpoints.checks:missing")
+        return
+    _exact_keys(
+        checks,
+        {"health", "explorer", "safe_rpc", "unsafe_rpc_rejection"},
+        "public_endpoints.checks",
+        failures,
+    )
+    if checks.get("health") != "PASS":
+        failures.append("public_endpoints.health:not_pass")
+
+    explorer_check = checks.get("explorer")
+    if not isinstance(explorer_check, Mapping):
+        failures.append("public_endpoints.explorer_check:missing")
+    else:
+        _exact_keys(
+            explorer_check,
+            PUBLIC_EXPLORER_CHECK_FIELDS,
+            "public_endpoints.explorer_check",
+            failures,
+        )
+        if (
+            explorer_check.get("result") != "PASS"
+            or explorer_check.get("signed_power") != 3
+            or explorer_check.get("total_power") != 3
+            or not isinstance(explorer_check.get("peer_count"), int)
+            or isinstance(explorer_check.get("peer_count"), bool)
+            or explorer_check.get("peer_count", -1) < 0
+            or not isinstance(finalized, Mapping)
+            or explorer_check.get("finalized_height")
+            != finalized.get("height")
+            or explorer_check.get("finalized_hash") != finalized.get("hash")
+            or explorer_check.get("certificate_hash")
+            != finalized.get("certificate_hash")
+        ):
+            failures.append("public_endpoints.explorer_check:invalid")
+
+    for field, methods in (
+        ("safe_rpc", list(SAFE_RPC_METHODS)),
+        ("unsafe_rpc_rejection", list(UNSAFE_RPC_METHODS)),
+    ):
+        check = checks.get(field)
+        if not isinstance(check, Mapping):
+            failures.append(f"public_endpoints.{field}:missing")
+            continue
+        _exact_keys(
+            check,
+            {"result", "methods"},
+            f"public_endpoints.{field}",
+            failures,
+        )
+        if check.get("result") != "PASS" or check.get("methods") != methods:
+            failures.append(f"public_endpoints.{field}:invalid")
+
+
+def _drift_and_lineage(
+    manifest: Mapping[str, Any],
+    explorer: Mapping[str, Any],
+    ebs: Mapping[str, Any],
+    expected: tuple[Any, Any, Any, Any],
+    failures: list[str],
+) -> None:
+    for field in DRIFT_FIELDS:
+        if explorer.get(field) != manifest.get(field):
+            failures.append(f"explorer.{field}:mismatch")
+        if ebs.get(field) != manifest.get(field):
+            failures.append(f"ebs.{field}:mismatch")
+
+    if (
+        manifest.get("observed_runtime_ami_state")
+        != "EXACT_PRE_ROLLOUT_INVENTORY_NOT_CANDIDATE_ACCEPTANCE"
+    ):
+        failures.append("drift.observed_runtime_ami_state:invalid")
+    if manifest.get("candidate_ami_preexisting") is not False:
+        failures.append("drift.candidate_ami_preexisting:not_false")
+
+    runtimes = manifest.get("observed_validator_runtimes")
+    if (
+        not isinstance(runtimes, list)
+        or len(runtimes) != 3
+        or any(not isinstance(item, Mapping) for item in runtimes)
+    ):
+        failures.append("drift.observed_validator_runtimes:not_exact_three")
+        runtimes = []
+    else:
+        for item in runtimes:
+            _exact_keys(
+                item,
+                OBSERVED_RUNTIME_FIELDS,
+                "drift.observed_validator_runtime",
+                failures,
+            )
+        validator_ids = [item.get("validator_id") for item in runtimes]
+        instance_ids = [item.get("instance_id") for item in runtimes]
+        image_ids = [item.get("image_id") for item in runtimes]
+        root_volume_ids = [item.get("root_volume_id") for item in runtimes]
+        if (
+            validator_ids != list(VALIDATOR_IDS)
+            or len(set(instance_ids)) != 3
+            or any(
+                INSTANCE.fullmatch(str(value)) is None
+                for value in instance_ids
+            )
+            or any(AMI.fullmatch(str(value)) is None for value in image_ids)
+            or expected[3] in image_ids
+            or len(set(root_volume_ids)) != 3
+            or any(
+                VOLUME.fullmatch(str(value)) is None
+                for value in root_volume_ids
+            )
+            or any(item.get("state") != "running" for item in runtimes)
+            or any(
+                not isinstance(item.get("terraform_approved_ami"), bool)
+                for item in runtimes
+            )
+            or any(item.get("candidate_ami") is not False for item in runtimes)
+            or any(
+                item.get("terraform_approved_ami")
+                is not (
+                    item.get("image_id")
+                    == manifest.get("previous_runtime", {}).get("ami_id")
+                )
+                for item in runtimes
+            )
+        ):
+            failures.append("drift.observed_validator_runtimes:invalid")
+        if manifest.get("observed_runtime_ami_ids") != sorted(set(image_ids)):
+            failures.append("drift.observed_runtime_ami_ids:mismatch")
+        if manifest.get("runtime_ami_drift_detected") is not any(
+            item.get("terraform_approved_ami") is False for item in runtimes
+        ):
+            failures.append("drift.runtime_ami_drift_detected:mismatch")
+
+    if (
+        manifest.get("migration_lineage_state")
+        != "RETAINED_STATE_LINEAGE_VERIFIED"
+        or manifest.get("migration_retained_state_lineage_verified") is not True
+    ):
+        failures.append("lineage.state:not_verified")
+
+    original = manifest.get("migration_original_validator_mappings")
+    current = manifest.get("migration_current_validator_mappings")
+    mappings: list[tuple[str, list[Mapping[str, Any]]]] = []
+    for label, value in (("original", original), ("current", current)):
+        if (
+            not isinstance(value, list)
+            or len(value) != 3
+            or any(not isinstance(item, Mapping) for item in value)
+        ):
+            failures.append(f"lineage.{label}:not_exact_three")
+            continue
+        normalized = list(value)
+        mappings.append((label, normalized))
+        for item in normalized:
+            _exact_keys(
+                item,
+                MIGRATION_MAPPING_FIELDS,
+                f"lineage.{label}.mapping",
+                failures,
+            )
+        validator_ids = [item.get("validator_id") for item in normalized]
+        instance_ids = [item.get("instance_id") for item in normalized]
+        signer_arns = [item.get("signer_arn") for item in normalized]
+        state_volume_ids = [
+            item.get("state_volume_id") for item in normalized
+        ]
+        snapshots = [
+            item.get("rollback_snapshot_id") for item in normalized
+        ]
+        root_volume_ids = [item.get("root_volume_id") for item in normalized]
+        signer_prefix = f"arn:aws:kms:{REGION}:{ACCOUNT_ID}:key/"
+        if (
+            validator_ids != list(VALIDATOR_IDS)
+            or len(set(instance_ids)) != 3
+            or any(
+                INSTANCE.fullmatch(str(value)) is None
+                for value in instance_ids
+            )
+            or len(set(signer_arns)) != 3
+            or any(
+                not isinstance(value, str)
+                or not value.startswith(signer_prefix)
+                for value in signer_arns
+            )
+            or len(set(state_volume_ids)) != 3
+            or any(
+                VOLUME.fullmatch(str(value)) is None
+                for value in state_volume_ids
+            )
+            or len(set(snapshots)) != 3
+            or any(
+                SNAPSHOT.fullmatch(str(value)) is None for value in snapshots
+            )
+            or len(set(root_volume_ids)) != 3
+            or any(
+                VOLUME.fullmatch(str(value)) is None
+                for value in root_volume_ids
+            )
+        ):
+            failures.append(f"lineage.{label}:invalid")
+
+    if len(mappings) != 2:
+        return
+    original_items = mappings[0][1]
+    current_items = mappings[1][1]
+    retained_fields = (
+        "validator_id",
+        "signer_arn",
+        "state_volume_id",
+        "rollback_snapshot_id",
+    )
+    if any(
+        any(
+            old.get(field) != new.get(field) for field in retained_fields
+        )
+        for old, new in zip(original_items, current_items, strict=True)
+    ):
+        failures.append("lineage.retained_identity:mismatch")
+    instance_rotation = any(
+        old.get("instance_id") != new.get("instance_id")
+        for old, new in zip(original_items, current_items, strict=True)
+    )
+    root_rotation = any(
+        old.get("root_volume_id") != new.get("root_volume_id")
+        for old, new in zip(original_items, current_items, strict=True)
+    )
+    if manifest.get("migration_instance_rotation_detected") is not (
+        instance_rotation
+    ):
+        failures.append("lineage.instance_rotation:mismatch")
+    if manifest.get("migration_root_volume_rotation_detected") is not (
+        root_rotation
+    ):
+        failures.append("lineage.root_volume_rotation:mismatch")
+
+    retained_state = [item.get("state_volume_id") for item in current_items]
+    retained_snapshots = [
+        item.get("rollback_snapshot_id") for item in current_items
+    ]
+    retained_signers = [item.get("signer_arn") for item in current_items]
+    if manifest.get("migration_retained_state_volume_ids") != retained_state:
+        failures.append("lineage.retained_state_volume_ids:mismatch")
+    if (
+        manifest.get("migration_retained_rollback_snapshot_ids")
+        != retained_snapshots
+    ):
+        failures.append("lineage.retained_rollback_snapshot_ids:mismatch")
+    if manifest.get("migration_retained_signer_arns") != retained_signers:
+        failures.append("lineage.retained_signer_arns:mismatch")
+    if runtimes and (
+        [item.get("instance_id") for item in current_items]
+        != [item.get("instance_id") for item in runtimes]
+        or [item.get("root_volume_id") for item in current_items]
+        != [item.get("root_volume_id") for item in runtimes]
+    ):
+        failures.append("lineage.observed_runtime:mismatch")
+    migration_mappings = ebs.get("migration_validator_mappings")
+    if migration_mappings != current_items:
+        failures.append("lineage.ebs_migration_mappings:mismatch")
+
+    signers = manifest.get("signer_bindings")
+    if isinstance(signers, list):
+        signer_values = [
+            item.get("resource_arn")
+            for item in signers
+            if isinstance(item, Mapping)
+        ]
+        if retained_signers != signer_values:
+            failures.append("lineage.signer_bindings:mismatch")
+    volumes = ebs.get("validator_volumes")
+    if isinstance(volumes, list):
+        state_values = [
+            item.get("volume_id")
+            for item in volumes
+            if isinstance(item, Mapping)
+        ]
+        snapshot_values = [
+            item.get("rollback_snapshot_id")
+            for item in volumes
+            if isinstance(item, Mapping)
+        ]
+        if retained_state != state_values:
+            failures.append("lineage.validator_state_volumes:mismatch")
+        if retained_snapshots != snapshot_values:
+            failures.append("lineage.validator_snapshots:mismatch")
+
+
+def _private_ssm_baseline(
+    manifest: Mapping[str, Any],
+    explorer: Mapping[str, Any],
+    failures: list[str],
 ) -> None:
     readback = explorer.get("readback")
     if not isinstance(readback, Mapping):
         failures.append("private_ssm.readback:missing")
         return
+    _exact_keys(
+        readback,
+        PRIVATE_READBACK_FIELDS,
+        "private_ssm.readback",
+        failures,
+    )
     if (
         readback.get("mode") != "private_ssm"
         or readback.get("scope")
         != "Public Testnet Pre-rollout Baseline / Private SSM Read-only"
         or readback.get("validator_count") != 3
+        or readback.get("chain_id") != 20260723
+        or readback.get(
+            "immutable_runtime_certificate_activation_pending"
+        )
+        is not True
+        or readback.get("runtime_certificate_states")
+        != ["ACTIVATION_PENDING"] * 3
     ):
         failures.append("private_ssm.readback:invalid")
     validators = readback.get("validators")
     timestamp_states: list[Any] = []
     timestamp_schema_tables: list[Any] = []
+    runtime_certificate_states: list[Any] = []
+    durable_certificate_hashes: list[Any] = []
     if not isinstance(validators, list):
         failures.append("private_ssm.validators:missing")
     else:
+        for item in validators:
+            if isinstance(item, Mapping):
+                _exact_keys(
+                    item,
+                    PRIVATE_VALIDATOR_FIELDS,
+                    "private_ssm.validator",
+                    failures,
+                )
         identities = [
             item.get("validator_id")
             for item in validators
@@ -205,6 +712,21 @@ def _private_ssm_baseline(
             for item in validators
             if isinstance(item, Mapping)
         ]
+        signer_bindings = manifest.get("signer_bindings")
+        signer_by_validator = (
+            {
+                item.get("validator_id"): item.get("resource_arn")
+                for item in signer_bindings
+                if isinstance(item, Mapping)
+            }
+            if isinstance(signer_bindings, list)
+            else {}
+        )
+        expected_signer_digests = [
+            hashlib.sha256(signer_by_validator[validator_id].encode()).hexdigest()
+            for validator_id in VALIDATOR_IDS
+            if isinstance(signer_by_validator.get(validator_id), str)
+        ]
         timestamp_states = [
             item.get("durable_timestamp_state")
             for item in validators
@@ -212,6 +734,16 @@ def _private_ssm_baseline(
         ]
         timestamp_schema_tables = [
             item.get("timestamp_schema_tables")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        runtime_certificate_states = [
+            item.get("runtime_certificate_state")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        durable_certificate_hashes = [
+            item.get("durable_certificate_hash")
             for item in validators
             if isinstance(item, Mapping)
         ]
@@ -228,12 +760,23 @@ def _private_ssm_baseline(
                 SHA256.fullmatch(str(signer_digest)) is None
                 for signer_digest in signer_digests
             )
+            or runtime_certificate_states != ["ACTIVATION_PENDING"] * 3
         ):
             failures.append("private_ssm.validators:not_exact_three")
+        if signer_digests != expected_signer_digests:
+            failures.append(
+                "private_ssm.validators.signer_resource_digest:mismatch"
+            )
     finalized = readback.get("finalized_head")
     if not isinstance(finalized, Mapping):
         failures.append("private_ssm.finalized_head:missing")
     else:
+        _exact_keys(
+            finalized,
+            PRIVATE_FINALIZED_HEAD_FIELDS,
+            "private_ssm.finalized_head",
+            failures,
+        )
         if (
             not isinstance(finalized.get("height"), int)
             or isinstance(finalized.get("height"), bool)
@@ -242,6 +785,12 @@ def _private_ssm_baseline(
             or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
         ):
             failures.append("private_ssm.finalized_head:invalid")
+        if durable_certificate_hashes != [
+            finalized.get("certificate_hash")
+        ] * 3:
+            failures.append(
+                "private_ssm.validators.durable_certificate_hash:mismatch"
+            )
         timestamp_state = finalized.get("timestamp_state")
         timestamp = finalized.get("timestamp")
         expected_tables: list[str] | None
@@ -288,12 +837,41 @@ def _private_ssm_baseline(
     quorum = readback.get("quorum")
     if not isinstance(quorum, Mapping):
         failures.append("private_ssm.quorum:missing")
-    elif (
-        quorum.get("signed_power") != 3
-        or quorum.get("total_power") != 3
-        or quorum.get("validator_ids") != list(VALIDATOR_IDS)
-    ):
-        failures.append("private_ssm.quorum:not_exact_three")
+    else:
+        _exact_keys(
+            quorum,
+            PRIVATE_QUORUM_FIELDS,
+            "private_ssm.quorum",
+            failures,
+        )
+        if (
+            quorum.get("signed_power") != 3
+            or quorum.get("total_power") != 3
+            or quorum.get("validator_ids") != list(VALIDATOR_IDS)
+        ):
+            failures.append("private_ssm.quorum:not_exact_three")
+
+    durable_binding = readback.get("durable_certificate_binding")
+    if not isinstance(durable_binding, Mapping):
+        failures.append("private_ssm.durable_certificate_binding:missing")
+    else:
+        _exact_keys(
+            durable_binding,
+            PRIVATE_DURABLE_BINDING_FIELDS,
+            "private_ssm.durable_certificate_binding",
+            failures,
+        )
+        if (
+            not isinstance(finalized, Mapping)
+            or durable_binding.get("height") != finalized.get("height")
+            or durable_binding.get("hash") != finalized.get("hash")
+            or durable_binding.get("certificate_hash")
+            != finalized.get("certificate_hash")
+            or durable_binding.get("validator_count") != 3
+        ):
+            failures.append(
+                "private_ssm.durable_certificate_binding:mismatch"
+            )
 
 
 def _public_endpoint_outage(
@@ -504,6 +1082,8 @@ def evaluate(
             "NodeArtifactSHA256": expected_artifact_sha256,
             "GenesisSHA256": expected_genesis_sha256,
             "RequestDigest": request_sha256,
+            "RequestSchema":
+                "junca-validator-ami-build-request/v2",
             "MainnetChanged": "false",
             "AssetsMoved": "false",
             "BridgeActivated": "false",
@@ -511,6 +1091,58 @@ def evaluate(
         for field, value in required_tags.items():
             if provenance.get(field) != value:
                 failures.append(f"manifest.ami_provenance.{field}:mismatch")
+        if not IMAGE_BUILDER_ARN.fullmatch(
+            str(provenance.get("ImageBuilderArn", ""))
+        ):
+            failures.append(
+                "manifest.ami_provenance.ImageBuilderArn:invalid"
+            )
+        if not AMI.fullmatch(
+            str(provenance.get("ParentAMIId", ""))
+        ):
+            failures.append(
+                "manifest.ami_provenance.ParentAMIId:invalid"
+            )
+        if provenance.get("ParentAMIOwnerId") != "137112412989":
+            failures.append(
+                "manifest.ami_provenance.ParentAMIOwnerId:mismatch"
+            )
+        parent_ami_name = str(provenance.get("ParentAMIName", ""))
+        dnf_releasever = str(provenance.get("DnfReleasever", ""))
+        if not PARENT_AMI_NAME.fullmatch(parent_ami_name):
+            failures.append(
+                "manifest.ami_provenance.ParentAMIName:invalid"
+            )
+        if (
+            not DNF_RELEASEVER.fullmatch(dnf_releasever)
+            or not parent_ami_name.startswith(
+                f"al2023-ami-{dnf_releasever}."
+            )
+        ):
+            failures.append(
+                "manifest.ami_provenance.DnfReleasever:mismatch"
+            )
+        for field in (
+            "ComponentSourceSHA256",
+            "DependencyLockSHA256",
+            "SupplyChainPolicySHA256",
+        ):
+            if not SHA256.fullmatch(str(provenance.get(field, ""))):
+                failures.append(
+                    f"manifest.ami_provenance.{field}:invalid"
+                )
+        for field, package in (
+            ("Boto3NEVRA", "python3-boto3"),
+            ("BotocoreNEVRA", "python3-botocore"),
+        ):
+            value = str(provenance.get(field, ""))
+            if (
+                not RPM_NEVRA.fullmatch(value)
+                or not value.startswith(f"{package}-")
+            ):
+                failures.append(
+                    f"manifest.ami_provenance.{field}:invalid"
+                )
 
     signers = manifest.get("signer_bindings")
     signer_prefix = f"arn:aws:kms:{REGION}:{ACCOUNT_ID}:key/"
@@ -561,7 +1193,15 @@ def evaluate(
         previous_binding = _candidate_binding(previous)
         if previous_binding == expected:
             failures.append("manifest.previous_runtime:equals_candidate")
-        if not all(previous_binding):
+        if (
+            COMMIT.fullmatch(str(previous.get("source_commit"))) is None
+            or SHA256.fullmatch(
+                str(previous.get("node_artifact_sha256"))
+            )
+            is None
+            or SHA256.fullmatch(str(previous.get("genesis_sha256"))) is None
+            or AMI.fullmatch(str(previous.get("ami_id"))) is None
+        ):
             failures.append("manifest.previous_runtime:incomplete")
 
     if manifest.get("explorer_baseline_sha256") != explorer_evidence_sha256:
@@ -607,24 +1247,7 @@ def evaluate(
             failures.append("public_endpoints.acceptance_binding:invalid")
         if explorer.get("unsafe_rpc_rejection") is not True:
             failures.append("explorer.unsafe_rpc_rejection:not_true")
-        readback = explorer.get("readback")
-        if not isinstance(readback, Mapping):
-            failures.append("public_endpoints.readback:missing")
-        else:
-            _exact_keys(
-                readback,
-                {"mode", "observed_at", "finalized_head", "checks"},
-                "public_endpoints.readback",
-                failures,
-            )
-            if (
-                readback.get("mode") != "public_endpoints"
-                or not isinstance(readback.get("observed_at"), str)
-                or not readback.get("observed_at")
-                or not isinstance(readback.get("finalized_head"), Mapping)
-                or not isinstance(readback.get("checks"), Mapping)
-            ):
-                failures.append("public_endpoints.readback:invalid")
+        _public_endpoint_baseline(explorer, failures)
     elif baseline_mode == "private_ssm":
         if public_endpoint_acceptance is not False:
             failures.append("private_ssm.public_endpoint_acceptance:not_false")
@@ -643,7 +1266,7 @@ def evaluate(
             != "NOT_APPLICABLE_PRIVATE_SSM"
         ):
             failures.append("private_ssm.unsafe_rpc_rejection:invalid")
-        _private_ssm_baseline(explorer, failures)
+        _private_ssm_baseline(manifest, explorer, failures)
     if _candidate_binding(explorer) != expected:
         failures.append("explorer.candidate_binding:mismatch")
     observed_explorer = explorer.get("observed_runtime")
@@ -660,6 +1283,8 @@ def evaluate(
             "explorer.observed_runtime",
             failures,
         )
+        if observed_explorer != previous:
+            failures.append("explorer.observed_runtime:mismatch")
 
     if (
         ebs.get("schema_version")
@@ -691,6 +1316,8 @@ def evaluate(
             "ebs.observed_runtime",
             failures,
         )
+        if observed_ebs != previous:
+            failures.append("ebs.observed_runtime:mismatch")
     migration_execution = ebs.get("migration_execution_binding")
     if not isinstance(migration_execution, Mapping):
         failures.append("ebs.migration_execution_binding:missing")
@@ -701,6 +1328,29 @@ def evaluate(
             "ebs.migration_execution_binding",
             failures,
         )
+        if (
+            not isinstance(migration_execution.get("repository"), str)
+            or migration_execution.get("repository")
+            != "JAIOS-Governance/junca-social-ecosystem-chain"
+            or not isinstance(migration_execution.get("run_id"), str)
+            or re.fullmatch(
+                r"[1-9][0-9]*", migration_execution.get("run_id", "")
+            )
+            is None
+            or not isinstance(migration_execution.get("head_sha"), str)
+            or COMMIT.fullmatch(
+                migration_execution.get("head_sha", "")
+            )
+            is None
+            or not isinstance(
+                migration_execution.get("migration_request_sha256"), str
+            )
+            or SHA256.fullmatch(
+                migration_execution.get("migration_request_sha256", "")
+            )
+            is None
+        ):
+            failures.append("ebs.migration_execution_binding:invalid")
     migration_mappings = ebs.get("migration_validator_mappings")
     if (
         not isinstance(migration_mappings, list)
@@ -709,6 +1359,12 @@ def evaluate(
     ):
         failures.append("ebs.migration_validator_mappings:not_exact_three")
     else:
+        mapping_validator_ids: list[Any] = []
+        mapping_instance_ids: list[Any] = []
+        mapping_signers: list[Any] = []
+        mapping_state_volumes: list[Any] = []
+        mapping_snapshots: list[Any] = []
+        mapping_root_volumes: list[Any] = []
         for item in migration_mappings:
             _exact_keys(
                 item,
@@ -716,6 +1372,43 @@ def evaluate(
                 "ebs.migration_validator_mapping",
                 failures,
             )
+            mapping_validator_ids.append(item.get("validator_id"))
+            mapping_instance_ids.append(item.get("instance_id"))
+            mapping_signers.append(item.get("signer_arn"))
+            mapping_state_volumes.append(item.get("state_volume_id"))
+            mapping_snapshots.append(item.get("rollback_snapshot_id"))
+            mapping_root_volumes.append(item.get("root_volume_id"))
+        signer_prefix = f"arn:aws:kms:{REGION}:{ACCOUNT_ID}:key/"
+        if (
+            mapping_validator_ids != list(VALIDATOR_IDS)
+            or len(set(mapping_instance_ids)) != 3
+            or any(
+                INSTANCE.fullmatch(str(value)) is None
+                for value in mapping_instance_ids
+            )
+            or len(set(mapping_signers)) != 3
+            or any(
+                not isinstance(value, str)
+                or not value.startswith(signer_prefix)
+                for value in mapping_signers
+            )
+            or len(set(mapping_state_volumes)) != 3
+            or any(
+                VOLUME.fullmatch(str(value)) is None
+                for value in mapping_state_volumes
+            )
+            or len(set(mapping_snapshots)) != 3
+            or any(
+                SNAPSHOT.fullmatch(str(value)) is None
+                for value in mapping_snapshots
+            )
+            or len(set(mapping_root_volumes)) != 3
+            or any(
+                VOLUME.fullmatch(str(value)) is None
+                for value in mapping_root_volumes
+            )
+        ):
+            failures.append("ebs.migration_validator_mappings:invalid")
     migration_head = ebs.get("migration_finalized_head")
     if not isinstance(migration_head, Mapping):
         failures.append("ebs.migration_finalized_head:missing")
@@ -726,13 +1419,40 @@ def evaluate(
             "ebs.migration_finalized_head",
             failures,
         )
-    if not isinstance(
-        ebs.get("immutable_runtime_certificate_activation_pending"),
-        bool,
+        if (
+            not isinstance(migration_head.get("height"), int)
+            or isinstance(migration_head.get("height"), bool)
+            or migration_head.get("height", 0) < 1
+            or HASH.fullmatch(str(migration_head.get("hash"))) is None
+            or HASH.fullmatch(
+                str(migration_head.get("certificate_hash"))
+            )
+            is None
+        ):
+            failures.append("ebs.migration_finalized_head:invalid")
+    if (
+        ebs.get("immutable_runtime_certificate_activation_pending")
+        is not True
     ):
         failures.append(
-            "ebs.immutable_runtime_certificate_activation_pending:not_bool"
+            "ebs.immutable_runtime_certificate_activation_pending:not_true"
         )
+    if baseline_mode == "private_ssm":
+        private_readback = explorer.get("readback")
+        private_head = (
+            private_readback.get("finalized_head")
+            if isinstance(private_readback, Mapping)
+            else None
+        )
+        if not isinstance(private_head, Mapping) or not isinstance(
+            migration_head, Mapping
+        ) or any(
+            private_head.get(field) != migration_head.get(field)
+            for field in ("height", "hash", "certificate_hash")
+        ):
+            failures.append(
+                "private_ssm.migration_finalized_head:mismatch"
+            )
     volumes = ebs.get("validator_volumes")
     if not isinstance(volumes, list):
         failures.append("ebs.validator_volumes:missing")
@@ -770,6 +1490,41 @@ def evaluate(
             or any(not SNAPSHOT.fullmatch(str(value)) for value in snapshots)
         ):
             failures.append("ebs.validator_volumes:not_exact_three")
+        if (
+            isinstance(migration_mappings, list)
+            and len(migration_mappings) == 3
+            and isinstance(signers, list)
+        ):
+            if [
+                item.get("signer_arn")
+                for item in migration_mappings
+                if isinstance(item, Mapping)
+            ] != [
+                item.get("resource_arn")
+                for item in signers
+                if isinstance(item, Mapping)
+            ]:
+                failures.append(
+                    "ebs.migration_validator_mappings.signers:mismatch"
+                )
+            if [
+                item.get("state_volume_id")
+                for item in migration_mappings
+                if isinstance(item, Mapping)
+            ] != volume_ids:
+                failures.append(
+                    "ebs.migration_validator_mappings.volumes:mismatch"
+                )
+            if [
+                item.get("rollback_snapshot_id")
+                for item in migration_mappings
+                if isinstance(item, Mapping)
+            ] != snapshots:
+                failures.append(
+                    "ebs.migration_validator_mappings.snapshots:mismatch"
+                )
+
+    _drift_and_lineage(manifest, explorer, ebs, expected, failures)
 
     for name, source in (
         ("manifest", manifest),
@@ -779,6 +1534,14 @@ def evaluate(
         _boundary(source, name, failures)
 
     failures = sorted(set(failures))
+    ami_supply_chain = {
+        field: (
+            provenance.get(tag)
+            if isinstance(provenance, Mapping)
+            else None
+        )
+        for field, tag in AMI_SUPPLY_CHAIN_PROVENANCE.items()
+    }
     return {
         "schema_version": "junca-runtime-release-manifest-decision/v1",
         "decision": "PROMOTION_GATE_PASS" if not failures else "PROMOTION_GATE_REJECTED",
@@ -799,6 +1562,7 @@ def evaluate(
             "ami_id": manifest.get("ami_id"),
             "request_sha256": request_sha256,
             "migration_evidence_sha256": migration_evidence_sha256,
+            "ami_supply_chain": ami_supply_chain,
         },
         "failure_count": len(failures),
         "failures": failures,

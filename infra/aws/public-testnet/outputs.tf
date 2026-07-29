@@ -47,6 +47,11 @@ output "validator_instance_ids" {
   value = aws_instance.validator[*].id
 }
 
+output "validator_user_data_sha1" {
+  description = "Canonical per-validator SHA-1 values emitted by the provider for the exact rendered bootstrap payloads."
+  value       = [for rendered in local.validator_user_data : sha1(rendered)]
+}
+
 output "automatic_finality_readback" {
   description = "Terraform-canonical automatic finality settings shared by all three validators."
   value = {

@@ -2,13 +2,6 @@ name: JUNCA Public Testnet OIDC Trust Recovery
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - agent/public-testnet-oidc-trust-recovery-20260726
-    paths:
-      - .github/workflows/junca-public-testnet-oidc-trust-recovery.yml
-
 permissions:
   id-token: write
   contents: read
@@ -29,10 +22,10 @@ jobs:
       OIDC_PROVIDER_ARN: arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com
       REQUIRED_SUBJECT: repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Configure verified recovery role
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.RECOVERY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -149,7 +142,7 @@ jobs:
       contents: read
     steps:
       - name: Assume repaired role from exact public-testnet subject
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: arn:aws:iam::595710543956:role/${{ matrix.role }}
           aws-region: us-east-1

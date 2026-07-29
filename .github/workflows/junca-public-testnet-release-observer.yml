@@ -13,7 +13,7 @@ on:
     types: [requested, in_progress, completed]
 
 permissions:
-  actions: write
+  actions: read
   contents: read
   issues: write
 
@@ -46,7 +46,7 @@ jobs:
       OBSERVED_CREATED_AT: ${{ github.event.workflow_run.created_at }}
       OBSERVED_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
     steps:
-      - name: Record and authorize governed workflow evidence
+      - name: Record governed workflow evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -54,6 +54,7 @@ jobs:
           [[ "$OBSERVED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$OBSERVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$OBSERVED_RUN_URL" == "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}" ]]
+          live_state_eligible=true
 
           case "$OBSERVED_ACTION" in
             requested) result="RUN_REQUESTED" ;;
@@ -112,8 +113,17 @@ jobs:
               workflow_path="junca-validator-foundation-release.yml"
               ;;
             "JUNCA Public Testnet Continuity Evidence")
-              phase="FINALITY_CONTINUITY_READBACK"
-              issues="244 249"
+              if [ "$OBSERVED_EVENT" = "pull_request" ]; then
+                phase="CONTINUITY_CONTRACT_TEST"
+                issues="244"
+                live_state_eligible=false
+                if [ "$result" = "VERIFIED" ]; then
+                  result="CONTRACT_TEST_PASS"
+                fi
+              else
+                phase="FINALITY_CONTINUITY_READBACK"
+                issues="244 249"
+              fi
               environment_review="NOT_APPLICABLE"
               workflow_path="junca-public-testnet-continuity.yml"
               ;;
@@ -139,42 +149,8 @@ jobs:
           stale_run_cancellations=0
 
           approval_state="$environment_review"
-          if [ "$OBSERVED_ACTION" = "requested" ] && \
-             { [ "$source_binding" = "EXACT_CURRENT_MAIN" ] || \
-               [ "$source_binding" = "IMMUTABLE_CANDIDATE_REF" ]; } && \
-             [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
-            approval_state="NO_REVIEW_DISCOVERED"
-            for attempt in $(seq 1 60); do
-              if deployments="$(
-                gh api \
-                  "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
-                  2>/dev/null
-              )"; then
-                count="$(jq 'length' <<<"$deployments")"
-                if [ "$count" -eq 0 ]; then
-                  sleep 2
-                  continue
-                fi
-                jq -e '
-                  length == 1 and
-                  .[0].environment.name == "public-testnet" and
-                  (.[] | .environment.id | type == "number")
-                ' <<<"$deployments" >/dev/null
-                environment_id="$(jq -er '.[0].environment.id' <<<"$deployments")"
-                jq -n \
-                  --argjson environment_id "$environment_id" \
-                  --arg comment "CEO-authorized exact-source Public Testnet release ${OBSERVED_HEAD_SHA}" '{
-                    environment_ids: [$environment_id],
-                    state: "approved",
-                    comment: $comment
-                  }' | gh api --method POST \
-                    "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
-                    --input - >/dev/null
-                approval_state="APPROVED_EXACT_SOURCE"
-                break
-              fi
-              sleep 2
-            done
+          if [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
+            approval_state="HUMAN_REVIEW_REQUIRED"
           fi
 
           body="$(cat <<EOF
@@ -195,7 +171,7 @@ jobs:
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. In-flight immutable candidates are never cancelled merely because main advances; the canonical controller serializes them. Environment approval is permitted only for an exact current-main or exact immutable-candidate SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. In-flight immutable candidates are never cancelled merely because main advances; the canonical controller serializes them. This observer never approves deployments. A separate human reviewer must approve the protected public-testnet environment after exact-source review. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
 
           ## Safety boundary
 
@@ -210,8 +186,9 @@ jobs:
 
           # Historical runs remain append-only in Issue #266. Only the exact
           # current-main source may replace the single current-state Issue #269.
-          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ] || \
-             [ "$source_binding" = "IMMUTABLE_CANDIDATE_REF" ]; then
+          if [ "$live_state_eligible" = true ] && \
+             { [ "$source_binding" = "EXACT_CURRENT_MAIN" ] || \
+               [ "$source_binding" = "IMMUTABLE_CANDIDATE_REF" ]; }; then
             gh api --method PATCH \
               "repos/${GITHUB_REPOSITORY}/issues/269" \
               -f body="$body" >/dev/null

@@ -180,9 +180,6 @@ class RollingCompatibilityTests(unittest.TestCase):
 
         recovery_files = [
             ".github/workflows/junca-validator-foundation-release.yml",
-            "infra/aws/public-testnet/main.tf",
-            "infra/aws/public-testnet/outputs.tf",
-            "infra/aws/public-testnet/variables.tf",
             "jaios/social_ecosystem_chain/rolling_compatibility.py",
             "scripts/junca_public_testnet_foundation.sh",
             "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
@@ -274,6 +271,17 @@ class RollingCompatibilityTests(unittest.TestCase):
                 [
                     {
                         "filename": "infra/aws/public-testnet/unsafe-new.tf",
+                        "status": "modified",
+                        "previous_filename": None,
+                    }
+                ],
+                "outside the recovery allowlist",
+            ),
+            (
+                "files",
+                [
+                    {
+                        "filename": "infra/aws/public-testnet/main.tf",
                         "status": "modified",
                         "previous_filename": None,
                     }

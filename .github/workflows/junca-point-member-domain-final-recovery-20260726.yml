@@ -1,9 +1,6 @@
 name: JUNCA POINT MEMBER Domain Final Recovery 20260726
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/junca-point-member-domain-final-recovery-20260726.yml"]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +35,7 @@ jobs:
       DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
     steps:
       - name: Assume recovered AWS deployment role
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.RECOVERY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

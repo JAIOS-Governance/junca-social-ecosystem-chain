@@ -22,21 +22,37 @@ concurrency:
 
 jobs:
   accept:
-    if: >-
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/main'
-      ) ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.name == 'JUNCA Public Testnet Live 24h Soak' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository
-      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Authorize exact acceptance trigger
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          WORKFLOW_RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name || '' }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              test "$GITHUB_REF" = "refs/heads/main"
+              ;;
+            workflow_run)
+              test "$WORKFLOW_RUN_CONCLUSION" = "success"
+              test "$WORKFLOW_RUN_NAME" = \
+                "JUNCA Public Testnet Live 24h Soak"
+              test "$WORKFLOW_RUN_HEAD_BRANCH" = "main"
+              test "$WORKFLOW_RUN_HEAD_REPOSITORY" = "$REPOSITORY"
+              ;;
+            *)
+              echo "::error::Unsupported acceptance event: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Resolve exact hardcoded evidence chain
         env:
@@ -59,7 +75,10 @@ jobs:
             .conclusion == "success" and
             .name == "JUNCA Public Testnet Live 24h Soak" and
             .path == ".github/workflows/junca-public-testnet-live-soak.yml" and
-            .event == "workflow_run" and
+            (
+              .event == "workflow_run" or
+              .event == "workflow_dispatch"
+            ) and
             .head_branch == "main" and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -73,6 +92,12 @@ jobs:
             cd evidence/soak
             sha256sum --check junca-public-testnet-live-soak.json.sha256
           )
+          source_commit="$(
+            jq -er '
+              .candidate_binding.source_commit |
+              select(test("^[0-9a-f]{40}$"))
+            ' evidence/soak/junca-public-testnet-live-soak.json
+          )"
           foundation_run_id="$(
             jq -er .provenance.foundation_run_id \
               evidence/soak/junca-public-testnet-live-soak.json
@@ -81,28 +106,46 @@ jobs:
             jq -er .provenance.public_release_run_id \
               evidence/soak/junca-public-testnet-live-soak.json
           )"
-          for specification in \
-            "$foundation_run_id|JUNCA Validator Foundation Release|.github/workflows/junca-validator-foundation-release.yml|workflow_dispatch" \
-            "$public_release_run_id|JUNCA Public Testnet Release|.github/workflows/junca-public-testnet-release.yml|workflow_run"
-          do
-            IFS='|' read -r run_id workflow_name workflow_path workflow_event \
-              <<<"$specification"
-            run="$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}")"
-            jq -e \
-              --arg repository "${{ github.repository }}" \
-              --arg workflow_name "$workflow_name" \
-              --arg workflow_path "$workflow_path" \
-              --arg workflow_event "$workflow_event" '
-              .status == "completed" and
-              .conclusion == "success" and
-              .name == $workflow_name and
-              .path == $workflow_path and
-              .event == $workflow_event and
-              .head_branch == "main" and
-              .repository.full_name == $repository and
-              .head_repository.full_name == $repository
-            ' <<<"$run"
-          done
+          [[ "$foundation_run_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$public_release_run_id" =~ ^[1-9][0-9]*$ ]]
+          foundation_run="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${foundation_run_id}")"
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg source_commit "$source_commit" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Foundation Release" and
+            .path == ".github/workflows/junca-validator-foundation-release.yml" and
+            .event == "workflow_dispatch" and
+            .head_branch == ("release-candidate/" + $source_commit) and
+            .head_sha == $source_commit and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$foundation_run"
+          public_release_run="$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${public_release_run_id}")"
+          jq -e \
+            --arg repository "${{ github.repository }}" \
+            --arg source_commit "$source_commit" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Public Testnet Release" and
+            .path == ".github/workflows/junca-public-testnet-release.yml" and
+            (
+              (
+                .event == "workflow_run" and
+                .head_branch == "main"
+              ) or
+              (
+                .event == "workflow_dispatch" and
+                .head_branch == ("release-candidate/" + $source_commit) and
+                .head_sha == $source_commit
+              )
+            ) and
+            .repository.full_name == $repository and
+            .head_repository.full_name == $repository
+          ' <<<"$public_release_run"
           gh run download "$foundation_run_id" \
             --repo "${{ github.repository }}" \
             --name "junca-validator-foundation-release-${foundation_run_id}" \
@@ -124,7 +167,7 @@ jobs:
             --publication evidence/public-release/public-testnet-publication.json \
             --output artifacts/junca-public-testnet-runtime-acceptance-decision.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-public-testnet-runtime-acceptance-${{ github.run_id }}

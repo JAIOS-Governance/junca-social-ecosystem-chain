@@ -165,27 +165,63 @@ wait_for_ssm_command() {
   local instance_id="$2"
   local output_path="$3"
   local status=""
+  local error_path="${output_path%.json}-status-error.txt"
+  local final_readback_succeeded=false
   for attempt in $(seq 1 90); do
-    status="$(
+    if ! status="$(
       aws ssm get-command-invocation \
         --command-id "$command_id" \
         --instance-id "$instance_id" \
         --query Status \
-        --output text
-    )"
+        --output text 2>"$error_path"
+    )"; then
+      if grep -Eq \
+          'InvocationDoesNotExist|Throttl(ing|ed)|TooManyRequests|RequestLimitExceeded' \
+          "$error_path" &&
+          [[ "$attempt" != 90 ]]
+      then
+        sleep 2
+        continue
+      fi
+      return 1
+    fi
     case "$status" in
       Success) break ;;
       Failed|Cancelled|TimedOut|Cancelling)
         break
         ;;
     esac
-    test "$attempt" -lt 90
+    if [[ "$attempt" == 90 ]]; then
+      return 1
+    fi
     sleep 2
   done
-  aws ssm get-command-invocation \
-    --command-id "$command_id" \
-    --instance-id "$instance_id" >"$output_path"
-  jq -e '.Status == "Success"' "$output_path" >/dev/null
+  for attempt in $(seq 1 10); do
+    if aws ssm get-command-invocation \
+        --command-id "$command_id" \
+        --instance-id "$instance_id" \
+        >"$output_path" 2>"$error_path"
+    then
+      final_readback_succeeded=true
+      break
+    fi
+    if ! grep -Eq \
+        'InvocationDoesNotExist|Throttl(ing|ed)|TooManyRequests|RequestLimitExceeded' \
+        "$error_path" ||
+        [[ "$attempt" == 10 ]]
+    then
+      return 1
+    fi
+    sleep 2
+  done
+  if [[ "$final_readback_succeeded" != true ]]; then
+    return 1
+  fi
+  if ! jq -e '.Status == "Success"' "$output_path" >/dev/null; then
+    return 1
+  fi
+  rm -f "$error_path"
+  return 0
 }
 
 wait_for_ssm_command_result() {
@@ -193,14 +229,26 @@ wait_for_ssm_command_result() {
   local instance_id="$2"
   local output_path="$3"
   local status=""
+  local error_path="${output_path%.json}-status-error.txt"
+  local final_readback_succeeded=false
   for attempt in $(seq 1 90); do
-    status="$(
+    if ! status="$(
       aws ssm get-command-invocation \
         --command-id "$command_id" \
         --instance-id "$instance_id" \
         --query Status \
-        --output text
-    )"
+        --output text 2>"$error_path"
+    )"; then
+      if grep -Eq \
+          'InvocationDoesNotExist|Throttl(ing|ed)|TooManyRequests|RequestLimitExceeded' \
+          "$error_path" &&
+          [[ "$attempt" != 90 ]]
+      then
+        sleep 2
+        continue
+      fi
+      return 1
+    fi
     case "$status" in
       Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
     esac
@@ -210,9 +258,29 @@ wait_for_ssm_command_result() {
     fi
     sleep 2
   done
-  aws ssm get-command-invocation \
-    --command-id "$command_id" \
-    --instance-id "$instance_id" >"$output_path"
+  for attempt in $(seq 1 10); do
+    if aws ssm get-command-invocation \
+        --command-id "$command_id" \
+        --instance-id "$instance_id" \
+        >"$output_path" 2>"$error_path"
+    then
+      final_readback_succeeded=true
+      break
+    fi
+    if ! grep -Eq \
+        'InvocationDoesNotExist|Throttl(ing|ed)|TooManyRequests|RequestLimitExceeded' \
+        "$error_path" ||
+        [[ "$attempt" == 10 ]]
+    then
+      return 1
+    fi
+    sleep 2
+  done
+  if [[ "$final_readback_succeeded" != true ]]; then
+    return 1
+  fi
+  rm -f "$error_path"
+  return 0
 }
 
 render_runtime_finality_preflight() {
@@ -466,6 +534,7 @@ set_runtime_finality() {
   local command
   local command_id
   local instance_id
+  local instance_lines
   local expected_artifact_sha256
   local allow_missing_finality_keys
   local compensation_summary
@@ -475,9 +544,9 @@ set_runtime_finality() {
   local mutation_failed=false
   local -a instances=()
   local -a mutation_command_ids=()
-  [[ "$block_interval" =~ ^(0|30)$ ]]
-  [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]]
-  jq -e '
+  [[ "$block_interval" =~ ^(0|30)$ ]] || return 1
+  [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  if ! jq -e '
     type == "array" and length >= 1 and length <= 3 and
     (map(.instance_id) | unique | length) == length and
     all(
@@ -487,14 +556,22 @@ set_runtime_finality() {
         type == "string" and test("^[0-9a-f]{64}$")) and
       (.allow_missing_finality_keys | type == "boolean")
     )
-  ' <<<"$bindings_json" >/dev/null
-  mapfile -t instances < <(jq -er '.[].instance_id' <<<"$bindings_json")
+  ' <<<"$bindings_json" >/dev/null; then
+    return 1
+  fi
+  if ! instance_lines="$(
+    jq -er '.[].instance_id' <<<"$bindings_json"
+  )"; then
+    return 1
+  fi
+  mapfile -t instances <<<"$instance_lines"
+  [[ "${#instances[@]}" -ge 1 && "${#instances[@]}" -le 3 ]] || return 1
   if [[ "$slot_epoch" != "0" ]]; then
-    test "$slot_epoch" -gt "$(date +%s)"
-    test "$((slot_epoch % 30))" -eq 0
+    test "$slot_epoch" -gt "$(date +%s)" || return 1
+    test "$((slot_epoch % 30))" -eq 0 || return 1
   fi
   if [[ "$block_interval" == "30" ]]; then
-    test "$slot_epoch" != "0"
+    test "$slot_epoch" != "0" || return 1
     finality_enabled=true
   else
     finality_enabled=false
@@ -503,20 +580,29 @@ set_runtime_finality() {
   # Complete every read-only preflight before any runtime.env mutation.
   for index in "${!instances[@]}"; do
     instance_id="${instances[$index]}"
-    expected_artifact_sha256="$(
+    if ! expected_artifact_sha256="$(
       jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
-    )"
-    allow_missing_finality_keys="$(
-      jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
-    )"
-    command="$(
+    )"; then
+      return 1
+    fi
+    if ! allow_missing_finality_keys="$(
+      jq -r ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+    )"; then
+      return 1
+    fi
+    if ! command="$(
       render_runtime_finality_preflight \
         "$finality_enabled" "$block_interval" "$slot_epoch" \
         "$expected_artifact_sha256" "$allow_missing_finality_keys"
-    )"
-    jq -n --arg command "$command" '{commands: [$command]}' \
+    )"; then
+      return 1
+    fi
+    if ! jq -n --arg command "$command" '{commands: [$command]}' \
       >"artifacts/ssm-finality-preflight-${index}.json"
-    command_id="$(
+    then
+      return 1
+    fi
+    if ! command_id="$(
       aws ssm send-command \
         --instance-ids "$instance_id" \
         --document-name AWS-RunShellScript \
@@ -524,10 +610,15 @@ set_runtime_finality() {
         --comment "JUNCA Public Testnet finality read-only preflight" \
         --query Command.CommandId \
         --output text
-    )"
-    wait_for_ssm_command \
+    )"; then
+      return 1
+    fi
+    if ! wait_for_ssm_command \
       "$command_id" "$instance_id" \
       "artifacts/finality-preflight-${block_interval}-${slot_epoch}-${instance_id}.json"
+    then
+      return 1
+    fi
   done
 
   # Dispatch every mutation before collecting any result, preventing an early
@@ -538,7 +629,7 @@ set_runtime_finality() {
       jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
     )"
     allow_missing_finality_keys="$(
-      jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+      jq -r ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
     )"
     command="$(
       render_runtime_finality_mutation \
@@ -588,7 +679,7 @@ set_runtime_finality() {
         jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
       )"
       allow_missing_finality_keys="$(
-        jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+        jq -r ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
       )"
       command="$(
         render_runtime_finality_mutation \
@@ -691,6 +782,106 @@ set_runtime_finality() {
       }' > artifacts/finality-compensation-summary.json
     return 1
   fi
+  return 0
+}
+
+verify_validator_bootstrap_readiness() {
+  local validator_id="$1"
+  local instance_id="$2"
+  local output_path="$3"
+  local command_path="${output_path%.json}-command.json"
+  local invocation_path="${output_path%.json}-invocation.json"
+  local command
+  local command_id
+  [[ "$validator_id" =~ ^validator-0[1-3]$ ]] || return 1
+  [[ "$instance_id" =~ ^i-[0-9a-f]{8,17}$ ]] || return 1
+  command="$(cat <<EOF
+set -euo pipefail
+cloud-init status --wait >/dev/null
+systemctl is-active --quiet junca-validator.service
+mountpoint -q /var/lib/junca
+test -f /var/lib/junca/state.sqlite
+test ! -L /var/lib/junca/state.sqlite
+test "\$(python3 -c 'import sqlite3; c=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro",uri=True); print(c.execute("PRAGMA quick_check").fetchone()[0]); c.close()')" = ok
+test -f /etc/junca/runtime.env
+test ! -L /etc/junca/runtime.env
+test "\$(grep -c '^NODE_ARTIFACT_SHA256=' /etc/junca/runtime.env)" = 1
+test "\$(grep -c '^GENESIS_SHA256=' /etc/junca/runtime.env)" = 1
+grep -Fxq 'NODE_ARTIFACT_SHA256=${NODE_ARTIFACT_SHA256}' /etc/junca/runtime.env
+grep -Fxq 'GENESIS_SHA256=${GENESIS_SHA256}' /etc/junca/runtime.env
+printf '%s  %s\n' '${NODE_ARTIFACT_SHA256}' /opt/junca/validator-runtime.tar.gz | sha256sum --check --strict >/dev/null
+printf '%s  %s\n' '${GENESIS_SHA256}' /etc/junca/genesis.json | sha256sum --check --strict >/dev/null
+health="\$(curl -fsS http://127.0.0.1:8545/health)"
+durable="\$(python3 -c 'import json,sqlite3; c=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro",uri=True); c.row_factory=sqlite3.Row; r=c.execute("SELECT height,block_hash,certificate_hash FROM blocks WHERE finalized=1 ORDER BY height DESC LIMIT 1").fetchone(); assert r is not None; print(json.dumps(dict(r),sort_keys=True,separators=(",",":"))); c.close()')"
+jq -n --argjson health "\$health" --argjson durable "\$durable" '{
+  status: (if (
+    \$health.status == "healthy" and
+    \$health.validator_id == "${validator_id}" and
+    \$health.chain_id == 20260723 and
+    (\$health.head_height | type) == "number" and
+	    \$health.head_height >= 1 and
+	    \$health.head_height == \$durable.height and
+	    \$health.head_hash == \$durable.block_hash and
+	    (\$health.consensus | type) == "object" and
+	    (\$health.consensus.last_certificate_hash | type) == "string" and
+	    (\$health.consensus.last_certificate_hash |
+	      test("^0x[0-9a-f]{64}$")) and
+	    (\$durable.certificate_hash | type) == "string" and
+	    (\$durable.certificate_hash | test("^0x[0-9a-f]{64}$")) and
+	    \$health.consensus.last_certificate_hash ==
+	      \$durable.certificate_hash and
+    \$health.mainnet_changed == false and
+    \$health.assets_moved == false and
+    \$health.bridge_activated == false
+  ) then "READY" else "REJECTED" end),
+  validator_id: \$health.validator_id,
+  chain_id: \$health.chain_id,
+  head_height: \$health.head_height,
+  head_hash: \$health.head_hash,
+  certificate_hash: \$durable.certificate_hash,
+  mainnet_changed: \$health.mainnet_changed,
+  assets_moved: \$health.assets_moved,
+  bridge_activated: \$health.bridge_activated
+}'
+EOF
+)"
+  if ! jq -n --arg command "$command" '{commands: [$command]}' \
+      >"$command_path"
+  then
+    return 1
+  fi
+  if ! command_id="$(
+    aws ssm send-command \
+      --instance-ids "$instance_id" \
+      --document-name AWS-RunShellScript \
+      --parameters "file://${command_path}" \
+      --comment "JUNCA validator bootstrap readiness pre-mutation" \
+      --query Command.CommandId \
+      --output text
+  )"; then
+    return 1
+  fi
+  if ! wait_for_ssm_command \
+      "$command_id" "$instance_id" "$invocation_path"
+  then
+    return 1
+  fi
+  if ! jq -er .StandardOutputContent "$invocation_path" |
+      jq -e '
+        .status == "READY" and
+        .chain_id == 20260723 and
+        (.head_height | type) == "number" and
+        .head_height >= 1 and
+        (.head_hash | type) == "string" and
+        (.certificate_hash | type) == "string" and
+        .mainnet_changed == false and
+        .assets_moved == false and
+        .bridge_activated == false
+      ' >"$output_path"
+  then
+    return 1
+  fi
+  return 0
 }
 
 capture_validator_observation() {
@@ -785,6 +976,18 @@ def finality_readback:
 
 (finality_readback) as $finality
 |
+if (
+  ($health.consensus | type) != "object" or
+  ($health.consensus.last_certificate | type) != "object" or
+  ($health.consensus.last_certificate_hash | type) != "string" or
+  (($health.consensus.last_certificate_hash |
+    test("^0x[0-9a-f]{64}$")) | not) or
+  $health.consensus.last_certificate_hash != $durable.certificate_hash or
+  ($health.consensus.last_certificate | tojson) !=
+    ($durable.certificate | tojson)
+) then
+  error("health consensus certificate and durable certificate differ")
+else
 {
   validator_id: $health.validator_id,
   runtime_version: $runtime_version,
@@ -798,29 +1001,17 @@ def finality_readback:
   state_store_integrity: true,
   head_height: $health.head_height,
   head_hash: $health.head_hash,
-  certificate_hash:
-    ($health.consensus.last_certificate_hash // $durable.certificate_hash),
+  certificate_hash: $health.consensus.last_certificate_hash,
   durable_certificate_hash: $durable.certificate_hash,
-  certificate_height:
-    ($health.consensus.last_certificate.height // $durable.certificate.height),
-  certificate_block_hash:
-    ($health.consensus.last_certificate.block_hash //
-      $durable.certificate.block_hash),
+  certificate_height: $health.consensus.last_certificate.height,
+  certificate_block_hash: $health.consensus.last_certificate.block_hash,
   certificate_finality_status:
-    ($health.consensus.last_certificate.finality_status //
-      $durable.certificate.finality_status),
-  certificate_signed_power:
-    ($health.consensus.last_certificate.signed_power //
-      $durable.certificate.signed_power),
-  certificate_total_power:
-    ($health.consensus.last_certificate.total_power //
-      $durable.certificate.total_power),
+    $health.consensus.last_certificate.finality_status,
+  certificate_signed_power: $health.consensus.last_certificate.signed_power,
+  certificate_total_power: $health.consensus.last_certificate.total_power,
   certificate_validator_ids:
-    ($health.consensus.last_certificate.validator_ids //
-      $durable.certificate.validator_ids),
-  certificate_vote_hashes:
-    ($health.consensus.last_certificate.vote_hashes //
-      $durable.certificate.vote_hashes),
+    $health.consensus.last_certificate.validator_ids,
+  certificate_vote_hashes: $health.consensus.last_certificate.vote_hashes,
   automatic_finality_enabled: $finality.automatic_finality_enabled,
   block_interval_seconds: $finality.block_interval_seconds,
   slot_epoch_seconds: $finality.slot_epoch_seconds,
@@ -841,6 +1032,7 @@ def finality_readback:
   assets_moved: $health.assets_moved,
   bridge_activated: $health.bridge_activated
 }
+end
 '"'"'
 '
   jq -n --arg command "$readback_command" '{commands: [$command]}' \
@@ -1271,9 +1463,16 @@ terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
 terraform -chdir=infra/aws/public-testnet output -json \
   > artifacts/pre-foundation-outputs.json
 public_services_enabled="$(
-  jq -er '.public_services_acceptance_readback.value.enabled // false' \
+  jq -r '
+    .public_services_acceptance_readback.value.enabled
+    | select(type == "boolean")
+  ' \
     artifacts/pre-foundation-outputs.json
 )"
+case "$public_services_enabled" in
+  true|false) ;;
+  *) echo "public services readback must be boolean" >&2; exit 1 ;;
+esac
 if [[ "$public_services_enabled" == "true" ]]; then
   quorum_acceptance_sha256="$(
     jq -er '.public_services_acceptance_readback.value.quorum_evidence_sha256' \
@@ -1378,6 +1577,127 @@ case "$validator_state_count" in
     exit 1
     ;;
 esac
+validator_state_volume_ids="$(
+  jq -ce 'map(.volume_id)' <<<"$validator_state_readback"
+)"
+
+# Bind the implicit replacement root-volume key to the exact encrypted
+# candidate AMI snapshot. This uses EC2 readback already required by the
+# deployment role and does not assume that the Terraform-state KMS key is also
+# an EBS key.
+aws ec2 get-ebs-encryption-by-default \
+  --region "$AWS_REGION" > artifacts/ebs-encryption-default-readback.json
+jq -e '.EbsEncryptionByDefault == true' \
+  artifacts/ebs-encryption-default-readback.json >/dev/null
+aws ec2 describe-images \
+  --region "$AWS_REGION" \
+  --owners self \
+  --image-ids "$NODE_AMI_ID" \
+  > artifacts/candidate-root-image-readback.json
+candidate_root_snapshot_id="$(
+  jq -er \
+    --arg account_id "$AWS_ACCOUNT_ID" \
+    --arg image_id "$NODE_AMI_ID" '
+      .Images
+      | select(length == 1)
+      | .[0]
+      | select(
+          .ImageId == $image_id and
+          .OwnerId == $account_id and
+          .State == "available" and
+          .Architecture == "x86_64" and
+          .RootDeviceType == "ebs" and
+          (.RootDeviceName | type == "string" and length > 0)
+        )
+      | . as $image
+      | [
+          .BlockDeviceMappings[]
+          | select(
+              .DeviceName == $image.RootDeviceName and
+              .Ebs.VolumeSize == 16 and
+              (.Ebs.SnapshotId |
+                type == "string" and test("^snap-[0-9a-f]{8,17}$"))
+            )
+          | .Ebs.SnapshotId
+        ]
+      | select(length == 1)
+      | .[0]
+    ' artifacts/candidate-root-image-readback.json
+)"
+aws ec2 describe-snapshots \
+  --region "$AWS_REGION" \
+  --owner-ids self \
+  --snapshot-ids "$candidate_root_snapshot_id" \
+  > artifacts/candidate-root-snapshot-readback.json
+root_ebs_kms_key_arn="$(
+  jq -er \
+    --arg account_id "$AWS_ACCOUNT_ID" \
+    --arg region "$AWS_REGION" \
+    --arg snapshot_id "$candidate_root_snapshot_id" '
+      .Snapshots
+      | select(length == 1)
+      | .[0]
+      | select(
+          .SnapshotId == $snapshot_id and
+          .OwnerId == $account_id and
+          .State == "completed" and
+          .Encrypted == true and
+          .VolumeSize == 16 and
+          (.KmsKeyId |
+            test(
+              "^arn:aws:kms:" + $region + ":" + $account_id +
+              ":key/[0-9A-Za-z-]{16,}$"
+            ))
+        )
+      | .KmsKeyId
+    ' artifacts/candidate-root-snapshot-readback.json
+)"
+[[ "$root_ebs_kms_key_arn" =~ ^arn:aws:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/[0-9A-Za-z-]{16,}$ ]]
+
+if [[ "$validator_state_enabled" == "true" ]]; then
+  mapfile -t validator_state_volume_id_list < <(
+    jq -er '.[]' <<<"$validator_state_volume_ids"
+  )
+  aws ec2 describe-volumes \
+    --region "$AWS_REGION" \
+    --volume-ids "${validator_state_volume_id_list[@]}" \
+    > artifacts/validator-state-volume-plan-readback.json
+  validator_state_kms_key_arns="$(
+    jq -ce \
+      --arg account_id "$AWS_ACCOUNT_ID" \
+      --arg region "$AWS_REGION" \
+      --argjson state "$validator_state_readback" '
+        .Volumes as $volumes
+        | [
+            $state[] as $expected
+            | [
+                $volumes[]
+                | select(
+                    .VolumeId == $expected.volume_id and
+                    .AvailabilityZone == $expected.availability_zone and
+                    .Encrypted == true and
+                    .Size == $expected.size_gib and
+                    .Iops == $expected.iops and
+                    .Throughput == $expected.throughput_mibps and
+                    .VolumeType == $expected.type and
+                    .State == "in-use" and
+                    (.KmsKeyId |
+                      test(
+                        "^arn:aws:kms:" + $region + ":" + $account_id +
+                        ":key/[0-9A-Za-z-]{16,}$"
+                      ))
+                  )
+                | .KmsKeyId
+              ]
+            | select(length == 1)
+            | .[0]
+          ]
+        | select(length == 3)
+      ' artifacts/validator-state-volume-plan-readback.json
+  )"
+else
+  validator_state_kms_key_arns='[]'
+fi
 
 # Preserve the exact Terraform-canonical automatic finality epoch after its
 # first successful apply. A later AMI rollout must not create a second slot
@@ -1558,63 +1878,292 @@ jq -n \
     )
   }' > artifacts/foundation.auto.tfvars.json
 
+# Render the exact three user-data payloads from a single Terraform local used
+# by aws_instance.validator. The provider stores SHA-1 in plan JSON, so these
+# independently evaluated digests close the plan/apply binding without
+# accepting an arbitrary 40-hex replacement value.
+expected_user_data_sha1="$(
+  terraform -chdir=infra/aws/public-testnet console \
+    -var-file="$GITHUB_WORKSPACE/artifacts/foundation.auto.tfvars.json" \
+    <<<'jsonencode([for value in local.validator_user_data : sha1(value)])' |
+    jq -cer '
+      fromjson
+      | select(
+          type == "array" and
+          length == 3 and
+          (unique | length) == 3 and
+          all(.[]; type == "string" and test("^[0-9a-f]{40}$"))
+        )
+    '
+)"
+validator_user_data_template_sha256="$(
+  sha256sum \
+    infra/aws/public-testnet/templates/validator-user-data.sh.tftpl |
+    cut -d' ' -f1
+)"
+[[ "$validator_user_data_template_sha256" =~ ^[0-9a-f]{64}$ ]]
+jq -n \
+  --arg root_ebs_kms_key_arn "$root_ebs_kms_key_arn" \
+  --arg template_sha256 "$validator_user_data_template_sha256" \
+  --argjson user_data_sha1 "$expected_user_data_sha1" \
+  '{
+    schema_version: 1,
+    root_ebs_kms_key_arn: $root_ebs_kms_key_arn,
+    template_sha256: $template_sha256,
+    user_data_sha1: $user_data_sha1
+  }' > artifacts/foundation-render-bindings.json
+
 terraform -chdir=infra/aws/public-testnet plan -input=false \
   -var-file="$GITHUB_WORKSPACE/artifacts/foundation.auto.tfvars.json" \
   -out="$GITHUB_WORKSPACE/artifacts/foundation.tfplan"
 terraform -chdir=infra/aws/public-testnet show -json \
   "$GITHUB_WORKSPACE/artifacts/foundation.tfplan" > artifacts/foundation-plan.json
-
-# Destructive changes remain fail-closed. The only permitted delete action is
-# an AMI-driven replacement of one or more of the three canonical validators.
 jq -e \
-  --argjson public_services_enabled "$public_services_enabled" \
-  --argjson validator_state_enabled "$validator_state_enabled" '
-  [
-    .resource_changes[]?
-    | select(.change.actions | index("delete"))
-    | {
-        address,
-        actions: .change.actions,
-        replace_paths: (.change.replace_paths // [])
-      }
-  ] as $deletions
-  | ($deletions | length) == 0 or
+  --argjson expected "$expected_user_data_sha1" '
+    .output_changes.validator_user_data_sha1.after == $expected and
     (
-      [
-        $deletions[]
-        | select(.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
-      ] as $validators
-      | [
-          $validators[].address
-          | capture("^aws_instance\\.validator\\[(?<index>[0-2])\\]$").index
-        ] as $indices
-      | [
-          $indices[] as $index
-          | "aws_lb_target_group_attachment.rpc[\($index)]",
-            "aws_lb_target_group_attachment.explorer[\($index)]"
-        ] as $expected_attachments
-      | [
-          $indices[] as $index
-          | "aws_volume_attachment.validator_state[\($index)]"
-        ] as $expected_state_attachments
-      | [
-          $deletions[]
-          | select(.address | test(
-              "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
-          ))
-        ] as $attachments
-      | [
-          $deletions[]
-          | select(.address | test(
-              "^aws_volume_attachment\\.validator_state\\[[0-2]\\]$"
-            ))
-        ] as $state_attachments
-      | ($validators | length) >= 1 and
+      .output_changes.validator_user_data_sha1.after_unknown // false
+    ) == false
+  ' artifacts/foundation-plan.json >/dev/null
+
+# Every managed non-noop change is fail-closed. A rolling release may replace
+# only the canonical validator suffix and its exact attachments; the only
+# in-place updates are validator alarm InstanceId dimensions. Legacy
+# non-rolling apply is retained only for an already-converged no-op state.
+jq -e \
+  --arg phase "$phase" \
+  --arg node_ami_id "$NODE_AMI_ID" \
+  --arg root_ebs_kms_key_arn "$root_ebs_kms_key_arn" \
+  --argjson rolling_release "$rolling_release" \
+  --argjson public_services_enabled "$public_services_enabled" \
+  --argjson validator_state_enabled "$validator_state_enabled" \
+  --argjson validator_state_volume_ids "$validator_state_volume_ids" \
+  --argjson validator_state_kms_key_arns \
+    "$validator_state_kms_key_arns" \
+  --argjson validator_state_rollback_snapshot_ids \
+    "$validator_state_rollback_snapshot_ids" \
+  --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
+  --argjson expected_user_data_sha1 "$expected_user_data_sha1" \
+  --argjson current_validator_ids "$(
+    jq -c '.validator_instance_ids.value' artifacts/pre-foundation-outputs.json
+  )" '
+  # BEGIN_ROLLING_FULL_PLAN_GATE
+  def validator_index:
+    .address |
+      capture("^aws_instance\\.validator\\[(?<index>[0-2])\\]$").index |
+      tonumber;
+
+  def retained_state_drift(
+    $volume_ids;
+    $state_kms;
+    $rollback_snapshot_ids;
+    $zones
+  ):
+    validator_index as $index
+    | .mode == "managed" and
+      .type == "aws_instance" and
+      .name == "validator" and
+      .index == $index and
+      .change.actions == ["update"] and
+      (.change.replace_paths // []) == [] and
+      .change.before.ebs_block_device == [] and
+      (
+        (.change.before |
+          del(.ebs_block_device, .root_block_device[0].tags)) ==
+        (.change.after |
+          del(.ebs_block_device, .root_block_device[0].tags))
+      ) and
+      (
+        .change.before.root_block_device[0].tags == null or
+        .change.before.root_block_device[0].tags == {}
+      ) and
+      .change.after.root_block_device[0].tags == {} and
+      ([.change.after_unknown | .. | select(. == true)] | length) == 0 and
+      (.change.after.ebs_block_device | length) == 1 and
+      (
+        .change.after.ebs_block_device[0] as $volume
+        | $volume.delete_on_termination == false and
+          $volume.device_name == "/dev/sdf" and
+          $volume.encrypted == true and
+          $volume.iops == 6000 and
+          $volume.kms_key_id == $state_kms[$index] and
+          $volume.snapshot_id == "" and
+          $volume.throughput == 250 and
+          $volume.volume_id == $volume_ids[$index] and
+          $volume.volume_size == 200 and
+          $volume.volume_type == "gp3" and
+          $volume.tags == $volume.tags_all and
+          ($volume.tags | keys) == [
+            "AssetsMoved",
+            "BridgeActivated",
+            "FailureDomain",
+            "Governance",
+            "JuncaFilesystemVerified",
+            "JuncaFinalityCertificateBackfilled",
+            "JuncaMigrationState",
+            "JuncaRollbackSnapshotId",
+            "JuncaStateStoreIntegrity",
+            "MainnetChanged",
+            "ManagedBy",
+            "MigrationRequired",
+            "MonetaryUse",
+            "Name",
+            "Network",
+            "Project",
+            "PublicTestnetOnly",
+            "StatePath",
+            "Validator"
+          ] and
+          $volume.tags.AssetsMoved == "false" and
+          $volume.tags.BridgeActivated == "false" and
+          $volume.tags.FailureDomain == $zones[$index] and
+          $volume.tags.Governance ==
+            "JAIOS Institutional Governance" and
+          $volume.tags.JuncaFilesystemVerified == "true" and
+          $volume.tags.JuncaFinalityCertificateBackfilled == "true" and
+          $volume.tags.JuncaMigrationState == "VERIFIED_PASS" and
+          $volume.tags.JuncaRollbackSnapshotId ==
+            $rollback_snapshot_ids[$index] and
+          $volume.tags.JuncaStateStoreIntegrity == "true" and
+          $volume.tags.MainnetChanged == "false" and
+          $volume.tags.ManagedBy == "Terraform" and
+          $volume.tags.MigrationRequired == "false" and
+          $volume.tags.MonetaryUse == "None" and
+          $volume.tags.Name == (
+            "junca-social-ecosystem-chain-testnet-validator-0" +
+            (($index + 1) | tostring) + "-state"
+          ) and
+          $volume.tags.Network == "Public Testnet" and
+          $volume.tags.Project == "JUNCA Social Ecosystem Chain" and
+          $volume.tags.PublicTestnetOnly == "true" and
+          $volume.tags.StatePath == "/var/lib/junca" and
+          $volume.tags.Validator == ("0" + (($index + 1) | tostring))
+      );
+
+  def alarm_update($replacement_indices; $current_ids):
+    (.address |
+      capture("^aws_cloudwatch_metric_alarm\\.validator_status\\[(?<index>[0-2])\\]$").index |
+      tonumber) as $index
+    |
+    .change.actions == ["update"] and
+    (.change.replace_paths // []) == [] and
+    ((.change.before | del(.dimensions)) ==
+      (.change.after | del(.dimensions))) and
+    (.change.before.dimensions | keys) == ["InstanceId"] and
+    (.change.before.dimensions.InstanceId |
+      test("^i-[0-9a-f]{8,17}$")) and
+    (
+      if ($replacement_indices | index($index)) != null then
+        .change.after.dimensions == null and
+        .change.after_unknown.dimensions == true
+      else
+        .change.after.dimensions ==
+          {"InstanceId": $current_ids[$index]} and
+        ([.change.after_unknown | .. | select(. == true)] | length) == 0
+      end
+    );
+
+  . as $plan
+  | [
+      .resource_changes[]?
+      | select(
+          .mode == "managed" and
+          .change.actions != ["no-op"]
+        )
+    ] as $changes
+  | [
+    $changes[]
+    | select(.address | test("^aws_instance\\.validator\\[[0-2]\\]$"))
+  ] as $validators
+  | [
+      $validators[].address
+      | capture("^aws_instance\\.validator\\[(?<index>[0-2])\\]$").index
+      | tonumber
+    ] as $indices
+  | [
+      $indices[] as $index
+      | "aws_lb_target_group_attachment.rpc[\($index)]",
+        "aws_lb_target_group_attachment.explorer[\($index)]"
+    ] as $expected_attachments
+  | [
+      $indices[] as $index
+      | "aws_volume_attachment.validator_state[\($index)]"
+    ] as $expected_state_attachments
+  | [
+      $changes[]
+      | select(.address | test(
+          "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
+        ))
+    ] as $attachments
+  | [
+      $changes[]
+      | select(.address | test(
+          "^aws_volume_attachment\\.validator_state\\[[0-2]\\]$"
+        ))
+    ] as $state_attachments
+  | [
+      $changes[]
+      | select(.address | test(
+          "^aws_cloudwatch_metric_alarm\\.validator_status\\[[0-2]\\]$"
+        ))
+    ] as $alarms
+  | [($plan.resource_drift // [])[]?] as $drift
+  | (
+      if $validator_state_enabled then [0, 1, 2] else [] end
+    ) as $expected_drift_indices
+  | [
+      $expected_drift_indices[] |
+      "aws_instance.validator[\(.)]"
+    ] as $expected_drift_addresses
+  | (
+      if ($indices | length) > 0 then
+        [$indices[] |
+          "aws_cloudwatch_metric_alarm.validator_status[\(.)]"]
+      else
+        [$alarms[].address]
+      end
+    ) as $expected_alarms
+  | $plan.format_version == "1.2" and
+    $plan.terraform_version == "1.9.8" and
+    $plan.complete == true and
+    $plan.errored == false and
+    (($plan.deferred_changes // []) | length) == 0 and
+    ($drift | length) <= ($expected_drift_addresses | length) and
+    ([ $drift[].address ] | unique | length) == ($drift | length) and
+    all(
+      $drift[];
+      .address as $drift_address |
+      ($expected_drift_addresses | index($drift_address)) != null
+    ) and
+    all(
+      $drift[];
+      retained_state_drift(
+        $validator_state_volume_ids;
+        $validator_state_kms_key_arns;
+        $validator_state_rollback_snapshot_ids;
+        $availability_zones
+      )
+    ) and
+    all(
+      $plan.resource_changes[]?;
+      if .mode == "managed" then
+        true
+      elif .mode == "data" then
+        (.change.actions == ["read"] or .change.actions == ["no-op"])
+      else
+        false
+      end
+    ) and
+    (
+      if $rolling_release then
+        (($changes | length) == 0 or $plan.applyable == true) and
         ($validators | length) <= 3 and
-        ([ $deletions[].address ] | unique | length) == ($deletions | length) and
+        ([ $changes[].address ] | unique | length) == ($changes | length) and
+        ([ $alarms[].address ] | sort) == ($expected_alarms | sort) and
         (
           if $public_services_enabled then
-            ([ $attachments[].address ] | sort) == ($expected_attachments | sort)
+            ([ $attachments[].address ] | sort) ==
+              ($expected_attachments | sort)
           else
             ($attachments | length) == 0
           end
@@ -1627,35 +2176,104 @@ jq -e \
             ($state_attachments | length) == 0
           end
         ) and
-        ($deletions | length) == (
+        ($changes | length) == (
           ($validators | length) +
           ($attachments | length) +
-          ($state_attachments | length)
+          ($state_attachments | length) +
+          ($alarms | length)
         ) and
         all(
-          $deletions[];
-          (.actions | index("create")) != null and
-          (.actions | index("delete")) != null and
+          $validators[];
+          .change.actions == ["delete", "create"] and
+          .change.replace_paths == [["ami"], ["user_data"]] and
+          .change.after.ami == $node_ami_id and
+          .change.after.private_ip ==
+            ["10.67.16.10", "10.67.32.10", "10.67.48.10"][
+              (.address |
+                capture("\\[(?<index>[0-2])\\]$").index |
+                tonumber)
+            ] and
+          .change.after.associate_public_ip_address == false and
+          .change.after.instance_type == "m7i.large" and
+          .change.after.iam_instance_profile ==
+            ("junca-social-ecosystem-chain-testnet-validator-" +
+              (((.address |
+                capture("\\[(?<index>[0-2])\\]$").index |
+                tonumber) + 1) | tostring)) and
+          .change.before.iam_instance_profile ==
+            .change.after.iam_instance_profile and
+          .change.before.subnet_id == .change.after.subnet_id and
+          (.change.after.subnet_id | test("^subnet-[0-9a-f]{8,17}$")) and
+          .change.before.vpc_security_group_ids ==
+            .change.after.vpc_security_group_ids and
+          (.change.after.vpc_security_group_ids | length) == 1 and
+          (.change.after.vpc_security_group_ids[0] |
+            test("^sg-[0-9a-f]{8,17}$")) and
+          .change.before.tags_all == .change.after.tags_all and
+          .change.after.tags_all.Project ==
+            "JUNCA Social Ecosystem Chain" and
+          .change.after.tags_all.Governance ==
+            "JAIOS Institutional Governance" and
+          .change.after.tags_all.Network == "Public Testnet" and
+          .change.after.tags_all.MonetaryUse == "None" and
+          .change.after.tags_all.ManagedBy == "Terraform" and
+          .change.after.monitoring == true and
+          (.change.before.user_data | test("^[0-9a-f]{40}$")) and
+          .change.after.user_data ==
+            $expected_user_data_sha1[
+              (.address |
+                capture("\\[(?<index>[0-2])\\]$").index |
+                tonumber)
+            ] and
+          (.change.after_unknown.user_data // false) == false and
+          .change.after.user_data_replace_on_change == true and
+          .change.after.source_dest_check == true and
+          .change.after.metadata_options[0].http_endpoint == "enabled" and
+          .change.after.metadata_options[0].http_tokens == "required" and
+          .change.after.root_block_device[0].encrypted == true and
+          .change.after.root_block_device[0].delete_on_termination == true and
+          .change.before.root_block_device[0].kms_key_id ==
+            $root_ebs_kms_key_arn and
+          .change.after.root_block_device[0].kms_key_id == null and
+          .change.after_unknown.root_block_device[0].kms_key_id == true and
+          .change.after.root_block_device[0].volume_type == "gp3" and
+          .change.after.root_block_device[0].volume_size == 200 and
+          .change.after.root_block_device[0].iops == 6000 and
+          .change.after.root_block_device[0].throughput == 250
+        ) and
+        all(
+          $attachments[];
+          .change.actions == ["delete", "create"] and
+          .change.replace_paths == [["target_id"]] and
+          .change.before.target_group_arn ==
+            .change.after.target_group_arn and
+          .change.after_unknown.target_id == true and
           (
-            (
-              (.address | test("^aws_instance\\.validator\\[[0-2]\\]$")) and
-              (.replace_paths | any(.[]; . == ["ami"]))
-            ) or
-            (
-              (.address | test(
-                "^aws_lb_target_group_attachment\\.(rpc|explorer)\\[[0-2]\\]$"
-              )) and
-              (.replace_paths | any(.[]; . == ["target_id"]))
-            ) or
-            (
-              (.address | test(
-                "^aws_volume_attachment\\.validator_state\\[[0-2]\\]$"
-              )) and
-              (.replace_paths | any(.[]; . == ["instance_id"]))
-            )
+            if (.address | contains(".rpc[")) then
+              .change.after.port == 8546
+            else
+              .change.after.port == 3000
+            end
           )
-        )
+        ) and
+        all(
+          $state_attachments[];
+          .change.actions == ["delete", "create"] and
+          .change.replace_paths == [["instance_id"]] and
+          .change.after.device_name == "/dev/sdf" and
+          .change.after.volume_id == .change.before.volume_id and
+          .change.after.force_detach == false and
+          .change.after.stop_instance_before_detaching == true and
+          .change.after_unknown.instance_id == true
+        ) and
+        all($alarms[]; alarm_update($indices; $current_validator_ids))
+      elif $phase == "foundation-plan" then
+        true
+      else
+        ($changes | length) == 0
+      end
     )
+  # END_ROLLING_FULL_PLAN_GATE
 ' artifacts/foundation-plan.json >/dev/null
 
 mapfile -t validator_replacements < <(
@@ -2069,37 +2687,261 @@ if [[ "$phase" == "foundation-apply" ]]; then
       terraform -chdir=infra/aws/public-testnet show -json "$target_plan" \
         > "$target_json"
       jq -e \
+        --slurpfile full_plan artifacts/foundation-plan.json \
         --arg address "$address" \
-        --argjson expected_addresses "$expected_addresses_json" '
+        --arg node_ami_id "$NODE_AMI_ID" \
+        --arg root_ebs_kms_key_arn "$root_ebs_kms_key_arn" \
+        --argjson expected_addresses "$expected_addresses_json" \
+        --argjson validator_state_enabled "$validator_state_enabled" \
+        --argjson validator_state_volume_ids "$validator_state_volume_ids" \
+        --argjson validator_state_kms_key_arns \
+          "$validator_state_kms_key_arns" \
+        --argjson validator_state_rollback_snapshot_ids \
+          "$validator_state_rollback_snapshot_ids" \
+        --argjson availability_zones "$AVAILABILITY_ZONES_JSON" \
+        --argjson expected_user_data_sha1 "$expected_user_data_sha1" '
+        # BEGIN_ROLLING_TARGET_PLAN_GATE
+        def validator_index:
+          .address |
+            capture("^aws_instance\\.validator\\[(?<index>[0-2])\\]$").index |
+            tonumber;
+
+        def retained_state_drift(
+          $volume_ids;
+          $state_kms;
+          $rollback_snapshot_ids;
+          $zones
+        ):
+          validator_index as $index
+          | .mode == "managed" and
+            .type == "aws_instance" and
+            .name == "validator" and
+            .index == $index and
+            .change.actions == ["update"] and
+            (.change.replace_paths // []) == [] and
+            .change.before.ebs_block_device == [] and
+            (
+              (.change.before |
+                del(.ebs_block_device, .root_block_device[0].tags)) ==
+              (.change.after |
+                del(.ebs_block_device, .root_block_device[0].tags))
+            ) and
+            (
+              .change.before.root_block_device[0].tags == null or
+              .change.before.root_block_device[0].tags == {}
+            ) and
+            .change.after.root_block_device[0].tags == {} and
+            ([.change.after_unknown | .. | select(. == true)] | length) == 0 and
+            (.change.after.ebs_block_device | length) == 1 and
+            (
+              .change.after.ebs_block_device[0] as $volume
+              | $volume.delete_on_termination == false and
+                $volume.device_name == "/dev/sdf" and
+                $volume.encrypted == true and
+                $volume.iops == 6000 and
+                $volume.kms_key_id == $state_kms[$index] and
+                $volume.snapshot_id == "" and
+                $volume.throughput == 250 and
+                $volume.volume_id == $volume_ids[$index] and
+                $volume.volume_size == 200 and
+                $volume.volume_type == "gp3" and
+                $volume.tags == $volume.tags_all and
+                ($volume.tags | keys) == [
+                  "AssetsMoved",
+                  "BridgeActivated",
+                  "FailureDomain",
+                  "Governance",
+                  "JuncaFilesystemVerified",
+                  "JuncaFinalityCertificateBackfilled",
+                  "JuncaMigrationState",
+                  "JuncaRollbackSnapshotId",
+                  "JuncaStateStoreIntegrity",
+                  "MainnetChanged",
+                  "ManagedBy",
+                  "MigrationRequired",
+                  "MonetaryUse",
+                  "Name",
+                  "Network",
+                  "Project",
+                  "PublicTestnetOnly",
+                  "StatePath",
+                  "Validator"
+                ] and
+                $volume.tags.AssetsMoved == "false" and
+                $volume.tags.BridgeActivated == "false" and
+                $volume.tags.FailureDomain == $zones[$index] and
+                $volume.tags.Governance ==
+                  "JAIOS Institutional Governance" and
+                $volume.tags.JuncaFilesystemVerified == "true" and
+                $volume.tags.JuncaFinalityCertificateBackfilled == "true" and
+                $volume.tags.JuncaMigrationState == "VERIFIED_PASS" and
+                $volume.tags.JuncaRollbackSnapshotId ==
+                  $rollback_snapshot_ids[$index] and
+                $volume.tags.JuncaStateStoreIntegrity == "true" and
+                $volume.tags.MainnetChanged == "false" and
+                $volume.tags.ManagedBy == "Terraform" and
+                $volume.tags.MigrationRequired == "false" and
+                $volume.tags.MonetaryUse == "None" and
+                $volume.tags.Name == (
+                  "junca-social-ecosystem-chain-testnet-validator-0" +
+                  (($index + 1) | tostring) + "-state"
+                ) and
+                $volume.tags.Network == "Public Testnet" and
+                $volume.tags.Project == "JUNCA Social Ecosystem Chain" and
+                $volume.tags.PublicTestnetOnly == "true" and
+                $volume.tags.StatePath == "/var/lib/junca" and
+                $volume.tags.Validator == ("0" + (($index + 1) | tostring))
+            );
+
+        . as $plan
+        |
         [
           .resource_changes[]?
-          | select(.change.actions | index("delete"))
-          | {
-              address,
-              actions: .change.actions,
-            replace_paths: (.change.replace_paths // [])
-          }
-        ] as $deletions
-        | ($deletions | length) == ($expected_addresses | length) and
-          ([ $deletions[].address ] | sort) == ($expected_addresses | sort) and
+          | select(
+              .mode == "managed" and
+              .change.actions != ["no-op"]
+            )
+        ] as $changes
+        | [($plan.resource_drift // [])[]?] as $drift
+        | ($address |
+            capture("\\[(?<index>[0-2])\\]$").index |
+            tonumber) as $target_index
+        | (
+            if $validator_state_enabled then
+              ["aws_instance.validator[\($target_index)]"]
+            else
+              []
+            end
+          ) as $expected_drift_addresses
+        | $plan.format_version == "1.2" and
+          $plan.terraform_version == "1.9.8" and
+          $plan.complete == false and
+          $plan.applyable == true and
+          $plan.errored == false and
+          (($plan.deferred_changes // []) | length) == 0 and
+          ($full_plan | length) == 1 and
+          $plan.variables == $full_plan[0].variables and
+          $plan.configuration == $full_plan[0].configuration and
+          ($drift | length) <= ($expected_drift_addresses | length) and
+          ([ $drift[].address ] | unique | length) == ($drift | length) and
           all(
-            $deletions[];
-            (.actions | index("create")) != null and
-            (.actions | index("delete")) != null and
+            $drift[];
+            .address as $drift_address |
+            ($expected_drift_addresses | index($drift_address)) != null
+          ) and
+          all(
+            $drift[];
+            retained_state_drift(
+              $validator_state_volume_ids;
+              $validator_state_kms_key_arns;
+              $validator_state_rollback_snapshot_ids;
+              $availability_zones
+            )
+          ) and
+          all(
+            $plan.resource_changes[]?;
+            if .mode == "managed" then
+              true
+            elif .mode == "data" then
+              (.change.actions == ["read"] or .change.actions == ["no-op"])
+            else
+              false
+            end
+          ) and
+          ($changes | length) == ($expected_addresses | length) and
+          ([ $changes[].address ] | sort) == ($expected_addresses | sort) and
+          ([ $changes[].address ] | unique | length) == ($changes | length) and
+          all(
+            $changes[];
+            .change.actions == ["delete", "create"] and
             (
-              (
-                .address == $address and
-                (.replace_paths | any(.[]; . == ["ami"]))
-              ) or
-              (
-                .address != $address and
-                (
-                  (.replace_paths | any(.[]; . == ["target_id"])) or
-                  (.replace_paths | any(.[]; . == ["instance_id"]))
-                )
-              )
+              if .address == $address then
+                .change.replace_paths == [["ami"], ["user_data"]] and
+                .change.after.ami == $node_ami_id and
+                .change.after.private_ip ==
+                  ["10.67.16.10", "10.67.32.10", "10.67.48.10"][
+                    (.address |
+                      capture("\\[(?<index>[0-2])\\]$").index |
+                      tonumber)
+                  ] and
+                .change.after.associate_public_ip_address == false and
+                .change.after.instance_type == "m7i.large" and
+                .change.after.iam_instance_profile ==
+                  ("junca-social-ecosystem-chain-testnet-validator-" +
+                    (((.address |
+                      capture("\\[(?<index>[0-2])\\]$").index |
+                      tonumber) + 1) | tostring)) and
+                .change.before.iam_instance_profile ==
+                  .change.after.iam_instance_profile and
+                .change.before.subnet_id == .change.after.subnet_id and
+                (.change.after.subnet_id |
+                  test("^subnet-[0-9a-f]{8,17}$")) and
+                .change.before.vpc_security_group_ids ==
+                  .change.after.vpc_security_group_ids and
+                (.change.after.vpc_security_group_ids | length) == 1 and
+                (.change.after.vpc_security_group_ids[0] |
+                  test("^sg-[0-9a-f]{8,17}$")) and
+                .change.before.tags_all == .change.after.tags_all and
+                .change.after.tags_all.Project ==
+                  "JUNCA Social Ecosystem Chain" and
+                .change.after.tags_all.Governance ==
+                  "JAIOS Institutional Governance" and
+                .change.after.tags_all.Network == "Public Testnet" and
+                .change.after.tags_all.MonetaryUse == "None" and
+                .change.after.tags_all.ManagedBy == "Terraform" and
+                .change.after.monitoring == true and
+                (.change.before.user_data |
+                  test("^[0-9a-f]{40}$")) and
+                .change.after.user_data ==
+                  $expected_user_data_sha1[$target_index] and
+                (.change.after_unknown.user_data // false) == false and
+                .change.after.user_data_replace_on_change == true and
+                .change.after.source_dest_check == true and
+                .change.after.metadata_options[0].http_endpoint == "enabled" and
+                .change.after.metadata_options[0].http_tokens == "required" and
+                .change.after.root_block_device[0].encrypted == true and
+                .change.after.root_block_device[0].delete_on_termination ==
+                  true and
+                .change.before.root_block_device[0].kms_key_id ==
+                  $root_ebs_kms_key_arn and
+                .change.after.root_block_device[0].kms_key_id == null and
+                .change.after_unknown.root_block_device[0].kms_key_id ==
+                  true and
+                .change.after.root_block_device[0].volume_type == "gp3" and
+                .change.after.root_block_device[0].volume_size == 200 and
+                .change.after.root_block_device[0].iops == 6000 and
+                .change.after.root_block_device[0].throughput == 250
+              elif (.address |
+                test("^aws_lb_target_group_attachment\\.rpc\\[[0-2]\\]$"))
+              then
+                .change.replace_paths == [["target_id"]] and
+                .change.after.port == 8546 and
+                .change.before.target_group_arn ==
+                  .change.after.target_group_arn and
+                .change.after_unknown.target_id == true
+              elif (.address |
+                test("^aws_lb_target_group_attachment\\.explorer\\[[0-2]\\]$"))
+              then
+                .change.replace_paths == [["target_id"]] and
+                .change.after.port == 3000 and
+                .change.before.target_group_arn ==
+                  .change.after.target_group_arn and
+                .change.after_unknown.target_id == true
+              elif (.address |
+                test("^aws_volume_attachment\\.validator_state\\[[0-2]\\]$"))
+              then
+                .change.replace_paths == [["instance_id"]] and
+                .change.after.device_name == "/dev/sdf" and
+                .change.after.volume_id == .change.before.volume_id and
+                .change.after.force_detach == false and
+                .change.after.stop_instance_before_detaching == true and
+                .change.after_unknown.instance_id == true
+              else
+                false
+              end
             )
           )
+        # END_ROLLING_TARGET_PLAN_GATE
       ' "$target_json" >/dev/null
 
       # Fail before replacement when the future epoch no longer leaves a
@@ -2131,6 +2973,112 @@ if [[ "$phase" == "foundation-apply" ]]; then
       fi
       write_post_apply_checkpoint \
         "$index" instance-output succeeded "$new_instance"
+
+      write_post_apply_checkpoint \
+        "$index" root-volume started "$new_instance"
+      if ! aws ec2 describe-instances \
+        --region "$AWS_REGION" \
+        --instance-ids "$new_instance" \
+        >"artifacts/post-apply-validator-${index}-root-instance.json"
+      then
+        write_post_apply_checkpoint \
+          "$index" root-volume failed "$new_instance"
+        exit 1
+      fi
+      if ! readarray -t root_volume_binding < <(
+        jq -er \
+          --arg image_id "$NODE_AMI_ID" \
+          --arg instance_id "$new_instance" \
+          --argjson index "$index" '
+            [
+              .Reservations[].Instances[]
+              | select(
+                  .InstanceId == $instance_id and
+                  .ImageId == $image_id and
+                  .State.Name == "running" and
+                  .PrivateIpAddress ==
+                    ["10.67.16.10", "10.67.32.10", "10.67.48.10"][$index] and
+                  (.PublicIpAddress // null) == null and
+                  (.RootDeviceName | type == "string" and length > 0)
+                )
+            ]
+            | select(length == 1)
+            | .[0] as $instance
+            | [
+                $instance.BlockDeviceMappings[]
+                | select(
+                    .DeviceName == $instance.RootDeviceName and
+                    .Ebs.Status == "attached" and
+                    .Ebs.DeleteOnTermination == true and
+                    (.Ebs.VolumeId |
+                      test("^vol-[0-9a-f]{8,17}$"))
+                  )
+                | [$instance.RootDeviceName, .Ebs.VolumeId]
+              ]
+            | select(length == 1)
+            | .[0][]
+          ' "artifacts/post-apply-validator-${index}-root-instance.json"
+      ); then
+        write_post_apply_checkpoint \
+          "$index" root-volume failed "$new_instance"
+        exit 1
+      fi
+      if [[ "${#root_volume_binding[@]}" != 2 ]]; then
+        write_post_apply_checkpoint \
+          "$index" root-volume failed "$new_instance"
+        exit 1
+      fi
+      candidate_root_device_name="${root_volume_binding[0]}"
+      candidate_root_volume_id="${root_volume_binding[1]}"
+      if ! aws ec2 describe-volumes \
+        --region "$AWS_REGION" \
+        --volume-ids "$candidate_root_volume_id" \
+        >"artifacts/post-apply-validator-${index}-root-volume.json"
+      then
+        write_post_apply_checkpoint \
+          "$index" root-volume failed "$new_instance"
+        exit 1
+      fi
+      if ! jq -e \
+        --arg device "$candidate_root_device_name" \
+        --arg instance_id "$new_instance" \
+        --arg kms_key_arn "$root_ebs_kms_key_arn" \
+        --arg volume_id "$candidate_root_volume_id" '
+          .Volumes
+          | select(length == 1)
+          | .[0]
+          | .VolumeId == $volume_id and
+            .Encrypted == true and
+            .KmsKeyId == $kms_key_arn and
+            .State == "in-use" and
+            .Size == 200 and
+            .VolumeType == "gp3" and
+            .Iops == 6000 and
+            .Throughput == 250 and
+            (.Attachments | length) == 1 and
+            .Attachments[0].InstanceId == $instance_id and
+            .Attachments[0].Device == $device and
+            .Attachments[0].State == "attached" and
+            (
+              .Tags | from_entries
+            ).Project == "JUNCA Social Ecosystem Chain" and
+            (
+              .Tags | from_entries
+            ).Governance == "JAIOS Institutional Governance" and
+            (.Tags | from_entries).Network == "Public Testnet" and
+            (.Tags | from_entries).MonetaryUse == "None" and
+            (.Tags | from_entries).ManagedBy == "Terraform"
+        ' "artifacts/post-apply-validator-${index}-root-volume.json" \
+        >/dev/null
+      then
+        write_post_apply_checkpoint \
+          "$index" root-volume failed "$new_instance" \
+          "$candidate_root_volume_id"
+        exit 1
+      fi
+      write_post_apply_checkpoint \
+        "$index" root-volume succeeded "$new_instance" \
+        "$candidate_root_volume_id"
 
       write_post_apply_checkpoint \
         "$index" ssm-online started "$new_instance"
@@ -2191,10 +3139,28 @@ if [[ "$phase" == "foundation-apply" ]]; then
           "$index" state-volume succeeded "$new_instance" "$state_volume_id"
       fi
 
+      write_post_apply_checkpoint \
+        "$index" runtime-readiness started "$new_instance" \
+        "${state_volume_id:-}"
+      if ! verify_validator_bootstrap_readiness \
+        "validator-0$((index + 1))" \
+        "$new_instance" \
+        "artifacts/post-apply-validator-${index}-runtime-readiness.json"
+      then
+        write_post_apply_checkpoint \
+          "$index" runtime-readiness failed "$new_instance" \
+          "${state_volume_id:-}"
+        exit 1
+      fi
+      write_post_apply_checkpoint \
+        "$index" runtime-readiness succeeded "$new_instance" \
+        "${state_volume_id:-}"
+
       # A replacement boots with the Terraform-bound future epoch. Quiesce it
-      # immediately after SSM and retained-volume readback; the epoch is still
-      # in the future, so no automatic-finality slot can execute during this
-      # bounded transition.
+      # only after cloud-init, service, immutable artifacts, retained state and
+      # durable finalized certificate are read back. The epoch is still in the
+      # future, so no automatic-finality slot can execute during this bounded
+      # transition.
       write_post_apply_checkpoint \
         "$index" finality-quiesce started "$new_instance" \
         "${state_volume_id:-}"
@@ -2251,13 +3217,189 @@ if [[ "$phase" == "foundation-apply" ]]; then
 
     # Reconcile non-destructive dependants (for example CloudWatch alarm
     # instance IDs) only after every validator replacement is SSM-managed.
+    reconcile_validator_ids="$(
+      terraform -chdir=infra/aws/public-testnet output -json \
+        validator_instance_ids
+    )"
+    jq -e '
+      type == "array" and length == 3 and
+      (unique | length) == 3 and
+      all(.[]; type == "string" and test("^i-[0-9a-f]{8,17}$"))
+    ' <<<"$reconcile_validator_ids" >/dev/null
     terraform -chdir=infra/aws/public-testnet plan -input=false \
       -var-file="$GITHUB_WORKSPACE/artifacts/foundation.auto.tfvars.json" \
       -out="$GITHUB_WORKSPACE/artifacts/foundation-reconcile.tfplan"
     terraform -chdir=infra/aws/public-testnet show -json \
       "$GITHUB_WORKSPACE/artifacts/foundation-reconcile.tfplan" \
       > artifacts/foundation-reconcile-plan.json
-    jq -e '[.resource_changes[]?.change.actions | select(index("delete"))] | length == 0' \
+    jq -e \
+      --arg root_ebs_kms_key_arn "$root_ebs_kms_key_arn" \
+      --argjson validator_ids "$reconcile_validator_ids" \
+      --argjson validator_state_enabled "$validator_state_enabled" \
+      --argjson validator_state_volume_ids "$validator_state_volume_ids" \
+      --argjson validator_state_kms_key_arns \
+        "$validator_state_kms_key_arns" \
+      --argjson validator_state_rollback_snapshot_ids \
+        "$validator_state_rollback_snapshot_ids" \
+      --argjson availability_zones "$AVAILABILITY_ZONES_JSON" '
+      # BEGIN_ROLLING_RECONCILE_PLAN_GATE
+      def validator_index:
+        .address |
+          capture("^aws_instance\\.validator\\[(?<index>[0-2])\\]$").index |
+          tonumber;
+
+      def retained_state_drift(
+        $volume_ids;
+        $state_kms;
+        $rollback_snapshot_ids;
+        $zones
+      ):
+        validator_index as $index
+        | .mode == "managed" and
+          .type == "aws_instance" and
+          .name == "validator" and
+          .index == $index and
+          .change.actions == ["update"] and
+          (.change.replace_paths // []) == [] and
+          .change.before.ebs_block_device == [] and
+          (
+            (.change.before |
+              del(.ebs_block_device, .root_block_device[0].tags)) ==
+            (.change.after |
+              del(.ebs_block_device, .root_block_device[0].tags))
+          ) and
+          (
+            .change.before.root_block_device[0].tags == null or
+            .change.before.root_block_device[0].tags == {}
+          ) and
+          .change.after.root_block_device[0].tags == {} and
+          ([.change.after_unknown | .. | select(. == true)] | length) == 0 and
+          (.change.after.ebs_block_device | length) == 1 and
+          (
+            .change.after.ebs_block_device[0] as $volume
+            | $volume.delete_on_termination == false and
+              $volume.device_name == "/dev/sdf" and
+              $volume.encrypted == true and
+              $volume.iops == 6000 and
+              $volume.kms_key_id == $state_kms[$index] and
+              $volume.snapshot_id == "" and
+              $volume.throughput == 250 and
+              $volume.volume_id == $volume_ids[$index] and
+              $volume.volume_size == 200 and
+              $volume.volume_type == "gp3" and
+              $volume.tags == $volume.tags_all and
+              ($volume.tags | keys) == [
+                "AssetsMoved",
+                "BridgeActivated",
+                "FailureDomain",
+                "Governance",
+                "JuncaFilesystemVerified",
+                "JuncaFinalityCertificateBackfilled",
+                "JuncaMigrationState",
+                "JuncaRollbackSnapshotId",
+                "JuncaStateStoreIntegrity",
+                "MainnetChanged",
+                "ManagedBy",
+                "MigrationRequired",
+                "MonetaryUse",
+                "Name",
+                "Network",
+                "Project",
+                "PublicTestnetOnly",
+                "StatePath",
+                "Validator"
+              ] and
+              $volume.tags.AssetsMoved == "false" and
+              $volume.tags.BridgeActivated == "false" and
+              $volume.tags.FailureDomain == $zones[$index] and
+              $volume.tags.Governance ==
+                "JAIOS Institutional Governance" and
+              $volume.tags.JuncaFilesystemVerified == "true" and
+              $volume.tags.JuncaFinalityCertificateBackfilled == "true" and
+              $volume.tags.JuncaMigrationState == "VERIFIED_PASS" and
+              $volume.tags.JuncaRollbackSnapshotId ==
+                $rollback_snapshot_ids[$index] and
+              $volume.tags.JuncaStateStoreIntegrity == "true" and
+              $volume.tags.MainnetChanged == "false" and
+              $volume.tags.ManagedBy == "Terraform" and
+              $volume.tags.MigrationRequired == "false" and
+              $volume.tags.MonetaryUse == "None" and
+              $volume.tags.Name == (
+                "junca-social-ecosystem-chain-testnet-validator-0" +
+                (($index + 1) | tostring) + "-state"
+              ) and
+              $volume.tags.Network == "Public Testnet" and
+              $volume.tags.Project == "JUNCA Social Ecosystem Chain" and
+              $volume.tags.PublicTestnetOnly == "true" and
+              $volume.tags.StatePath == "/var/lib/junca" and
+              $volume.tags.Validator == ("0" + (($index + 1) | tostring))
+          );
+
+      . as $plan
+      | [
+          .resource_changes[]?
+          | select(
+              .mode == "managed" and
+              .change.actions != ["no-op"]
+            )
+        ] as $changes
+      | [($plan.resource_drift // [])[]?] as $drift
+      | (
+          if $validator_state_enabled then [0, 1, 2] else [] end
+        ) as $expected_drift_indices
+      | [
+          $expected_drift_indices[] |
+          "aws_instance.validator[\(.)]"
+        ] as $expected_drift_addresses
+      | $plan.format_version == "1.2" and
+        $plan.terraform_version == "1.9.8" and
+        $plan.complete == true and
+        $plan.errored == false and
+        (($plan.deferred_changes // []) | length) == 0 and
+        (($changes | length) == 0 or $plan.applyable == true) and
+        ($drift | length) <= ($expected_drift_addresses | length) and
+        ([ $drift[].address ] | unique | length) == ($drift | length) and
+        all(
+          $drift[];
+          .address as $drift_address |
+          ($expected_drift_addresses | index($drift_address)) != null
+        ) and
+        all(
+          $drift[];
+          retained_state_drift(
+            $validator_state_volume_ids;
+            $validator_state_kms_key_arns;
+            $validator_state_rollback_snapshot_ids;
+            $availability_zones
+          )
+        ) and
+        ([ $changes[].address ] | unique | length) == ($changes | length) and
+        all(
+          $plan.resource_changes[]?;
+          if .mode == "managed" then
+            true
+          elif .mode == "data" then
+            (.change.actions == ["read"] or .change.actions == ["no-op"])
+          else
+            false
+          end
+        ) and
+        all(
+          $changes[];
+          (.address |
+            capture("^aws_cloudwatch_metric_alarm\\.validator_status\\[(?<index>[0-2])\\]$").index |
+            tonumber) as $index
+          |
+          .change.actions == ["update"] and
+          (.change.replace_paths // []) == [] and
+          ((.change.before | del(.dimensions)) ==
+            (.change.after | del(.dimensions))) and
+          (.change.after.dimensions ==
+            {"InstanceId": $validator_ids[$index]}) and
+          ([.change.after_unknown | .. | select(. == true)] | length) == 0
+        )
+      # END_ROLLING_RECONCILE_PLAN_GATE
+    ' \
       artifacts/foundation-reconcile-plan.json >/dev/null
     terraform -chdir=infra/aws/public-testnet apply -input=false -auto-approve \
       "$GITHUB_WORKSPACE/artifacts/foundation-reconcile.tfplan"

@@ -3,39 +3,6 @@ name: JUNCA Validator Runtime Artifacts
 on:
   push:
     branches: [main]
-    paths:
-      - "jaios/social_ecosystem_chain/validator_artifacts.py"
-      - "jaios/social_ecosystem_chain/validator_node.py"
-      - "jaios/social_ecosystem_chain/**"
-      - "packaging/systemd/**"
-      - "config/junca_hardened_immutable_candidate_policy.json"
-      - "scripts/build_validator_runtime.sh"
-      - "scripts/verify_validator_runtime_layout.py"
-      - "scripts/generate_junca_public_testnet_genesis.py"
-      - "scripts/junca-chain-node"
-      - "scripts/junca_validator_artifact_handoff.py"
-      - "scripts/junca_hardened_immutable_candidate_policy.py"
-      - "scripts/junca_dispatch_workflow_and_wait.py"
-      - "scripts/junca_release_child_provenance.py"
-      - "scripts/junca_runtime_release_evidence_collector_drift.py"
-      - "scripts/junca_live_rollout_prefix_gate.py"
-      - "scripts/junca_public_testnet_endpoint_test.py"
-      - "scripts/junca_public_testnet_foundation.sh"
-      - "tests/test_junca_validator_artifacts.py"
-      - "tests/test_validator_runtime_layout.py"
-      - "tests/test_junca_hardened_immutable_candidate_policy.py"
-      - "tests/test_junca_release_orchestration.py"
-      - "tests/test_junca_runtime_release_ami_drift.py"
-      - "tests/test_junca_hardened_release_v2.py"
-      - "tests/test_junca_live_rollout_prefix_gate.py"
-      - "tests/test_junca_public_endpoint_sampling.py"
-      - ".github/image-builder/validator-component.yml"
-      - ".github/workflows/junca-validator-ami-build.yml"
-      - ".github/workflows/junca-validator-runtime-artifacts.yml"
-      - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
-      - ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
-      - ".github/workflows/junca-runtime-release-manifest-gate.yml"
-      - ".github/workflows/junca-public-testnet-release-observer.yml"
   pull_request:
     paths:
       - "jaios/social_ecosystem_chain/validator_artifacts.py"
@@ -43,6 +10,7 @@ on:
       - "jaios/social_ecosystem_chain/**"
       - "packaging/systemd/**"
       - "config/junca_hardened_immutable_candidate_policy.json"
+      - "config/junca_validator_ami_supply_chain_lock.json"
       - "scripts/build_validator_runtime.sh"
       - "scripts/verify_validator_runtime_layout.py"
       - "scripts/generate_junca_public_testnet_genesis.py"
@@ -51,24 +19,46 @@ on:
       - "scripts/junca_hardened_immutable_candidate_policy.py"
       - "scripts/junca_dispatch_workflow_and_wait.py"
       - "scripts/junca_release_child_provenance.py"
+      - "scripts/junca_release_dispatch_attestation.py"
+      - "scripts/junca_validator_ami_build_request.py"
       - "scripts/junca_runtime_release_evidence_collector_drift.py"
+      - "scripts/junca_runtime_release_evidence_collector.py"
+      - "scripts/junca_runtime_release_manifest_gate.py"
       - "scripts/junca_live_rollout_prefix_gate.py"
       - "scripts/junca_public_testnet_endpoint_test.py"
       - "scripts/junca_public_testnet_foundation.sh"
+      - "scripts/junca_public_testnet_runtime_acceptance_packet.py"
+      - "scripts/junca_public_testnet_live_soak.py"
+      - "scripts/junca_public_testnet_runtime_acceptance_gate.py"
       - "tests/test_junca_validator_artifacts.py"
       - "tests/test_validator_runtime_layout.py"
       - "tests/test_junca_hardened_immutable_candidate_policy.py"
       - "tests/test_junca_release_orchestration.py"
       - "tests/test_junca_runtime_release_ami_drift.py"
+      - "tests/test_junca_runtime_release_evidence_collector.py"
+      - "tests/test_junca_runtime_release_manifest_gate.py"
       - "tests/test_junca_hardened_release_v2.py"
+      - "tests/test_junca_validator_ami_build_request.py"
       - "tests/test_junca_live_rollout_prefix_gate.py"
       - "tests/test_junca_public_endpoint_sampling.py"
+      - "tests/test_junca_public_testnet_endpoint_test.py"
+      - "tests/test_junca_public_testnet_runtime_acceptance_packet.py"
+      - "tests/test_junca_public_testnet_live_soak.py"
+      - "tests/test_junca_public_testnet_runtime_acceptance_gate.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_foundation.py"
+      - "infra/aws/public-testnet/**"
+      - "infra/aws/bootstrap/**"
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
       - ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
       - ".github/workflows/junca-runtime-release-manifest-gate.yml"
+      - ".github/workflows/junca-validator-foundation-release.yml"
+      - ".github/workflows/junca-public-testnet-release.yml"
+      - ".github/workflows/junca-public-testnet-live-soak.yml"
+      - ".github/workflows/junca-public-testnet-live-soak-segment.yml"
+      - ".github/workflows/junca-public-testnet-runtime-acceptance-gate.yml"
       - ".github/workflows/junca-public-testnet-release-observer.yml"
   workflow_dispatch:
 
@@ -80,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify immutable artifact and safety contracts
         run: |
@@ -89,11 +79,19 @@ jobs:
             tests.test_junca_validator_artifacts \
             tests.test_validator_runtime_layout \
             tests.test_junca_hardened_immutable_candidate_policy \
+            tests.test_junca_validator_ami_build_request \
             tests.test_junca_release_orchestration \
             tests.test_junca_runtime_release_ami_drift \
+            tests.test_junca_runtime_release_evidence_collector \
+            tests.test_junca_runtime_release_manifest_gate \
             tests.test_junca_hardened_release_v2 \
             tests.test_junca_live_rollout_prefix_gate \
             tests.test_junca_public_endpoint_sampling \
+            tests.test_junca_public_testnet_endpoint_test \
+            tests.test_junca_public_testnet_runtime_acceptance_packet \
+            tests.test_junca_public_testnet_live_soak \
+            tests.test_junca_public_testnet_runtime_acceptance_gate \
+            tests.test_junca_social_ecosystem_chain_aws_foundation \
             tests.test_junca_social_ecosystem_chain_validator_node -v
           python3 scripts/junca_hardened_immutable_candidate_policy.py \
             --policy config/junca_hardened_immutable_candidate_policy.json \
@@ -101,8 +99,16 @@ jobs:
           python3 -m py_compile \
             scripts/junca_dispatch_workflow_and_wait.py \
             scripts/junca_release_child_provenance.py \
+            scripts/junca_release_dispatch_attestation.py \
+            scripts/junca_validator_ami_build_request.py \
             scripts/junca_live_rollout_prefix_gate.py \
-            scripts/junca_public_testnet_endpoint_test.py
+            scripts/junca_public_testnet_endpoint_test.py \
+            scripts/junca_runtime_release_evidence_collector.py \
+            scripts/junca_runtime_release_evidence_collector_drift.py \
+            scripts/junca_runtime_release_manifest_gate.py \
+            scripts/junca_public_testnet_runtime_acceptance_packet.py \
+            scripts/junca_public_testnet_live_soak.py \
+            scripts/junca_public_testnet_runtime_acceptance_gate.py
           python3 scripts/junca_live_rollout_prefix_gate.py --help >/dev/null
           bash -n scripts/junca_public_testnet_foundation.sh
 
@@ -148,7 +154,7 @@ jobs:
           )
 
       - name: Upload complete validator runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-validator-runtime-${{ github.run_id }}
           path: artifacts/runtime/validator-runtime.tar.gz
@@ -156,7 +162,7 @@ jobs:
           retention-days: 90
 
       - name: Upload canonical genesis
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-validator-genesis-${{ github.run_id }}
           path: artifacts/genesis/genesis.json
@@ -164,7 +170,7 @@ jobs:
           retention-days: 90
 
       - name: Upload runtime build evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-validator-runtime-evidence-${{ github.run_id }}
           path: artifacts/evidence/

@@ -52,7 +52,7 @@ jobs:
       contents: read
     steps:
       - name: Download exact triggering recovery evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-runtime-self-permission-recovery-${{ github.event.workflow_run.id }}
           path: artifacts/recovery
@@ -98,7 +98,7 @@ jobs:
       AUTO_RESUME: ${{ github.event_name == 'workflow_run' }}
       RECOVERY_RUN_ID: ${{ github.event.workflow_run.id || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Enforce Public Testnet execution boundary
         run: |
@@ -114,7 +114,7 @@ jobs:
             .bridge_activated == false
           ' config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
           aws-region: us-east-1
@@ -313,7 +313,7 @@ jobs:
           echo "apply_requested=$apply_requested" >> "$GITHUB_OUTPUT"
           echo "authorized=$authorized" >> "$GITHUB_OUTPUT"
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         if: contains(fromJSON('["bootstrap-plan","foundation-plan","bootstrap-apply","foundation-apply","auto-release"]'), env.REQUESTED_PHASE)
         with:
           terraform_version: 1.9.8
@@ -568,7 +568,7 @@ jobs:
           AVAILABILITY_ZONES_JSON: ${{ vars.JUNCA_PUBLIC_TESTNET_AVAILABILITY_ZONES_JSON }}
         run: bash scripts/junca_public_testnet_foundation.sh foundation-apply
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-aws-foundation-execution-${{ github.run_id }}

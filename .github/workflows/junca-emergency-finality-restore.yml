@@ -1,10 +1,7 @@
 name: JUNCA Emergency Finality Restore
 
 on:
-  push:
-    branches: [main]
-    paths: [.github/workflows/junca-emergency-finality-restore.yml]
-
+  workflow_dispatch:
 permissions:
   contents: read
   id-token: write
@@ -16,9 +13,10 @@ concurrency:
 jobs:
   restore:
     runs-on: ubuntu-24.04
+    environment: public-testnet
     timeout-minutes: 15
     steps:
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
           aws-region: us-east-1

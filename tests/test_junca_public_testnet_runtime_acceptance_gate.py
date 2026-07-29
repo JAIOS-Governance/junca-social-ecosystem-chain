@@ -121,8 +121,21 @@ class RuntimeAcceptanceGateTests(unittest.TestCase):
             "junca-public-testnet-release-${public_release_run_id}",
             "workflow_dispatch",
             "workflow_run",
+            ".candidate_binding.source_commit",
+            '.head_branch == ("release-candidate/" + $source_commit)',
+            ".head_sha == $source_commit",
+            '.event == "workflow_dispatch"',
         ):
             self.assertIn(value, workflow)
+        job_prefix = workflow.split("  accept:", 1)[1].split(
+            "    runs-on:", 1
+        )[0]
+        self.assertNotIn("if:", job_prefix)
+        self.assertIn("Authorize exact acceptance trigger", workflow)
+        self.assertIn(
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            workflow,
+        )
 
 
 if __name__ == "__main__":

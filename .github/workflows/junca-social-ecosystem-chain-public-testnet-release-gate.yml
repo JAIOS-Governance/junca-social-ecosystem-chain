@@ -27,7 +27,7 @@ jobs:
   release-gate-validation:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Compile release decision controller
         run: python -m py_compile scripts/public_testnet_release_gate.py
       - name: Run acceptance and negative tests

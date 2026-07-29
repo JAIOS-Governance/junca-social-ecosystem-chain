@@ -48,6 +48,25 @@ class AwsOidcBootstrapTests(unittest.TestCase):
         )
         self.assertNotIn("repo:*", self.template)
 
+    def test_terraform_deployment_trust_requires_exact_environment_subject(
+        self,
+    ) -> None:
+        expected_subject = (
+            "repo:JAIOS-Governance@308604370/"
+            "junca-social-ecosystem-chain@1310568313:"
+            "environment:public-testnet"
+        )
+        self.assertIn(
+            f'"token.actions.githubusercontent.com:sub" = '
+            f'"{expected_subject}"',
+            self.bootstrap_main,
+        )
+        self.assertNotIn(":ref:refs/heads/main", self.bootstrap_main)
+        self.assertNotIn(
+            '"token.actions.githubusercontent.com:sub" = [',
+            self.bootstrap_main,
+        )
+
     def test_bootstrap_has_no_chain_runtime_resources(self) -> None:
         forbidden = (
             "AWS::EC2::Instance",
@@ -72,14 +91,18 @@ class AwsOidcBootstrapTests(unittest.TestCase):
     def test_workflow_is_manual_oidc_and_readback_only(self) -> None:
         self.assertIn("workflow_dispatch:", self.workflow)
         self.assertIn("id-token: write", self.workflow)
-        self.assertIn("aws-actions/configure-aws-credentials@v6.1.2", self.workflow)
+        self.assertIn(
+            "aws-actions/configure-aws-credentials@"
+            "acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+            self.workflow,
+        )
         self.assertIn("deployment_enabled: false", self.workflow)
         self.assertNotIn("terraform apply", self.workflow)
         self.assertNotIn("pull_request_target", self.workflow)
 
-    def test_readback_runs_automatically_on_canonical_main_change(self) -> None:
-        self.assertIn("push:", self.workflow)
-        self.assertIn("branches: [main]", self.workflow)
+    def test_readback_requires_explicit_manual_dispatch(self) -> None:
+        self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertNotIn("\n  push:", self.workflow)
         self.assertIn(
             "CANONICAL_ROLE_ARN: "
             "arn:aws:iam::595710543956:role/"

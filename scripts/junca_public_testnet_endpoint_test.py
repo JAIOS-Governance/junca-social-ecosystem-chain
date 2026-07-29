@@ -236,6 +236,7 @@ def run_acceptance(
         "signed_power": head["signed_power"],
         "total_power": head["total_power"],
         "certificate_hash": head["certificate_hash"],
+        "peer_count": network["peer_count"],
     }
 
     safe_results: dict[str, Any] = {}

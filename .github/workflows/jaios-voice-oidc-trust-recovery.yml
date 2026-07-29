@@ -2,10 +2,6 @@ name: JAIOS Voice OIDC Trust Recovery
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [.github/workflows/jaios-voice-oidc-trust-recovery.yml]
-
 permissions:
   id-token: write
   contents: read
@@ -29,7 +25,7 @@ jobs:
       TARGET_POLICY_NAME: JAIOSVoiceRoute53Production
     steps:
       - name: Configure verified AWS recovery identity
-        uses: aws-actions/configure-aws-credentials@v6.1.2
+        uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.RECOVERY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

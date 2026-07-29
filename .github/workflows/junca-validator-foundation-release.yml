@@ -44,13 +44,6 @@ concurrency:
 
 jobs:
   deploy-and-accept:
-    if: >-
-      startsWith(github.ref, 'refs/heads/release-candidate/') &&
-      github.ref == format(
-        'refs/heads/release-candidate/{0}',
-        github.sha
-      ) &&
-      inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 210
@@ -69,7 +62,17 @@ jobs:
       RENEWAL_PRESERVE_PREFIX_COUNT: ${{ inputs.renewal_preserve_prefix_count }}
       FOUNDATION_ROLLING_RELEASE: "true"
     steps:
-      - uses: actions/checkout@v4
+      - name: Enforce explicit rollout authorization
+        env:
+          AUTHORIZE_ROLLOUT: ${{ inputs.authorize_rollout }}
+        run: |
+          set -euo pipefail
+          test "$AUTHORIZE_ROLLOUT" = "PUBLIC_TESTNET_ROLLOUT"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = \
+            "refs/heads/release-candidate/$GITHUB_SHA"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Resolve immutable candidate provenance head
         env:
@@ -155,7 +158,7 @@ jobs:
           [[ "$candidate_head" =~ ^[0-9a-f]{40}$ ]]
           echo "ROLLING_CANDIDATE_HEAD_SHA=$candidate_head" >> "$GITHUB_ENV"
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -198,14 +201,14 @@ jobs:
             .head_repository.full_name == $repository
           ' <<<"$manifest_run"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-validator-ami-build-${{ env.AMI_RUN_ID }}
           path: artifacts/ami
           github-token: ${{ github.token }}
           run-id: ${{ env.AMI_RUN_ID }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-runtime-release-manifest-gate-${{ env.MANIFEST_GATE_RUN_ID }}
           path: artifacts/manifest
@@ -238,6 +241,9 @@ jobs:
               "ami_id",
               "assets_moved",
               "bridge_activated",
+              "component_source_sha256",
+              "dependency_lock_sha256",
+              "dnf_releasever",
               "genesis_sha256",
               "governance",
               "image_builder_arn",
@@ -245,30 +251,77 @@ jobs:
               "network",
               "node_artifact_sha256",
               "notice",
+              "parent_ami_id",
+              "parent_ami_name",
+              "parent_ami_owner_id",
+              "python3_boto3_nevra",
+              "python3_botocore_nevra",
+              "request_schema",
               "request_sha256",
               "reused_existing_ami",
               "schema_version",
               "source_commit",
               "source_run_id",
               "state",
+              "supply_chain_policy_sha256",
               "terraform_state_changed"
             ] | sort) and
-            .schema_version == "junca-validator-ami-build/v1" and
+            .schema_version == "junca-validator-ami-build/v2" and
             .state == "AMI_VERIFIED" and
             .network == "Public Testnet" and
             .notice == "Public Testnet / No Monetary Value" and
             .governance == "JAIOS Institutional Governance" and
+            .request_schema ==
+              "junca-validator-ami-build-request/v2" and
             .source_commit == $candidate_head and
             (.source_run_id | type) == "string" and
             (.source_run_id | test("^[1-9][0-9]*$")) and
             (.ami_id | type) == "string" and
             (.ami_id | test("^ami-[0-9a-f]{8,17}$")) and
+            (.image_builder_arn | type) == "string" and
+            (.image_builder_arn | test(
+              "^arn:aws:imagebuilder:us-east-1:595710543956:image/" +
+              "junca-validator-[1-9][0-9]*-[1-9][0-9]*/" +
+              "1\\.0\\.0/[1-9][0-9]*$"
+            )) and
             (.node_artifact_sha256 | type) == "string" and
             (.node_artifact_sha256 | test("^[0-9a-f]{64}$")) and
             (.genesis_sha256 | type) == "string" and
             (.genesis_sha256 | test("^[0-9a-f]{64}$")) and
             (.request_sha256 | type) == "string" and
             (.request_sha256 | test("^[0-9a-f]{64}$")) and
+            (.parent_ami_id | type) == "string" and
+            (.parent_ami_id | test("^ami-[0-9a-f]{8,17}$")) and
+            .parent_ami_owner_id == "137112412989" and
+            (.parent_ami_name | type) == "string" and
+            (.parent_ami_name | test(
+              "^al2023-ami-2023\\.[0-9]+\\.[0-9]{8}\\.[0-9]+" +
+              "-kernel-[0-9]+\\.[0-9]+-x86_64$"
+            )) and
+            (.dnf_releasever | type) == "string" and
+            (.dnf_releasever | test(
+              "^2023\\.[0-9]+\\.[0-9]{8}$"
+            )) and
+            (
+              .dnf_releasever as $releasever |
+              .parent_ami_name |
+              startswith("al2023-ami-" + $releasever + ".")
+            ) and
+            (.component_source_sha256 | test("^[0-9a-f]{64}$")) and
+            (.dependency_lock_sha256 | test("^[0-9a-f]{64}$")) and
+            (.supply_chain_policy_sha256 |
+              test("^[0-9a-f]{64}$")) and
+            (.python3_boto3_nevra | type) == "string" and
+            (.python3_boto3_nevra | test(
+              "^python3-boto3-[0-9]+:[A-Za-z0-9][A-Za-z0-9+_.~^%-]*" +
+              "-[A-Za-z0-9][A-Za-z0-9+_.~^%-]*\\.[a-z0-9_]+$"
+            )) and
+            (.python3_botocore_nevra | type) == "string" and
+            (.python3_botocore_nevra | test(
+              "^python3-botocore-[0-9]+:" +
+              "[A-Za-z0-9][A-Za-z0-9+_.~^%-]*-" +
+              "[A-Za-z0-9][A-Za-z0-9+_.~^%-]*\\.[a-z0-9_]+$"
+            )) and
             (.reused_existing_ami | type) == "boolean" and
             .terraform_state_changed == false and
             .mainnet_changed == false and
@@ -282,6 +335,29 @@ jobs:
           genesis_sha256="$(jq -er '.genesis_sha256' "$evidence")"
           source_commit="$(jq -er '.source_commit' "$evidence")"
           request_sha256="$(jq -er '.request_sha256' "$evidence")"
+          request_schema="$(jq -er '.request_schema' "$evidence")"
+          image_builder_arn="$(jq -er '.image_builder_arn' "$evidence")"
+          parent_ami_id="$(jq -er '.parent_ami_id' "$evidence")"
+          parent_ami_owner_id="$(
+            jq -er '.parent_ami_owner_id' "$evidence"
+          )"
+          parent_ami_name="$(jq -er '.parent_ami_name' "$evidence")"
+          component_source_sha256="$(
+            jq -er '.component_source_sha256' "$evidence"
+          )"
+          dependency_lock_sha256="$(
+            jq -er '.dependency_lock_sha256' "$evidence"
+          )"
+          supply_chain_policy_sha256="$(
+            jq -er '.supply_chain_policy_sha256' "$evidence"
+          )"
+          dnf_releasever="$(jq -er '.dnf_releasever' "$evidence")"
+          python3_boto3_nevra="$(
+            jq -er '.python3_boto3_nevra' "$evidence"
+          )"
+          python3_botocore_nevra="$(
+            jq -er '.python3_botocore_nevra' "$evidence"
+          )"
 
           decision=artifacts/manifest/junca-runtime-release-manifest-decision.json
           decision_checksum=artifacts/manifest/SHA256SUMS
@@ -306,7 +382,19 @@ jobs:
             --arg node_sha256 "$node_artifact_sha256" \
             --arg genesis_sha256 "$genesis_sha256" \
             --arg ami_id "$node_ami_id" \
-            --arg request_sha256 "$request_sha256" '
+            --arg request_sha256 "$request_sha256" \
+            --arg request_schema "$request_schema" \
+            --arg image_builder_arn "$image_builder_arn" \
+            --arg parent_ami_id "$parent_ami_id" \
+            --arg parent_ami_owner_id "$parent_ami_owner_id" \
+            --arg parent_ami_name "$parent_ami_name" \
+            --arg component_sha "$component_source_sha256" \
+            --arg dependency_lock_sha "$dependency_lock_sha256" \
+            --arg supply_chain_policy_sha \
+              "$supply_chain_policy_sha256" \
+            --arg dnf_releasever "$dnf_releasever" \
+            --arg boto3_nevra "$python3_boto3_nevra" \
+            --arg botocore_nevra "$python3_botocore_nevra" '
             (keys | sort) == ([
               "accepted",
               "baseline_mode",
@@ -323,11 +411,25 @@ jobs:
             ] | sort) and
             (.candidate | keys | sort) == ([
               "ami_id",
+              "ami_supply_chain",
               "genesis_sha256",
               "migration_evidence_sha256",
               "node_artifact_sha256",
               "request_sha256",
               "source_commit"
+            ] | sort) and
+            (.candidate.ami_supply_chain | keys | sort) == ([
+              "component_source_sha256",
+              "dependency_lock_sha256",
+              "dnf_releasever",
+              "image_builder_arn",
+              "parent_ami_id",
+              "parent_ami_name",
+              "parent_ami_owner_id",
+              "python3_boto3_nevra",
+              "python3_botocore_nevra",
+              "request_schema",
+              "supply_chain_policy_sha256"
             ] | sort) and
             (.release_boundary | keys | sort) == ([
               "assets_moved",
@@ -344,6 +446,28 @@ jobs:
             .candidate.genesis_sha256 == $genesis_sha256 and
             .candidate.ami_id == $ami_id and
             .candidate.request_sha256 == $request_sha256 and
+            .candidate.ami_supply_chain.request_schema ==
+              $request_schema and
+            .candidate.ami_supply_chain.image_builder_arn ==
+              $image_builder_arn and
+            .candidate.ami_supply_chain.parent_ami_id ==
+              $parent_ami_id and
+            .candidate.ami_supply_chain.parent_ami_owner_id ==
+              $parent_ami_owner_id and
+            .candidate.ami_supply_chain.parent_ami_name ==
+              $parent_ami_name and
+            .candidate.ami_supply_chain.component_source_sha256 ==
+              $component_sha and
+            .candidate.ami_supply_chain.dependency_lock_sha256 ==
+              $dependency_lock_sha and
+            .candidate.ami_supply_chain.supply_chain_policy_sha256 ==
+              $supply_chain_policy_sha and
+            .candidate.ami_supply_chain.dnf_releasever ==
+              $dnf_releasever and
+            .candidate.ami_supply_chain.python3_boto3_nevra ==
+              $boto3_nevra and
+            .candidate.ami_supply_chain.python3_botocore_nevra ==
+              $botocore_nevra and
             .release_boundary.mainnet_changed == false and
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
@@ -358,6 +482,17 @@ jobs:
             echo "GENESIS_SHA256=$genesis_sha256"
             echo "SOURCE_COMMIT=$source_commit"
             echo "REQUEST_SHA256=$request_sha256"
+            echo "AMI_REQUEST_SCHEMA=$request_schema"
+            echo "IMAGE_BUILDER_ARN=$image_builder_arn"
+            echo "PARENT_AMI_ID=$parent_ami_id"
+            echo "PARENT_AMI_OWNER_ID=$parent_ami_owner_id"
+            echo "PARENT_AMI_NAME=$parent_ami_name"
+            echo "COMPONENT_SOURCE_SHA256=$component_source_sha256"
+            echo "DEPENDENCY_LOCK_SHA256=$dependency_lock_sha256"
+            echo "SUPPLY_CHAIN_POLICY_SHA256=$supply_chain_policy_sha256"
+            echo "DNF_RELEASEVER=$dnf_releasever"
+            echo "PYTHON3_BOTO3_NEVRA=$python3_boto3_nevra"
+            echo "PYTHON3_BOTOCORE_NEVRA=$python3_botocore_nevra"
             echo "MANIFEST_DECISION_SHA256=$manifest_decision_sha256"
           } >> "$GITHUB_ENV"
 
@@ -411,11 +546,112 @@ jobs:
               .bridge_activated == false
             ' "$ROLLING_RESUME_EVIDENCE_PATH"
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-validator-release-${{ github.run_id }}
+
+      - name: Cross-bind live AMI supply-chain tags
+        run: |
+          set -euo pipefail
+          test "$(
+            aws sts get-caller-identity --query Account --output text
+          )" = "$AWS_ACCOUNT_ID"
+          aws ec2 describe-images \
+            --owners self \
+            --image-ids "$NODE_AMI_ID" \
+            --output json > "$RUNNER_TEMP/foundation-live-ami.json"
+          jq -e \
+            --arg ami_id "$NODE_AMI_ID" \
+            --arg account_id "$AWS_ACCOUNT_ID" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node_sha "$NODE_ARTIFACT_SHA256" \
+            --arg genesis_sha "$GENESIS_SHA256" \
+            --arg request_sha "$REQUEST_SHA256" \
+            --arg request_schema "$AMI_REQUEST_SCHEMA" \
+            --arg image_builder_arn "$IMAGE_BUILDER_ARN" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha \
+              "$SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" '
+              .Images | length == 1 and
+              .[0].ImageId == $ami_id and
+              .[0].OwnerId == $account_id and
+              .[0].State == "available" and
+              .[0].Public == false and
+              .[0].ImageType == "machine" and
+              .[0].Architecture == "x86_64" and
+              .[0].RootDeviceType == "ebs" and
+              .[0].VirtualizationType == "hvm" and
+              ([.[0].Tags[] |
+                select(.Key == "Network") |
+                .Value] | first) == "Public Testnet" and
+              ([.[0].Tags[] |
+                select(.Key == "Governance") |
+                .Value] | first) ==
+                  "JAIOS Institutional Governance" and
+              ([.[0].Tags[] |
+                select(.Key == "RequestSchema") |
+                .Value] | first) == $request_schema and
+              ([.[0].Tags[] |
+                select(.Key == "SourceCommit") |
+                .Value] | first) == $source_commit and
+              ([.[0].Tags[] |
+                select(.Key == "NodeArtifactSHA256") |
+                .Value] | first) == $node_sha and
+              ([.[0].Tags[] |
+                select(.Key == "GenesisSHA256") |
+                .Value] | first) == $genesis_sha and
+              ([.[0].Tags[] |
+                select(.Key == "RequestDigest") |
+                .Value] | first) == $request_sha and
+              ([.[0].Tags[] |
+                select(.Key == "ImageBuilderArn") |
+                .Value] | first) == $image_builder_arn and
+              ([.[0].Tags[] |
+                select(.Key == "ParentAMIId") |
+                .Value] | first) == $parent_ami_id and
+              ([.[0].Tags[] |
+                select(.Key == "ParentAMIOwnerId") |
+                .Value] | first) == $parent_ami_owner_id and
+              ([.[0].Tags[] |
+                select(.Key == "ParentAMIName") |
+                .Value] | first) == $parent_ami_name and
+              ([.[0].Tags[] |
+                select(.Key == "ComponentSourceSHA256") |
+                .Value] | first) == $component_sha and
+              ([.[0].Tags[] |
+                select(.Key == "DependencyLockSHA256") |
+                .Value] | first) == $dependency_lock_sha and
+              ([.[0].Tags[] |
+                select(.Key == "SupplyChainPolicySHA256") |
+                .Value] | first) == $supply_chain_policy_sha and
+              ([.[0].Tags[] |
+                select(.Key == "DnfReleasever") |
+                .Value] | first) == $dnf_releasever and
+              ([.[0].Tags[] |
+                select(.Key == "Boto3NEVRA") |
+                .Value] | first) == $boto3_nevra and
+              ([.[0].Tags[] |
+                select(.Key == "BotocoreNEVRA") |
+                .Value] | first) == $botocore_nevra and
+              ([.[0].Tags[] |
+                select(.Key == "MainnetChanged") |
+                .Value] | first) == "false" and
+              ([.[0].Tags[] |
+                select(.Key == "AssetsMoved") |
+                .Value] | first) == "false" and
+              ([.[0].Tags[] |
+                select(.Key == "BridgeActivated") |
+                .Value] | first) == "false"
+            ' "$RUNNER_TEMP/foundation-live-ami.json"
 
       - name: Generate or renew the shared automatic finality epoch
         run: |
@@ -758,6 +994,8 @@ jobs:
                 all(
                   .automatic_finality_enabled == true and
                   .automatic_finality_loop_running == true and
+                  (.peer_count | type) == "number" and
+                  .peer_count >= 2 and
                   .block_interval_seconds == 30 and
                   .slot_epoch_seconds == $slot_epoch and
                   (.head_timestamp | type) == "number" and
@@ -837,7 +1075,7 @@ jobs:
           sha256sum artifacts/public-testnet-runtime-acceptance.json \
             > artifacts/public-testnet-runtime-acceptance.json.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-validator-foundation-release-${{ github.run_id }}

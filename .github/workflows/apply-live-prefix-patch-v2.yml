@@ -15,14 +15,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout controller source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
           path: controller
           persist-credentials: false
 
       - name: Checkout target branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: fix/evidence-bound-live-prefix
           path: target

@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_commit }}
 
@@ -55,6 +55,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
+          NODE_ARTIFACT_SHA256: ${{ inputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
           DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
           ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
           ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
@@ -64,7 +66,13 @@ jobs:
             --source-commit "$SOURCE_COMMIT" \
             --dispatch-token "$DISPATCH_TOKEN" \
             --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
-            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT"
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT" \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-manifest-gate.yml" \
+            --input "evidence_run_id=$EVIDENCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_sha256=$NODE_ARTIFACT_SHA256" \
+            --input "genesis_sha256=$GENESIS_SHA256"
           [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           evidence_run_json="$(gh api \
@@ -91,7 +99,7 @@ jobs:
           test ! -L downloaded-release-evidence
 
       - name: Download exact pre-rollout evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-runtime-release-evidence-${{ inputs.evidence_run_id }}
           path: downloaded-release-evidence
@@ -147,7 +155,7 @@ jobs:
               > SHA256SUMS
           )
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-runtime-release-manifest-gate-${{ github.run_id }}

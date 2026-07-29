@@ -2,11 +2,6 @@ name: JUNCA Chain CloudFormation Self Reconcile
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/recovery-triggers/chain-cloudformation-self-reconcile.txt
-
 permissions:
   id-token: write
   contents: write
@@ -22,9 +17,9 @@ jobs:
       ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       STACK_NAME: junca-chain-docs-publication
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Configure production role
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

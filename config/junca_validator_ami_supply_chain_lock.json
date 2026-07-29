@@ -1,0 +1,41 @@
+{
+  "schema_version": "junca-validator-ami-supply-chain-lock/v1",
+  "state": "EXACT_RELEASE_INPUT_REQUIRED",
+  "value_source": "release-candidate-workflow-input",
+  "aws_region": "us-east-1",
+  "architecture": "x86_64",
+  "parent_ami": {
+    "distribution": "amazon-linux-2023",
+    "owner_id": "137112412989",
+    "root_device_type": "ebs",
+    "virtualization_type": "hvm",
+    "mutable_aliases_allowed": false,
+    "required_exact_inputs": [
+      "parent_ami_id",
+      "parent_ami_name",
+      "dnf_releasever"
+    ]
+  },
+  "component": {
+    "path": ".github/image-builder/validator-component.yml",
+    "mutable_rendering_allowed": false,
+    "required_digest": "component_source_sha256"
+  },
+  "dependency_lock": {
+    "schema_version": "junca-validator-ami-dependency-lock/v1",
+    "installer": "dnf",
+    "install_weak_dependencies": false,
+    "exact_releasever_required": true,
+    "packages": [
+      "python3-boto3",
+      "python3-botocore"
+    ],
+    "exact_nevra_required": true,
+    "required_digest": "dependency_lock_sha256"
+  },
+  "boundaries": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  }
+}

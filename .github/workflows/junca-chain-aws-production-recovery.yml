@@ -3,11 +3,7 @@ name: JUNCA Chain AWS Production Recovery
 # Recovery execution: 2026-07-25T08:15:00Z
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-chain-aws-production-recovery.yml"
-
+  workflow_dispatch:
 permissions:
   contents: read
 
@@ -60,14 +56,14 @@ jobs:
       PUBLIC_URL: https://docs.jaios-governance.org
     steps:
       - name: Checkout exact production source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.EXACT_SHA }}
           fetch-depth: 1
       - name: Verify exact source
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$EXACT_SHA"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
       - name: Build and verify eight-route artifact
@@ -81,7 +77,7 @@ jobs:
           jwt="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
           JWT="$jwt" python3 -c 'import base64,json,os; p=os.environ["JWT"].split(".")[1]; p += "="*((4-len(p)%4)%4); c=json.loads(base64.urlsafe_b64decode(p)); expected="repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:junca-chain-docs-production"; assert c.get("sub")==expected, c.get("sub"); print(json.dumps({k:c.get(k) for k in ("sub","aud","repository","repository_id","repository_owner","repository_owner_id","environment","ref","sha","actor")},sort_keys=True))'
       - name: Configure publication-only AWS identity
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

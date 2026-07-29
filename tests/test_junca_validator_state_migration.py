@@ -112,11 +112,11 @@ class ValidatorStateMigrationTests(unittest.TestCase):
             self.assertIn(required, attachment)
         self.assertIn('output "validator_state_volume_readback"', self.outputs)
 
-    def test_workflow_is_signed_one_file_oidc_gated_and_serialized(
+    def test_workflow_is_manual_signed_one_file_oidc_gated_and_serialized(
         self,
     ) -> None:
         for required in (
-            "push:",
+            "workflow_dispatch:",
             "config/junca_validator_state_migration_request.json",
             "Verify signed migration request-only main commit",
             ".commit.verification.verified == true",
@@ -142,7 +142,7 @@ class ValidatorStateMigrationTests(unittest.TestCase):
                 re.MULTILINE,
             ),
         )
-        self.assertNotIn("workflow_dispatch:", self.workflow)
+        self.assertNotIn("\n  push:", self.workflow)
         self.assertNotIn("workflow_run:", self.workflow)
         self.assertNotIn("inputs.authorize_migration", self.workflow)
 

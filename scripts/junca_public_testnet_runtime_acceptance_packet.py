@@ -239,6 +239,7 @@ def build_packet(observations: list[dict[str, Any]], interval: int) -> dict[str,
     certificates = [
         item["normalized"]["certificate_hash"] for item in observations
     ]
+    peer_counts = [item["normalized"]["peer_count"] for item in observations]
     metadata_by_hash: dict[str, tuple[object, object, object]] = {}
     for item in observations:
         normalized = item["normalized"]
@@ -273,6 +274,13 @@ def build_packet(observations: list[dict[str, Any]], interval: int) -> dict[str,
         failures.append("timestamp:not_advancing_each_observation")
     if len(set(certificates)) != len(certificates):
         failures.append("certificate:not_advancing_each_observation")
+    if any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 2
+        for value in peer_counts
+    ):
+        failures.append("peers:not_exact_public_quorum")
 
     unsafe = _unsafe_rejection()
     if not unsafe["accepted"]:

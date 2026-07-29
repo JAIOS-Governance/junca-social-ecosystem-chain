@@ -90,22 +90,22 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Checkout audited legacy source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: juncachain/juncachain
           ref: a3e47b6a96c36378606764c35cfcdb2de97cb685
           path: legacy-chain
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 
@@ -193,7 +193,7 @@ jobs:
 
       - name: Upload redacted health evidence
         if: always() && github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-health-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-health.json
@@ -202,7 +202,7 @@ jobs:
 
       - name: Upload legacy fingerprint evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-legacy-fingerprint-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-legacy-fingerprint.json
@@ -211,7 +211,7 @@ jobs:
 
       - name: Upload release readiness evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-readiness-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-readiness.json
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload runtime contract evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-runtime-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-runtime.json
@@ -229,7 +229,7 @@ jobs:
 
       - name: Upload public testnet launch-plan evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-public-testnet-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-public-testnet-plan.json
@@ -238,7 +238,7 @@ jobs:
 
       - name: Upload deployment preflight evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-deployment-preflight-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-deployment-preflight.json
@@ -247,7 +247,7 @@ jobs:
 
       - name: Upload deterministic launch-manifest evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-launch-manifest-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-launch-manifest.json
@@ -256,7 +256,7 @@ jobs:
 
       - name: Upload runtime acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-runtime-acceptance-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-runtime-acceptance.json
@@ -265,7 +265,7 @@ jobs:
 
       - name: Upload partner asset issuance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-partner-assets-${{ github.run_id }}
           path: |
@@ -276,7 +276,7 @@ jobs:
 
       - name: Upload interoperability evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-interoperability-${{ github.run_id }}
           path: |
@@ -296,7 +296,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout audited legacy source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: juncachain/juncachain
           ref: a3e47b6a96c36378606764c35cfcdb2de97cb685
@@ -340,7 +340,7 @@ jobs:
           test "$(cut -d' ' -f1 artifacts/junca.sha256)" = "$(cut -d' ' -f1 artifacts/junca-rebuild.sha256)"
 
       - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: artifacts
           format: spdx-json
@@ -348,7 +348,7 @@ jobs:
           upload-artifact: false
 
       - name: Upload reproducible build evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-social-ecosystem-chain-node-build-${{ github.run_id }}
           path: |

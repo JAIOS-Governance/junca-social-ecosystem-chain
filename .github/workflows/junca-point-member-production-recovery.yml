@@ -1,10 +1,6 @@
 name: JUNCA POINT MEMBER Production Recovery
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-point-member-production-recovery.yml"
   workflow_dispatch:
 
 permissions:

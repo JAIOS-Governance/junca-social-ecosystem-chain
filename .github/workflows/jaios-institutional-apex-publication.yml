@@ -2,11 +2,6 @@ name: JAIOS Institutional Apex Publication
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/jaios-institutional-apex-publication.yml
-
 permissions:
   id-token: write
   contents: read
@@ -30,7 +25,7 @@ jobs:
       CLOUDFRONT_ZONE_ID: Z2FDTNDATAQYW2
     steps:
       - name: Configure verified AWS identity
-        uses: aws-actions/configure-aws-credentials@v6.1.2
+        uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -103,7 +98,7 @@ jobs:
           grep -q "cloudfront:CreateDistribution" /tmp/jaios-apex-cloudfront-policy-readback.json
 
       - name: Refresh AWS identity with bounded capability
-        uses: aws-actions/configure-aws-credentials@v6.1.2
+        uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

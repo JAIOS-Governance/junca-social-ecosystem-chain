@@ -1,19 +1,6 @@
 name: JUNCA Chain AWS Canonical Inventory
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/junca-chain-aws-canonical-inventory.yml"
-      - "scripts/junca_aws_canonical_inventory.py"
-      - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
-      - "infrastructure/aws/public-testnet-oidc-trust-handoff.json"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-chain-aws-canonical-inventory.yml"
-      - "scripts/junca_aws_canonical_inventory.py"
-      - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
-      - "infrastructure/aws/public-testnet-oidc-trust-handoff.json"
   workflow_dispatch:
 
 permissions:
@@ -34,8 +21,8 @@ jobs:
       AWS_ACCOUNT_ID: "595710543956"
       REQUIRED_SUBJECT: repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -164,7 +151,7 @@ jobs:
 
       - name: Upload redacted recovery evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-aws-canonical-inventory-${{ github.run_id }}
           path: artifacts/

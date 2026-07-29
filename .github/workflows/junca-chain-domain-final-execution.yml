@@ -1,9 +1,6 @@
 name: JUNCA Chain Custom Domain Final Execution
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/junca-chain-domain-final-execution.yml"]
   workflow_dispatch:
 
 permissions:
@@ -39,12 +36,12 @@ jobs:
       DOCS_ROLE_NAME: JuncaChainDocsProductionDeployment
       HOSTED_ZONE_ID: Z0336017285464TX0NT1G
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Configure canonical AWS bootstrap identity
         id: aws_auth
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ env.BOOTSTRAP_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

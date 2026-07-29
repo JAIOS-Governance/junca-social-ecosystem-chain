@@ -1,17 +1,7 @@
 name: JUNCA Chain Runtime Self Permission Recovery
 
 on:
-  workflow_run:
-    workflows:
-      - JUNCA Public Testnet OIDC Trust Recovery
-    types:
-      - completed
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/junca-chain-runtime-self-permission-recovery.yml
-      - config/junca_public_testnet_aws_iam_authorization.json
 
 permissions:
   contents: read
@@ -19,9 +9,6 @@ permissions:
 
 jobs:
   recover:
-    if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 10
@@ -31,7 +18,7 @@ jobs:
       TARGET_ROLE_NAME: JuncaChainPublicTestnetDeployment
       TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Enforce Public Testnet boundary
         run: |
@@ -232,7 +219,7 @@ jobs:
           echo "recovery_result=$result" >> "$GITHUB_OUTPUT"
           echo "verification=$verification" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-runtime-self-permission-recovery-${{ github.run_id }}
           path: artifacts/

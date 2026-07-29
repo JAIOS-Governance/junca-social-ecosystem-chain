@@ -1,12 +1,6 @@
 name: JUNCA Chain Docs Production
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/technical-reference/**"
-      - "infra/aws/docs-publication/**"
-      - ".github/workflows/junca-chain-docs-production.yml"
   pull_request:
     paths:
       - "docs/technical-reference/**"
@@ -34,8 +28,8 @@ jobs:
       run:
         working-directory: docs/technical-reference
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
       - name: Lint generators and QA
@@ -43,7 +37,7 @@ jobs:
       - name: Build and verify eight-route artifact
         run: npm test
       - name: Upload exact publication artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-chain-docs-${{ github.sha }}
           path: docs/technical-reference/dist
@@ -51,7 +45,7 @@ jobs:
           retention-days: 90
 
   deploy:
-    if: (github.event_name == 'workflow_dispatch' && inputs.deploy) || github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
     needs: quality
     runs-on: ubuntu-latest
     environment: junca-chain-docs-production
@@ -59,8 +53,8 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
       - name: Rebuild exact source artifact
@@ -85,7 +79,7 @@ jobs:
             *) echo "AWS_BINDING_PENDING: AWS_DOCS_DEPLOYMENT_ROLE_ARN is missing or unexpected" >&2; exit 1 ;;
           esac
       - name: Configure publication-only AWS identity
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
           aws-region: us-east-1

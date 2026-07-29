@@ -1,11 +1,7 @@
 name: JUNCA Validator Durable State Migration
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - config/junca_validator_state_migration_request.json
-
+  workflow_dispatch:
 permissions:
   actions: read
   contents: read
@@ -35,7 +31,7 @@ jobs:
       assets_moved: false
       bridge_activated: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify signed migration request-only main commit
         id: request
@@ -61,12 +57,12 @@ jobs:
             --request "$REQUEST_PATH" \
             --github-output "$GITHUB_OUTPUT"
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -179,7 +175,7 @@ jobs:
             .bridge_activated == false
           ' "$artifact_dir/junca-validator-state-migration-binding.json"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-validator-state-migration-${{ github.run_id }}

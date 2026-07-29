@@ -1,6 +1,37 @@
 name: JUNCAValidatorRuntime
 description: Install and verify the immutable JUNCA Public Testnet validator runtime
 schemaVersion: 1.0
+parameters:
+  - ArtifactBucket:
+      type: string
+      description: Exact ephemeral S3 bucket containing digest-bound build inputs
+  - NodeSHA256:
+      type: string
+      description: Exact validator runtime archive SHA-256
+  - GenesisSHA256:
+      type: string
+      description: Exact canonical genesis SHA-256
+  - ParentAMIId:
+      type: string
+      description: Exact Amazon Linux 2023 parent AMI ID
+  - DnfReleasever:
+      type: string
+      description: Exact Amazon Linux 2023 repository release
+  - Boto3Nevra:
+      type: string
+      description: Exact python3-boto3 package NEVRA
+  - BotocoreNevra:
+      type: string
+      description: Exact python3-botocore package NEVRA
+  - ComponentSourceSHA256:
+      type: string
+      description: Exact SHA-256 of this component source
+  - DependencyLockSHA256:
+      type: string
+      description: Exact canonical dependency-lock SHA-256
+  - SupplyChainPolicySHA256:
+      type: string
+      description: Exact repository supply-chain policy SHA-256
 phases:
   - name: build
     steps:
@@ -12,14 +43,19 @@ phases:
             - install -d -m 0755 /opt/junca /etc/junca /var/log/junca
             - getent group junca >/dev/null || groupadd --system junca
             - id -u junca >/dev/null 2>&1 || useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
-            - dnf install -y python3-boto3
-            - aws s3 cp s3://__BUCKET__/validator-runtime.tar.gz /tmp/validator-runtime.tar.gz
-            - aws s3 cp s3://__BUCKET__/genesis.json /tmp/genesis.json
-            - echo "__NODE_SHA256__  /tmp/validator-runtime.tar.gz" | sha256sum --check
-            - echo "__GENESIS_SHA256__  /tmp/genesis.json" | sha256sum --check
+            - 'test "$(rpm -q --qf "%{VERSION}" system-release)" = "{{ DnfReleasever }}"'
+            - 'dnf install -y --releasever="{{ DnfReleasever }}" --setopt=install_weak_deps=False "{{ Boto3Nevra }}" "{{ BotocoreNevra }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-boto3)" = "{{ Boto3Nevra }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-botocore)" = "{{ BotocoreNevra }}"'
+            - 'aws s3 cp "s3://{{ ArtifactBucket }}/validator-runtime.tar.gz" /tmp/validator-runtime.tar.gz'
+            - 'aws s3 cp "s3://{{ ArtifactBucket }}/genesis.json" /tmp/genesis.json'
+            - 'echo "{{ NodeSHA256 }}  /tmp/validator-runtime.tar.gz" | sha256sum --check'
+            - 'echo "{{ GenesisSHA256 }}  /tmp/genesis.json" | sha256sum --check'
             - install -m 0644 /tmp/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz
             - tar -xzf /opt/junca/validator-runtime.tar.gz -C /
             - install -m 0644 /tmp/genesis.json /etc/junca/genesis.json
+            - 'printf "%s\n" "PARENT_AMI_ID={{ ParentAMIId }}" "DNF_RELEASEVER={{ DnfReleasever }}" "BOTO3_NEVRA={{ Boto3Nevra }}" "BOTOCORE_NEVRA={{ BotocoreNevra }}" "COMPONENT_SOURCE_SHA256={{ ComponentSourceSHA256 }}" "DEPENDENCY_LOCK_SHA256={{ DependencyLockSHA256 }}" "SUPPLY_CHAIN_POLICY_SHA256={{ SupplyChainPolicySHA256 }}" "MAINNET_CHANGED=false" "ASSETS_MOVED=false" "BRIDGE_ACTIVATED=false" > /opt/junca/ami-supply-chain.env'
+            - chmod 0444 /opt/junca/ami-supply-chain.env
             - systemctl enable junca-validator.service junca-public-rpc.service junca-public-explorer.service
             - rm -f /tmp/validator-runtime.tar.gz /tmp/genesis.json
   - name: validate
@@ -48,6 +84,17 @@ phases:
             - grep -Fq -- '--http.port 8545' /etc/systemd/system/junca-validator.service
             - grep -Fq -- '--http.port 3000' /etc/systemd/system/junca-public-explorer.service
             - grep -Fq -- '--http.port 8546' /etc/systemd/system/junca-public-rpc.service
-            - echo "__NODE_SHA256__  /opt/junca/validator-runtime.tar.gz" | sha256sum --check
-            - echo "__GENESIS_SHA256__  /etc/junca/genesis.json" | sha256sum --check
+            - 'echo "{{ NodeSHA256 }}  /opt/junca/validator-runtime.tar.gz" | sha256sum --check'
+            - 'echo "{{ GenesisSHA256 }}  /etc/junca/genesis.json" | sha256sum --check'
+            - 'test "$(rpm -q --qf "%{VERSION}" system-release)" = "{{ DnfReleasever }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-boto3)" = "{{ Boto3Nevra }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-botocore)" = "{{ BotocoreNevra }}"'
+            - python3 -c 'import boto3, botocore; assert boto3.__version__; assert botocore.__version__'
+            - 'grep -Fxq "PARENT_AMI_ID={{ ParentAMIId }}" /opt/junca/ami-supply-chain.env'
+            - 'grep -Fxq "COMPONENT_SOURCE_SHA256={{ ComponentSourceSHA256 }}" /opt/junca/ami-supply-chain.env'
+            - 'grep -Fxq "DEPENDENCY_LOCK_SHA256={{ DependencyLockSHA256 }}" /opt/junca/ami-supply-chain.env'
+            - 'grep -Fxq "SUPPLY_CHAIN_POLICY_SHA256={{ SupplyChainPolicySHA256 }}" /opt/junca/ami-supply-chain.env'
+            - grep -Fxq 'MAINNET_CHANGED=false' /opt/junca/ami-supply-chain.env
+            - grep -Fxq 'ASSETS_MOVED=false' /opt/junca/ami-supply-chain.env
+            - grep -Fxq 'BRIDGE_ACTIVATED=false' /opt/junca/ami-supply-chain.env
             - python3 -c 'import json; d=json.load(open("/etc/junca/genesis.json")); assert d["network"] == "public-testnet"; assert d["notice"] == "Public Testnet / No Monetary Value"; assert d["validator_ids"] == ["validator-01", "validator-02", "validator-03"]'

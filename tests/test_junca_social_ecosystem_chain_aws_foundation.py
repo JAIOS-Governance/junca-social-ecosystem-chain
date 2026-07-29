@@ -77,6 +77,24 @@ def rollback_snapshot_function(script: str) -> str:
     )[0].join(("verify_rollback_snapshots() {", "\n}"))
 
 
+def ssm_command_functions(script: str) -> str:
+    return script.split("wait_for_ssm_command() {", 1)[1].split(
+        "\nrender_runtime_finality_preflight()", 1
+    )[0].join(("wait_for_ssm_command() {", ""))
+
+
+def set_runtime_finality_function(script: str) -> str:
+    return script.split("set_runtime_finality() {", 1)[1].split(
+        "\n}\n\nverify_validator_bootstrap_readiness()", 1
+    )[0].join(("set_runtime_finality() {", "\n}"))
+
+
+def marked_jq_filter(script: str, marker: str) -> str:
+    return script.split(f"# BEGIN_{marker}", 1)[1].split(
+        f"# END_{marker}", 1
+    )[0]
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -249,7 +267,7 @@ class AwsFoundationTests(unittest.TestCase):
             self.runtime_variables,
         )
         self.assertIn(
-            "local.validator_bootstrap_slot_epochs[count.index]",
+            "local.validator_bootstrap_slot_epochs[index]",
             self.runtime,
         )
         self.assertIn(
@@ -409,7 +427,11 @@ class AwsFoundationTests(unittest.TestCase):
             "public-testnet/bootstrap.tfstate",
             "public-testnet/terraform.tfstate",
             "foundation.tfplan",
-            'select(index("delete"))',
+            "BEGIN_ROLLING_FULL_PLAN_GATE",
+            "BEGIN_ROLLING_TARGET_PLAN_GATE",
+            "BEGIN_ROLLING_RECONCILE_PLAN_GATE",
+            '.change.actions != ["no-op"]',
+            '.change.replace_paths == [["ami"], ["user_data"]]',
             "enable_public_services: $enable_public_services",
             "public_services_acceptance_readback.value.enabled",
             "public-services stage while rotating validator",
@@ -419,6 +441,14 @@ class AwsFoundationTests(unittest.TestCase):
             "validator_state_volume_readback.value // []",
             "enable_validator_state_volumes: $enable_validator_state_volumes",
             "aws_volume_attachment.validator_state",
+            "--slurpfile full_plan artifacts/foundation-plan.json",
+            "$plan.complete == false",
+            "$plan.configuration == $full_plan[0].configuration",
+            "$plan.variables == $full_plan[0].variables",
+            "expected_user_data_sha1",
+            "validator_state_kms_key_arns",
+            "candidate-root-snapshot-readback.json",
+            "get-ebs-encryption-by-default",
             'test("^aws_instance\\\\.validator\\\\[[0-2]\\\\]$")',
             "describe-volumes --volume-ids",
         ):
@@ -435,7 +465,8 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_validator_release_pins_terraform_before_foundation_apply(self) -> None:
         setup_index = self.validator_foundation_release.index(
-            "hashicorp/setup-terraform@v3"
+            "hashicorp/setup-terraform@"
+            "b9cd54a3c349d3f38e8881555d616ced269862dd"
         )
         version_index = self.validator_foundation_release.index(
             "terraform_version: 1.9.8"
@@ -457,13 +488,18 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertNotIn("workflow_run:", self.validator_foundation_release)
         self.assertIn(
-            "inputs.authorize_rollout == 'PUBLIC_TESTNET_ROLLOUT'",
+            'test "$AUTHORIZE_ROLLOUT" = "PUBLIC_TESTNET_ROLLOUT"',
             self.validator_foundation_release,
         )
         self.assertIn(
-            "startsWith(github.ref, 'refs/heads/release-candidate/')",
+            '"refs/heads/release-candidate/$GITHUB_SHA"',
             self.validator_foundation_release,
         )
+        job_header = self.validator_foundation_release.split(
+            "deploy-and-accept:",
+            1,
+        )[1].split("steps:", 1)[0]
+        self.assertNotIn("\n    if:", job_header)
         self.assertNotIn(
             "github.ref == 'refs/heads/main'",
             self.validator_foundation_release,
@@ -501,8 +537,38 @@ class AwsFoundationTests(unittest.TestCase):
             'test ! -L "$checksum"',
             "(keys | sort) == ([",
             ".source_commit == $candidate_head",
+            '.schema_version == "junca-validator-ami-build/v2"',
+            ".candidate.ami_supply_chain.request_schema ==",
+            ".candidate.ami_supply_chain.image_builder_arn ==",
+            ".candidate.ami_supply_chain.parent_ami_id ==",
+            ".candidate.ami_supply_chain.component_source_sha256 ==",
+            ".candidate.ami_supply_chain.dependency_lock_sha256 ==",
+            ".candidate.ami_supply_chain.supply_chain_policy_sha256 ==",
+            ".candidate.ami_supply_chain.dnf_releasever ==",
+            ".candidate.ami_supply_chain.python3_boto3_nevra ==",
+            ".candidate.ami_supply_chain.python3_botocore_nevra ==",
+            "Cross-bind live AMI supply-chain tags",
         ):
             self.assertIn(required, self.validator_foundation_release)
+        artifact_exists = self.validator_foundation_release.index(
+            'test -f "$evidence"'
+        )
+        artifact_verified = self.validator_foundation_release.index(
+            '.state == "AMI_VERIFIED"'
+        )
+        manifest_exists = self.validator_foundation_release.index(
+            'test -f "$decision"'
+        )
+        manifest_verified = self.validator_foundation_release.index(
+            '.decision == "PROMOTION_GATE_PASS"'
+        )
+        apply_index = self.validator_foundation_release.index(
+            "scripts/junca_public_testnet_foundation.sh foundation-apply"
+        )
+        self.assertLess(artifact_exists, artifact_verified)
+        self.assertLess(artifact_verified, manifest_exists)
+        self.assertLess(manifest_exists, manifest_verified)
+        self.assertLess(manifest_verified, apply_index)
         self.assertEqual(
             self.validator_foundation_release.count(
                 "sha256sum --strict --check SHA256SUMS"
@@ -516,7 +582,8 @@ class AwsFoundationTests(unittest.TestCase):
             '.decision == "PROMOTION_GATE_PASS"'
         )
         oidc_index = self.validator_foundation_release.index(
-            "aws-actions/configure-aws-credentials@v6.1.2"
+            "aws-actions/configure-aws-credentials@"
+            "acca2b1b2070338fb9fd1ca27ecee81d687e58e5"
         )
         apply_index = self.validator_foundation_release.index(
             "scripts/junca_public_testnet_foundation.sh foundation-apply"
@@ -541,6 +608,546 @@ class AwsFoundationTests(unittest.TestCase):
             "Automatic finality requires a shared positive 30-second-boundary",
         ):
             self.assertIn(required, self.runtime)
+
+    def test_rolling_plan_gates_reject_every_unallowlisted_non_noop(self) -> None:
+        node_ami_id = "ami-0123456789abcdef0"
+        root_kms_key_arn = (
+            "arn:aws:kms:us-east-1:595710543956:key/"
+            "00000000-0000-0000-0000-000000000000"
+        )
+        current_ids = [
+            "i-00000000000000001",
+            "i-00000000000000002",
+            "i-00000000000000003",
+        ]
+        expected_user_data = [
+            "0" * 40,
+            "1" * 40,
+            "2" * 40,
+        ]
+        volume_ids = [f"vol-{index + 1:017x}" for index in range(3)]
+        rollback_snapshot_ids = [
+            f"snap-{index + 1:017x}" for index in range(3)
+        ]
+        availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+        def plan(changes, drift=None, complete=True):
+            return {
+                "format_version": "1.2",
+                "terraform_version": "1.9.8",
+                "complete": complete,
+                "applyable": bool(changes),
+                "errored": False,
+                "deferred_changes": [],
+                "variables": {"release_binding": "canonical"},
+                "configuration": {
+                    "root_module": {"release_binding": "canonical"}
+                },
+                "resource_changes": changes,
+                "resource_drift": drift or [],
+            }
+
+        def instance(index=0):
+            profile = (
+                "junca-social-ecosystem-chain-testnet-validator-"
+                f"{index + 1}"
+            )
+            tags = {
+                "Project": "JUNCA Social Ecosystem Chain",
+                "Governance": "JAIOS Institutional Governance",
+                "Network": "Public Testnet",
+                "MonetaryUse": "None",
+                "ManagedBy": "Terraform",
+            }
+            subnet_id = f"subnet-{index + 1:017x}"
+            security_groups = [f"sg-{index + 1:017x}"]
+            return {
+                "address": f"aws_instance.validator[{index}]",
+                "mode": "managed",
+                "change": {
+                    "actions": ["delete", "create"],
+                    "replace_paths": [["ami"], ["user_data"]],
+                    "before": {
+                        "iam_instance_profile": profile,
+                        "subnet_id": subnet_id,
+                        "vpc_security_group_ids": security_groups,
+                        "tags_all": tags,
+                        "user_data": f"{index + 3}" * 40,
+                        "root_block_device": [
+                            {"kms_key_id": root_kms_key_arn}
+                        ],
+                    },
+                    "after": {
+                        "ami": node_ami_id,
+                        "private_ip": [
+                            "10.67.16.10",
+                            "10.67.32.10",
+                            "10.67.48.10",
+                        ][index],
+                        "associate_public_ip_address": False,
+                        "instance_type": "m7i.large",
+                        "iam_instance_profile": profile,
+                        "subnet_id": subnet_id,
+                        "vpc_security_group_ids": security_groups,
+                        "tags_all": tags,
+                        "monitoring": True,
+                        "user_data": expected_user_data[index],
+                        "user_data_replace_on_change": True,
+                        "source_dest_check": True,
+                        "metadata_options": [
+                            {
+                                "http_endpoint": "enabled",
+                                "http_tokens": "required",
+                            }
+                        ],
+                        "root_block_device": [
+                            {
+                                "encrypted": True,
+                                "delete_on_termination": True,
+                                "kms_key_id": None,
+                                "volume_type": "gp3",
+                                "volume_size": 200,
+                                "iops": 6000,
+                                "throughput": 250,
+                            }
+                        ],
+                    },
+                    "after_unknown": {
+                        "root_block_device": [{"kms_key_id": True}]
+                    },
+                },
+            }
+
+        def target_attachment(kind, index=0):
+            port = 8546 if kind == "rpc" else 3000
+            return {
+                "address":
+                    f"aws_lb_target_group_attachment.{kind}[{index}]",
+                "mode": "managed",
+                "change": {
+                    "actions": ["delete", "create"],
+                    "replace_paths": [["target_id"]],
+                    "before": {"target_group_arn": f"arn:target:{kind}"},
+                    "after": {
+                        "target_group_arn": f"arn:target:{kind}",
+                        "port": port,
+                    },
+                    "after_unknown": {"target_id": True},
+                },
+            }
+
+        def state_attachment(index=0):
+            return {
+                "address": f"aws_volume_attachment.validator_state[{index}]",
+                "mode": "managed",
+                "change": {
+                    "actions": ["delete", "create"],
+                    "replace_paths": [["instance_id"]],
+                    "before": {"volume_id": f"vol-{index + 1:017x}"},
+                    "after": {
+                        "device_name": "/dev/sdf",
+                        "volume_id": f"vol-{index + 1:017x}",
+                        "force_detach": False,
+                        "stop_instance_before_detaching": True,
+                    },
+                    "after_unknown": {"instance_id": True},
+                },
+            }
+
+        def retained_state_drift(index):
+            validator_number = f"{index + 1:02d}"
+            tags = {
+                "AssetsMoved": "false",
+                "BridgeActivated": "false",
+                "FailureDomain": availability_zones[index],
+                "Governance": "JAIOS Institutional Governance",
+                "JuncaFilesystemVerified": "true",
+                "JuncaFinalityCertificateBackfilled": "true",
+                "JuncaMigrationState": "VERIFIED_PASS",
+                "JuncaRollbackSnapshotId": rollback_snapshot_ids[index],
+                "JuncaStateStoreIntegrity": "true",
+                "MainnetChanged": "false",
+                "ManagedBy": "Terraform",
+                "MigrationRequired": "false",
+                "MonetaryUse": "None",
+                "Name": (
+                    "junca-social-ecosystem-chain-testnet-validator-"
+                    f"{validator_number}-state"
+                ),
+                "Network": "Public Testnet",
+                "Project": "JUNCA Social Ecosystem Chain",
+                "PublicTestnetOnly": "true",
+                "StatePath": "/var/lib/junca",
+                "Validator": validator_number,
+            }
+            stable = {
+                "id": current_ids[index],
+                "root_block_device": [
+                    {
+                        "kms_key_id": root_kms_key_arn,
+                        "tags": None,
+                    }
+                ],
+            }
+            after = json.loads(json.dumps(stable))
+            after["root_block_device"][0]["tags"] = {}
+            after["ebs_block_device"] = [
+                {
+                    "delete_on_termination": False,
+                    "device_name": "/dev/sdf",
+                    "encrypted": True,
+                    "iops": 6000,
+                    "kms_key_id": root_kms_key_arn,
+                    "snapshot_id": "",
+                    "tags": tags,
+                    "tags_all": tags,
+                    "throughput": 250,
+                    "volume_id": volume_ids[index],
+                    "volume_size": 200,
+                    "volume_type": "gp3",
+                }
+            ]
+            before = json.loads(json.dumps(stable))
+            before["ebs_block_device"] = []
+            return {
+                "address": f"aws_instance.validator[{index}]",
+                "mode": "managed",
+                "type": "aws_instance",
+                "name": "validator",
+                "index": index,
+                "change": {
+                    "actions": ["update"],
+                    "before": before,
+                    "after": after,
+                    "after_unknown": {},
+                },
+            }
+
+        def alarm(index, replacement):
+            stable = {"threshold": 1}
+            return {
+                "address":
+                    f"aws_cloudwatch_metric_alarm.validator_status[{index}]",
+                "mode": "managed",
+                "change": {
+                    "actions": ["update"],
+                    "replace_paths": [],
+                    "before": stable | {
+                        "dimensions": {"InstanceId": current_ids[index]}
+                    },
+                    "after": stable | {
+                        "dimensions": (
+                            None
+                            if replacement
+                            else {"InstanceId": current_ids[index]}
+                        )
+                    },
+                    "after_unknown": (
+                        {"dimensions": True} if replacement else {}
+                    ),
+                },
+            }
+
+        def evaluate(marker, value, arguments):
+            command = ["jq", "-e"]
+            for flag, key, item in arguments:
+                command.extend((flag, key, item))
+            command.append(marked_jq_filter(self.foundation_script, marker))
+            return subprocess.run(
+                command,
+                input=json.dumps(value),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        target_changes = [
+            instance(),
+            target_attachment("rpc"),
+            target_attachment("explorer"),
+            state_attachment(),
+        ]
+        target_arguments = [
+            ("--arg", "address", "aws_instance.validator[0]"),
+            ("--arg", "node_ami_id", node_ami_id),
+            ("--arg", "root_ebs_kms_key_arn", root_kms_key_arn),
+            (
+                "--argjson",
+                "full_plan",
+                json.dumps(
+                    [
+                        {
+                            "variables": {
+                                "release_binding": "canonical"
+                            },
+                            "configuration": {
+                                "root_module": {
+                                    "release_binding": "canonical"
+                                }
+                            },
+                        }
+                    ]
+                ),
+            ),
+            (
+                "--argjson",
+                "expected_addresses",
+                json.dumps([item["address"] for item in target_changes]),
+            ),
+            ("--argjson", "validator_state_enabled", "true"),
+            (
+                "--argjson",
+                "validator_state_volume_ids",
+                json.dumps(volume_ids),
+            ),
+            (
+                "--argjson",
+                "validator_state_kms_key_arns",
+                json.dumps([root_kms_key_arn] * 3),
+            ),
+            (
+                "--argjson",
+                "validator_state_rollback_snapshot_ids",
+                json.dumps(rollback_snapshot_ids),
+            ),
+            (
+                "--argjson",
+                "availability_zones",
+                json.dumps(availability_zones),
+            ),
+            (
+                "--argjson",
+                "expected_user_data_sha1",
+                json.dumps(expected_user_data),
+            ),
+        ]
+        result = evaluate(
+            "ROLLING_TARGET_PLAN_GATE",
+            plan(
+                target_changes,
+                drift=[retained_state_drift(0)],
+                complete=False,
+            ),
+            target_arguments,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        malicious = json.loads(json.dumps(target_changes))
+        malicious.append(
+            {
+                "address": "aws_security_group.unapproved",
+                "mode": "managed",
+                "change": {
+                    "actions": ["create"],
+                    "before": None,
+                    "after": {},
+                    "after_unknown": {},
+                },
+            }
+        )
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_TARGET_PLAN_GATE",
+                plan(
+                    malicious,
+                    drift=[retained_state_drift(0)],
+                    complete=False,
+                ),
+                target_arguments,
+            ).returncode,
+            0,
+        )
+        mismatched_target = plan(
+            target_changes,
+            drift=[retained_state_drift(0)],
+            complete=False,
+        )
+        mismatched_target["configuration"] = {"root_module": {"evil": True}}
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_TARGET_PLAN_GATE",
+                mismatched_target,
+                target_arguments,
+            ).returncode,
+            0,
+        )
+        bad_user_data = json.loads(json.dumps(target_changes))
+        bad_user_data[0]["change"]["after"]["user_data"] = "d" * 40
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_TARGET_PLAN_GATE",
+                plan(
+                    bad_user_data,
+                    drift=[retained_state_drift(0)],
+                    complete=False,
+                ),
+                target_arguments,
+            ).returncode,
+            0,
+        )
+        bad_drift = retained_state_drift(0)
+        bad_drift["change"]["after"]["ebs_block_device"][0][
+            "volume_id"
+        ] = "vol-fffffffffffffffff"
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_TARGET_PLAN_GATE",
+                plan(target_changes, drift=[bad_drift], complete=False),
+                target_arguments,
+            ).returncode,
+            0,
+        )
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_TARGET_PLAN_GATE",
+                plan(
+                    target_changes,
+                    drift=[retained_state_drift(0)],
+                    complete=True,
+                ),
+                target_arguments,
+            ).returncode,
+            0,
+        )
+
+        full_arguments = [
+            ("--arg", "phase", "foundation-apply"),
+            ("--arg", "node_ami_id", node_ami_id),
+            ("--arg", "root_ebs_kms_key_arn", root_kms_key_arn),
+            ("--argjson", "rolling_release", "true"),
+            ("--argjson", "public_services_enabled", "true"),
+            ("--argjson", "validator_state_enabled", "true"),
+            (
+                "--argjson",
+                "validator_state_volume_ids",
+                json.dumps(volume_ids),
+            ),
+            (
+                "--argjson",
+                "validator_state_kms_key_arns",
+                json.dumps([root_kms_key_arn] * 3),
+            ),
+            (
+                "--argjson",
+                "validator_state_rollback_snapshot_ids",
+                json.dumps(rollback_snapshot_ids),
+            ),
+            (
+                "--argjson",
+                "availability_zones",
+                json.dumps(availability_zones),
+            ),
+            (
+                "--argjson",
+                "expected_user_data_sha1",
+                json.dumps(expected_user_data),
+            ),
+            ("--argjson", "current_validator_ids", json.dumps(current_ids)),
+        ]
+        def replacement_suffix(prefix_count):
+            changes = []
+            for index in range(prefix_count, 3):
+                changes.extend(
+                    (
+                        instance(index),
+                        target_attachment("rpc", index),
+                        target_attachment("explorer", index),
+                        state_attachment(index),
+                        alarm(index, True),
+                    )
+                )
+            return changes
+
+        for prefix_count in range(4):
+            with self.subTest(resume_prefix_count=prefix_count):
+                result = evaluate(
+                    "ROLLING_FULL_PLAN_GATE",
+                    plan(
+                        replacement_suffix(prefix_count),
+                        drift=[
+                            retained_state_drift(index)
+                            for index in range(3)
+                        ],
+                    ),
+                    full_arguments,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+        full_changes = replacement_suffix(0)
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_FULL_PLAN_GATE",
+                plan(
+                    full_changes + malicious[-1:],
+                    drift=[
+                        retained_state_drift(index) for index in range(3)
+                    ],
+                ),
+                full_arguments,
+            ).returncode,
+            0,
+        )
+        resume_suffix_with_extra_alarm = (
+            replacement_suffix(2) + [alarm(0, False)]
+        )
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_FULL_PLAN_GATE",
+                plan(
+                    resume_suffix_with_extra_alarm,
+                    drift=[
+                        retained_state_drift(index) for index in range(3)
+                    ],
+                ),
+                full_arguments,
+            ).returncode,
+            0,
+        )
+
+        reconcile_arguments = [
+            ("--arg", "root_ebs_kms_key_arn", root_kms_key_arn),
+            ("--argjson", "validator_ids", json.dumps(current_ids)),
+            ("--argjson", "validator_state_enabled", "true"),
+            (
+                "--argjson",
+                "validator_state_volume_ids",
+                json.dumps(volume_ids),
+            ),
+            (
+                "--argjson",
+                "validator_state_kms_key_arns",
+                json.dumps([root_kms_key_arn] * 3),
+            ),
+            (
+                "--argjson",
+                "validator_state_rollback_snapshot_ids",
+                json.dumps(rollback_snapshot_ids),
+            ),
+            (
+                "--argjson",
+                "availability_zones",
+                json.dumps(availability_zones),
+            ),
+        ]
+        reconcile = plan(
+            [alarm(1, False)],
+            drift=[retained_state_drift(index) for index in range(3)],
+        )
+        result = evaluate(
+            "ROLLING_RECONCILE_PLAN_GATE",
+            reconcile,
+            reconcile_arguments,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reconcile["resource_changes"][0]["change"]["after"]["threshold"] = 2
+        self.assertNotEqual(
+            evaluate(
+                "ROLLING_RECONCILE_PLAN_GATE",
+                reconcile,
+                reconcile_arguments,
+            ).returncode,
+            0,
+        )
         for required in (
             "AUTOMATIC_FINALITY_ENABLED=${automatic_finality_enabled}",
             "TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval_seconds}",
@@ -583,7 +1190,8 @@ class AwsFoundationTests(unittest.TestCase):
         for required in (
             "user_data_replace_on_change = true",
             "validator_state_volume_id",
-            "aws_ebs_volume.validator_state[count.index].id",
+            "aws_ebs_volume.validator_state[index].id",
+            "user_data = local.validator_user_data[count.index]",
         ):
             self.assertIn(required, self.runtime)
         for required in (
@@ -1116,6 +1724,136 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.foundation_script)
 
+    def test_replacement_readiness_precedes_finality_mutation(self) -> None:
+        script = self.foundation_script
+        definition = script.index("verify_validator_bootstrap_readiness() {")
+        call = script.index(
+            "if ! verify_validator_bootstrap_readiness \\\n",
+            definition,
+        )
+        quiesce = script.index(
+            '"$index" finality-quiesce started',
+            call,
+        )
+        root_volume = script.index(
+            '"$index" root-volume started',
+            definition,
+        )
+        ssm_online = script.index(
+            '"$index" ssm-online started',
+            root_volume,
+        )
+        self.assertLess(root_volume, ssm_online)
+        self.assertLess(root_volume, call)
+        self.assertLess(call, quiesce)
+        for required in (
+            "cloud-init status --wait",
+            "systemctl is-active --quiet junca-validator.service",
+            "mountpoint -q /var/lib/junca",
+            "PRAGMA quick_check",
+            "/opt/junca/validator-runtime.tar.gz",
+            "/etc/junca/genesis.json",
+            '"$index" runtime-readiness started',
+            '"$index" runtime-readiness succeeded',
+            '(\\$health.consensus | type) == "object"',
+            'test("^0x[0-9a-f]{64}$")',
+            "\\$health.consensus.last_certificate_hash ==",
+            "\\$durable.certificate_hash and",
+            "post-apply-validator-${index}-root-volume.json",
+            ".KmsKeyId == $kms_key_arn",
+        ):
+            self.assertIn(required, script)
+        self.assertNotIn("aws kms describe-key", script)
+        readiness = script.split(
+            "verify_validator_bootstrap_readiness() {", 1
+        )[1].split("\ncapture_validator_observation() {", 1)[0]
+        self.assertNotIn(
+            "\\$health.consensus.last_certificate_hash //", readiness
+        )
+
+    def test_finality_preflight_failure_returns_before_mutation(self) -> None:
+        block = self.foundation_script.split(
+            "set_runtime_finality() {", 1
+        )[1].split(
+            "\nverify_validator_bootstrap_readiness() {", 1
+        )[0]
+        preflight_wait = block.index("if ! wait_for_ssm_command \\")
+        preflight_return = block.index("return 1", preflight_wait)
+        mutation = block.index(
+            "# Dispatch every mutation",
+            preflight_return,
+        )
+        self.assertLess(preflight_wait, preflight_return)
+        self.assertLess(preflight_return, mutation)
+        self.assertTrue(block.rstrip().endswith("return 0\n}"))
+
+    def test_finality_preflight_failure_executes_zero_mutations(self) -> None:
+        bindings = [
+            {
+                "instance_id": "i-00000000000000001",
+                "expected_artifact_sha256": "1" * 64,
+                "allow_missing_finality_keys": False,
+            },
+            {
+                "instance_id": "i-00000000000000002",
+                "expected_artifact_sha256": "2" * 64,
+                "allow_missing_finality_keys": False,
+            },
+        ]
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            script = (
+                "set -euo pipefail\n"
+                + set_runtime_finality_function(self.foundation_script)
+                + textwrap.dedent(
+                    f"""
+                    render_runtime_finality_preflight() {{
+                      printf 'read-only-preflight'
+                    }}
+                    render_runtime_finality_mutation() {{
+                      printf 'runtime-mutation'
+                    }}
+                    render_runtime_finality_readback() {{
+                      printf 'runtime-readback'
+                    }}
+                    aws() {{
+                      if [[ "$*" == *"read-only preflight"* ]]; then
+                        printf '%s\\n' preflight >> preflight-submissions
+                        printf 'preflight-command-id\\n'
+                        return 0
+                      fi
+                      if [[ "$*" == *"fail-closed finality configuration"* ]]
+                      then
+                        printf '%s\\n' mutation >> mutation-submissions
+                        printf 'mutation-command-id\\n'
+                        return 0
+                      fi
+                      return 1
+                    }}
+                    wait_for_ssm_command() {{
+                      [[ "$2" != "i-00000000000000002" ]]
+                    }}
+                    wait_for_ssm_command_result() {{
+                      return 0
+                    }}
+                    mkdir artifacts
+                    bindings='{json.dumps(bindings, separators=(",", ":"))}'
+                    if set_runtime_finality 0 0 "$bindings"; then
+                      exit 91
+                    fi
+                    test "$(wc -l < preflight-submissions)" = 2
+                    test ! -e mutation-submissions
+                    """
+                )
+            )
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=directory,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_compensation_readback_requires_exact_disabled_values(self) -> None:
         block = runtime_finality_exact_readback_block(
             self.foundation_script
@@ -1377,6 +2115,7 @@ class AwsFoundationTests(unittest.TestCase):
             "post-apply-validator-${index}-checkpoint.json",
             "terraform-apply started",
             "instance-output started",
+            "root-volume started",
             "ssm-online started",
             "state-volume started",
             "finality-quiesce started",
@@ -1454,6 +2193,83 @@ class AwsFoundationTests(unittest.TestCase):
                 evidence["attempts"][0]["stderr"],
             )
             self.assertEqual(evidence["attempts"][1]["cli_exit"], 0)
+
+    def test_ssm_command_retries_only_allowlisted_transient_errors(self) -> None:
+        function = ssm_command_functions(self.foundation_script)
+        with tempfile.TemporaryDirectory() as directory:
+            temp = pathlib.Path(directory)
+            counter = temp / "counter"
+            output = temp / "invocation.json"
+            harness = textwrap.dedent(
+                """
+                aws() {
+                  count=0
+                  if [[ -f "$COUNTER_PATH" ]]; then
+                    count="$(cat "$COUNTER_PATH")"
+                  fi
+                  count="$((count + 1))"
+                  printf '%s' "$count" >"$COUNTER_PATH"
+                  if [[ "$MODE" == transient && "$count" == 1 ]]; then
+                    echo "InvocationDoesNotExist" >&2
+                    return 254
+                  fi
+                  if [[ "$MODE" == unknown ]]; then
+                    echo "AccessDeniedException" >&2
+                    return 254
+                  fi
+                  if [[ " $* " == *" --query Status "* ]]; then
+                    printf 'Success\\n'
+                  else
+                    printf '{"Status":"Success"}\\n'
+                  fi
+                }
+                sleep() { :; }
+                wait_for_ssm_command "$1" "$2" "$3"
+                """
+            )
+            environment = {
+                "PATH": "/usr/bin:/bin",
+                "COUNTER_PATH": str(counter),
+                "MODE": "transient",
+            }
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n" + function + harness,
+                    "ssm-command-test",
+                    "command-1",
+                    "i-00000000000000001",
+                    str(output),
+                ],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(output.read_text())["Status"], "Success")
+            self.assertEqual(counter.read_text(), "3")
+
+            counter.unlink()
+            environment["MODE"] = "unknown"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n" + function + harness,
+                    "ssm-command-test",
+                    "command-1",
+                    "i-00000000000000001",
+                    str(output),
+                ],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(counter.read_text(), "1")
 
     def test_pre_mutation_snapshot_readback_rejects_aws_drift(self) -> None:
         state = [
@@ -1603,13 +2419,11 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertNotIn("JUNCA Public Testnet IAM Recovery", trigger)
         for required in (
-            "github.event.workflow_run.conclusion == 'success'",
-            "github.event.workflow_run.name == "
-            "'JUNCA Validator Foundation Release'",
-            "github.event.workflow_run.head_branch == format(",
-            "'release-candidate/{0}'",
-            "github.event.workflow_run.head_repository.full_name == "
-            "github.repository",
+            'test "$WORKFLOW_RUN_CONCLUSION" = "success"',
+            'test "$WORKFLOW_RUN_NAME" = \\\n'
+            '                "JUNCA Validator Foundation Release"',
+            '"release-candidate/$WORKFLOW_RUN_HEAD_SHA"',
+            'test "$WORKFLOW_RUN_HEAD_REPOSITORY" = "$REPOSITORY"',
         ):
             self.assertIn(required, self.public_testnet_release)
         self.assertNotIn("30237527940", self.public_testnet_release)

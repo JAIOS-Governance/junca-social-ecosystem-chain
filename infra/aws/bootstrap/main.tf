@@ -8,7 +8,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.60"
+      version = "= 5.100.0"
     }
   }
 }
@@ -195,12 +195,7 @@ resource "aws_iam_role" "deployment" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        }
-        StringLike = {
-          "token.actions.githubusercontent.com:sub" = [
-            "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:ref:refs/heads/main",
-            "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet"
-          ]
+          "token.actions.githubusercontent.com:sub" = "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet"
         }
       }
     }]

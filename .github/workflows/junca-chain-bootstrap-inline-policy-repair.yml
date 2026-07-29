@@ -2,11 +2,6 @@ name: JUNCA Chain Bootstrap Inline Policy Repair
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/junca-chain-bootstrap-inline-policy-repair.yml
-      - .github/recovery-triggers/chain-bootstrap-policy-repair.txt
 
 permissions:
   id-token: write
@@ -21,7 +16,7 @@ jobs:
       AWS_ACCOUNT_ID: "595710543956"
       TARGET_ROLE: JuncaChainDocsProductionDeployment
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Acquire GitHub OIDC token
         id: oidc
         shell: bash
