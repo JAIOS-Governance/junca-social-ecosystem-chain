@@ -68,11 +68,12 @@ jobs:
             .head_branch == "main"
           ' <<<"$resume"
 
-      - name: Remove only the duplicate attempt artifact
+      - name: Preserve exact resume artifact and remove duplicate idempotently
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          mkdir -p artifacts
           retained="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETAINED_RESUME_ARTIFACT_ID}")"
           jq -e \
             --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
@@ -85,26 +86,39 @@ jobs:
               .workflow_run.id == $run_id
             ' <<<"$retained"
 
-          duplicate="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}")"
-          jq -e \
-            --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
-            --arg digest "$DUPLICATE_ATTEMPT_ARTIFACT_DIGEST" \
-            --argjson run_id "$RESUME_RUN_ID" '
-              .id == 8714715997 and
-              .name == $name and
-              .digest == $digest and
-              .expired == false and
-              .workflow_run.id == $run_id
-            ' <<<"$duplicate"
-
-          gh api --method DELETE \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}"
-          if gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
-            >/dev/null 2>&1
-          then
-            echo "duplicate attempt artifact still exists" >&2
-            exit 1
+          set +e
+          duplicate="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
+              2>artifacts/duplicate-artifact-read-error.txt
+          )"
+          duplicate_status=$?
+          set -e
+          if [[ "$duplicate_status" == 0 ]]; then
+            jq -e \
+              --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
+              --arg digest "$DUPLICATE_ATTEMPT_ARTIFACT_DIGEST" \
+              --argjson run_id "$RESUME_RUN_ID" '
+                .id == 8714715997 and
+                .name == $name and
+                .digest == $digest and
+                .expired == false and
+                .workflow_run.id == $run_id
+              ' <<<"$duplicate"
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}"
+            if gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
+              >/dev/null 2>&1
+            then
+              echo "duplicate attempt artifact still exists" >&2
+              exit 1
+            fi
+          elif grep -Fq "HTTP 404" artifacts/duplicate-artifact-read-error.txt; then
+            echo "duplicate attempt artifact is already absent"
+          else
+            cat artifacts/duplicate-artifact-read-error.txt >&2
+            exit "$duplicate_status"
           fi
 
           retained_after="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETAINED_RESUME_ARTIFACT_ID}")"
