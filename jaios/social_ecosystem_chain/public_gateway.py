@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +19,8 @@ from .explorer_page import EXPLORER_DOCUMENT
 
 
 NOTICE = "Public Testnet / No Monetary Value"
+COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_METHODS = frozenset(
     {
         "eth_blockNumber",
@@ -125,8 +129,28 @@ class PublicGateway:
         upstream: str = "http://127.0.0.1:8545/",
         *,
         transport: Transport | None = None,
+        runtime_artifact_commit: str | None = None,
+        genesis_sha256: str | None = None,
+        node_artifact_sha256: str | None = None,
     ) -> None:
         self.upstream = validate_upstream(upstream)
+        if runtime_artifact_commit is not None and not COMMIT_SHA.fullmatch(
+            runtime_artifact_commit
+        ):
+            raise PublicGatewayError(
+                "runtime artifact commit must be a lowercase 40-character SHA"
+            )
+        self.runtime_artifact_commit = runtime_artifact_commit
+        for label, digest in (
+            ("genesis SHA-256", genesis_sha256),
+            ("node artifact SHA-256", node_artifact_sha256),
+        ):
+            if digest is not None and not DIGEST_SHA256.fullmatch(digest):
+                raise PublicGatewayError(
+                    f"{label} must be a lowercase 64-character digest"
+                )
+        self.genesis_sha256 = genesis_sha256
+        self.node_artifact_sha256 = node_artifact_sha256
         self._transport = transport or (
             lambda _upstream, payload: http_transport(self.upstream, payload)
         )
@@ -203,8 +227,14 @@ class PublicGateway:
             else None
         )
         body = {
-            "schema_version": "junca-public-explorer/v3",
+            "schema_version": "junca-public-explorer/v4",
             "notice": NOTICE,
+            "runtime_artifact": {
+                "source_commit": self.runtime_artifact_commit,
+                "genesis_sha256": self.genesis_sha256,
+                "node_artifact_sha256": self.node_artifact_sha256,
+                "evidence_source": "approved immutable validator runtime",
+            },
             "finalized_only": True,
             "status": "ready" if finalized else "syncing",
             "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -422,7 +452,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if not 1 <= args.http_port <= 65535:
         raise PublicGatewayError("http.port is invalid")
-    gateway = PublicGateway(args.upstream)
+    gateway = PublicGateway(
+        args.upstream,
+        runtime_artifact_commit=os.environ.get("JUNCA_RUNTIME_ARTIFACT_COMMIT"),
+        genesis_sha256=os.environ.get("JUNCA_GENESIS_SHA256"),
+        node_artifact_sha256=os.environ.get("JUNCA_NODE_ARTIFACT_SHA256"),
+    )
     server = ThreadingHTTPServer(
         (args.http_addr, args.http_port), make_handler(gateway)
     )

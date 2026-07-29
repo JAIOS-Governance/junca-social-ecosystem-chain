@@ -53,7 +53,15 @@ class PublicGatewayTests(unittest.TestCase):
                 {"jsonrpc": "2.0", "id": payload["id"], "result": result},
             )
 
-        self.gateway = PublicGateway(transport=transport)
+        self.runtime_artifact_commit = "12" * 20
+        self.genesis_sha256 = "34" * 32
+        self.node_artifact_sha256 = "56" * 32
+        self.gateway = PublicGateway(
+            transport=transport,
+            runtime_artifact_commit=self.runtime_artifact_commit,
+            genesis_sha256=self.genesis_sha256,
+            node_artifact_sha256=self.node_artifact_sha256,
+        )
 
     def test_only_explicit_read_only_methods_are_forwarded(self) -> None:
         for method in sorted(ALLOWED_METHODS):
@@ -109,7 +117,22 @@ class PublicGatewayTests(unittest.TestCase):
     def test_explorer_returns_only_certificate_backed_finalized_head(self) -> None:
         status, body = self.gateway.explorer()
         self.assertEqual(status, 200)
-        self.assertEqual(body["schema_version"], "junca-public-explorer/v3")
+        self.assertEqual(body["schema_version"], "junca-public-explorer/v4")
+        self.assertEqual(
+            body["runtime_artifact"]["source_commit"],
+            self.runtime_artifact_commit,
+        )
+        self.assertEqual(
+            body["runtime_artifact"]["evidence_source"],
+            "approved immutable validator runtime",
+        )
+        self.assertEqual(
+            body["runtime_artifact"]["genesis_sha256"], self.genesis_sha256
+        )
+        self.assertEqual(
+            body["runtime_artifact"]["node_artifact_sha256"],
+            self.node_artifact_sha256,
+        )
         self.assertIsInstance(body["observed_at"], str)
         self.assertTrue(body["finalized_only"])
         self.assertTrue(body["read_only"])
@@ -194,6 +217,18 @@ class PublicGatewayTests(unittest.TestCase):
         ):
             with self.assertRaises(PublicGatewayError):
                 PublicGateway(upstream)
+
+    def test_runtime_artifact_commit_must_be_exact_lowercase_sha(self) -> None:
+        for commit in ("pending", "A" * 40, "0" * 39, "0" * 41):
+            with self.assertRaises(PublicGatewayError):
+                PublicGateway(runtime_artifact_commit=commit)
+
+    def test_runtime_artifact_digests_must_be_exact_lowercase_sha256(self) -> None:
+        for digest in ("pending", "A" * 64, "0" * 63, "0" * 65):
+            with self.assertRaises(PublicGatewayError):
+                PublicGateway(genesis_sha256=digest)
+            with self.assertRaises(PublicGatewayError):
+                PublicGateway(node_artifact_sha256=digest)
 
 
 if __name__ == "__main__":

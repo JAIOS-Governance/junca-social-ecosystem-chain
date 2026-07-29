@@ -615,10 +615,9 @@ EXPLORER_DOCUMENT = """<!doctype html>
           <h3>Runtime artifacts</h3>
           <dl class="data-list">
             <div class="data-row"><dt>Validator Count</dt><dd>3</dd></div>
-            <div class="data-row"><dt>Genesis SHA-256</dt><dd><code>285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95</code></dd></div>
-            <div class="data-row"><dt>Node Artifact SHA-256</dt><dd><code>f1cfb7bf2ca1186bde3613b66db254a13c49f1117d676397e43b756c58f66dc0</code></dd></div>
-            <div class="data-row"><dt>Runtime Source Commit</dt><dd><code>20057fbbf55528d2a8d14134fd8302067575fe75</code></dd></div>
-            <div class="data-row"><dt>Release Artifact Digest</dt><dd><code>sha256:2ec95166958fafdac81c07d92044e6560779961975b08453d4ef321c08975d68</code></dd></div>
+            <div class="data-row"><dt>Genesis SHA-256</dt><dd><code id="genesis-sha256">—</code></dd></div>
+            <div class="data-row"><dt>Node Artifact SHA-256</dt><dd><code id="node-artifact-sha256">—</code></dd></div>
+            <div class="data-row"><dt>Runtime Source Commit</dt><dd><code id="runtime-source-commit">—</code></dd></div>
           </dl>
         </article>
         <article class="panel">
@@ -718,6 +717,9 @@ EXPLORER_DOCUMENT = """<!doctype html>
           set("chain-id", `${explorer.network.chain_id_decimal} (${explorer.network.chain_id})`);
           set("peers", String(explorer.network.peer_count));
           set("client-version", explorer.network.client_version);
+          set("runtime-source-commit", explorer.runtime_artifact.source_commit);
+          set("genesis-sha256", explorer.runtime_artifact.genesis_sha256);
+          set("node-artifact-sha256", explorer.runtime_artifact.node_artifact_sha256);
           set("block-number", `${head.height} (${`0x${Number(head.height).toString(16)}`})`);
           set("block-hash", head.hash);
           set("parent-hash", head.parent_hash);
