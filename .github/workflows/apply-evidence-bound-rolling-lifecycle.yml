@@ -3,8 +3,7 @@ name: Apply Evidence-bound Rolling Lifecycle
 on:
   pull_request:
     paths:
-      - ".github/patches/apply_evidence_bound_rolling_lifecycle.py"
-      - ".github/patches/fix_evidence_bound_lifecycle_ci.py"
+      - ".github/patches/apply_rolling_volume_lineage_readback.py"
       - ".github/workflows/apply-evidence-bound-rolling-lifecycle.yml"
 
 permissions:
@@ -26,37 +25,32 @@ jobs:
       - name: Checkout target branch
         uses: actions/checkout@v4
         with:
-          ref: fix/evidence-bound-rolling-lifecycle
+          ref: fix/rolling-volume-lineage-readback
           path: target
           fetch-depth: 0
 
-      - name: Repair exact lifecycle CI contracts
+      - name: Apply retained-volume lineage readback
         run: |
           set -euo pipefail
-          python controller/.github/patches/fix_evidence_bound_lifecycle_ci.py \
-            target/scripts/junca_public_testnet_foundation.sh \
-            target/tests/test_junca_social_ecosystem_chain_aws_foundation.py
+          python controller/.github/patches/apply_rolling_volume_lineage_readback.py \
+            target/scripts/junca_public_testnet_foundation.sh
           bash -n target/scripts/junca_public_testnet_foundation.sh
-          python -m py_compile \
-            target/scripts/junca_live_rollout_prefix_gate.py \
-            target/tests/test_junca_live_rollout_prefix_gate.py \
-            target/tests/test_junca_social_ecosystem_chain_aws_foundation.py
           git -C target diff --check
-          test "$(grep -c 'python scripts/junca_live_rollout_prefix_gate.py' \
-            target/scripts/junca_public_testnet_foundation.sh)" = 2
-          test "$(grep -c -- '--mode rolling' \
+          test "$(grep -F -c '.validator_state_volume_readback.value[]' \
+            target/scripts/junca_public_testnet_foundation.sh)" -ge 1
+          test "$(grep -F -c 'artifacts/rollback-rehearsal.json' \
+            target/scripts/junca_public_testnet_foundation.sh)" -ge 1
+          test "$(grep -F -c 'test \"$state_volume_id\" = \"$rollback_volume_id\"' \
             target/scripts/junca_public_testnet_foundation.sh)" = 1
-          test "$(grep -c 'evidence-bound-rollout-baseline.json' \
+          test "$(grep -F -c "'. + {volume_id: \$volume_id}'" \
             target/scripts/junca_public_testnet_foundation.sh)" -ge 2
 
-      - name: Commit target branch repair
+      - name: Commit target branch patch
         working-directory: target
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            scripts/junca_public_testnet_foundation.sh \
-            tests/test_junca_social_ecosystem_chain_aws_foundation.py
-          git commit -m "Fix evidence-bound rolling lifecycle CI contracts"
-          git push origin HEAD:fix/evidence-bound-rolling-lifecycle
+          git add scripts/junca_public_testnet_foundation.sh
+          git commit -m "Bind rolling observations to retained state volumes"
+          git push origin HEAD:fix/rolling-volume-lineage-readback
