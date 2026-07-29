@@ -1,0 +1,51 @@
+name: Render Renewed Foundation Workflow
+
+on:
+  pull_request:
+    paths:
+      - ".github/patches/render_renewed_foundation_workflow.py"
+      - ".github/workflows/render-renewed-foundation-workflow.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout controller source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/renew-expired-foundation-epoch
+          path: target
+          persist-credentials: false
+
+      - name: Render exact workflow file
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            controller/.github/patches/render_renewed_foundation_workflow.py
+          python controller/.github/patches/render_renewed_foundation_workflow.py \
+            target/.github/workflows/junca-validator-foundation-release.yml
+          grep -Fq 'renew_expired_epoch:' \
+            target/.github/workflows/junca-validator-foundation-release.yml
+          grep -Fq 'RENEW_EXPIRED_QUIESCED_EPOCH' \
+            target/.github/workflows/junca-validator-foundation-release.yml
+          grep -Fq 'VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON' \
+            target/.github/workflows/junca-validator-foundation-release.yml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: renewed-foundation-workflow-${{ github.run_id }}
+          path: target/.github/workflows/junca-validator-foundation-release.yml
+          if-no-files-found: error
+          retention-days: 7
