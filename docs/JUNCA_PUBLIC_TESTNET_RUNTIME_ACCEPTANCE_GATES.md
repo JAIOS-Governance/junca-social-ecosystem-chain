@@ -25,6 +25,16 @@ ID and peer-count projections must agree before RPC parity is evaluated. An
 older Explorer schema or contradictory duplicate projection fails the bounded
 sample; it is never treated as transient parity.
 
+Before the immutable serial replacement reads its strict live prefix, it may
+recover an existing stopped validator service in place. That bounded recovery
+is permitted only after SSM Online, the retained `/var/lib/junca` mount,
+read-only SQLite `PRAGMA quick_check=ok`, and exactly one 64-character runtime
+artifact digest are proven. An already active validator is not restarted.
+Recovery must emit exact before/after service and health evidence, preserve all
+four safety boundaries as false, and then pass the unchanged strict live-prefix
+readback. Missing durable state, corrupt SQLite, ambiguous runtime provenance,
+or failed local health remains fail-closed and prevents Terraform mutation.
+
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a
 single GitHub-hosted job cannot safely own a 24-hour observation. Every segment

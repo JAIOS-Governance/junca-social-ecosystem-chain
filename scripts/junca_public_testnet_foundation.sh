@@ -126,7 +126,8 @@ verify_rollback_snapshots() {
   local output_path="$2"
   local -a snapshot_ids
   local expected_ids
-  mapfile -t snapshot_ids < <(
+  local snapshot_lines
+  snapshot_lines="$(
     jq -er '
       .[].rollback_snapshot_id
       | select(
@@ -134,7 +135,8 @@ verify_rollback_snapshots() {
           test("^snap-[0-9a-f]{8,17}$")
         )
     ' <<<"$validator_state_json"
-  )
+  )"
+  mapfile -t snapshot_ids <<<"$snapshot_lines"
   test "${#snapshot_ids[@]}" = 3
   expected_ids="$(
     printf '%s\n' "${snapshot_ids[@]}" |
@@ -864,6 +866,183 @@ def finality_readback:
     '.validator_id == $validator_id' "$output_path" >/dev/null
 }
 
+validate_validator_service_recovery_evidence() {
+  local evidence_path="$1"
+  local validator_id="$2"
+  local instance_id="$3"
+  jq -e \
+    --arg validator_id "$validator_id" \
+    --arg instance_id "$instance_id" '
+      .schema_version == "junca-validator-service-recovery/v1" and
+      .validator_id == $validator_id and
+      .instance_id == $instance_id and
+      (.before_status | type) == "string" and
+      (.restart_attempted | type) == "boolean" and
+      .restart_exit == 0 and
+      (
+        if .before_status == "active" then
+          .restart_attempted == false
+        else
+          .restart_attempted == true
+        end
+      ) and
+      .durable_mount_verified == true and
+      .state_store_integrity == true and
+      .runtime_env_verified == true and
+      (.runtime_version | type) == "string" and
+      (.runtime_version | test("^[0-9a-f]{64}$")) and
+      .after_status == "active" and
+      .health_status == "healthy" and
+      (.attempts | type) == "number" and
+      .attempts >= 1 and
+      .attempts <= 60 and
+      .accepted == true and
+      .mainnet_changed == false and
+      .assets_moved == false and
+      .bridge_activated == false and
+      .mainnet_activation_authorized == false
+    ' "$evidence_path" >/dev/null
+}
+
+ensure_validator_service_available() {
+  local validator_id="$1"
+  local instance_id="$2"
+  local output_path="$3"
+  local recovery_command
+  local command_id
+  local invocation
+  wait_for_ssm_online \
+    "$instance_id" \
+    "artifacts/ssm-online-service-recovery-${validator_id}-${instance_id}.json"
+  recovery_command='
+set -u -o pipefail
+before_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
+restart_attempted=false
+durable_mount_verified=false
+state_store_integrity=false
+runtime_env_verified=false
+runtime_version=""
+restart_exit=0
+after_status="$before_status"
+health_status=""
+attempts=1
+accepted=false
+
+if mountpoint -q /var/lib/junca; then
+  durable_mount_verified=true
+fi
+if [[ "$durable_mount_verified" == true &&
+      -f /var/lib/junca/state.sqlite &&
+      ! -L /var/lib/junca/state.sqlite ]]; then
+  quick_check="$(python3 -c '"'"'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro", uri=True); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()'"'"' 2>/dev/null || true)"
+  if [[ "$quick_check" == "ok" ]]; then
+    state_store_integrity=true
+  fi
+fi
+if [[ -f /etc/junca/runtime.env &&
+      ! -L /etc/junca/runtime.env ]]; then
+  runtime_count="$(awk '"'"'/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}'"'"' /etc/junca/runtime.env)"
+  runtime_version="$(sed -n '"'"'s/^NODE_ARTIFACT_SHA256=//p'"'"' /etc/junca/runtime.env)"
+  if [[ "$runtime_count" == 1 &&
+        "$runtime_version" =~ ^[0-9a-f]{64}$ ]]; then
+    runtime_env_verified=true
+  fi
+fi
+
+if [[ "$before_status" != "active" &&
+      "$durable_mount_verified" == true &&
+      "$state_store_integrity" == true &&
+      "$runtime_env_verified" == true ]]; then
+  restart_attempted=true
+  systemctl restart junca-validator.service || restart_exit=$?
+fi
+
+for attempts in $(seq 1 60); do
+  after_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
+  if [[ "$after_status" == "active" ]] &&
+      health="$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null)"; then
+    health_status="$(jq -r '"'"'.status // empty'"'"' <<<"$health" 2>/dev/null || true)"
+    if [[ "$health_status" == "healthy" &&
+          "$restart_exit" == 0 &&
+          "$durable_mount_verified" == true &&
+          "$state_store_integrity" == true &&
+          "$runtime_env_verified" == true ]]; then
+      accepted=true
+      break
+    fi
+  fi
+  if [[ "$attempts" -lt 60 ]]; then
+    sleep 2
+  fi
+done
+
+jq -n \
+  --arg schema_version "junca-validator-service-recovery/v1" \
+  --arg before_status "$before_status" \
+  --argjson restart_attempted "$restart_attempted" \
+  --argjson restart_exit "$restart_exit" \
+  --argjson durable_mount_verified "$durable_mount_verified" \
+  --argjson state_store_integrity "$state_store_integrity" \
+  --argjson runtime_env_verified "$runtime_env_verified" \
+  --arg runtime_version "$runtime_version" \
+  --arg after_status "$after_status" \
+  --arg health_status "$health_status" \
+  --argjson attempts "$attempts" \
+  --argjson accepted "$accepted" '"'"'{
+    schema_version: $schema_version,
+    before_status: $before_status,
+    restart_attempted: $restart_attempted,
+    restart_exit: $restart_exit,
+    durable_mount_verified: $durable_mount_verified,
+    state_store_integrity: $state_store_integrity,
+    runtime_env_verified: $runtime_env_verified,
+    runtime_version: $runtime_version,
+    after_status: $after_status,
+    health_status: $health_status,
+    attempts: $attempts,
+    accepted: $accepted,
+    mainnet_changed: false,
+    assets_moved: false,
+    bridge_activated: false,
+    mainnet_activation_authorized: false
+  }'"'"'
+
+if [[ "$accepted" != true ]]; then
+  systemctl status junca-validator.service --no-pager -l >&2 || true
+  journalctl -u junca-validator.service --no-pager -n 100 >&2 || true
+  exit 1
+fi
+'
+  jq -n --arg command "$recovery_command" '{commands: [$command]}' \
+    >"artifacts/ssm-service-recovery-${validator_id}.json"
+  command_id="$(
+    aws ssm send-command \
+      --instance-ids "$instance_id" \
+      --document-name AWS-RunShellScript \
+      --parameters \
+        "file://artifacts/ssm-service-recovery-${validator_id}.json" \
+      --comment "JUNCA Public Testnet bounded validator service recovery" \
+      --query Command.CommandId \
+      --output text
+  )"
+  invocation="artifacts/service-recovery-command-${validator_id}-${instance_id}.json"
+  wait_for_ssm_command_result "$command_id" "$instance_id" "$invocation"
+  jq -er \
+    '.StandardOutputContent |
+      select(type == "string" and length > 0)' \
+    "$invocation" |
+    jq \
+      --arg validator_id "$validator_id" \
+      --arg instance_id "$instance_id" \
+      '. + {
+        validator_id: $validator_id,
+        instance_id: $instance_id
+      }' >"$output_path"
+  validate_validator_service_recovery_evidence \
+    "$output_path" "$validator_id" "$instance_id"
+  jq -e '.Status == "Success"' "$invocation" >/dev/null
+}
+
 write_live_rollout_prefix_readback() {
   local evidence_updated_count="$1"
   local evidence_validators_path="$2"
@@ -916,6 +1095,10 @@ write_live_rollout_prefix_readback() {
     artifacts/live-prefix-rollback-snapshots.json
   for index in 0 1 2; do
     observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
+    ensure_validator_service_available \
+      "validator-0$((index + 1))" \
+      "${current_instances[$index]}" \
+      "artifacts/live-prefix-service-recovery-$((index + 1)).json"
     capture_validator_observation \
       "validator-0$((index + 1))" \
       "${current_instances[$index]}" \

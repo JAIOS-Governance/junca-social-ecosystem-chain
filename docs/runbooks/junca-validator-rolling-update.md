@@ -40,7 +40,13 @@ stable height alone is never activation evidence.
    SSM Online, `junca-validator.service` active, `/var/lib/junca` mounted,
    read-only SQLite `PRAGMA quick_check=ok`, exact runtime artifact digest, and
    a `FINALIZED` certificate that binds its durable head. All three heads and
-   certificate hashes must match.
+   certificate hashes must match. If an existing service is stopped at this
+   boundary, the workflow may restart only that service after SSM Online,
+   retained-volume mount, SQLite integrity, and the single exact runtime digest
+   are verified. It records before/after evidence and immediately returns to
+   the same strict readback; it never treats the restart itself as acceptance.
+   A failed prerequisite or failed health readback stops before Terraform
+   mutation and preserves service diagnostics for the next repair.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the
