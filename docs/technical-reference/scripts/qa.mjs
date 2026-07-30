@@ -74,6 +74,14 @@ for (const route of routes) {
   for (const term of prohibited) {
     if (html.toLowerCase().includes(term.toLowerCase())) failures.push(`${route}: prohibited public claim ${term}`);
   }
+  for (const forbiddenDisplay of [
+    "throw new Error",
+    "BLOCKED: accepted network registry is required",
+  ]) {
+    if (html.includes(forbiddenDisplay)) {
+      failures.push(`${route}: exposed technical failure display ${forbiddenDisplay}`);
+    }
+  }
   if (!html.startsWith('<!DOCTYPE html><html lang="en">')) {
     failures.push(`${route}: English must remain the fixed document language`);
   }
@@ -131,7 +139,7 @@ for (const required of [
   "AWS Runtime",
   "Read-only Operations",
   "Assets Moved",
-  "Revision · 2026.07.29 / R33",
+  "Revision · 2026.07.29 / R34",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -181,6 +189,7 @@ for (const required of [
   "Token Standard",
   "NFT Standard",
   "Partner Release Checklist",
+  "Registry verification in progress",
 ]) {
   if (!implementation.includes(required)) failures.push(`/implementation: missing ${required}`);
 }
@@ -204,7 +213,7 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R33") failures.push("release manifest revision must be R33");
+if (releaseManifest.revision !== "R34") failures.push("release manifest revision must be R34");
 if (!/^[0-9a-f]{40}$/.test(releaseManifest.chain_source_commit ?? "")) {
   failures.push("release manifest must bind the exact development source commit");
 }
