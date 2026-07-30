@@ -427,7 +427,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
     .footer-links { display: flex; gap: 18px; flex-wrap: wrap; }
     .footer-links a:hover, .footer-links a:focus-visible { color: var(--gold); }
     .skeleton { color: var(--quiet); }
-    .error { color: var(--red); }
+    .review { color: var(--amber); }
     @media (max-width: 1040px) {
       .metric-grid, .boundary-grid, .operations-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .unavailable-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -469,6 +469,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
         <a href="#network">Network</a>
         <a href="#finality">Finality</a>
         <a href="#block">Latest Block</a>
+        <a href="#development">Development</a>
         <a href="#evidence">Evidence</a>
       </nav>
     </div>
@@ -476,8 +477,8 @@ EXPLORER_DOCUMENT = """<!doctype html>
 
   <div class="status-band">
     <div class="shell status-row">
-      <span><i id="status-dot" class="status-dot" aria-hidden="true"></i><span id="network-status">Connecting</span></span>
-      <span id="live-mode">Live readback starting</span>
+      <span><i id="status-dot" class="status-dot" aria-hidden="true"></i><span id="network-status">Verification in progress</span></span>
+      <span id="live-mode">Readback starting</span>
       <span>Finalized-only</span>
       <span>Read-only</span>
       <span class="notice">Public Testnet / No Monetary Value</span>
@@ -497,7 +498,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
           <input id="search" type="search" value="" placeholder="Search will become available with the indexer" disabled>
           <button type="button" disabled>Search</button>
         </div>
-        <p class="search-note">Not Available Yet — history indexer and general transaction access are not active.</p>
+        <p class="search-note">NOT YET PUBLISHED — history indexer and general transaction access are outside the current public evidence surface.</p>
       </div>
     </section>
 
@@ -518,10 +519,10 @@ EXPLORER_DOCUMENT = """<!doctype html>
         <p>Automatic public readback every 5 seconds</p>
       </div>
       <div class="operations-grid" aria-live="polite">
-        <div class="operation"><span>Gateway</span><strong id="gateway-state">Connecting</strong><small id="gateway-latency">Latency —</small></div>
-        <div class="operation"><span>Finality</span><strong id="finality-live">Checking</strong><small>Certificate-backed</small></div>
-        <div class="operation"><span>Head Movement</span><strong id="head-movement">Observing</strong><small id="head-age">Block age —</small></div>
-        <div class="operation"><span>Successful Samples</span><strong id="sample-count">0</strong><small id="failure-count">Failures 0</small></div>
+        <div class="operation"><span>Gateway</span><strong id="gateway-state">Verification in progress</strong><small id="gateway-latency">Readback starting</small></div>
+        <div class="operation"><span>Finality</span><strong id="finality-live">Verification in progress</strong><small>Certificate-backed</small></div>
+        <div class="operation"><span>Head Movement</span><strong id="head-movement">Observation starting</strong><small id="head-age">Age evidence starting</small></div>
+        <div class="operation"><span>Successful Samples</span><strong id="sample-count">0</strong><small id="failure-count">Readbacks retained 0</small></div>
         <div class="operation"><span>Next Readback</span><strong id="next-readback">5s</strong><small id="last-success">Last success —</small></div>
       </div>
 
@@ -591,18 +592,48 @@ EXPLORER_DOCUMENT = """<!doctype html>
         <p>Unavailable fields are not inferred or shown as zero.</p>
       </div>
       <div class="unavailable-grid">
-        <article class="unavailable"><h3>Transactions</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Addresses</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Tokens</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Contracts</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Gas &amp; TPS</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Accounts</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Validators &amp; Staking</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Governance</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Faucet</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Wallet Connection</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Bridge History</h3><span>Not Available Yet</span></article>
-        <article class="unavailable"><h3>Market Data</h3><span>Not Available Yet</span></article>
+        <article class="unavailable"><h3>Transactions</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Addresses</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Tokens</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Contracts</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Gas &amp; TPS</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Accounts</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Validators &amp; Staking</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Governance</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Faucet</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Wallet Connection</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Bridge History</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Market Data</h3><span>NOT YET PUBLISHED</span></article>
+      </div>
+    </section>
+
+    <section id="development" aria-labelledby="development-title">
+      <div class="section-head">
+        <div><p class="eyebrow">Governed development continuity</p><h2 id="development-title">JSEC Development Evidence</h2></div>
+        <p>Development evidence remains separate from live runtime activation.</p>
+      </div>
+      <div class="two-col">
+        <article class="panel">
+          <h3>Canonical persistent panel</h3>
+          <p class="footnote">Current local development checkpoints, cross-cell integration results and the exact local-versus-remote publication boundary are maintained in one continuously updated governance record.</p>
+          <div class="evidence-links">
+            <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/issues/218#issuecomment-5127105621"><span>JSEC Live Development Status</span><span>↗</span></a>
+            <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/303"><span>Recovery PR #303 · Remote Evidence</span><span>↗</span></a>
+          </div>
+        </article>
+        <article class="panel">
+          <h3>Evidence boundary</h3>
+          <dl class="data-list">
+            <div class="data-row"><dt>Live Runtime</dt><dd><span class="pill">Explorer JSON</span></dd></div>
+            <div class="data-row"><dt>Development Checkpoints</dt><dd><span class="pill">Local Evidence Only</span></dd></div>
+            <div class="data-row"><dt>Remote Publication</dt><dd><span class="pill">PR #303 Exact Head</span></dd></div>
+            <div class="data-row"><dt>Operational Recovery</dt><dd><span class="pill">Verification in Progress</span></dd></div>
+          </dl>
+          <div class="evidence-links">
+            <a href="https://chain.jaios-governance.org/api/operational"><span>Chain Operational API</span><span>↗</span></a>
+            <a href="https://chain.jaios-governance.org/evidence"><span>Chain Evidence View</span><span>↗</span></a>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -627,6 +658,8 @@ EXPLORER_DOCUMENT = """<!doctype html>
             <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30239469442"><span>IAM Recovery</span><span>↗</span></a>
             <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30237527940"><span>Runtime Foundation</span><span>↗</span></a>
             <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain"><span>Canonical Repository</span><span>↗</span></a>
+            <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/issues/218#issuecomment-5127105621"><span>JSEC Development Evidence</span><span>↗</span></a>
+            <a href="https://chain.jaios-governance.org/api/operational"><span>Chain Operational API</span><span>↗</span></a>
             <a href="https://docs.jaios-governance.org/"><span>Technical Reference</span><span>↗</span></a>
             <a href="https://chain.jaios-governance.org/"><span>Chain Overview</span><span>↗</span></a>
           </div>
@@ -658,25 +691,25 @@ EXPLORER_DOCUMENT = """<!doctype html>
       const byId = (id) => document.getElementById(id);
       const set = (id, value, className) => {
         const node = byId(id);
-        node.textContent = value ?? "Not Available Yet";
-        node.classList.remove("skeleton", "error", "good", "warn");
+        node.textContent = value ?? "NOT CURRENTLY PUBLISHED";
+        node.classList.remove("skeleton", "review", "good", "warn");
         if (className) node.classList.add(className);
       };
       const REFRESH_SECONDS = 5;
       let nextRefreshAt = Date.now();
       let loading = false;
       let samples = 0;
-      let failures = 0;
+      let retainedReadbacks = 0;
       let previousHeight = null;
       const blockTimestamp = (value) => {
-        if (typeof value !== "string") return "Not Available Yet";
+        if (typeof value !== "string") return "NOT YET PUBLISHED";
         const date = new Date(Number.parseInt(value, 16) * 1000);
-        return Number.isNaN(date.valueOf()) ? "Not Available Yet" : date.toISOString();
+        return Number.isNaN(date.valueOf()) ? "NOT YET PUBLISHED" : date.toISOString();
       };
       const blockAge = (value) => {
-        if (typeof value !== "string") return "Block age unavailable";
+        if (typeof value !== "string") return "Age evidence not currently published";
         const seconds = Math.max(0, Math.floor(Date.now() / 1000 - Number.parseInt(value, 16)));
-        if (!Number.isFinite(seconds)) return "Block age unavailable";
+        if (!Number.isFinite(seconds)) return "Age evidence not currently published";
         if (seconds < 60) return `Block age ${seconds}s`;
         if (seconds < 3600) return `Block age ${Math.floor(seconds / 60)}m`;
         if (seconds < 86400) return `Block age ${Math.floor(seconds / 3600)}h`;
@@ -702,13 +735,13 @@ EXPLORER_DOCUMENT = """<!doctype html>
           if (!head || explorer.finalized_only !== true) throw new Error("Finalized data unavailable");
           const latency = Math.max(0, Math.round(performance.now() - startedAt));
           samples += 1;
-          set("network-status", explorer.status);
-          set("live-mode", `LIVE · ${REFRESH_SECONDS}s`);
+          set("network-status", explorer.status === "ready" ? "READY · READ-ONLY" : "VERIFICATION IN PROGRESS");
+          set("live-mode", `READBACK · ${REFRESH_SECONDS}s`);
           byId("status-dot").classList.toggle("ready", explorer.status === "ready");
           byId("status-dot").classList.toggle("live", explorer.status === "ready");
           set("height", String(head.height));
           set("quorum", `${head.signed_power} / ${head.total_power}`);
-          set("finality-status", explorer.finalized_only ? "Finalized-only" : "Unavailable", "pill");
+          set("finality-status", explorer.finalized_only ? "Finalized-only" : "Verification in progress", "pill");
           set("finality-height", String(head.height));
           set("finality-hash", head.hash);
           set("certificate-hash", head.certificate_hash);
@@ -727,37 +760,36 @@ EXPLORER_DOCUMENT = """<!doctype html>
           set("block-time", blockTimestamp(head.timestamp));
           const count = Number.isInteger(head.transaction_count)
             ? head.transaction_count
-            : "Not Available Yet";
+            : "NOT YET PUBLISHED";
           set("transactions", String(count));
           set("block-transactions", String(count));
-          set("gateway-state", "ONLINE", "good");
+          set("gateway-state", "READY · READ-ONLY", "good");
           set("gateway-latency", `Latency ${latency} ms`);
-          set("finality-live", head.signed_power === head.total_power ? "VERIFIED" : "PARTIAL", head.signed_power === head.total_power ? "good" : "warn");
+          set("finality-live", head.signed_power === head.total_power ? "CERTIFICATE OBSERVED" : "VERIFICATION IN PROGRESS", head.signed_power === head.total_power ? "good" : "warn");
           if (previousHeight === null) {
-            set("head-movement", "BASELINE", "good");
+            set("head-movement", "BASELINE OBSERVED", "good");
           } else if (head.height > previousHeight) {
             set("head-movement", `+${head.height - previousHeight} BLOCK`, "good");
           } else {
-            set("head-movement", "UNCHANGED", "warn");
+            set("head-movement", "OBSERVATION CONTINUES");
           }
           previousHeight = head.height;
           set("head-age", blockAge(head.timestamp));
           set("sample-count", String(samples));
-          set("failure-count", `Failures ${failures}`);
+          set("failure-count", `Readbacks retained ${retainedReadbacks}`);
           const observedAt = explorer.observed_at || new Date().toISOString();
           set("updated-at", `Live observation ${observedAt}`);
           set("last-success", `Last success ${new Date().toLocaleTimeString()}`);
-        } catch (error) {
-          failures += 1;
-          set("network-status", "Data unavailable", "error");
-          set("live-mode", "RETRYING", "error");
+        } catch {
+          retainedReadbacks += 1;
+          set("network-status", "VERIFICATION IN PROGRESS", "review");
+          set("live-mode", "READBACK CONTINUES", "review");
           byId("status-dot").classList.remove("ready");
           byId("status-dot").classList.remove("live");
-          ["height", "quorum", "transactions", "peers"].forEach((id) => set(id, "—", "error"));
-          set("gateway-state", "RETRYING", "error");
-          set("gateway-latency", "No public response", "error");
-          set("failure-count", `Failures ${failures}`, "error");
-          set("updated-at", "Live readback unavailable", "error");
+          set("gateway-state", "VERIFICATION IN PROGRESS", "review");
+          set("gateway-latency", "Last verified evidence retained");
+          set("failure-count", `Readbacks retained ${retainedReadbacks}`, "review");
+          set("updated-at", "Last verified readback retained", "review");
         } finally {
           loading = false;
           scheduleNext();
