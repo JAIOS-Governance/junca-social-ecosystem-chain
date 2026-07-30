@@ -284,10 +284,10 @@ for (const route of routes) {
   }
   const decorated = decorateSecondaryCopy(
     source
-      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260729-r32" alt="JUNCA" width="190" height="57"></a>')
-      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260729-r32" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
-      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260729-r32" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
-      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260729-r32"></script></head>`)
+      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260729-r34" alt="JUNCA" width="190" height="57"></a>')
+      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260729-r34" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
+      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260729-r34" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
+      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260729-r34"></script></head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace("</header>", `</header>${secondaryLanguageToolbar}`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
@@ -298,7 +298,7 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
       .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.29 / R34")
-      .replaceAll("20260727-r29", "20260729-r32")
+      .replaceAll("20260727-r29", "20260729-r34")
       .replaceAll("official-brand-lockup-r29.js", "official-brand-lockup-r32.js")
       .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-07-29"')
       .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R34"')
@@ -345,10 +345,10 @@ for (const route of routes) {
       .replace('<tr><td>Finality Policy</td><td>Certified finality / strict &gt;2/3 voting power</td><td>Implemented in source; runtime evidence pending</td></tr>', '<tr><td>Finality Policy</td><td>Certified finality · 3 / 3 observed</td><td>Verified against the current read-only Explorer snapshot</td></tr>')
       .replaceAll("34d838b8a59c", "052598647079")
       .replaceAll("052598647079", "6de0979b9725")
-      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260729-r32")
-      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r32")
-      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r32")
-      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260729-r32"></script></body>'),
+      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260729-r34")
+      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r34")
+      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r34")
+      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260729-r34"></script></body>'),
     route,
   );
   await writeFile(path, decorated, "utf8");
@@ -356,7 +356,7 @@ for (const route of routes) {
 const installManifestPath = join(dist, "manifest.webmanifest");
 const installManifest = JSON.parse(await readFile(installManifestPath, "utf8"));
 for (const icon of installManifest.icons) {
-  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260729-r32");
+  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260729-r34");
 }
 await writeFile(
   installManifestPath,
