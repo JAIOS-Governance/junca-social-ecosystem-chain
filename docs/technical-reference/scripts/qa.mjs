@@ -60,10 +60,10 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260729-r32"',
-    'src="/official-brand-lockup-r32.js?v=20260729-r32"',
-    'src="/docs-controls-r32.js?v=20260729-r32"',
-    'src="/secondary-language.js?v=20260729-r32"',
+    'src="/junca-chain-official-wordmark.png?v=20260729-r34"',
+    'src="/official-brand-lockup-r32.js?v=20260729-r34"',
+    'src="/docs-controls-r32.js?v=20260729-r34"',
+    'src="/secondary-language.js?v=20260729-r34"',
     'href="/favicon.ico"',
     'id="secondary-language-select"',
     'English remains the fixed primary language.',
@@ -127,9 +127,9 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 100000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260729-r32"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r32"',
-  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r32"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260729-r34"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r34"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r34"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -286,9 +286,9 @@ const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanife
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
-  "/icon-192.png?v=20260729-r32",
-  "/icon-512.png?v=20260729-r32",
-  "/icon-maskable-512.png?v=20260729-r32",
+  "/icon-192.png?v=20260729-r34",
+  "/icon-512.png?v=20260729-r34",
+  "/icon-maskable-512.png?v=20260729-r34",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
