@@ -79,7 +79,7 @@ def rollback_snapshot_function(script: str) -> str:
 
 def ssm_command_functions(script: str) -> str:
     return script.split("wait_for_ssm_command() {", 1)[1].split(
-        "\nrender_runtime_finality_preflight()", 1
+        "\nbuild_runtime_finality_bindings()", 1
     )[0].join(("wait_for_ssm_command() {", ""))
 
 
@@ -102,6 +102,9 @@ class AwsFoundationTests(unittest.TestCase):
         cls.bootstrap = (ROOT / "infra/aws/bootstrap/main.tf").read_text(
             encoding="utf-8"
         )
+        cls.iam_separation = (
+            ROOT / "infra/aws/bootstrap/iam-separation.tf"
+        ).read_text(encoding="utf-8")
         cls.bootstrap_outputs = (
             ROOT / "infra/aws/bootstrap/outputs.tf"
         ).read_text(encoding="utf-8")
@@ -114,7 +117,7 @@ class AwsFoundationTests(unittest.TestCase):
         cls.runtime_outputs = (
             ROOT / "infra/aws/public-testnet/outputs.tf"
         ).read_text(encoding="utf-8")
-        cls.image_builder = cls.bootstrap
+        cls.image_builder = cls.iam_separation
         cls.validator_user_data = (
             ROOT
             / "infra/aws/public-testnet/templates/validator-user-data.sh.tftpl"
@@ -123,11 +126,11 @@ class AwsFoundationTests(unittest.TestCase):
             ROOT
             / ".github/workflows/junca-social-ecosystem-chain-aws-iac.yml"
         ).read_text(encoding="utf-8")
-        cls.execution_workflow = (
+        cls.execution_workflow_path = (
             ROOT
             / ".github/workflows/"
             "junca-social-ecosystem-chain-aws-foundation-execution.yml"
-        ).read_text(encoding="utf-8")
+        )
         cls.foundation_script = (
             ROOT / "scripts/junca_public_testnet_foundation.sh"
         ).read_text(encoding="utf-8")
@@ -142,20 +145,20 @@ class AwsFoundationTests(unittest.TestCase):
             ROOT
             / ".github/workflows/junca-public-testnet-release.yml"
         ).read_text(encoding="utf-8")
-        cls.self_permission_recovery = (
+        cls.self_permission_recovery_path = (
             ROOT
             / ".github/workflows/"
             "junca-chain-runtime-self-permission-recovery.yml"
-        ).read_text(encoding="utf-8")
-        cls.validator_runtime_recovery = (
-            ROOT
-            / ".github/workflows/"
-            "junca-validator-runtime-recovery.yml"
-        ).read_text(encoding="utf-8")
+        )
         cls.gates = json.loads(
             (
                 ROOT
                 / "config/junca_social_ecosystem_chain_aws_foundation_gates.pending.json"
+            ).read_text(encoding="utf-8")
+        )
+        cls.cloud_role_policy = json.loads(
+            (
+                ROOT / "config/junca_public_testnet_cloud_role_policy.json"
             ).read_text(encoding="utf-8")
         )
         cls.iam_authorization = json.loads(
@@ -295,22 +298,24 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn("user_data_replace_on_change = true", self.runtime)
 
     def test_validator_roles_sign_only_with_their_assigned_key_but_verify_quorum(self) -> None:
-        signer_boundary = self.runtime.split(
+        signer_boundary = self.iam_separation.split(
             'resource "aws_iam_role_policy" "validator_signer_boundary"', 1
         )[1].split(
-            'resource "aws_iam_role_policy_attachment" "validator_ssm"', 1
+            'resource "aws_iam_instance_profile" "validator"', 1
         )[0]
         self.assertIn('Sid      = "UseOnlyAssignedSigner"', signer_boundary)
-        self.assertIn('Action   = ["kms:Sign"]', signer_boundary)
+        self.assertIn('Action   = "kms:Sign"', signer_boundary)
         self.assertIn(
-            "Resource = var.validator_signer_arns[count.index]", signer_boundary
-        )
-        self.assertIn('Sid      = "VerifyValidatorQuorum"', signer_boundary)
-        self.assertIn(
-            'Action   = ["kms:GetPublicKey", "kms:Verify", "kms:DescribeKey"]',
+            "Resource = aws_kms_key.validator_signer[count.index].arn",
             signer_boundary,
         )
-        self.assertIn("Resource = var.validator_signer_arns", signer_boundary)
+        self.assertIn('Sid    = "VerifyValidatorQuorum"', signer_boundary)
+        for action in ("kms:DescribeKey", "kms:GetPublicKey", "kms:Verify"):
+            self.assertIn(f'"{action}"', signer_boundary)
+        self.assertIn(
+            "Resource = aws_kms_key.validator_signer[*].arn",
+            signer_boundary,
+        )
         self.assertEqual(signer_boundary.count('"kms:Sign"'), 1)
 
     def test_runtime_reads_back_ami_and_signer_properties(self) -> None:
@@ -343,7 +348,7 @@ class AwsFoundationTests(unittest.TestCase):
             'Action   = "iam:PassRole"',
             '"imagebuilder.amazonaws.com"',
             '"ec2.amazonaws.com"',
-            'resource "aws_iam_role_policy" "deployment_ami_build"',
+            'resource "aws_iam_role_policy" "ami_builder_controller"',
             "prevent_destroy = true",
         ):
             self.assertIn(required, self.image_builder)
@@ -395,32 +400,26 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertTrue(all(gate["state"] == "PENDING" for gate in self.gates["gates"]))
         self.assertNotIn("terraform apply", self.workflow)
 
-    def test_execution_workflow_reads_permissions_before_plan_or_apply(self) -> None:
-        for required in (
-            "iam simulate-principal-policy",
-            "permission_gate",
-            "bootstrap-plan",
-            "foundation-plan",
-            "bootstrap-apply",
-            "foundation-apply",
-            "PUBLIC-TESTNET-FOUNDATION-APPLY",
-        ):
-            self.assertIn(required, self.execution_workflow)
-
-    def test_execution_workflow_applies_only_after_exact_authorization(self) -> None:
-        for required in (
-            "config_authorized",
-            'test "$config_authorized" = "true"',
-            "PUBLIC-TESTNET-FOUNDATION-APPLY",
-            "approved_change_reference",
-            "steps.permissions.outputs.permission_gate",
-            "steps.authorization.outputs.authorized == 'true'",
-            "terraform -chdir=infra/aws/bootstrap apply",
-            "bootstrap-outputs.json",
-            "-migrate-state -force-copy",
-            "scripts/junca_public_testnet_foundation.sh foundation-apply",
-        ):
-            self.assertIn(required, self.execution_workflow)
+    def test_legacy_foundation_execution_workflow_is_retired(self) -> None:
+        self.assertFalse(self.execution_workflow_path.exists())
+        retired = {
+            (item["workflow"], item["job"], item["call_index"]): item
+            for item in self.cloud_role_policy[
+                "repo_global_oidc_cutover_gate"
+            ]["retired_credential_calls"]
+        }
+        entry = retired[
+            (
+                self.execution_workflow_path.name,
+                "permission-readback",
+                0,
+            )
+        ]
+        self.assertEqual(
+            entry["disposition"],
+            "RETIRED_WORKFLOW_FILE_REMOVED",
+        )
+        self.assertIn("Legacy Foundation", entry["retirement_reason"])
 
     def test_foundation_plan_and_apply_are_durable_and_fail_closed(self) -> None:
         for required in (
@@ -454,14 +453,13 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.foundation_script)
         for required in (
-            "JUNCA_PUBLIC_TESTNET_NODE_AMI_ID",
-            "JUNCA_PUBLIC_TESTNET_GENESIS_SHA256",
-            "JUNCA_PUBLIC_TESTNET_SOURCE_COMMIT",
-            "Produce guarded validator foundation plan",
-            "Apply guarded validator foundation",
+            "NODE_AMI_ID",
+            "NODE_ARTIFACT_SHA256",
+            "GENESIS_SHA256",
+            "SOURCE_COMMIT",
+            "scripts/junca_public_testnet_foundation.sh foundation-apply",
         ):
-            self.assertIn(required, self.execution_workflow)
-        self.assertNotIn("Reject unimplemented foundation apply", self.execution_workflow)
+            self.assertIn(required, self.validator_foundation_release)
 
     def test_validator_release_pins_terraform_before_foundation_apply(self) -> None:
         setup_index = self.validator_foundation_release.index(
@@ -492,7 +490,11 @@ class AwsFoundationTests(unittest.TestCase):
             self.validator_foundation_release,
         )
         self.assertIn(
-            '"refs/heads/release-candidate/$GITHUB_SHA"',
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "git/ref/heads/release-candidate/${GITHUB_SHA}",
             self.validator_foundation_release,
         )
         job_header = self.validator_foundation_release.split(
@@ -500,10 +502,6 @@ class AwsFoundationTests(unittest.TestCase):
             1,
         )[1].split("steps:", 1)[0]
         self.assertNotIn("\n    if:", job_header)
-        self.assertNotIn(
-            "github.ref == 'refs/heads/main'",
-            self.validator_foundation_release,
-        )
         self.assertIn(
             "required: true",
             self.validator_foundation_release.split("ami_run_id:", 1)[1].split(
@@ -1260,9 +1258,8 @@ class AwsFoundationTests(unittest.TestCase):
             "READY_FOR_FINALITY_ENABLE",
             "ACCEPTED",
             "describe-instance-information",
-            "systemctl is-active --quiet junca-validator.service",
-            "mountpoint -q /var/lib/junca",
-            "PRAGMA quick_check",
+            "JuncaPTRuntimeObservation",
+            "junca_fixed_ssm_send_command",
             "certificate_hash:",
             "certificate_height:",
             "certificate_block_hash:",
@@ -1271,281 +1268,46 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.foundation_script)
 
-    def test_validator_readback_uses_exact_legacy_env_only_when_health_omits_all(
-        self,
-    ) -> None:
-        jq_filter = finality_readback_filter(self.foundation_script)
+    def test_runtime_observation_is_fixed_document_only(self) -> None:
+        block = self.foundation_script.split(
+            "capture_validator_observation() {", 1
+        )[1].split("\nwrite_live_rollout_prefix_readback() {", 1)[0]
+        self.assertIn("JuncaPTRuntimeObservation", block)
+        self.assertIn("ValidatorId: $validator_id", block)
+        self.assertIn("junca_fixed_ssm_send_command", block)
+        self.assertNotIn("python3 -c", block)
+        self.assertNotIn("readback_command", block)
+        self.assertNotIn("AWS-RunShellScript", block)
 
-        def resolve(health: dict, env: tuple[str, str, str]) -> subprocess.CompletedProcess:
-            return subprocess.run(
-                [
-                    "jq",
-                    "-c",
-                    "-n",
-                    "--argjson",
-                    "health",
-                    json.dumps(health),
-                    "--argjson",
-                    "runtime_automatic_finality_enabled",
-                    env[0],
-                    "--argjson",
-                    "runtime_block_interval_seconds",
-                    env[1],
-                    "--argjson",
-                    "runtime_slot_epoch_seconds",
-                    env[2],
-                    jq_filter,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+    def test_fixed_runtime_observation_owns_exact_env_readback(self) -> None:
+        document = (
+            ROOT
+            / "infrastructure/aws/ssm-documents/JuncaPTRuntimeObservation.yaml"
+        ).read_text(encoding="utf-8")
+        for required in (
+            'fixed_env_count "$RUNTIME_ENV" "$runtime_key"',
+            "AUTOMATIC_FINALITY_ENABLED TESTNET_BLOCK_INTERVAL_SECONDS",
+            "TESTNET_SLOT_EPOCH_SECONDS BRIDGE_ACTIVATED",
+            ".peer_count == 2",
+            'health_supported: true',
+            'access_class: "read-only"',
+        ):
+            self.assertIn(required, document)
 
-        legacy = resolve({}, ("false", "0", "0"))
-        self.assertEqual(legacy.returncode, 0, legacy.stderr)
-        self.assertEqual(
-            json.loads(legacy.stdout),
-            {
-                "automatic_finality_enabled": False,
-                "block_interval_seconds": 0,
-                "slot_epoch_seconds": 0,
-                "health_supported": False,
-            },
-        )
-
-        matching = resolve(
-            {
-                "automatic_finality_enabled": True,
-                "block_interval_seconds": 30,
-                "slot_epoch_seconds": 2_000_000_010,
-            },
-            ("true", "30", "2000000010"),
-        )
-        self.assertEqual(matching.returncode, 0, matching.stderr)
-        self.assertTrue(json.loads(matching.stdout)["health_supported"])
-
-        rejected = (
-            (
-                {
-                    "automatic_finality_enabled": False,
-                    "block_interval_seconds": 0,
-                },
-                ("false", "0", "0"),
-                "partially missing",
-            ),
-            (
-                {
-                    "automatic_finality_enabled": True,
-                    "block_interval_seconds": 30,
-                    "slot_epoch_seconds": 2_000_000_010,
-                },
-                ("false", "0", "0"),
-                "differ",
-            ),
-            (
-                {
-                    "automatic_finality_enabled": "false",
-                    "block_interval_seconds": 0,
-                    "slot_epoch_seconds": 0,
-                },
-                ("false", "0", "0"),
-                "differ",
-            ),
-        )
-        for health, env, message in rejected:
-            with self.subTest(health=health):
-                result = resolve(health, env)
-                self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn(message, result.stderr)
-
-    def test_runtime_env_readback_rejects_missing_duplicate_and_invalid_values(
-        self,
-    ) -> None:
-        block = runtime_finality_readback_block(self.foundation_script)
-        accepted = (
-            (
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
-            ),
-            (
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n"
-            ),
-            (
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n"
-            ),
-        )
-        rejected = (
-            (
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-            ),
-            (
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
-            ),
-            (
-                "AUTOMATIC_FINALITY_ENABLED=False\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
-            ),
-            (
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
-            ),
-            (
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
-            ),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            runtime_env = pathlib.Path(directory) / "runtime.env"
-            executable = block.replace(
-                "/etc/junca/runtime.env", str(runtime_env)
-            )
-            for content in accepted:
-                with self.subTest(accepted=content):
-                    runtime_env.write_text(content, encoding="utf-8")
-                    result = subprocess.run(
-                        ["bash", "-c", "set -euo pipefail\n" + executable],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertEqual(result.returncode, 0, result.stderr)
-            for content in rejected:
-                with self.subTest(rejected=content):
-                    runtime_env.write_text(content, encoding="utf-8")
-                    result = subprocess.run(
-                        ["bash", "-c", "set -euo pipefail\n" + executable],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-
-    def test_finality_mutation_requires_exact_keys_before_and_after_sed(
-        self,
-    ) -> None:
-        block = set_runtime_finality_block(self.foundation_script)
-        expected_artifact = "a" * 64
-
-        def execute(
-            runtime_env: pathlib.Path,
-            content: str,
-            *,
-            allow_missing: str,
-            finality_enabled: str = "false",
-            block_interval: str = "0",
-            slot_epoch: str = "0",
-            expected: str = expected_artifact,
-        ) -> subprocess.CompletedProcess:
-            runtime_env.write_text(content, encoding="utf-8")
-            executable = block.replace(
-                "/etc/junca/runtime.env", str(runtime_env)
-            )
-            executable = executable.replace(
-                "/etc/junca/.runtime.env.XXXXXX",
-                str(runtime_env.parent / ".runtime.env.XXXXXX"),
-            )
-            executable = (
-                executable.replace(
-                    "${expected_artifact_sha256}", expected
-                )
-                .replace(
-                    "${allow_missing_finality_keys}", allow_missing
-                )
-                .replace("${finality_enabled}", finality_enabled)
-                .replace("${block_interval}", block_interval)
-                .replace("${slot_epoch}", slot_epoch)
-            )
-            return subprocess.run(
-                ["bash", "-c", "set -euo pipefail\n" + executable],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        with tempfile.TemporaryDirectory() as directory:
-            runtime_env = pathlib.Path(directory) / "runtime.env"
-            result = execute(
-                runtime_env,
-                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
-                allow_missing="false",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                runtime_env.read_text(encoding="utf-8"),
-                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n",
-            )
-
-            result = execute(
-                runtime_env,
-                f"NODE_ARTIFACT_SHA256={expected_artifact}\n",
-                allow_missing="true",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                runtime_env.read_text(encoding="utf-8"),
-                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n",
-            )
-
-            rejected = (
-                (
-                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                    "AUTOMATIC_FINALITY_ENABLED=false\n",
-                    {"allow_missing": "true"},
-                ),
-                (
-                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                    "AUTOMATIC_FINALITY_ENABLED=false\n"
-                    "AUTOMATIC_FINALITY_ENABLED=false\n"
-                    "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                    "TESTNET_SLOT_EPOCH_SECONDS=0\n",
-                    {"allow_missing": "true"},
-                ),
-                (
-                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n",
-                    {"allow_missing": "false"},
-                ),
-                (
-                    f"NODE_ARTIFACT_SHA256={'b' * 64}\n",
-                    {"allow_missing": "true"},
-                ),
-                (
-                    f"NODE_ARTIFACT_SHA256={expected_artifact}\n",
-                    {
-                        "allow_missing": "true",
-                        "finality_enabled": "true",
-                        "block_interval": "30",
-                        "slot_epoch": "2000000010",
-                    },
-                ),
-            )
-            for content, arguments in rejected:
-                with self.subTest(rejected=(content, arguments)):
-                    before = hashlib.sha256(content.encode()).hexdigest()
-                    result = execute(runtime_env, content, **arguments)
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    after = hashlib.sha256(runtime_env.read_bytes()).hexdigest()
-                    self.assertEqual(after, before)
+    def test_fixed_finality_set_owns_atomic_mutation(self) -> None:
+        document = (
+            ROOT / "infrastructure/aws/ssm-documents/JuncaPTFinalitySet.yaml"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "readonly MUTATION_LOCK_DIRECTORY=/run/lock/junca-validator-mutation",
+            "write_transaction_marker PREPARED",
+            "write_transaction_marker ACCEPTED",
+            "before_non_finality_sha256=",
+            'transaction_state: "ACCEPTED"',
+            ".peer_count == 2",
+        ):
+            self.assertIn(required, document)
+        self.assertNotIn("AWS-RunShellScript", self.foundation_script)
 
     def test_finality_call_sites_bind_exact_runtime_and_legacy_mode(self) -> None:
         for required in (
@@ -1553,11 +1315,13 @@ class AwsFoundationTests(unittest.TestCase):
             'resume_updated_count="$(jq -er \'.updated_count\' "$resume_path")"',
             "build_pre_rollout_finality_bindings",
             'build_runtime_finality_bindings \\\n'
-            '          "$NODE_ARTIFACT_SHA256" false "$new_instance"',
+            '          "$NODE_ARTIFACT_SHA256" false \\\n'
+            '          "[\\"validator-0$((index + 1))\\"]" "$new_instance"',
             'build_runtime_finality_bindings \\\n'
-            '        "$NODE_ARTIFACT_SHA256" false '
-            '"${activated_instances[@]}"',
-            "NODE_ARTIFACT_SHA256=${expected_artifact_sha256}",
+            '        "$NODE_ARTIFACT_SHA256" false \\\n'
+            "        '[\"validator-01\",\"validator-02\",\"validator-03\"]'",
+            "JuncaPTFinalityInspect",
+            "JuncaPTFinalitySet",
         ):
             self.assertIn(required, self.foundation_script)
 
@@ -1595,15 +1359,28 @@ class AwsFoundationTests(unittest.TestCase):
 
         for selected in (instances[:1], instances):
             with self.subTest(homogeneous=selected):
+                validator_ids = [
+                    f"validator-0{index + 1}"
+                    for index in range(len(selected))
+                ]
                 result = run(
                     "build_runtime_finality_bindings",
-                    (target, "false", *selected),
+                    (
+                        target,
+                        "false",
+                        json.dumps(validator_ids),
+                        *selected,
+                    ),
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 bindings = json.loads(result.stdout)
                 self.assertEqual(
                     [item["instance_id"] for item in bindings],
                     list(selected),
+                )
+                self.assertEqual(
+                    [item["validator_id"] for item in bindings],
+                    validator_ids,
                 )
                 self.assertTrue(
                     all(
@@ -1660,11 +1437,26 @@ class AwsFoundationTests(unittest.TestCase):
             ),
             (
                 "build_runtime_finality_bindings",
-                (target, "false", *instances, "i-0a09abcdef1234567"),
+                (
+                    target,
+                    "false",
+                    '["validator-01","validator-02","validator-03"]',
+                    *instances,
+                    "i-0a09abcdef1234567",
+                ),
             ),
             (
                 "build_runtime_finality_bindings",
-                (target, "false", "invalid-instance"),
+                (target, "false", '["validator-01"]', "invalid-instance"),
+            ),
+            (
+                "build_runtime_finality_bindings",
+                (
+                    target,
+                    "false",
+                    '["validator-01","validator-01","validator-03"]',
+                    *instances,
+                ),
             ),
             (
                 "build_pre_rollout_finality_bindings",
@@ -1689,10 +1481,6 @@ class AwsFoundationTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_finality_preflight_is_read_only_and_precedes_all_mutation(self) -> None:
-        block = runtime_finality_preflight_block(self.foundation_script)
-        self.assertNotIn("sed ", block)
-        self.assertNotIn("mv ", block)
-        self.assertNotIn("printf ", block)
         preflight_loop = self.foundation_script.index(
             "# Complete every read-only preflight before any runtime.env mutation."
         )
@@ -1713,16 +1501,17 @@ class AwsFoundationTests(unittest.TestCase):
             "mutation_failed=true",
             "finality-compensation-${instance_id}.json",
             "finality-compensation-readback-${instance_id}.json",
-            "render_runtime_finality_mutation \\\n"
-            "          false 0 0",
-            "render_runtime_finality_readback \\\n"
-            "          false 0 0",
+            "JuncaPTFinalityInspect",
+            "JuncaPTFinalitySet",
+            "Mode: \"preflight\"",
+            "Mode: \"exact\"",
+            "AllowMissingFinalityKeys: \"false\"",
             "finality-compensation-summary.json",
             "exact_disabled_readback_status:",
-            'runtime_env_tmp="\\$(mktemp /etc/junca/.runtime.env.XXXXXX)"',
-            'mv -f "\\$runtime_env_tmp" "\\$runtime_env"',
+            "junca_fixed_ssm_send_command",
         ):
             self.assertIn(required, self.foundation_script)
+        self.assertNotIn("AWS-RunShellScript", self.foundation_script)
 
     def test_replacement_readiness_precedes_finality_mutation(self) -> None:
         script = self.foundation_script
@@ -1747,18 +1536,12 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(root_volume, call)
         self.assertLess(call, quiesce)
         for required in (
-            "cloud-init status --wait",
-            "systemctl is-active --quiet junca-validator.service",
-            "mountpoint -q /var/lib/junca",
-            "PRAGMA quick_check",
-            "/opt/junca/validator-runtime.tar.gz",
-            "/etc/junca/genesis.json",
+            "JuncaPTBootstrapReadiness",
+            "ExpectedArtifactSha256:",
+            "ExpectedGenesisSha256:",
+            "junca_fixed_ssm_send_command",
             '"$index" runtime-readiness started',
             '"$index" runtime-readiness succeeded',
-            '(\\$health.consensus | type) == "object"',
-            'test("^0x[0-9a-f]{64}$")',
-            "\\$health.consensus.last_certificate_hash ==",
-            "\\$durable.certificate_hash and",
             "post-apply-validator-${index}-root-volume.json",
             ".KmsKeyId == $kms_key_arn",
         ):
@@ -1767,9 +1550,8 @@ class AwsFoundationTests(unittest.TestCase):
         readiness = script.split(
             "verify_validator_bootstrap_readiness() {", 1
         )[1].split("\ncapture_validator_observation() {", 1)[0]
-        self.assertNotIn(
-            "\\$health.consensus.last_certificate_hash //", readiness
-        )
+        self.assertNotIn("python3 -c", readiness)
+        self.assertNotIn("AWS-RunShellScript", readiness)
 
     def test_finality_preflight_failure_returns_before_mutation(self) -> None:
         block = self.foundation_script.split(
@@ -1790,11 +1572,13 @@ class AwsFoundationTests(unittest.TestCase):
     def test_finality_preflight_failure_executes_zero_mutations(self) -> None:
         bindings = [
             {
+                "validator_id": "validator-01",
                 "instance_id": "i-00000000000000001",
                 "expected_artifact_sha256": "1" * 64,
                 "allow_missing_finality_keys": False,
             },
             {
+                "validator_id": "validator-02",
                 "instance_id": "i-00000000000000002",
                 "expected_artifact_sha256": "2" * 64,
                 "allow_missing_finality_keys": False,
@@ -1806,23 +1590,19 @@ class AwsFoundationTests(unittest.TestCase):
                 + set_runtime_finality_function(self.foundation_script)
                 + textwrap.dedent(
                     f"""
-                    render_runtime_finality_preflight() {{
-                      printf 'read-only-preflight'
+                    junca_fixed_ssm_document_version() {{
+                      printf '1\\n'
                     }}
-                    render_runtime_finality_mutation() {{
-                      printf 'runtime-mutation'
+                    junca_fixed_ssm_validate_document() {{
+                      return 0
                     }}
-                    render_runtime_finality_readback() {{
-                      printf 'runtime-readback'
-                    }}
-                    aws() {{
-                      if [[ "$*" == *"read-only preflight"* ]]; then
+                    junca_fixed_ssm_send_command() {{
+                      if [[ "$1" == JuncaPTFinalityInspect ]]; then
                         printf '%s\\n' preflight >> preflight-submissions
                         printf 'preflight-command-id\\n'
                         return 0
                       fi
-                      if [[ "$*" == *"fail-closed finality configuration"* ]]
-                      then
+                      if [[ "$1" == JuncaPTFinalitySet ]]; then
                         printf '%s\\n' mutation >> mutation-submissions
                         printf 'mutation-command-id\\n'
                         return 0
@@ -1830,7 +1610,7 @@ class AwsFoundationTests(unittest.TestCase):
                       return 1
                     }}
                     wait_for_ssm_command() {{
-                      [[ "$2" != "i-00000000000000002" ]]
+                      return 1
                     }}
                     wait_for_ssm_command_result() {{
                       return 0
@@ -1840,7 +1620,7 @@ class AwsFoundationTests(unittest.TestCase):
                     if set_runtime_finality 0 0 "$bindings"; then
                       exit 91
                     fi
-                    test "$(wc -l < preflight-submissions)" = 2
+                    test "$(wc -l < preflight-submissions)" = 1
                     test ! -e mutation-submissions
                     """
                 )
@@ -1854,53 +1634,20 @@ class AwsFoundationTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_compensation_readback_requires_exact_disabled_values(self) -> None:
-        block = runtime_finality_exact_readback_block(
-            self.foundation_script
-        )
-        expected_artifact = "a" * 64
-        with tempfile.TemporaryDirectory() as directory:
-            runtime_env = pathlib.Path(directory) / "runtime.env"
-            executable = (
-                block.replace(
-                    "/etc/junca/runtime.env", str(runtime_env)
-                )
-                .replace(
-                    "${expected_artifact_sha256}", expected_artifact
-                )
-                .replace("${finality_enabled}", "false")
-                .replace("${block_interval}", "0")
-                .replace("${slot_epoch}", "0")
-            )
-            disabled = (
-                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                "AUTOMATIC_FINALITY_ENABLED=false\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=0\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=0\n"
-            )
-            runtime_env.write_text(disabled, encoding="utf-8")
-            result = subprocess.run(
-                ["bash", "-c", "set -euo pipefail\n" + executable],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-            runtime_env.write_text(
-                f"NODE_ARTIFACT_SHA256={expected_artifact}\n"
-                "AUTOMATIC_FINALITY_ENABLED=true\n"
-                "TESTNET_BLOCK_INTERVAL_SECONDS=30\n"
-                "TESTNET_SLOT_EPOCH_SECONDS=2000000010\n",
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                ["bash", "-c", "set -euo pipefail\n" + executable],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(result.returncode, 0, result.stdout)
+    def test_compensation_uses_fixed_exact_false_zero_zero(self) -> None:
+        block = self.foundation_script.split(
+            "# Best-effort compensation always returns every reachable node", 1
+        )[1].split("\n    compensation_summary='[]'", 1)[0]
+        for required in (
+            "JuncaPTFinalitySet",
+            "JuncaPTFinalityInspect",
+            'Enabled: "false"',
+            'BlockIntervalSeconds: "0"',
+            'SlotEpochSeconds: "0"',
+            'Mode: "exact"',
+            'AllowMissingFinalityKeys: "false"',
+        ):
+            self.assertIn(required, block)
 
     def test_finality_activation_is_separate_and_manual_vote_is_disabled(self) -> None:
         disable_index = self.foundation_script.index(
@@ -1909,21 +1656,23 @@ class AwsFoundationTests(unittest.TestCase):
         replacement_index = self.foundation_script.index(
             'for address in "${validator_replacements[@]}"'
         )
-        epoch_index = self.foundation_script.index(
-            '0 "$validator_slot_epoch_seconds" "$activated_finality_bindings"'
+        dispatch_index = self.foundation_script.index(
+            'activation_dispatch_epoch="$((validator_slot_epoch_seconds - 60))"'
         )
         enable_index = self.foundation_script.index(
             '30 "$validator_slot_epoch_seconds" "$activated_finality_bindings"'
         )
         self.assertLess(disable_index, replacement_index)
-        self.assertLess(replacement_index, epoch_index)
-        self.assertLess(epoch_index, enable_index)
-        for workflow in (
-            self.validator_foundation_release,
-            self.validator_runtime_recovery,
-        ):
-            self.assertNotIn("junca_broadcastVote", workflow)
-            self.assertNotIn("ssm-broadcast", workflow)
+        self.assertLess(replacement_index, dispatch_index)
+        self.assertLess(dispatch_index, enable_index)
+        self.assertNotIn(
+            "set_runtime_finality \\\n"
+            '      0 "$validator_slot_epoch_seconds" '
+            '"$activated_finality_bindings"',
+            self.foundation_script,
+        )
+        self.assertNotIn("junca_broadcastVote", self.validator_foundation_release)
+        self.assertNotIn("ssm-broadcast", self.validator_foundation_release)
 
     def test_rollback_rehearsal_is_bound_to_no_state_rewind(self) -> None:
         for required in (
@@ -2224,7 +1973,8 @@ class AwsFoundationTests(unittest.TestCase):
                   fi
                 }
                 sleep() { :; }
-                wait_for_ssm_command "$1" "$2" "$3"
+                junca_fixed_ssm_validate_invocation_readback() { return 0; }
+                wait_for_ssm_command "$1" "$2" "$3" "$4" "$5"
                 """
             )
             environment = {
@@ -2241,6 +1991,8 @@ class AwsFoundationTests(unittest.TestCase):
                     "command-1",
                     "i-00000000000000001",
                     str(output),
+                    "JuncaPTHealthReadback",
+                    "1",
                 ],
                 env=environment,
                 check=False,
@@ -2262,6 +2014,8 @@ class AwsFoundationTests(unittest.TestCase):
                     "command-1",
                     "i-00000000000000001",
                     str(output),
+                    "JuncaPTHealthReadback",
+                    "1",
                 ],
                 env=environment,
                 check=False,
@@ -2422,7 +2176,8 @@ class AwsFoundationTests(unittest.TestCase):
             'test "$WORKFLOW_RUN_CONCLUSION" = "success"',
             'test "$WORKFLOW_RUN_NAME" = \\\n'
             '                "JUNCA Validator Foundation Release"',
-            '"release-candidate/$WORKFLOW_RUN_HEAD_SHA"',
+            'test "$WORKFLOW_RUN_HEAD_BRANCH" = "main"',
+            'test "$WORKFLOW_RUN_HEAD_SHA" = "$GITHUB_SHA"',
             'test "$WORKFLOW_RUN_HEAD_REPOSITORY" = "$REPOSITORY"',
         ):
             self.assertIn(required, self.public_testnet_release)
@@ -2442,7 +2197,7 @@ class AwsFoundationTests(unittest.TestCase):
             '.name == "JUNCA Validator Foundation Release"',
             '.path == ".github/workflows/junca-validator-foundation-release.yml"',
             '.event == "workflow_dispatch"',
-            '.head_branch == ("release-candidate/" + .head_sha)',
+            '.head_branch == "main"',
             ".repository.full_name == $repository",
             ".head_repository.full_name == $repository",
             "ref: ${{ steps.foundation.outputs.head_sha }}",
@@ -2458,15 +2213,23 @@ class AwsFoundationTests(unittest.TestCase):
             self.public_testnet_release,
         )
 
-    def test_deployment_role_can_refresh_and_update_validator_iam_roles(self) -> None:
+    def test_foundation_reads_but_cannot_mutate_validator_iam_roles(self) -> None:
+        policy = self.iam_separation.split(
+            'resource "aws_iam_policy" "deployment_validator_pass"', 1
+        )[1].split(
+            'resource "aws_iam_role_policy_attachment" '
+            '"deployment_validator_pass"',
+            1,
+        )[0]
         for action in (
             "iam:GetRole",
             "iam:ListAttachedRolePolicies",
             "iam:ListInstanceProfilesForRole",
             "iam:ListRolePolicies",
-            "iam:UpdateAssumeRolePolicy",
         ):
-            self.assertIn(action, self.bootstrap)
+            self.assertIn(action, policy)
+        self.assertIn("DenyPassRoleUntilAttestedLaunchContract", policy)
+        self.assertNotIn("iam:UpdateAssumeRolePolicy", policy)
 
     def test_managed_acm_and_sns_are_not_external_foundation_inputs(self) -> None:
         for deprecated_input in (
@@ -2476,7 +2239,10 @@ class AwsFoundationTests(unittest.TestCase):
             "JUNCA_PUBLIC_TESTNET_ALERT_TOPIC_ARN",
         ):
             self.assertNotIn(deprecated_input, self.foundation_script)
-            self.assertNotIn(deprecated_input, self.execution_workflow)
+            self.assertNotIn(
+                deprecated_input,
+                self.validator_foundation_release,
+            )
         for required_input in (
             "NODE_AMI_ID",
             "NODE_ARTIFACT_SHA256",
@@ -2485,35 +2251,27 @@ class AwsFoundationTests(unittest.TestCase):
             "AVAILABILITY_ZONES_JSON",
         ):
             self.assertIn(required_input, self.foundation_script)
-            self.assertIn(required_input, self.execution_workflow)
+            self.assertIn(required_input, self.validator_foundation_release)
 
-    def test_auto_release_preserves_completed_bootstrap_when_runtime_inputs_are_pending(self) -> None:
+    def test_canonical_foundation_release_binds_immutable_inputs(self) -> None:
         for required in (
-            "Resolve validator foundation input readiness",
-            "foundation-input-readiness.json",
-            'foundation_state: $state',
-            'steps.foundation_inputs.outputs.ready == \'true\'',
-            'REQUESTED_PHASE" != "auto-release"',
-            "foundation_apply_executed: false",
-            "public_services_enabled: false",
+            "Verified immutable AMI workflow run ID",
+            "Successful JUNCA Runtime Release Manifest Gate run ID",
+            "release-candidate/${GITHUB_SHA}",
+            "Attest exact live GitHub OIDC claims",
+            "PUBLIC_TESTNET_ROLLOUT",
+            "scripts/junca_public_testnet_foundation.sh foundation-apply",
         ):
-            self.assertIn(required, self.execution_workflow)
+            self.assertIn(required, self.validator_foundation_release)
 
-    def test_bootstrap_plan_rejects_delete_or_replace_actions(self) -> None:
-        self.assertIn(
-            'select(index("delete"))', self.execution_workflow
-        )
-        self.assertIn(
-            "aws_iam_role.deployment JuncaChainPublicTestnetDeployment",
-            self.execution_workflow,
-        )
-        self.assertIn(
-            "aws_iam_openid_connect_provider.github",
-            self.execution_workflow,
-        )
+    def test_bootstrap_state_contract_remains_durable(self) -> None:
         self.assertIn('backend "s3" {}', self.bootstrap)
+        self.assertIn(
+            "JuncaChainPublicTestnetDeployment",
+            self.iam_separation,
+        )
 
-    def test_execution_workflow_preserves_non_monetary_boundary(self) -> None:
+    def test_canonical_foundation_release_preserves_non_monetary_boundary(self) -> None:
         for required in (
             "Public Testnet / No Monetary Value",
             "mainnet_changed: false",
@@ -2523,38 +2281,45 @@ class AwsFoundationTests(unittest.TestCase):
             "us-east-1",
             "JuncaChainPublicTestnetDeployment",
         ):
-            self.assertIn(required, self.execution_workflow)
+            self.assertIn(required, self.validator_foundation_release)
 
-    def test_foundation_execution_requires_manual_dispatch(self) -> None:
+    def test_canonical_foundation_release_requires_manual_dispatch(self) -> None:
         for required in (
             "workflow_dispatch:",
-            "apply_confirmation:",
-            "approved_change_reference:",
+            "authorize_rollout:",
+            "ami_run_id:",
+            "manifest_gate_run_id:",
         ):
-            self.assertIn(required, self.execution_workflow)
-        self.assertNotIn("\n  workflow_run:", self.execution_workflow)
-        self.assertNotIn("\n  push:", self.execution_workflow)
+            self.assertIn(required, self.validator_foundation_release)
+        self.assertNotIn(
+            "\n  workflow_run:",
+            self.validator_foundation_release,
+        )
+        self.assertNotIn("\n  push:", self.validator_foundation_release)
 
-    def test_recovery_accepts_exact_existing_permission_without_mutation(self) -> None:
-        for required in (
-            "Fast path for an administrator-attached exact grant",
-            'result="PRESENT"',
-            'verification="PASS"',
-            'if [[ "$verification" != "PASS" ]]',
-            "iam:SimulatePrincipalPolicy",
-        ):
-            self.assertIn(required, self.self_permission_recovery)
+    def test_oidc_self_permission_recovery_entry_point_is_retired(self) -> None:
+        self.assertFalse(self.self_permission_recovery_path.exists())
+        policy = json.loads(
+            (
+                ROOT / "config/junca_public_testnet_cloud_role_policy.json"
+            ).read_text(encoding="utf-8")
+        )
+        retired = {
+            item["workflow"]: item
+            for item in policy["blocked_raw_oidc_workflows"]
+        }
+        entry = retired[self.self_permission_recovery_path.name]
+        self.assertEqual(entry["disposition"], "DELETE_WORKFLOW_FILE")
+        self.assertIn("must not repair its own IAM", entry["retired_reason"])
 
-    def test_manual_apply_requires_permission_pass_before_bootstrap_plan(self) -> None:
+    def test_manual_apply_requires_provenance_and_oidc_attestation(self) -> None:
         for required in (
-            "bootstrap-apply|foundation-apply|auto-release",
-            "Require permission PASS before any plan",
-            'test "${{ steps.permissions.outputs.permission_gate }}" = "PASS"',
-            "JUNCA_TERRAFORM_STATE_BUCKET",
-            "JUNCA_GITHUB_OIDC_THUMBPRINT",
+            'test "$AUTHORIZE_ROLLOUT" = "PUBLIC_TESTNET_ROLLOUT"',
+            "release-candidate/${GITHUB_SHA}",
+            "scripts/junca_oidc_claim_attestation.py",
+            "scripts/junca_public_testnet_foundation.sh foundation-apply",
         ):
-            self.assertIn(required, self.execution_workflow)
-        self.assertNotIn("terraform apply", self.execution_workflow)
+            self.assertIn(required, self.validator_foundation_release)
 
     def test_runtime_role_can_simulate_only_its_own_policy(self) -> None:
         for required in (
@@ -2563,9 +2328,9 @@ class AwsFoundationTests(unittest.TestCase):
             'Action   = "iam:SimulatePrincipalPolicy"',
             "Resource = aws_iam_role.deployment.arn",
         ):
-            self.assertIn(required, self.bootstrap)
+            self.assertIn(required, self.iam_separation)
 
-    def test_ceo_iam_authorization_is_exact_and_triggers_recovery(self) -> None:
+    def test_ceo_iam_authorization_is_exact_but_cannot_trigger_raw_oidc(self) -> None:
         authorization = self.iam_authorization
         self.assertEqual(
             authorization["authorization_state"], "CEO_APPROVED_FOR_EXECUTION"
@@ -2583,27 +2348,21 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertFalse(authorization["broad_iam_grant"])
         self.assertFalse(authorization["docs_runtime_role_use_authorized"])
-        self.assertIn(
-            "config/junca_public_testnet_aws_iam_authorization.json",
-            self.self_permission_recovery,
-        )
-        self.assertIn("CEO_APPROVED_FOR_EXECUTION", self.self_permission_recovery)
+        self.assertFalse(self.self_permission_recovery_path.exists())
 
-    def test_self_permission_recovery_is_exact_and_fail_closed(self) -> None:
-        for required in (
-            "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
-            "--role-name \"$TARGET_ROLE_NAME\"",
-            "--policy-name SelfPermissionReadback",
-            '"Resource": "$TARGET_ROLE_ARN"',
-            "broad_iam_grant: false",
-            "docs_runtime_role_used: false",
-            "AWS foundation remains fail-closed",
-            'echo "::error::Exact self-readback policy was not verified',
-            "exit 1",
-        ):
-            self.assertIn(required, self.self_permission_recovery)
-        self.assertNotIn("JuncaChainDocsProductionDeployment", self.self_permission_recovery)
-        self.assertNotIn('"Resource": "*"', self.self_permission_recovery)
+    def test_raw_oidc_and_direct_web_identity_sts_are_absent(self) -> None:
+        retired = (
+            "junca-chain-bootstrap-inline-policy-repair.yml",
+            "junca-chain-runtime-self-permission-recovery.yml",
+            "junca-point-member-production-recovery.yml",
+        )
+        for workflow in retired:
+            self.assertFalse((ROOT / ".github/workflows" / workflow).exists())
+        for workflow_path in (ROOT / ".github/workflows").glob("*.y*ml"):
+            text = workflow_path.read_text(encoding="utf-8")
+            self.assertNotIn("ACTIONS_ID_TOKEN_REQUEST_TOKEN", text)
+            self.assertNotIn("ACTIONS_ID_TOKEN_REQUEST_URL", text)
+            self.assertNotIn("assume-role-with-web-identity", text)
 
 
 if __name__ == "__main__":

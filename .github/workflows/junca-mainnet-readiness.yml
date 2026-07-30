@@ -25,6 +25,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify fail-closed Candidate Mainnet gate
+        shell: bash
         run: |
           set -euo pipefail
           python -m unittest tests.test_junca_mainnet_readiness -v

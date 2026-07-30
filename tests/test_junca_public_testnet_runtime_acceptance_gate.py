@@ -122,7 +122,7 @@ class RuntimeAcceptanceGateTests(unittest.TestCase):
             "workflow_dispatch",
             "workflow_run",
             ".candidate_binding.source_commit",
-            '.head_branch == ("release-candidate/" + $source_commit)',
+            '.head_branch == "main"',
             ".head_sha == $source_commit",
             '.event == "workflow_dispatch"',
         ):

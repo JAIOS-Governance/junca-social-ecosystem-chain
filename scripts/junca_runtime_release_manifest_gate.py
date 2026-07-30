@@ -18,6 +18,7 @@ ACCOUNT_ID = "595710543956"
 REGION = "us-east-1"
 VALIDATOR_IDS = ("validator-01", "validator-02", "validator-03")
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
+MAX_PUBLIC_FINALIZED_HEAD_AGE_SECONDS = 120
 CANDIDATE_FIELDS = {
     "source_commit",
     "node_artifact_sha256",
@@ -195,6 +196,7 @@ PUBLIC_EXPLORER_CHECK_FIELDS = {
 PRIVATE_READBACK_FIELDS = {
     "mode",
     "scope",
+    "observed_at",
     "validator_count",
     "chain_id",
     "validators",
@@ -208,6 +210,7 @@ PRIVATE_VALIDATOR_FIELDS = {
     "validator_id",
     "instance_id",
     "signer_resource_digest",
+    "peer_count",
     "durable_timestamp_state",
     "timestamp_schema_tables",
     "runtime_certificate_state",
@@ -319,6 +322,17 @@ def _valid_utc_observed_at(value: Any) -> bool:
     return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
+def _utc_observed_epoch(value: Any) -> int | None:
+    if not _valid_utc_observed_at(value):
+        return None
+    assert isinstance(value, str)
+    return int(
+        datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        ).timestamp()
+    )
+
+
 def _public_endpoint_baseline(
     explorer: Mapping[str, Any], failures: list[str]
 ) -> None:
@@ -362,6 +376,23 @@ def _public_endpoint_baseline(
             or HASH.fullmatch(str(finalized.get("certificate_hash"))) is None
         ):
             failures.append("public_endpoints.finalized_head:invalid")
+        else:
+            observed_epoch = _utc_observed_epoch(
+                readback.get("observed_at")
+            )
+            finalized_epoch = int(
+                str(finalized.get("timestamp")),
+                16,
+            )
+            if (
+                observed_epoch is None
+                or not 0
+                <= observed_epoch - finalized_epoch
+                <= MAX_PUBLIC_FINALIZED_HEAD_AGE_SECONDS
+            ):
+                failures.append(
+                    "public_endpoints.finalized_head:stale_or_future"
+                )
 
     checks = readback.get("checks")
     if not isinstance(checks, Mapping):
@@ -392,7 +423,7 @@ def _public_endpoint_baseline(
             or explorer_check.get("total_power") != 3
             or not isinstance(explorer_check.get("peer_count"), int)
             or isinstance(explorer_check.get("peer_count"), bool)
-            or explorer_check.get("peer_count", -1) < 0
+            or explorer_check.get("peer_count") != 2
             or not isinstance(finalized, Mapping)
             or explorer_check.get("finalized_height")
             != finalized.get("height")
@@ -671,6 +702,7 @@ def _private_ssm_baseline(
         readback.get("mode") != "private_ssm"
         or readback.get("scope")
         != "Public Testnet Pre-rollout Baseline / Private SSM Read-only"
+        or not _valid_utc_observed_at(readback.get("observed_at"))
         or readback.get("validator_count") != 3
         or readback.get("chain_id") != 20260723
         or readback.get(
@@ -709,6 +741,11 @@ def _private_ssm_baseline(
         ]
         signer_digests = [
             item.get("signer_resource_digest")
+            for item in validators
+            if isinstance(item, Mapping)
+        ]
+        peer_counts = [
+            item.get("peer_count")
             for item in validators
             if isinstance(item, Mapping)
         ]
@@ -767,6 +804,16 @@ def _private_ssm_baseline(
             failures.append(
                 "private_ssm.validators.signer_resource_digest:mismatch"
             )
+        if (
+            len(peer_counts) != 3
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value != 2
+                for value in peer_counts
+            )
+        ):
+            failures.append("private_ssm.peer_count:not_exact_two")
     finalized = readback.get("finalized_head")
     if not isinstance(finalized, Mapping):
         failures.append("private_ssm.finalized_head:missing")
@@ -809,6 +856,20 @@ def _private_ssm_baseline(
                 failures.append(
                     "private_ssm.finalized_head.timestamp:invalid"
                 )
+            observed_epoch = _utc_observed_epoch(
+                readback.get("observed_at")
+            )
+            if (
+                observed_epoch is None
+                or not isinstance(timestamp, int)
+                or isinstance(timestamp, bool)
+                or not 0
+                <= observed_epoch - timestamp
+                <= MAX_PUBLIC_FINALIZED_HEAD_AGE_SECONDS
+            ):
+                failures.append(
+                    "private_ssm.finalized_head:stale_or_future"
+                )
         elif timestamp_state == "LEGACY_NOT_PERSISTED":
             expected_tables = [
                 "blocks",
@@ -819,6 +880,9 @@ def _private_ssm_baseline(
                 failures.append(
                     "private_ssm.finalized_head.legacy_timestamp:not_null"
                 )
+            failures.append(
+                "private_ssm.finalized_head:freshness_unverifiable"
+            )
         else:
             expected_tables = None
             failures.append(

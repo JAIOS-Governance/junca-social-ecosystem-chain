@@ -94,7 +94,7 @@ jobs:
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
-      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      AMI_BUILDER_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetAmiBuilder
       NETWORK: Public Testnet
       GOVERNANCE: JAIOS Institutional Governance
       NOTICE: Public Testnet / No Monetary Value
@@ -115,11 +115,22 @@ jobs:
       PYTHON3_BOTOCORE_NEVRA: ${{ inputs.python3_botocore_nevra }}
       PROVIDED_REQUEST_SHA256: ${{ inputs.request_sha256 }}
     steps:
+      - name: Bind trusted main execution before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REPOSITORY" = \
+            "JAIOS-Governance/junca-social-ecosystem-chain"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF_TYPE" = "branch"
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_commit }}
 
-      - name: Verify canonical parent and immutable execution ref
+      - name: Verify exact child run binding before AMI side effects
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
@@ -270,9 +281,18 @@ jobs:
         with:
           ref: ${{ env.SOURCE_COMMIT }}
 
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-validator-ami-build.yml" \
+            --role-arn "$AMI_BUILDER_ROLE_ARN" \
+            --output artifacts/oidc-claim-attestation.json
+
       - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.AMI_BUILDER_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-validator-ami-${{ github.run_id }}
 

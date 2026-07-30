@@ -90,6 +90,16 @@ data "aws_kms_key" "validator_signer" {
   key_id = var.validator_signer_arns[count.index]
 }
 
+data "aws_iam_role" "validator" {
+  count = 3
+  name  = "${local.name}-validator-${count.index + 1}"
+}
+
+data "aws_iam_instance_profile" "validator" {
+  count = 3
+  name  = "${local.name}-validator-${count.index + 1}"
+}
+
 resource "terraform_data" "canonical_binding_gate" {
   lifecycle {
     precondition {
@@ -111,6 +121,42 @@ resource "terraform_data" "canonical_binding_gate" {
     precondition {
       condition     = alltrue([for az in var.availability_zones : startswith(az, var.aws_region)])
       error_message = "All validator availability zones must belong to the canonical AWS region."
+    }
+    precondition {
+      condition = alltrue([
+        for index, role in data.aws_iam_role.validator :
+        role.permissions_boundary == (
+          "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
+          format(
+            "policy/JuncaChainPublicTestnetValidator%02dBoundary",
+            index + 1
+          )
+        )
+      ])
+      error_message = "Every validator role must retain its exact index-aligned Security Bootstrap permissions boundary."
+    }
+    precondition {
+      condition = alltrue([
+        for role in data.aws_iam_role.validator :
+        jsondecode(role.assume_role_policy) == {
+          Version = "2012-10-17"
+          Statement = [{
+            Sid       = "Ec2ValidatorWorkloadOnly"
+            Effect    = "Allow"
+            Principal = { Service = "ec2.amazonaws.com" }
+            Action    = "sts:AssumeRole"
+          }]
+        }
+      ])
+      error_message = "Validator role trust must be the exact EC2-only Security Bootstrap contract."
+    }
+    precondition {
+      condition = alltrue([
+        for index, profile in data.aws_iam_instance_profile.validator :
+        profile.role_name == data.aws_iam_role.validator[index].name &&
+        profile.role_arn == data.aws_iam_role.validator[index].arn
+      ])
+      error_message = "Every validator instance profile must contain only its exact same-index validator role."
     }
     precondition {
       condition = (
@@ -421,62 +467,6 @@ resource "aws_vpc_endpoint" "aws_services" {
   private_dns_enabled = true
 }
 
-resource "aws_iam_role" "validator" {
-  count = 3
-  name  = "${local.name}-validator-${count.index + 1}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "validator_signer_boundary" {
-  count = 3
-  name  = "validator-${count.index + 1}-signer-boundary"
-  role  = aws_iam_role.validator[count.index].id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "UseOnlyAssignedSigner"
-        Effect   = "Allow"
-        Action   = ["kms:Sign"]
-        Resource = var.validator_signer_arns[count.index]
-      },
-      {
-        Sid      = "VerifyValidatorQuorum"
-        Effect   = "Allow"
-        Action   = ["kms:GetPublicKey", "kms:Verify", "kms:DescribeKey"]
-        Resource = var.validator_signer_arns
-      },
-      {
-        Sid      = "WriteOperationalTelemetry"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "cloudwatch:PutMetricData"]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "validator_ssm" {
-  count      = 3
-  role       = aws_iam_role.validator[count.index].name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "validator" {
-  count = 3
-  name  = "${local.name}-validator-${count.index + 1}"
-  role  = aws_iam_role.validator[count.index].name
-}
-
 resource "aws_cloudwatch_log_group" "validator" {
   name              = "/junca/social-ecosystem-chain/public-testnet/validator"
   retention_in_days = 90
@@ -492,7 +482,7 @@ resource "aws_instance" "validator" {
   private_ip                  = local.validator_private_ips[count.index]
   vpc_security_group_ids      = [aws_security_group.validator.id]
   associate_public_ip_address = false
-  iam_instance_profile        = aws_iam_instance_profile.validator[count.index].name
+  iam_instance_profile        = data.aws_iam_instance_profile.validator[count.index].name
   monitoring                  = true
 
   metadata_options {

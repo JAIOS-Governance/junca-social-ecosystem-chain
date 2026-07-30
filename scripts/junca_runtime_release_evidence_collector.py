@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -30,6 +31,7 @@ BOUNDARY = {
     "assets_moved": False,
     "bridge_activated": False,
 }
+MAX_FINALIZED_HEAD_AGE_SECONDS = 120
 COMMIT = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 AMI = re.compile(r"ami-[0-9a-f]{8,17}")
@@ -969,6 +971,23 @@ def verify_private_validator_health(
         == "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
         "private_ssm.scope:mismatch",
     )
+    observed_at = report.get("observed_at")
+    require(
+        isinstance(observed_at, str) and bool(observed_at),
+        "private_ssm.observed_at:invalid",
+    )
+    try:
+        observed_datetime = datetime.fromisoformat(
+            observed_at.replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise EvidenceError("private_ssm.observed_at:invalid") from exc
+    require(
+        observed_datetime.tzinfo is not None
+        and observed_datetime.utcoffset() is not None,
+        "private_ssm.observed_at:invalid",
+    )
+    observed_epoch = int(observed_datetime.timestamp())
     validators = report.get("validators")
     require(
         isinstance(validators, list)
@@ -987,6 +1006,7 @@ def verify_private_validator_health(
     certificates: list[str] = []
     chain_ids: list[Any] = []
     runtime_certificate_states: list[str] = []
+    legacy_freshness_unverifiable = False
     migration_height = migration_finality.get("height")
     migration_hash = migration_finality.get("hash")
     migration_certificate_hash = migration_finality.get("certificate_hash")
@@ -1017,6 +1037,13 @@ def verify_private_validator_health(
         require(
             health.get("validator_id") == validator_id,
             f"private_ssm.{validator_id}.runtime_identity:mismatch",
+        )
+        peer_count = health.get("peer_count")
+        require(
+            isinstance(peer_count, int)
+            and not isinstance(peer_count, bool)
+            and peer_count == 2,
+            f"private_ssm.{validator_id}.peer_count:not_exact_two",
         )
         height = health.get("head_height")
         head_hash = health.get("head_hash")
@@ -1153,6 +1180,13 @@ def verify_private_validator_health(
                 f"private_ssm.{validator_id}."
                 "timestamp_schema_tables:invalid",
             )
+            require(
+                0
+                <= observed_epoch - durable_head_timestamp
+                <= MAX_FINALIZED_HEAD_AGE_SECONDS,
+                f"private_ssm.{validator_id}."
+                "durable_head_timestamp:stale_or_future",
+            )
         elif durable_timestamp_state == "LEGACY_NOT_PERSISTED":
             require(
                 durable_head_timestamp is None,
@@ -1174,6 +1208,7 @@ def verify_private_validator_health(
                 f"private_ssm.{validator_id}."
                 "timestamp_schema_tables:invalid",
             )
+            legacy_freshness_unverifiable = True
         else:
             raise EvidenceError(
                 f"private_ssm.{validator_id}."
@@ -1224,6 +1259,7 @@ def verify_private_validator_health(
                 "validator_id": validator_id,
                 "instance_id": instance_id,
                 "signer_resource_digest": health.get("signer_resource_digest"),
+                "peer_count": peer_count,
                 "runtime_certificate_state":
                     runtime_certificate_states[-1],
                 "durable_certificate_hash":
@@ -1233,6 +1269,10 @@ def verify_private_validator_health(
             }
         )
 
+    require(
+        not legacy_freshness_unverifiable,
+        "private_ssm.durable_head_timestamp:freshness_unverifiable",
+    )
     require(len(set(chain_ids)) == 1, "private_ssm.chain_id:mismatch")
     require(len(set(heads)) == 1, "private_ssm.finalized_head:mismatch")
     require(
@@ -1249,6 +1289,7 @@ def verify_private_validator_health(
     return {
         "mode": "private_ssm",
         "scope": report.get("scope"),
+        "observed_at": observed_at,
         "validator_count": 3,
         "validators": normalized,
         "chain_id": chain_ids[0],

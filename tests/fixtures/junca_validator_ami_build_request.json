@@ -13,7 +13,7 @@
   "parent_ami_id": "ami-0123456789abcdef0",
   "parent_ami_owner_id": "137112412989",
   "parent_ami_name": "al2023-ami-2023.12.20260724.0-kernel-6.18-x86_64",
-  "component_source_sha256": "4b80d4cfd785b4920ad937a8706d331a04dafd8eb24face3874942ce19f5bbb3",
+  "component_source_sha256": "5c02b2ada5a2642d8659f4ee992222069c68ca5c3d6124ac27348705ca1d5f18",
   "dependency_lock_sha256": "5d710b98d6a0da2abb156441b532d94a0ba7942dae1e59ce3c8f334311ed7289",
   "supply_chain_policy_sha256": "24922d23ed83153c954182d0e18b085d06f65a59757a2d0425e5fc152fc76fba",
   "dnf_releasever": "2023.12.20260724",
@@ -25,5 +25,5 @@
     "assets_moved": false,
     "bridge_activated": false
   },
-  "request_sha256": "2cb2e3ca34a5f980042a1880aace504bfede62d9321ab8f478d4b898dbb933d5"
+  "request_sha256": "d886689fd589c553d8b3540f502821a581e0e01f319b5479d3b1e5b8747a4bb7"
 }

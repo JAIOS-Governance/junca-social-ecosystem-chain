@@ -118,7 +118,7 @@ jobs:
             .name == "JUNCA Validator Foundation Release" and
             .path == ".github/workflows/junca-validator-foundation-release.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == ("release-candidate/" + $source_commit) and
+            .head_branch == "main" and
             .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -139,7 +139,7 @@ jobs:
               ) or
               (
                 .event == "workflow_dispatch" and
-                .head_branch == ("release-candidate/" + $source_commit) and
+                .head_branch == "main" and
                 .head_sha == $source_commit
               )
             ) and

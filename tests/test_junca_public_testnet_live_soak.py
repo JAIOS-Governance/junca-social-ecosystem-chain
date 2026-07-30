@@ -114,7 +114,7 @@ class LiveSoakTests(unittest.TestCase):
         )
         self.assertIn('.event == "workflow_run"', workflow)
         self.assertIn(
-            '.head_branch == ("release-candidate/" + $source_commit)',
+            '.head_branch == "main"',
             workflow,
         )
         self.assertIn(".head_sha == $source_commit", workflow)

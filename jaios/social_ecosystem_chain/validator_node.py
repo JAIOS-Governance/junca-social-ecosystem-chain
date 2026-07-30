@@ -375,7 +375,8 @@ class PublicTestnetConsensus:
             signature_verifier=self._verify_consensus,
             signing_journal=journal,
         )
-        self._accepted_peer_votes: set[str] = set()
+        self._accepted_peer_votes: dict[str, AuthenticatedVote] = {}
+        self._last_certificate_votes: tuple[AuthenticatedVote, ...] = ()
         self._last_certificate: FinalityCertificate | None = (
             store.latest_finality_certificate()
         )
@@ -413,14 +414,42 @@ class PublicTestnetConsensus:
             signature=packet.signature,
         )
         result = self.runtime.accept_vote(vote)
-        self._accepted_peer_votes.add(packet.validator_id)
+        self._accepted_peer_votes[packet.validator_id] = packet
         if result is not None:
             self._last_certificate = result.certificate
+            if (
+                tuple(sorted(self._accepted_peer_votes))
+                != result.certificate.validator_ids
+            ):
+                raise ValidatorNodeError(
+                    "finalized certificate is missing its exact vote set"
+                )
+            ordered = tuple(
+                self._accepted_peer_votes[validator_id]
+                for validator_id in result.certificate.validator_ids
+            )
+            vote_hashes = tuple(
+                FinalityVote(
+                    chain_id=packet.chain_id,
+                    height=packet.height,
+                    round=packet.round,
+                    block_hash=packet.block_hash,
+                    validator_id=packet.validator_id,
+                    signature=packet.signature,
+                ).vote_hash
+                for packet in ordered
+            )
+            if vote_hashes != result.certificate.vote_hashes:
+                raise ValidatorNodeError(
+                    "accepted votes do not reconstruct the finality certificate"
+                )
+            self._last_certificate_votes = ordered
         return result
 
     def evidence(self) -> dict[str, Any]:
         runtime = self.runtime.evidence()
         last = self._last_certificate
+        certificate_proof = self._certificate_proof(last)
         return {
             "schema_version": "junca-public-testnet-consensus-runtime/v1",
             "chain_id": runtime["chain_id"],
@@ -435,6 +464,7 @@ class PublicTestnetConsensus:
             "last_certificate": (
                 None if last is None else last.as_evidence()
             ),
+            "last_certificate_proof": certificate_proof,
             "signer_bindings": [
                 {
                     "validator_id": validator_id,
@@ -448,6 +478,34 @@ class PublicTestnetConsensus:
             "mainnet_changed": False,
             "assets_moved": False,
             "bridge_activated": False,
+        }
+
+    def _certificate_proof(
+        self,
+        certificate: FinalityCertificate | None,
+    ) -> dict[str, object] | None:
+        votes = self._last_certificate_votes
+        if (
+            certificate is None
+            or len(votes) != 3
+            or tuple(packet.validator_id for packet in votes)
+            != certificate.validator_ids
+        ):
+            return None
+        return {
+            "schema_version": "junca-public-finality-certificate-proof/v1",
+            "certificate": certificate.as_evidence(),
+            "votes": [
+                {
+                    "chain_id": packet.chain_id,
+                    "height": packet.height,
+                    "round": packet.round,
+                    "block_hash": packet.block_hash,
+                    "validator_id": packet.validator_id,
+                    "signature": packet.signature.hex(),
+                }
+                for packet in votes
+            ],
         }
 
     def _verify_consensus(
@@ -763,6 +821,7 @@ class NodeState:
         with self.consensus_lock:
             head = self.store.head()
             head_timestamp = self.store.block_timestamp(head.height)
+            observed_peer_count = self.observed_peer_count()
             automatic_finality = {
                 "enabled": self.automatic_finality_enabled,
                 "loop_running": self.automatic_finality_loop_running,
@@ -781,8 +840,66 @@ class NodeState:
                     self.automatic_finality_last_successful_height
                 ),
             }
+            consensus_evidence = (
+                self.consensus.evidence()
+                if self.consensus is not None
+                else None
+            )
+            certificate = (
+                consensus_evidence.get("last_certificate")
+                if isinstance(consensus_evidence, Mapping)
+                else None
+            )
+            finalized_head = (
+                isinstance(certificate, Mapping)
+                and certificate.get("finality_status") == "FINALIZED"
+                and certificate.get("height") == head.height
+                and certificate.get("block_hash") == head.block_hash
+                and certificate.get("signed_power") == 3
+                and certificate.get("total_power") == 3
+                and consensus_evidence.get("head_height") == head.height
+            )
+            now = int(datetime.now(timezone.utc).timestamp())
+            freshness_window = max(120, self.block_interval_seconds * 3)
+            fresh_head = (
+                isinstance(head_timestamp, int)
+                and not isinstance(head_timestamp, bool)
+                and 0 <= now - head_timestamp <= freshness_window
+            )
+            finality_slot_matches_head = (
+                isinstance(self.automatic_finality_last_successful_slot, int)
+                and not isinstance(
+                    self.automatic_finality_last_successful_slot,
+                    bool,
+                )
+                and self.automatic_finality_last_successful_slot > 0
+                and self.slot_epoch_seconds
+                + (
+                    self.automatic_finality_last_successful_slot
+                    * self.block_interval_seconds
+                )
+                == head_timestamp
+                and self.automatic_finality_last_successful_height
+                == head.height
+            )
+            health_gates = {
+                "authenticated_peer_quorum": observed_peer_count == 2,
+                "current_three_of_three_certificate": finalized_head,
+                "fresh_finalized_head": fresh_head,
+                "automatic_finality": (
+                    self.automatic_finality_enabled
+                    and self.automatic_finality_loop_running
+                    and 5 <= self.block_interval_seconds <= 3600
+                    and self.slot_epoch_seconds > 0
+                    and finality_slot_matches_head
+                ),
+            }
             evidence = {
-                "status": "healthy",
+                "status": (
+                    "healthy"
+                    if all(health_gates.values())
+                    else "unhealthy"
+                ),
                 "network": NETWORK_LABEL,
                 "chain_id": self.chain_id,
                 "validator_id": self.validator_id,
@@ -793,7 +910,8 @@ class NodeState:
                 "signer_resource_digest": hashlib.sha256(
                     self.signer_resource.encode()
                 ).hexdigest(),
-                "peer_count": self.observed_peer_count(),
+                "peer_count": observed_peer_count,
+                "health_gates": health_gates,
                 "private_key_material_accepted": False,
                 "automatic_finality_enabled": self.automatic_finality_enabled,
                 "block_interval_seconds": self.block_interval_seconds,
@@ -812,8 +930,8 @@ class NodeState:
                 "assets_moved": False,
                 "bridge_activated": False,
             }
-            if self.consensus is not None:
-                evidence["consensus"] = self.consensus.evidence()
+            if consensus_evidence is not None:
+                evidence["consensus"] = consensus_evidence
             if self.sync_recovery is not None:
                 evidence["sync_recovery"] = self.sync_recovery.evidence()
                 if (

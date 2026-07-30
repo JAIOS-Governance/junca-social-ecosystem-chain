@@ -10,7 +10,9 @@ on:
       - "jaios/social_ecosystem_chain/**"
       - "packaging/systemd/**"
       - "config/junca_hardened_immutable_candidate_policy.json"
+      - "config/junca_public_testnet_cloud_role_policy.json"
       - "config/junca_validator_ami_supply_chain_lock.json"
+      - "requirements/ci-yaml.txt"
       - "scripts/build_validator_runtime.sh"
       - "scripts/verify_validator_runtime_layout.py"
       - "scripts/generate_junca_public_testnet_genesis.py"
@@ -18,9 +20,15 @@ on:
       - "scripts/junca_validator_artifact_handoff.py"
       - "scripts/junca_hardened_immutable_candidate_policy.py"
       - "scripts/junca_dispatch_workflow_and_wait.py"
+      - "scripts/junca_release_child_run_binding.py"
       - "scripts/junca_release_child_provenance.py"
       - "scripts/junca_release_dispatch_attestation.py"
       - "scripts/junca_validator_ami_build_request.py"
+      - "scripts/junca_fixed_ssm_caller.sh"
+      - "scripts/junca_fixed_ssm_document_contract.py"
+      - "scripts/junca_oidc_claim_attestation.py"
+      - "scripts/junca_public_testnet_cloud_role_policy.py"
+      - "scripts/junca_workflow_shell_contract.py"
       - "scripts/junca_runtime_release_evidence_collector_drift.py"
       - "scripts/junca_runtime_release_evidence_collector.py"
       - "scripts/junca_runtime_release_manifest_gate.py"
@@ -39,16 +47,25 @@ on:
       - "tests/test_junca_runtime_release_manifest_gate.py"
       - "tests/test_junca_hardened_release_v2.py"
       - "tests/test_junca_validator_ami_build_request.py"
+      - "tests/test_junca_fixed_ssm_document_contract.py"
       - "tests/test_junca_live_rollout_prefix_gate.py"
       - "tests/test_junca_public_endpoint_sampling.py"
       - "tests/test_junca_public_testnet_endpoint_test.py"
       - "tests/test_junca_public_testnet_runtime_acceptance_packet.py"
       - "tests/test_junca_public_testnet_live_soak.py"
       - "tests/test_junca_public_testnet_runtime_acceptance_gate.py"
+      - "tests/test_junca_oidc_claim_attestation.py"
+      - "tests/test_junca_public_testnet_cloud_role_policy.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_canonical_inventory.py"
       - "tests/test_junca_social_ecosystem_chain_aws_foundation.py"
+      - "tests/test_junca_social_ecosystem_chain_aws_oidc_bootstrap.py"
+      - "tests/test_junca_workflow_shell_contract.py"
       - "infra/aws/public-testnet/**"
       - "infra/aws/bootstrap/**"
+      - "infrastructure/aws/ssm-documents/**"
+      - "docs/runbooks/junca-public-testnet-fixed-ssm-launch-design.md"
       - ".github/image-builder/validator-component.yml"
+      - ".github/workflows/**"
       - ".github/workflows/junca-validator-ami-build.yml"
       - ".github/workflows/junca-validator-runtime-artifacts.yml"
       - ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
@@ -60,6 +77,8 @@ on:
       - ".github/workflows/junca-public-testnet-live-soak-segment.yml"
       - ".github/workflows/junca-public-testnet-runtime-acceptance-gate.yml"
       - ".github/workflows/junca-public-testnet-release-observer.yml"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-binding-readback.yml"
+      - ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
   workflow_dispatch:
 
 permissions:
@@ -71,6 +90,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12.11"
+      - name: Install hash-pinned YAML parser
+        run: |
+          python -m pip install \
+            --disable-pip-version-check \
+            --only-binary=:all: \
+            --require-hashes \
+            -r requirements/ci-yaml.txt
 
       - name: Verify immutable artifact and safety contracts
         run: |
@@ -80,6 +109,7 @@ jobs:
             tests.test_validator_runtime_layout \
             tests.test_junca_hardened_immutable_candidate_policy \
             tests.test_junca_validator_ami_build_request \
+            tests.test_junca_fixed_ssm_document_contract \
             tests.test_junca_release_orchestration \
             tests.test_junca_runtime_release_ami_drift \
             tests.test_junca_runtime_release_evidence_collector \
@@ -91,16 +121,26 @@ jobs:
             tests.test_junca_public_testnet_runtime_acceptance_packet \
             tests.test_junca_public_testnet_live_soak \
             tests.test_junca_public_testnet_runtime_acceptance_gate \
+            tests.test_junca_oidc_claim_attestation \
+            tests.test_junca_public_testnet_cloud_role_policy \
+            tests.test_junca_social_ecosystem_chain_aws_canonical_inventory \
             tests.test_junca_social_ecosystem_chain_aws_foundation \
+            tests.test_junca_social_ecosystem_chain_aws_oidc_bootstrap \
+            tests.test_junca_workflow_shell_contract \
             tests.test_junca_social_ecosystem_chain_validator_node -v
           python3 scripts/junca_hardened_immutable_candidate_policy.py \
             --policy config/junca_hardened_immutable_candidate_policy.json \
             --candidate-source-commit "$GITHUB_SHA"
           python3 -m py_compile \
             scripts/junca_dispatch_workflow_and_wait.py \
+            scripts/junca_release_child_run_binding.py \
             scripts/junca_release_child_provenance.py \
             scripts/junca_release_dispatch_attestation.py \
             scripts/junca_validator_ami_build_request.py \
+            scripts/junca_fixed_ssm_document_contract.py \
+            scripts/junca_oidc_claim_attestation.py \
+            scripts/junca_public_testnet_cloud_role_policy.py \
+            scripts/junca_workflow_shell_contract.py \
             scripts/junca_live_rollout_prefix_gate.py \
             scripts/junca_public_testnet_endpoint_test.py \
             scripts/junca_runtime_release_evidence_collector.py \
@@ -109,7 +149,15 @@ jobs:
             scripts/junca_public_testnet_runtime_acceptance_packet.py \
             scripts/junca_public_testnet_live_soak.py \
             scripts/junca_public_testnet_runtime_acceptance_gate.py
+          fixed_ssm_report="$RUNNER_TEMP/junca-fixed-ssm-contract.json"
+          fixed_ssm_stdlib_report="$RUNNER_TEMP/junca-fixed-ssm-contract-stdlib.json"
+          python3 scripts/junca_fixed_ssm_document_contract.py \
+            > "$fixed_ssm_report"
+          python3 -S scripts/junca_fixed_ssm_document_contract.py \
+            > "$fixed_ssm_stdlib_report"
+          cmp "$fixed_ssm_report" "$fixed_ssm_stdlib_report"
           python3 scripts/junca_live_rollout_prefix_gate.py --help >/dev/null
+          bash -n scripts/junca_fixed_ssm_caller.sh
           bash -n scripts/junca_public_testnet_foundation.sh
 
       - name: Build deterministic runtime and canonical zero-allocation genesis

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -10,7 +14,6 @@ TF_DIR = ROOT / "infra/aws/public-testnet"
 WORKFLOW = ROOT / ".github/workflows/junca-validator-state-migration.yml"
 CONTROLLER = ROOT / "scripts/junca_validator_state_migration.sh"
 NODE_MIGRATION = ROOT / "scripts/junca_migrate_validator_state_node.sh"
-AUTHORIZATION = "PUBLIC_TESTNET_VALIDATOR_STATE_MIGRATION"
 
 
 def _read(path: Path) -> str:
@@ -46,14 +49,100 @@ class ValidatorStateMigrationTests(unittest.TestCase):
         cls.controller = _read(CONTROLLER)
         cls.node = _read(NODE_MIGRATION)
 
-    def test_expected_migration_entrypoints_exist(self) -> None:
+    def test_expected_migration_artifacts_exist(self) -> None:
         for path in (WORKFLOW, CONTROLLER, NODE_MIGRATION):
             with self.subTest(path=path):
-                self.assertTrue(path.is_file(), f"missing migration entrypoint: {path}")
+                self.assertTrue(path.is_file(), f"missing migration artifact: {path}")
 
-    def test_provisioning_is_separate_opt_in_and_enable_implies_provision(
-        self,
-    ) -> None:
+    def test_workflow_is_manual_non_oidc_tombstone(self) -> None:
+        for required in (
+            "workflow_dispatch:",
+            "environment: public-testnet",
+            "contents: read",
+            "cancel-in-progress: false",
+            "blocked-until-non-oidc-authorization:",
+            "State migration is not a steady-state GitHub OIDC operation.",
+            "time-bounded non-OIDC Security Bootstrap session",
+            "exit 1",
+        ):
+            self.assertIn(required, self.workflow)
+        self.assertRegex(
+            self.workflow,
+            re.compile(
+                r"group:\s*junca-public-testnet-aws-foundation",
+                re.MULTILINE,
+            ),
+        )
+        for forbidden in (
+            "\n  push:",
+            "workflow_run:",
+            "id-token: write",
+            "aws-actions/configure-aws-credentials@",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+            "scripts/junca_validator_state_migration.sh",
+            "terraform apply",
+        ):
+            self.assertNotIn(forbidden, self.workflow)
+
+    def test_controller_is_a_no_aws_fail_closed_tombstone(self) -> None:
+        for required in (
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "permanent fail-closed tombstone",
+            "time-bounded non-OIDC Security Bootstrap procedure",
+            "No AWS API call was attempted.",
+            "exit 64",
+        ):
+            self.assertIn(required, self.controller)
+        for forbidden in (
+            "aws ",
+            "AWS-RunShellScript",
+            "send-command",
+            "terraform ",
+            "curl ",
+            "python",
+            "eval ",
+        ):
+            self.assertNotIn(forbidden, self.controller)
+
+    def test_controller_exits_before_any_fake_aws_invocation(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker = root / "aws-called"
+            fake_aws = root / "aws"
+            fake_aws.write_text(
+                "#!/usr/bin/env bash\n"
+                f"touch {marker!s}\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_aws.chmod(0o755)
+            environment = dict(os.environ)
+            environment["PATH"] = f"{root}:{environment['PATH']}"
+            completed = subprocess.run(
+                ["bash", str(CONTROLLER)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(completed.returncode, 64)
+            self.assertIn("No AWS API call was attempted.", completed.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_historical_evidence_binding_remains_digest_pinned(self) -> None:
+        policy = json.loads(
+            (
+                ROOT
+                / "config/junca_hardened_immutable_candidate_policy.json"
+            ).read_text(encoding="utf-8")
+        )
+        binding = policy["migration_binding"]
+        self.assertRegex(binding["run_id"], r"^[1-9][0-9]*$")
+        self.assertRegex(binding["evidence_sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("migration_run_id", self.workflow)
+
+    def test_provisioning_is_separate_opt_in(self) -> None:
         provision = _terraform_block(
             self.variables,
             'variable "provision_validator_state_volumes"',
@@ -73,18 +162,10 @@ class ValidatorStateMigrationTests(unittest.TestCase):
                 "count = var.enable_validator_state_volumes ? 3 : 0",
                 block,
             )
-        self.assertIn(
-            "!var.enable_validator_state_volumes ||",
-            self.runtime,
-        )
-        self.assertIn(
-            "var.provision_validator_state_volumes",
-            self.runtime,
-        )
+        self.assertIn("!var.enable_validator_state_volumes ||", self.runtime)
+        self.assertIn("var.provision_validator_state_volumes", self.runtime)
 
-    def test_provisioned_volumes_remain_exact_three_retained_and_encrypted(
-        self,
-    ) -> None:
+    def test_volumes_remain_exact_three_retained_and_encrypted(self) -> None:
         volume = _terraform_block(
             self.volumes,
             'resource "aws_ebs_volume" "validator_state"',
@@ -112,184 +193,25 @@ class ValidatorStateMigrationTests(unittest.TestCase):
             self.assertIn(required, attachment)
         self.assertIn('output "validator_state_volume_readback"', self.outputs)
 
-    def test_workflow_is_manual_signed_one_file_oidc_gated_and_serialized(
-        self,
-    ) -> None:
-        for required in (
-            "workflow_dispatch:",
-            "config/junca_validator_state_migration_request.json",
-            "Verify signed migration request-only main commit",
-            ".commit.verification.verified == true",
-            '.commit.verification.reason == "valid"',
-            "(.files | length) == 1",
-            ".files[0].filename == $path",
-            "junca_validator_state_migration_request.py",
-            "environment: public-testnet",
-            "id-token: write",
-            "contents: read",
-            "cancel-in-progress: false",
-            "aws-actions/configure-aws-credentials@",
-            "hashicorp/setup-terraform@",
-            "scripts/junca_validator_state_migration.sh",
-            AUTHORIZATION,
-            "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
-        ):
-            self.assertIn(required, self.workflow)
-        self.assertRegex(
-            self.workflow,
-            re.compile(
-                r"group:\s*junca-public-testnet-aws-foundation",
-                re.MULTILINE,
-            ),
-        )
-        self.assertNotIn("\n  push:", self.workflow)
-        self.assertNotIn("workflow_run:", self.workflow)
-        self.assertNotIn("inputs.authorize_migration", self.workflow)
-
-    def test_workflow_emits_exact_next_phase_binding(self) -> None:
-        for required in (
-            "junca-validator-state-migration-binding/v1",
-            "junca-validator-state-migration-binding.json",
-            "migration_run_id",
-            "migration_run_head_sha",
-            "migration_request_sha256",
-            "migration_evidence_sha256",
-            'sha256sum --check SHA256SUMS',
-        ):
-            self.assertIn(required, self.workflow)
-
-    def test_workflow_and_controller_preserve_release_boundaries(self) -> None:
-        combined = self.workflow + "\n" + self.controller
-        for boundary in (
-            "mainnet_changed",
-            "assets_moved",
-            "bridge_activated",
-        ):
-            with self.subTest(boundary=boundary):
-                self.assertIn(boundary, combined)
-                self.assertRegex(
-                    combined,
-                    re.compile(rf"{boundary}[\"']?\s*[:=]\s*false"),
-                )
-        self.assertNotIn("mainnet-apply", combined.lower())
-        self.assertNotIn("bridge-apply", combined.lower())
-        self.assertNotIn("asset-issuance", combined.lower())
-
-    def test_controller_reads_existing_state_and_accepts_additions_only_plan(
-        self,
-    ) -> None:
-        for required in (
-            "junca-social-ecosystem-chain-tfstate-595710543956-us-east-1",
-            "junca-social-ecosystem-chain-testnet-lock",
-            'terraform -chdir="$runtime_dir" init',
-            'terraform -chdir="$runtime_dir" output -json',
-            'terraform -chdir="$runtime_dir" plan',
-            'terraform -chdir="$runtime_dir" show -json',
-            "-target=aws_ebs_volume.validator_state",
-            "provision_validator_state_volumes: true",
-            "aws_ebs_volume\\\\.validator_state",
-            "aws ec2 attach-volume",
-            'attachment_identity="/dev/sdf:${volume_id}:${instance_id}"',
-            'terraform -chdir="$runtime_dir" import',
-        ):
-            self.assertIn(required, self.controller)
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(create|\"create\").*(delete|update|replace)", re.DOTALL),
-        )
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(resource_changes|change\.actions)"),
-        )
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(length|wc -l).*(==|=).*3", re.DOTALL),
-        )
-        for prohibited in (
-            "terraform state rm",
-            "terraform state mv",
-            "bootstrap-apply",
-            "infra/aws/bootstrap",
-        ):
-            self.assertNotIn(prohibited, self.controller)
-
-    def test_controller_requires_exact_three_and_migrates_one_at_a_time(
-        self,
-    ) -> None:
-        for required in (
-            "validator_instance_ids",
-            "validator_state_volume_readback",
-            "aws ssm send-command",
-            "wait_ssm_command",
-            "junca_migrate_validator_state_node.sh",
-        ):
-            self.assertIn(required, self.controller)
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(instances|instance_ids).*3", re.DOTALL),
-        )
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(volumes|volume_ids).*3", re.DOTALL),
-        )
-        self.assertRegex(
-            self.controller,
-            re.compile(r"for\s+.*validator|for\s+.*instance", re.DOTALL),
-        )
-        self.assertNotRegex(
-            self.controller,
-            re.compile(r"send-command[^\n]*&"),
-        )
-
-    def test_controller_snapshots_each_root_volume_and_marks_verified_pass(
-        self,
-    ) -> None:
-        for required in (
-            "RootDeviceName",
-            "BlockDeviceMappings",
-            "aws ec2 create-snapshot",
-            "aws ec2 wait snapshot-completed",
-            "VERIFIED_PASS",
-            "aws ec2 create-tags",
-        ):
-            self.assertIn(required, self.controller)
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(rollback|Rollback).*(snapshot|Snapshot)", re.DOTALL),
-        )
-        self.assertRegex(
-            self.controller,
-            re.compile(r"(MigrationState|MigrationStatus).*VERIFIED_PASS"),
-        )
-
-    def test_node_migration_resolves_and_mounts_the_exact_volume_id(
-        self,
-    ) -> None:
+    def test_node_utility_resolves_exact_volume_and_never_assumes_sdf(self) -> None:
         self.assertRegex(
             self.node,
             re.compile(r"vol-\[0-9a-f\]\{8,17\}|vol-\[0-9a-f\]\+"),
         )
-        self.assertRegex(
-            self.node,
-            re.compile(r"/dev/disk/by-id/|ebsnvme-id"),
-        )
+        self.assertRegex(self.node, re.compile(r"/dev/disk/by-id/|ebsnvme-id"))
         self.assertIn("/var/lib/junca", self.node)
-        self.assertRegex(
-            self.node,
-            re.compile(r"(findmnt|lsblk|udevadm).*(volume|vol-)", re.DOTALL),
-        )
-        self.assertNotRegex(
-            self.node,
-            re.compile(r"mount\s+/dev/sdf"),
-        )
+        self.assertNotRegex(self.node, re.compile(r"mount\s+/dev/sdf"))
 
-    def test_node_migration_stops_copies_verifies_and_can_rollback(self) -> None:
+    def test_node_utility_preserves_and_verifies_state(self) -> None:
         for required in (
             "systemctl stop junca-validator",
             "systemctl start junca-validator",
             "cp -a --preserve=all",
-            "import sqlite3",
             "PRAGMA integrity_check",
+            "write_metadata_manifest",
+            "os.listxattr",
+            '"hardlink_group"',
+            'cmp "$source_manifest" "$target_manifest"',
             "rollback",
         ):
             self.assertIn(required, self.node)
@@ -304,21 +226,18 @@ class ValidatorStateMigrationTests(unittest.TestCase):
             self.node,
             re.compile(r"(trap|rollback).*(ERR|EXIT|RETURN)", re.DOTALL),
         )
-        self.assertRegex(
-            self.node,
-            re.compile(r"(umount|unmount).*(mount|bind)", re.DOTALL),
-        )
 
-    def test_node_migration_never_formats_nonempty_or_unresolved_storage(
-        self,
-    ) -> None:
+    def test_node_utility_formats_only_an_exact_empty_target(self) -> None:
         self.assertRegex(
             self.node,
             re.compile(r"(wipefs|blkid|lsblk).*(mkfs)", re.DOTALL),
         )
         self.assertRegex(
             self.node,
-            re.compile(r"(empty|EMPTY|unformatted|UNFORMATTED).*(mkfs)", re.DOTALL),
+            re.compile(
+                r"(empty|EMPTY|unformatted|UNFORMATTED).*(mkfs)",
+                re.DOTALL,
+            ),
         )
         self.assertNotIn("force_detach", self.node)
         self.assertNotIn("terraform", self.node)

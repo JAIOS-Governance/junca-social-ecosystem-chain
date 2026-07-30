@@ -1,0 +1,408 @@
+schemaVersion: '2.2'
+description: >-
+  Restart only the fixed JUNCA Public Testnet validator unit and perform the
+  fixed localhost health loop. Failure diagnostics expose only allowlisted
+  unit state and metadata from at most the final 100 journal entries; journal
+  messages are never returned. Repository contract only.
+parameters: {}
+mainSteps:
+  - action: aws:runShellScript
+    name: restartValidatorHealth
+    inputs:
+      runCommand:
+        - |-
+          #!/usr/bin/bash
+          if [ -z "${BASH_VERSION:-}" ]; then
+            exec /usr/bin/bash "$0" "$@"
+          fi
+          set -euo pipefail
+          readonly HEALTH_ENDPOINT=http://127.0.0.1:8545/health
+          readonly VALIDATOR_SERVICE=junca-validator.service
+          readonly MUTATION_LOCK_DIRECTORY=/run/lock/junca-validator-mutation
+          readonly MAX_JSON_BYTES=65536
+
+          bounded_json() {
+            local payload="$1"
+            local byte_count
+            byte_count="$(printf '%s' "$payload" | /usr/bin/wc -c)"
+            [[ "$byte_count" =~ ^[0-9]+$ ]]
+            test "$byte_count" -le "$MAX_JSON_BYTES"
+            printf '%s\n' "$payload"
+          }
+
+          certificate_digest_matches() {
+            local certificate="$1"
+            local canonical_body
+            local calculated_hash
+            local claimed_hash
+            canonical_body="$(
+              /usr/bin/jq -cS '{
+                block_hash: .block_hash,
+                chain_id: .chain_id,
+                height: .height,
+                round: .round,
+                signed_power: .signed_power,
+                total_power: .total_power,
+                validator_ids: .validator_ids,
+                vote_hashes: .vote_hashes
+              }' <<<"$certificate"
+            )" || return 1
+            claimed_hash="$(
+              /usr/bin/jq -er '.certificate_hash' <<<"$certificate"
+            )" || return 1
+            calculated_hash="$(
+              {
+                printf 'JUNCA_FINALITY_CERTIFICATE_V1\0'
+                printf '%s' "$canonical_body"
+              } |
+                /usr/bin/sha256sum |
+                /usr/bin/awk '{print $1}'
+            )" || return 1
+            test "$claimed_hash" = "0x${calculated_hash}"
+          }
+
+          if ! test -d "$MUTATION_LOCK_DIRECTORY" ||
+            test -L "$MUTATION_LOCK_DIRECTORY" ||
+            ! test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$MUTATION_LOCK_DIRECTORY"
+            )" = root:root:700 ||
+            ! exec 9<"$MUTATION_LOCK_DIRECTORY"
+          then
+            bounded_json \
+              '{"schema_version":"junca-validator-mutation-lock/v1","document":"JuncaPTRestartHealth","accepted":false,"operational_decision":"BLOCKED_MUTATION_LOCK_CONTRACT","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+              >&2
+            exit 1
+          fi
+          if ! /usr/bin/flock --exclusive --nonblock 9; then
+            bounded_json \
+              '{"schema_version":"junca-validator-mutation-lock/v1","document":"JuncaPTRestartHealth","accepted":false,"operational_decision":"BLOCKED_CONCURRENT_MUTATION","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+              >&2
+            exit 1
+          fi
+
+          restart_exit=0
+          /usr/bin/timeout --signal=TERM --kill-after=10 30 \
+            /usr/bin/systemctl restart "$VALIDATOR_SERVICE" ||
+            restart_exit="$?"
+          [[ "$restart_exit" =~ ^[0-9]{1,3}$ ]]
+          accepted=false
+          accepted_health=
+          for attempt in {1..60}; do
+            if [[ "$restart_exit" == 0 ]] &&
+              /usr/bin/timeout 5 /usr/bin/systemctl is-active \
+                --quiet "$VALIDATOR_SERVICE"
+            then
+              health="$(
+                /usr/bin/curl --fail --silent --show-error --noproxy '*' \
+                  --proto '=http' --connect-timeout 2 --max-time 5 \
+                  --max-filesize "$MAX_JSON_BYTES" "$HEALTH_ENDPOINT"
+              )" || health=
+              if test "$(printf '%s' "$health" | /usr/bin/wc -c)" -le "$MAX_JSON_BYTES" &&
+                projected_health="$(
+                  /usr/bin/jq -ce '
+                    if (
+                      type == "object" and
+                      .status == "healthy" and
+                      .network == "Public Testnet / No Monetary Value" and
+                      .chain_id == 20260723 and
+                      (.validator_id | type) == "string" and
+                      (.validator_id | test("^validator-0[1-3]$")) and
+                      (.head_height | type) == "number" and
+                      .head_height == (.head_height | floor) and
+                      .head_height >= 1 and
+                      (.head_hash | type) == "string" and
+                      (.head_hash | test("^0x[0-9a-f]{64}$")) and
+                      (.head_timestamp | type) == "number" and
+                      .head_timestamp == (.head_timestamp | floor) and
+                      .head_timestamp > 0 and
+                      (.peer_count | type) == "number" and
+                      .peer_count == (.peer_count | floor) and
+                      .peer_count == 2 and
+                      (.automatic_finality_enabled | type) == "boolean" and
+                      (.block_interval_seconds | type) == "number" and
+                      .block_interval_seconds ==
+                        (.block_interval_seconds | floor) and
+                      (.slot_epoch_seconds | type) == "number" and
+                      .slot_epoch_seconds ==
+                        (.slot_epoch_seconds | floor) and
+                      (.automatic_finality_loop_running | type) ==
+                        "boolean" and
+                      (
+                        (
+                          .automatic_finality_enabled == true and
+                          .block_interval_seconds == 30 and
+                          .slot_epoch_seconds > 0 and
+                          (.slot_epoch_seconds % 30) == 0 and
+                          .automatic_finality_loop_running == true
+                        ) or (
+                          .automatic_finality_enabled == false and
+                          .block_interval_seconds == 0 and
+                          .slot_epoch_seconds == 0 and
+                          .automatic_finality_loop_running == false
+                        )
+                      ) and
+                      (.consensus | type) == "object" and
+                      (.consensus.last_certificate_hash | type) ==
+                        "string" and
+                      (.consensus.last_certificate_hash |
+                        test("^0x[0-9a-f]{64}$")) and
+                      (.consensus.last_certificate | type) == "object" and
+                      (.consensus.last_certificate | keys | sort) == [
+                        "assets_moved",
+                        "block_hash",
+                        "bridge_activated",
+                        "certificate_hash",
+                        "chain_id",
+                        "finality_status",
+                        "height",
+                        "mainnet_changed",
+                        "round",
+                        "schema_version",
+                        "signed_power",
+                        "total_power",
+                        "validator_ids",
+                        "vote_hashes"
+                      ] and
+                      .consensus.last_certificate.schema_version ==
+                        "junca-finality-certificate/v1" and
+                      .consensus.last_certificate.chain_id == .chain_id and
+                      .consensus.last_certificate.height == .head_height and
+                      (.consensus.last_certificate.round | type) ==
+                        "number" and
+                      .consensus.last_certificate.round ==
+                        (.consensus.last_certificate.round | floor) and
+                      .consensus.last_certificate.round >= 0 and
+                      .consensus.last_certificate.round <= 2147483647 and
+                      .consensus.last_certificate.block_hash ==
+                        .head_hash and
+                      .consensus.last_certificate.certificate_hash ==
+                        .consensus.last_certificate_hash and
+                      .consensus.last_certificate.finality_status ==
+                        "FINALIZED" and
+                      .consensus.last_certificate.signed_power == 3 and
+                      .consensus.last_certificate.total_power == 3 and
+                      .consensus.last_certificate.validator_ids == [
+                        "validator-01",
+                        "validator-02",
+                        "validator-03"
+                      ] and
+                      (.consensus.last_certificate.vote_hashes | type) ==
+                        "array" and
+                      (.consensus.last_certificate.vote_hashes | length) ==
+                        3 and
+                      (.consensus.last_certificate.vote_hashes |
+                        unique | length) == 3 and
+                      all(.consensus.last_certificate.vote_hashes[];
+                        type == "string" and
+                        test("^0x[0-9a-f]{64}$")) and
+                      .consensus.last_certificate.mainnet_changed ==
+                        false and
+                      .consensus.last_certificate.assets_moved == false and
+                      .consensus.last_certificate.bridge_activated ==
+                        false and
+                      .private_key_material_accepted == false and
+                      .mainnet_changed == false and
+                      .assets_moved == false and
+                      .bridge_activated == false
+                    ) then {
+                      status: .status,
+                      network: .network,
+                      chain_id: .chain_id,
+                      validator_id: .validator_id,
+                      head_height: .head_height,
+                      head_hash: .head_hash,
+                      head_timestamp: .head_timestamp,
+                      peer_count: .peer_count,
+                      automatic_finality_enabled:
+                        .automatic_finality_enabled,
+                      block_interval_seconds: .block_interval_seconds,
+                      slot_epoch_seconds: .slot_epoch_seconds,
+                      automatic_finality_loop_running:
+                        .automatic_finality_loop_running,
+                      consensus: {
+                        last_certificate_hash:
+                          .consensus.last_certificate_hash,
+                        last_certificate:
+                          .consensus.last_certificate
+                      },
+                      private_key_material_accepted: false,
+                      mainnet_changed: false,
+                      assets_moved: false,
+                      bridge_activated: false
+                    } else error("restart health contract rejected") end
+                  ' <<<"$health"
+                )" &&
+                certificate="$(
+                  /usr/bin/jq -c \
+                    '.consensus.last_certificate' <<<"$projected_health"
+                )" &&
+                certificate_digest_matches "$certificate"
+              then
+                accepted=true
+                accepted_health="$projected_health"
+                break
+              fi
+            fi
+            /usr/bin/sleep 2
+          done
+
+          if [[ "$accepted" != true ]]; then
+            unit_active="$(
+              /usr/bin/timeout 10 /usr/bin/systemctl show "$VALIDATOR_SERVICE" \
+                --property=ActiveState --value
+            )" || unit_active=unavailable
+            unit_sub="$(
+              /usr/bin/timeout 10 /usr/bin/systemctl show "$VALIDATOR_SERVICE" \
+                --property=SubState --value
+            )" || unit_sub=unavailable
+            unit_result="$(
+              /usr/bin/timeout 10 /usr/bin/systemctl show "$VALIDATOR_SERVICE" \
+                --property=Result --value
+            )" || unit_result=unavailable
+            unit_exec_code_available=true
+            unit_exec_code="$(
+              /usr/bin/timeout 10 /usr/bin/systemctl show "$VALIDATOR_SERVICE" \
+                --property=ExecMainCode --value
+            )" || {
+              unit_exec_code=0
+              unit_exec_code_available=false
+            }
+            unit_exec_status_available=true
+            unit_exec_status="$(
+              /usr/bin/timeout 10 /usr/bin/systemctl show "$VALIDATOR_SERVICE" \
+                --property=ExecMainStatus --value
+            )" || {
+              unit_exec_status=0
+              unit_exec_status_available=false
+            }
+            if ! [[ "$unit_active" =~ ^[a-z-]{1,32}$ ]]; then
+              unit_active=unavailable
+            fi
+            if ! [[ "$unit_sub" =~ ^[a-z-]{1,32}$ ]]; then
+              unit_sub=unavailable
+            fi
+            if ! [[ "$unit_result" =~ ^[a-z-]{1,64}$ ]]; then
+              unit_result=unavailable
+            fi
+            if ! [[ "$unit_exec_code" =~ ^[0-9]{1,10}$ ]]; then
+              unit_exec_code=0
+              unit_exec_code_available=false
+            fi
+            if ! [[ "$unit_exec_status" =~ ^[0-9]{1,10}$ ]]; then
+              unit_exec_status=0
+              unit_exec_status_available=false
+            fi
+            journal_metadata_available=true
+            journal_metadata="$(
+              /usr/bin/timeout 10 /usr/bin/journalctl -u "$VALIDATOR_SERVICE" \
+                --no-pager --lines=100 --output=json \
+                --output-fields=__REALTIME_TIMESTAMP,PRIORITY,_SYSTEMD_UNIT |
+                /usr/bin/jq -cs '
+                  [
+                    .[] |
+                    {
+                      realtime_timestamp: .__REALTIME_TIMESTAMP,
+                      priority: .PRIORITY,
+                      systemd_unit: ._SYSTEMD_UNIT
+                    }
+                  ]
+                '
+            )" || {
+              journal_metadata='[]'
+              journal_metadata_available=false
+            }
+            if [[ "$journal_metadata_available" == true ]] &&
+              {
+                ! test "$(
+                  printf '%s' "$journal_metadata" | /usr/bin/wc -c
+                )" -le "$MAX_JSON_BYTES" ||
+                ! /usr/bin/jq -e '
+                  type == "array" and
+                  length <= 100 and
+                  all(.[];
+                    (keys | sort) == [
+                      "priority",
+                      "realtime_timestamp",
+                      "systemd_unit"
+                    ] and
+                    (.realtime_timestamp | type) == "string" and
+                    (.realtime_timestamp | test("^[0-9]{1,20}$")) and
+                    (.priority | type) == "string" and
+                    (.priority | test("^[0-7]$")) and
+                    .systemd_unit == "junca-validator.service"
+                  )
+                ' <<<"$journal_metadata" >/dev/null
+              }
+            then
+              journal_metadata='[]'
+              journal_metadata_available=false
+            fi
+            failure="$(
+              /usr/bin/jq -cn \
+                --arg active_state "$unit_active" \
+                --arg sub_state "$unit_sub" \
+                --arg result "$unit_result" \
+                --argjson restart_exit_code "$restart_exit" \
+                --argjson exec_main_code_available \
+                  "$unit_exec_code_available" \
+                --argjson exec_main_code "$unit_exec_code" \
+                --argjson exec_main_status_available \
+                  "$unit_exec_status_available" \
+                --argjson exec_main_status "$unit_exec_status" \
+                --argjson journal_metadata_available \
+                  "$journal_metadata_available" \
+                --argjson journal_metadata "$journal_metadata" '{
+                  schema_version: "junca-pt-restart-health/v1",
+                  document: "JuncaPTRestartHealth",
+                  access_class: "mutating",
+                  accepted: false,
+                  reason: "fixed_restart_health_failed",
+                  restart_exit_code: $restart_exit_code,
+                  unit: {
+                    active_state: $active_state,
+                    sub_state: $sub_state,
+                    result: $result,
+                    exec_main_code_available:
+                      $exec_main_code_available,
+                    exec_main_code:
+                      (if $exec_main_code_available
+                       then $exec_main_code else null end),
+                    exec_main_status_available:
+                      $exec_main_status_available,
+                    exec_main_status:
+                      (if $exec_main_status_available
+                       then $exec_main_status else null end)
+                  },
+                  journal_message_included: false,
+                  journal_metadata_available:
+                    $journal_metadata_available,
+                  journal_metadata: $journal_metadata,
+                  mainnet_changed: false,
+                  assets_moved: false,
+                  bridge_activated: false
+                }'
+            )"
+            bounded_json "$failure" >&2
+            exit 1
+          fi
+
+          result="$(
+            /usr/bin/jq -cn --argjson health "$accepted_health" '{
+              schema_version: "junca-pt-restart-health/v1",
+              document: "JuncaPTRestartHealth",
+              access_class: "mutating",
+              accepted: true,
+              attempts_maximum: 60,
+              interval_seconds: 2,
+              service_active: true,
+              validator_id: $health.validator_id,
+              chain_id: $health.chain_id,
+              health_status: $health.status,
+              head_height: $health.head_height,
+              head_hash: $health.head_hash,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }'
+          )"
+          bounded_json "$result"

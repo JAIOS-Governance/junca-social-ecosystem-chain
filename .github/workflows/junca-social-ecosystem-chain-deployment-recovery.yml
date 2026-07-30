@@ -36,6 +36,7 @@ jobs:
           python -m unittest \
             tests.test_junca_social_ecosystem_chain_deployment_recovery -v
       - name: Generate redacted fail-closed binding evidence
+        shell: bash
         run: |
           mkdir -p artifacts
           python - <<'PY'
@@ -70,4 +71,3 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 90
-

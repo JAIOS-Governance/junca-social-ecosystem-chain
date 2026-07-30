@@ -1,0 +1,147 @@
+{
+  "schema_version": "junca-fixed-ssm-document-manifest/v1",
+  "status": "REPOSITORY_CONTRACT_ONLY_NOT_DEPLOYED",
+  "operational_decision": "BLOCKED_PENDING_ATTESTED_LAUNCH_AND_SSM_CONTRACT",
+  "owner_principal": "arn:aws:iam::595710543956:role/JuncaChainSecurityBootstrap",
+  "account_id": "595710543956",
+  "region": "us-east-1",
+  "document_type": "Command",
+  "schema_version_ssm": "2.2",
+  "runtime_lock_contract": {
+    "path": "/run/lock/junca-validator-mutation",
+    "type": "directory",
+    "owner": "root",
+    "group": "root",
+    "mode": "0700",
+    "provisioned_by": "systemd-tmpfiles rule in SecurityBootstrap-owned immutable validator AMI",
+    "repository_provisioning_present": true,
+    "live_readback_present": false
+  },
+  "documents": [
+    {
+      "name": "JuncaPTBootstrapReadiness",
+      "file": "JuncaPTBootstrapReadiness.yaml",
+      "access_class": "read-only",
+      "parameters": [
+        "ValidatorId",
+        "ExpectedArtifactSha256",
+        "ExpectedGenesisSha256"
+      ],
+      "repository_sha256": "ef87219701d9c3310f8b8745b769ba8d6466e3b299e9503189d5599e7791c866",
+      "accepted_live_document_version": null,
+      "accepted_live_content_sha256": null,
+      "live_readback_present": false
+    },
+    {
+      "name": "JuncaPTFinalityInspect",
+      "file": "JuncaPTFinalityInspect.yaml",
+      "access_class": "read-only",
+      "parameters": [
+        "ExpectedArtifactSha256",
+        "Enabled",
+        "BlockIntervalSeconds",
+        "SlotEpochSeconds",
+        "Mode",
+        "AllowMissingFinalityKeys"
+      ],
+      "repository_sha256": "63f6e9ff96141015ca1fa8a4d746b0d67b9a9fe151ce60024f9756f0f5772383",
+      "accepted_live_document_version": null,
+      "accepted_live_content_sha256": null,
+      "live_readback_present": false
+    },
+    {
+      "name": "JuncaPTFinalitySet",
+      "file": "JuncaPTFinalitySet.yaml",
+      "access_class": "mutating",
+      "parameters": [
+        "ExpectedArtifactSha256",
+        "Enabled",
+        "BlockIntervalSeconds",
+        "SlotEpochSeconds"
+      ],
+      "repository_sha256": "59589512a5d4c12c80a094117286775723e2ed7261f5bf06c41719baa445e7ab",
+      "accepted_live_document_version": null,
+      "accepted_live_content_sha256": null,
+      "live_readback_present": false
+    },
+    {
+      "name": "JuncaPTHealthReadback",
+      "file": "JuncaPTHealthReadback.yaml",
+      "access_class": "read-only",
+      "parameters": [],
+      "repository_sha256": "f30e679eca076b1a26ee4df958f400a402fe2ad4b78e27efbb8c319bb8682b5a",
+      "accepted_live_document_version": null,
+      "accepted_live_content_sha256": null,
+      "live_readback_present": false
+    },
+    {
+      "name": "JuncaPTRestartHealth",
+      "file": "JuncaPTRestartHealth.yaml",
+      "access_class": "mutating",
+      "parameters": [],
+      "repository_sha256": "d3b83a24cd40b18fb3e0dbe4a00d4f84107e52dacff4e3ccadb93954a13733ca",
+      "accepted_live_document_version": null,
+      "accepted_live_content_sha256": null,
+      "live_readback_present": false
+    },
+    {
+      "name": "JuncaPTRuntimeObservation",
+      "file": "JuncaPTRuntimeObservation.yaml",
+      "access_class": "read-only",
+      "parameters": [
+        "ValidatorId"
+      ],
+      "repository_sha256": "c754bb26f3e7e1dd63e24c595cacb088403dcf8540dbb0f7a66cfe7c84c89f7f",
+      "accepted_live_document_version": null,
+      "accepted_live_content_sha256": null,
+      "live_readback_present": false
+    }
+  ],
+  "required_runtime_binaries": [
+    "/usr/bin/awk",
+    "/usr/bin/bash",
+    "/usr/bin/chmod",
+    "/usr/bin/cloud-init",
+    "/usr/bin/cp",
+    "/usr/bin/curl",
+    "/usr/bin/date",
+    "/usr/bin/flock",
+    "/usr/bin/journalctl",
+    "/usr/bin/jq",
+    "/usr/bin/mountpoint",
+    "/usr/bin/mv",
+    "/usr/bin/rm",
+    "/usr/bin/sed",
+    "/usr/bin/sha256sum",
+    "/usr/bin/sleep",
+    "/usr/bin/sqlite3",
+    "/usr/bin/stat",
+    "/usr/bin/sync",
+    "/usr/bin/systemctl",
+    "/usr/bin/tail",
+    "/usr/bin/timeout",
+    "/usr/bin/wc"
+  ],
+  "live_acceptance_missing": [
+    "SecurityBootstrap create-document and version readback",
+    "exact numeric document version acceptance",
+    "live canonical content digest readback",
+    "target tag and target cardinality readback",
+    "positive and negative IAM authorization acceptance",
+    "per-validator Run Command output readback",
+    "required runtime binary presence and immutable package provenance readback",
+    "root-owned mutation lock directory owner, mode, and inode readback after reboot",
+    "SSM Agent shell execution readback proving the fixed Bash shebang/re-exec contract"
+  ],
+  "not_implemented_by_this_manifest": [
+    "JuncaPTReplaceValidator Automation document",
+    "three immutable validator launch-template contracts",
+    "AMI replacement execution role and serialization lock",
+    "live AMI build and post-reboot owner, mode, inode, package inventory, and SSM shell readback acceptance for the mutation lock directory",
+    "live AWS deployment or invocation"
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "transaction_submission_enabled": false
+}

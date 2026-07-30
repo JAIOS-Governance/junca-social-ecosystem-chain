@@ -1,200 +1,150 @@
-import pathlib
+from __future__ import annotations
+
+import json
+from pathlib import Path
 import unittest
 
+import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github/workflows"
+POLICY_PATH = ROOT / "config/junca_public_testnet_cloud_role_policy.json"
+TOMBSTONE_PATH = (
+    ROOT / "infrastructure/aws/public-testnet-oidc-trust-handoff.json"
+)
+RETIRED_TEMPLATES = (
+    ROOT / "infrastructure/aws/bootstrap/github-oidc.yaml",
+    ROOT / "infrastructure/aws/bootstrap/public-testnet-inventory-role.yaml",
+)
+LEGACY_SUBJECT = (
+    "repo:JAIOS-Governance@308604370/"
+    "junca-social-ecosystem-chain@1310568313:"
+    "environment:public-testnet"
+)
 
 
 class AwsOidcBootstrapTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.template = (
-            ROOT / "infrastructure/aws/bootstrap/github-oidc.yaml"
-        ).read_text(encoding="utf-8")
-        self.workflow = (
-            ROOT
-            / ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
-        ).read_text(encoding="utf-8")
-        self.inventory_role = (
-            ROOT
-            / "infrastructure/aws/bootstrap/public-testnet-inventory-role.yaml"
-        ).read_text(encoding="utf-8")
-        self.binding_workflow = (
-            ROOT
-            / ".github/workflows/"
-            "junca-social-ecosystem-chain-aws-binding-readback.yml"
-        ).read_text(encoding="utf-8")
-        self.bootstrap_variables = (
-            ROOT / "infra/aws/bootstrap/variables.tf"
-        ).read_text(encoding="utf-8")
-        self.runtime_variables = (
-            ROOT / "infra/aws/public-testnet/variables.tf"
-        ).read_text(encoding="utf-8")
-        self.bootstrap_main = (
-            ROOT / "infra/aws/bootstrap/main.tf"
-        ).read_text(encoding="utf-8")
-
-    def test_trust_is_repository_and_environment_scoped(self) -> None:
-        self.assertIn(
-            "repo:JAIOS-Governance@${RepositoryOwnerId}/"
-            "junca-social-ecosystem-chain@${RepositoryId}:"
-            "environment:${EnvironmentName}",
-            self.template,
-        )
-        self.assertIn('Default: "308604370"', self.template)
-        self.assertIn('Default: "1310568313"', self.template)
-        self.assertIn(
-            "token.actions.githubusercontent.com:aud: sts.amazonaws.com",
-            self.template,
-        )
-        self.assertNotIn("repo:*", self.template)
-
-    def test_terraform_deployment_trust_requires_exact_environment_subject(
-        self,
-    ) -> None:
-        expected_subject = (
-            "repo:JAIOS-Governance@308604370/"
-            "junca-social-ecosystem-chain@1310568313:"
-            "environment:public-testnet"
-        )
-        self.assertIn(
-            f'"token.actions.githubusercontent.com:sub" = '
-            f'"{expected_subject}"',
-            self.bootstrap_main,
-        )
-        self.assertNotIn(":ref:refs/heads/main", self.bootstrap_main)
-        self.assertNotIn(
-            '"token.actions.githubusercontent.com:sub" = [',
-            self.bootstrap_main,
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        cls.tombstone = json.loads(
+            TOMBSTONE_PATH.read_text(encoding="utf-8")
         )
 
-    def test_bootstrap_has_no_chain_runtime_resources(self) -> None:
-        forbidden = (
-            "AWS::EC2::Instance",
-            "AWS::ECS::Service",
-            "AWS::ElasticLoadBalancingV2::LoadBalancer",
-            "AWS::KMS::Key",
-        )
-        for resource_type in forbidden:
-            self.assertNotIn(resource_type, self.template)
+    def test_legacy_cloudformation_bootstrap_entry_points_are_absent(self) -> None:
+        for template in RETIRED_TEMPLATES:
+            self.assertFalse(template.exists(), template)
 
-    def test_state_is_encrypted_versioned_private_and_retained(self) -> None:
-        for required in (
-            "DeletionPolicy: Retain",
-            "SSEAlgorithm: AES256",
-            "PublicAccessBlockConfiguration:",
-            "BlockPublicAcls: true",
-            "Status: Enabled",
-            "PointInTimeRecoveryEnabled: true",
+    def test_handoff_is_a_non_executable_tombstone(self) -> None:
+        self.assertEqual(
+            self.tombstone["schema_version"],
+            "junca-public-testnet-oidc-trust-handoff-retired/v2",
+        )
+        self.assertEqual(self.tombstone["state"], "RETIRED_NON_EXECUTABLE")
+        self.assertFalse(self.tombstone["executable"])
+        self.assertEqual(
+            self.tombstone["prohibited_legacy_subject"],
+            LEGACY_SUBJECT,
+        )
+        for field in self.tombstone["execution_fields_intentionally_absent"]:
+            self.assertNotIn(field, self.tombstone)
+        self.assertFalse(self.tombstone["deployment_performed"])
+
+    def test_tombstone_points_only_to_current_fail_closed_contracts(self) -> None:
+        replacements = self.tombstone["replacement_contracts"]
+        for relative_path in replacements.values():
+            self.assertTrue((ROOT / relative_path).is_file(), relative_path)
+        self.assertEqual(
+            self.tombstone["runtime_recovery_state"],
+            "BLOCKED_PENDING_ATTESTED_LAUNCH_AND_SSM_CONTRACT",
+        )
+
+    def test_current_subject_contract_is_workflow_and_runner_exact(self) -> None:
+        self.assertEqual(
+            self.policy["oidc_subject_claim_keys"],
+            ["repo", "context", "workflow_ref", "runner_environment"],
+        )
+        self.assertEqual(
+            self.policy["prohibited_legacy_subject"],
+            LEGACY_SUBJECT,
+        )
+        for role in ("foundation", "ami_builder", "observer"):
+            subjects = self.policy["roles"][role]["exact_subject_allowlist"]
+            self.assertTrue(subjects)
+            for subject in subjects:
+                self.assertIn(":workflow_ref:", subject)
+                self.assertTrue(
+                    subject.endswith(":runner_environment:github-hosted")
+                )
+                self.assertNotEqual(subject, LEGACY_SUBJECT)
+
+    def test_security_bootstrap_has_no_github_oidc_subject(self) -> None:
+        security = self.policy["roles"]["security_bootstrap"]
+        self.assertFalse(security["oidc_enabled"])
+        self.assertEqual(security["exact_workflow_allowlist"], [])
+        self.assertEqual(security["exact_subject_allowlist"], [])
+        self.assertEqual(
+            security["prohibited_principals"],
+            ["token.actions.githubusercontent.com"],
+        )
+
+    def test_canonical_readbacks_attest_before_aws_identity(self) -> None:
+        for workflow_name in (
+            "junca-social-ecosystem-chain-aws-binding-readback.yml",
+            "junca-social-ecosystem-chain-aws-readback.yml",
         ):
-            self.assertIn(required, self.template)
-
-    def test_workflow_is_manual_oidc_and_readback_only(self) -> None:
-        self.assertIn("workflow_dispatch:", self.workflow)
-        self.assertIn("id-token: write", self.workflow)
-        self.assertIn(
-            "aws-actions/configure-aws-credentials@"
-            "acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
-            self.workflow,
-        )
-        self.assertIn("deployment_enabled: false", self.workflow)
-        self.assertNotIn("terraform apply", self.workflow)
-        self.assertNotIn("pull_request_target", self.workflow)
-
-    def test_readback_requires_explicit_manual_dispatch(self) -> None:
-        self.assertIn("workflow_dispatch:", self.workflow)
-        self.assertNotIn("\n  push:", self.workflow)
-        self.assertIn(
-            "CANONICAL_ROLE_ARN: "
-            "arn:aws:iam::595710543956:role/"
-            "JuncaChainPublicTestnetDeployment",
-            self.workflow,
-        )
-        self.assertIn(
-            "inputs.expected_account_id || '595710543956'",
-            self.workflow,
-        )
-        self.assertIn("inputs.aws_region || 'us-east-1'", self.workflow)
-
-    def test_readback_is_bound_to_canonical_account_region_and_role(self) -> None:
-        self.assertIn("default: us-east-1", self.workflow)
-        self.assertNotIn("default: ap-northeast-1", self.workflow)
-        self.assertIn('CANONICAL_ACCOUNT_ID: "595710543956"', self.workflow)
-        self.assertIn("CANONICAL_REGION: us-east-1", self.workflow)
-        self.assertIn(
-            "CANONICAL_ROLE_ARN: "
-            "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
-            self.workflow,
-        )
-        self.assertNotIn("JuncaChainDocsProductionDeployment", self.workflow)
-        self.assertIn("unexpected Public Testnet role identity", self.workflow)
-
-    def test_all_aws_foundation_paths_use_canonical_region_and_role(self) -> None:
-        for source in (
-            self.binding_workflow,
-            self.bootstrap_variables,
-            self.runtime_variables,
-        ):
-            self.assertIn("us-east-1", source)
-            self.assertNotIn("ap-northeast-1", source)
-        self.assertIn(
-            "JuncaChainPublicTestnetDeployment",
-            self.binding_workflow,
-        )
-        self.assertIn(
-            'name                 = "JuncaChainPublicTestnetDeployment"',
-            self.bootstrap_main,
-        )
-        self.assertNotIn(
-            "JUNCA-Social-Ecosystem-Chain-Testnet-Deployment",
-            self.bootstrap_main,
-        )
-
-    def test_public_boundary_is_exact(self) -> None:
-        for value in (
-            "JUNCA Social Ecosystem Chain",
-            "JAIOS Institutional Governance",
-            "Public Testnet / No Monetary Value",
-            "mainnet_changed: false",
-        ):
-            self.assertTrue(
-                value in self.template or value in self.workflow,
-                msg=f"missing boundary: {value}",
+            document = yaml.safe_load(
+                (WORKFLOWS / workflow_name).read_text(encoding="utf-8")
+            )
+            credential_locations = []
+            for job_name, job in document["jobs"].items():
+                steps = job.get("steps") or []
+                for index, step in enumerate(steps):
+                    if "configure-aws-credentials@" not in str(
+                        step.get("uses", "")
+                    ):
+                        continue
+                    credential_locations.append((job_name, steps, index))
+            self.assertEqual(len(credential_locations), 1, workflow_name)
+            job_name, steps, index = credential_locations[0]
+            self.assertGreater(index, 0)
+            attestation = steps[index - 1]
+            self.assertEqual(
+                attestation["name"],
+                "Attest exact live GitHub OIDC claims",
+            )
+            self.assertIn(
+                "python3 scripts/junca_oidc_claim_attestation.py",
+                attestation["run"],
+            )
+            self.assertIn("--role-arn", attestation["run"])
+            self.assertEqual(
+                document["jobs"][job_name]["environment"],
+                "public-testnet",
             )
 
-    def test_missing_role_recovery_is_iam_only_and_read_only(self) -> None:
-        self.assertIn("RoleName: JuncaChainPublicTestnetDeployment", self.inventory_role)
-        self.assertIn(
-            "Sid: GitHubActionsPublicTestnetOIDC", self.inventory_role
+    def test_repository_global_cutover_is_currently_blocked(self) -> None:
+        gate = self.policy["repo_global_oidc_cutover_gate"]
+        self.assertNotEqual(
+            gate["preparation_state"],
+            gate["prepared_state"],
         )
-        self.assertIn(
-            "repo:JAIOS-Governance@${RepositoryOwnerId}/"
-            "junca-social-ecosystem-chain@${RepositoryId}:"
-            "environment:${EnvironmentName}",
-            self.inventory_role,
+        self.assertNotEqual(
+            gate["activation_state"],
+            gate["ready_state"],
         )
-        for required_action in (
-            "ec2:DescribeVpcs",
-            "ec2:DescribeSubnets",
-            "route53:ListHostedZonesByName",
-            "kms:ListAliases",
-            "ecr:DescribeRepositories",
-            "s3:ListAllMyBuckets",
-            "dynamodb:ListTables",
-        ):
-            self.assertIn(required_action, self.inventory_role)
-        for forbidden in (
-            "AWS::EC2::",
-            "AWS::S3::",
-            "AWS::DynamoDB::",
-            "AWS::KMS::",
-            "AWS::ECS::",
-            "AWS::Route53::",
-            "CreateRole",
-            "RunInstances",
-            "ChangeResourceRecordSets",
-            "terraform apply",
-        ):
-            self.assertNotIn(forbidden, self.inventory_role)
+        self.assertEqual(gate["baseline_credential_call_count"], 27)
+        self.assertEqual(gate["active_credential_call_count"], 7)
+        self.assertEqual(gate["blocked_pending_migration_call_count"], 0)
+        self.assertEqual(gate["retired_call_count"], 20)
+
+    def test_public_testnet_constitutional_boundary_is_preserved(self) -> None:
+        for document in (self.policy, self.tombstone):
+            boundary = document.get("release_boundary", document)
+            self.assertFalse(boundary["mainnet_changed"])
+            self.assertFalse(boundary["assets_moved"])
+            self.assertFalse(boundary["bridge_activated"])
 
 
 if __name__ == "__main__":

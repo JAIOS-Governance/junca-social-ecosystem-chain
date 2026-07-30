@@ -49,16 +49,15 @@ jobs:
           case "$EVENT_NAME" in
             workflow_dispatch)
               [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-              test "$GITHUB_REF" = \
-                "refs/heads/release-candidate/$GITHUB_SHA"
+              test "$GITHUB_REF" = "refs/heads/main"
               ;;
             workflow_run)
               test "$WORKFLOW_RUN_CONCLUSION" = "success"
               test "$WORKFLOW_RUN_NAME" = \
                 "JUNCA Validator Foundation Release"
               [[ "$WORKFLOW_RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-              test "$WORKFLOW_RUN_HEAD_BRANCH" = \
-                "release-candidate/$WORKFLOW_RUN_HEAD_SHA"
+              test "$WORKFLOW_RUN_HEAD_BRANCH" = "main"
+              test "$WORKFLOW_RUN_HEAD_SHA" = "$GITHUB_SHA"
               test "$WORKFLOW_RUN_HEAD_REPOSITORY" = "$REPOSITORY"
               ;;
             *)
@@ -101,7 +100,7 @@ jobs:
               .name == "JUNCA Validator Foundation Release" and
               .path == ".github/workflows/junca-validator-foundation-release.yml" and
               .event == "workflow_dispatch" and
-              .head_branch == ("release-candidate/" + .head_sha) and
+              .head_branch == "main" and
               .repository.full_name == $repository and
               .head_repository.full_name == $repository and
               (.head_sha | test("^[0-9a-f]{40}$"))
@@ -180,6 +179,15 @@ jobs:
             echo "SOURCE_COMMIT=$(jq -er .source_commit acceptance/ami/junca-validator-ami-build.json)"
             echo "REQUEST_SHA256=$(jq -er .request_sha256 acceptance/ami/junca-validator-ami-build.json)"
           } >> "$GITHUB_ENV"
+
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-public-testnet-release.yml" \
+            --role-arn "$DEPLOYMENT_ROLE_ARN" \
+            --output artifacts/oidc-claim-attestation.json
 
       - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:

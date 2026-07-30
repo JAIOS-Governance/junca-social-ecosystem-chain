@@ -298,11 +298,11 @@ def fixture():
     endpoints = {
         "status": "PASS",
         "scope": "Public Testnet Runtime Acceptance / Read-only",
-        "observed_at": "2026-07-27T00:00:00+00:00",
+        "observed_at": "2033-05-18T03:34:20+00:00",
         "finalized_head": {
             "height": 100,
             "hash": "0x" + "a" * 64,
-            "timestamp": "0x1234",
+            "timestamp": hex(FINALIZED_TIMESTAMP),
             "state_root": "0x" + "b" * 64,
             "certificate_hash": "0x" + "c" * 64,
         },
@@ -315,7 +315,7 @@ def fixture():
                 "signed_power": 3,
                 "total_power": 3,
                 "certificate_hash": "0x" + "c" * 64,
-                "peer_count": 0,
+                "peer_count": 2,
             },
             "safe_rpc": {
                 "result": "PASS",
@@ -475,6 +475,7 @@ def private_health(values):
                     "network": "Public Testnet / No Monetary Value",
                     "chain_id": CHAIN_ID,
                     "validator_id": validator_id,
+                    "peer_count": 2,
                     "head_height": FINALIZED_HEIGHT,
                     "head_hash": FINALIZED_HASH,
                     "head_timestamp": FINALIZED_TIMESTAMP,
@@ -506,6 +507,7 @@ def private_health(values):
         "schema_version": "junca-private-ssm-validator-baseline/v1",
         "status": "PASS",
         "scope": "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
+        "observed_at": "2033-05-18T03:34:20Z",
         "validators": validators,
     }
 
@@ -860,6 +862,24 @@ class EvidenceCollectorTests(unittest.TestCase):
         ):
             self.collect(values)
 
+    def test_private_ssm_requires_exact_authenticated_peer_topology(self):
+        for peer_count in (0, 1, 3, True, None):
+            with self.subTest(peer_count=peer_count):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                values["private_validator_health"]["validators"][0][
+                    "health"
+                ]["peer_count"] = peer_count
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    "peer_count:not_exact_two",
+                ):
+                    self.collect(values)
+
     def test_missing_legacy_health_timestamp_uses_durable_canonical_value(self):
         values = fixture()
         values["public"]["public_services_acceptance_readback"]["value"][
@@ -880,7 +900,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             "DURABLE_PERSISTED",
         )
 
-    def test_legacy_schema_without_persisted_timestamp_is_explicit(self):
+    def test_legacy_schema_without_persisted_timestamp_fails_closed(self):
         values = fixture()
         values["public"]["public_services_acceptance_readback"]["value"][
             "enabled"
@@ -898,22 +918,32 @@ class EvidenceCollectorTests(unittest.TestCase):
                 "finality_certificates",
                 "metadata",
             ]
-        _, paths = self.collect(values)
-        runtime = json.loads(paths[1].read_text(encoding="utf-8"))
-        self.assertIsNone(
-            runtime["readback"]["finalized_head"]["timestamp"]
-        )
-        self.assertEqual(
-            runtime["readback"]["finalized_head"]["timestamp_state"],
-            "LEGACY_NOT_PERSISTED",
-        )
-        self.assertEqual(
-            {
-                item["durable_timestamp_state"]
-                for item in runtime["readback"]["validators"]
-            },
-            {"LEGACY_NOT_PERSISTED"},
-        )
+        with self.assertRaisesRegex(
+            collector.EvidenceError,
+            "durable_head_timestamp:freshness_unverifiable",
+        ):
+            self.collect(values)
+
+    def test_private_ssm_rejects_stale_or_future_finalized_head(self):
+        for timestamp in (
+            FINALIZED_TIMESTAMP - 121,
+            FINALIZED_TIMESTAMP + 61,
+        ):
+            with self.subTest(timestamp=timestamp):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                for item in values["private_validator_health"]["validators"]:
+                    item["health"]["head_timestamp"] = timestamp
+                    item["durable_state"]["head"]["timestamp"] = timestamp
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    "durable_head_timestamp:stale_or_future",
+                ):
+                    self.collect(values)
 
     def test_legacy_timestamp_state_rejects_health_or_schema_drift(self):
         mutations = (

@@ -40,6 +40,7 @@ jobs:
           python -m unittest \
             tests.test_junca_social_ecosystem_chain_global_major_architecture_v1 -v
       - name: Generate architecture evidence
+        shell: bash
         run: |
           mkdir -p artifacts
           python - <<'PY'
@@ -64,6 +65,7 @@ jobs:
             "(世界一|world.?s best|best blockchain|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key)" \
             artifacts config docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_GLOBAL_MAJOR_ARCHITECTURE_V1.md
       - name: Record evidence digests and SBOM
+        shell: bash
         run: |
           python -m pip freeze --all > artifacts/python-dependencies.txt
           python - <<'PY'

@@ -1,0 +1,928 @@
+schemaVersion: '2.2'
+description: >-
+  Mutate only the three JUNCA Public Testnet finality keys through a durable
+  PREPARED/ACCEPTED transaction, atomic runtime.env replacement, fixed
+  restart, and strict health readback. Repository contract only; live
+  mutation remains blocked.
+parameters:
+  ExpectedArtifactSha256:
+    type: String
+    description: Exact lowercase SHA-256 of the immutable validator runtime archive.
+    allowedPattern: '^[0-9a-f]{64}$'
+    interpolationType: ENV_VAR
+  Enabled:
+    type: String
+    description: Exact automatic-finality state to apply.
+    allowedPattern: '^(true|false)$'
+    interpolationType: ENV_VAR
+  BlockIntervalSeconds:
+    type: String
+    description: Exact fixed Public Testnet block interval.
+    allowedPattern: '^(0|30)$'
+    interpolationType: ENV_VAR
+  SlotEpochSeconds:
+    type: String
+    description: Disabled zero or a future aligned Public Testnet epoch.
+    allowedPattern: '^(0|[1-9][0-9]{0,10})$'
+    interpolationType: ENV_VAR
+mainSteps:
+  - action: aws:runShellScript
+    name: setFinality
+    inputs:
+      runCommand:
+        - |-
+          #!/usr/bin/bash
+          if [ -z "${BASH_VERSION:-}" ]; then
+            exec /usr/bin/bash "$0" "$@"
+          fi
+          set -euo pipefail
+          umask 077
+          readonly RUNTIME_ENV=/etc/junca/runtime.env
+          readonly RUNTIME_ARCHIVE=/opt/junca/validator-runtime.tar.gz
+          readonly RUNTIME_BACKUP=/etc/junca/.runtime.env.rollback
+          readonly RUNTIME_CANDIDATE=/etc/junca/.runtime.env.candidate
+          readonly RUNTIME_RECOVERY=/etc/junca/.runtime.env.recovery
+          readonly TRANSACTION_MARKER=/etc/junca/.runtime.env.transaction.json
+          readonly TRANSACTION_MARKER_NEXT=/etc/junca/.runtime.env.transaction.next
+          readonly JUNCA_DIRECTORY=/etc/junca
+          readonly HEALTH_ENDPOINT=http://127.0.0.1:8545/health
+          readonly VALIDATOR_SERVICE=junca-validator.service
+          readonly MUTATION_LOCK_DIRECTORY=/run/lock/junca-validator-mutation
+          readonly MAX_JSON_BYTES=65536
+
+          bounded_json() {
+            local payload="$1"
+            local byte_count
+            byte_count="$(printf '%s' "$payload" | /usr/bin/wc -c)"
+            [[ "$byte_count" =~ ^[0-9]+$ ]]
+            test "$byte_count" -le "$MAX_JSON_BYTES"
+            printf '%s\n' "$payload"
+          }
+
+          certificate_digest_matches() {
+            local certificate="$1"
+            local canonical_body
+            local calculated_hash
+            local claimed_hash
+            canonical_body="$(
+              /usr/bin/jq -cS '{
+                block_hash: .block_hash,
+                chain_id: .chain_id,
+                height: .height,
+                round: .round,
+                signed_power: .signed_power,
+                total_power: .total_power,
+                validator_ids: .validator_ids,
+                vote_hashes: .vote_hashes
+              }' <<<"$certificate"
+            )" || return 1
+            claimed_hash="$(
+              /usr/bin/jq -er '.certificate_hash' <<<"$certificate"
+            )" || return 1
+            calculated_hash="$(
+              {
+                printf 'JUNCA_FINALITY_CERTIFICATE_V1\0'
+                printf '%s' "$canonical_body"
+              } |
+                /usr/bin/sha256sum |
+                /usr/bin/awk '{print $1}'
+            )" || return 1
+            test "$claimed_hash" = "0x${calculated_hash}"
+          }
+
+          if ! test -d "$MUTATION_LOCK_DIRECTORY" ||
+            test -L "$MUTATION_LOCK_DIRECTORY" ||
+            ! test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$MUTATION_LOCK_DIRECTORY"
+            )" = root:root:700 ||
+            ! exec 9<"$MUTATION_LOCK_DIRECTORY"
+          then
+            bounded_json \
+              '{"schema_version":"junca-validator-mutation-lock/v1","document":"JuncaPTFinalitySet","accepted":false,"operational_decision":"BLOCKED_MUTATION_LOCK_CONTRACT","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+              >&2
+            exit 1
+          fi
+          if ! /usr/bin/flock --exclusive --nonblock 9; then
+            bounded_json \
+              '{"schema_version":"junca-validator-mutation-lock/v1","document":"JuncaPTFinalitySet","accepted":false,"operational_decision":"BLOCKED_CONCURRENT_MUTATION","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+              >&2
+            exit 1
+          fi
+          test -d "$JUNCA_DIRECTORY"
+          test ! -L "$JUNCA_DIRECTORY"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$JUNCA_DIRECTORY"
+          )" = root:root:750
+
+          env_value() {
+            local key="$1"
+            local source_file="$2"
+            /usr/bin/awk -F= -v expected_key="$key" '
+              $1 == expected_key {
+                print substr($0, index($0, "=") + 1)
+              }
+            ' "$source_file"
+          }
+
+          env_count() {
+            local key="$1"
+            local source_file="$2"
+            /usr/bin/awk -F= -v expected_key="$key" '
+              $1 == expected_key { count++ }
+              END { print count + 0 }
+            ' "$source_file"
+          }
+
+          assert_desired_runtime() {
+            local source_file="$1"
+            test -f "$source_file"
+            test ! -L "$source_file"
+            test "$(env_count NODE_ARTIFACT_SHA256 "$source_file")" = 1
+            test "$(env_value NODE_ARTIFACT_SHA256 "$source_file")" = "$expected_artifact"
+            test "$(env_count AUTOMATIC_FINALITY_ENABLED "$source_file")" = 1
+            test "$(env_count TESTNET_BLOCK_INTERVAL_SECONDS "$source_file")" = 1
+            test "$(env_count TESTNET_SLOT_EPOCH_SECONDS "$source_file")" = 1
+            test "$(env_value AUTOMATIC_FINALITY_ENABLED "$source_file")" = "$enabled"
+            test "$(env_value TESTNET_BLOCK_INTERVAL_SECONDS "$source_file")" = "$block_interval"
+            test "$(env_value TESTNET_SLOT_EPOCH_SECONDS "$source_file")" = "$slot_epoch"
+          }
+
+          load_backup_finality() {
+            local enabled_count
+            local epoch_count
+            local interval_count
+            enabled_count="$(
+              env_count AUTOMATIC_FINALITY_ENABLED "$RUNTIME_BACKUP"
+            )" || return 1
+            interval_count="$(
+              env_count TESTNET_BLOCK_INTERVAL_SECONDS "$RUNTIME_BACKUP"
+            )" || return 1
+            epoch_count="$(
+              env_count TESTNET_SLOT_EPOCH_SECONDS "$RUNTIME_BACKUP"
+            )" || return 1
+            if [[ "$enabled_count" == 0 &&
+                  "$interval_count" == 0 &&
+                  "$epoch_count" == 0 ]]; then
+              transaction_original_enabled=false
+              transaction_original_interval=0
+              transaction_original_epoch=0
+            else
+              test "$enabled_count" = 1 || return 1
+              test "$interval_count" = 1 || return 1
+              test "$epoch_count" = 1 || return 1
+              transaction_original_enabled="$(
+                env_value AUTOMATIC_FINALITY_ENABLED "$RUNTIME_BACKUP"
+              )" || return 1
+              transaction_original_interval="$(
+                env_value TESTNET_BLOCK_INTERVAL_SECONDS "$RUNTIME_BACKUP"
+              )" || return 1
+              transaction_original_epoch="$(
+                env_value TESTNET_SLOT_EPOCH_SECONDS "$RUNTIME_BACKUP"
+              )" || return 1
+              [[ "$transaction_original_enabled" =~ ^(true|false)$ ]] ||
+                return 1
+              [[ "$transaction_original_interval" =~ ^(0|30)$ ]] ||
+                return 1
+              [[ "$transaction_original_epoch" =~ ^(0|[1-9][0-9]{0,10})$ ]] ||
+                return 1
+              if [[ "$transaction_original_enabled" == true ]]; then
+                test "$transaction_original_interval" = 30 || return 1
+                test "$transaction_original_epoch" -gt 0 || return 1
+                test "$((transaction_original_epoch % 30))" = 0 ||
+                  return 1
+              else
+                test "$transaction_original_interval" = 0 || return 1
+                test "$transaction_original_epoch" = 0 || return 1
+              fi
+            fi
+          }
+
+          load_candidate_finality() {
+            test "$(env_count AUTOMATIC_FINALITY_ENABLED "$RUNTIME_ENV")" = 1 ||
+              return 1
+            test "$(
+              env_count TESTNET_BLOCK_INTERVAL_SECONDS "$RUNTIME_ENV"
+            )" = 1 || return 1
+            test "$(env_count TESTNET_SLOT_EPOCH_SECONDS "$RUNTIME_ENV")" = 1 ||
+              return 1
+            transaction_candidate_enabled="$(
+              env_value AUTOMATIC_FINALITY_ENABLED "$RUNTIME_ENV"
+            )" || return 1
+            transaction_candidate_interval="$(
+              env_value TESTNET_BLOCK_INTERVAL_SECONDS "$RUNTIME_ENV"
+            )" || return 1
+            transaction_candidate_epoch="$(
+              env_value TESTNET_SLOT_EPOCH_SECONDS "$RUNTIME_ENV"
+            )" || return 1
+            [[ "$transaction_candidate_enabled" =~ ^(true|false)$ ]] ||
+              return 1
+            [[ "$transaction_candidate_interval" =~ ^(0|30)$ ]] ||
+              return 1
+            [[ "$transaction_candidate_epoch" =~ ^(0|[1-9][0-9]{0,10})$ ]] ||
+              return 1
+            if [[ "$transaction_candidate_enabled" == true ]]; then
+              test "$transaction_candidate_interval" = 30 || return 1
+              test "$transaction_candidate_epoch" -gt 0 || return 1
+              test "$((transaction_candidate_epoch % 30))" = 0 || return 1
+            else
+              test "$transaction_candidate_interval" = 0 || return 1
+              test "$transaction_candidate_epoch" = 0 || return 1
+            fi
+          }
+
+          health_matches_expected() {
+            local expected_enabled="$1"
+            local expected_interval="$2"
+            local expected_epoch="$3"
+            local certificate
+            local observed
+            local projected
+            observed="$(
+              /usr/bin/curl --fail --silent --show-error --noproxy '*' \
+                --proto '=http' --connect-timeout 2 --max-time 5 \
+                --max-filesize "$MAX_JSON_BYTES" "$HEALTH_ENDPOINT"
+            )" || return 1
+            test "$(printf '%s' "$observed" | /usr/bin/wc -c)" \
+              -le "$MAX_JSON_BYTES" || return 1
+            projected="$(
+              /usr/bin/jq -ce \
+                --argjson expected_enabled "$expected_enabled" \
+                --argjson expected_interval "$expected_interval" \
+                --argjson expected_epoch "$expected_epoch" '
+                  if (
+                    type == "object" and
+                    .status == "healthy" and
+                    .network == "Public Testnet / No Monetary Value" and
+                    .chain_id == 20260723 and
+                    (.validator_id | type) == "string" and
+                    (.validator_id | test("^validator-0[1-3]$")) and
+                    (.head_height | type) == "number" and
+                    .head_height == (.head_height | floor) and
+                    .head_height >= 1 and
+                    (.head_hash | type) == "string" and
+                    (.head_hash | test("^0x[0-9a-f]{64}$")) and
+                    (.head_timestamp | type) == "number" and
+                    .head_timestamp == (.head_timestamp | floor) and
+                    .head_timestamp > 0 and
+                    .peer_count == 2 and
+                    .automatic_finality_enabled == $expected_enabled and
+                    .block_interval_seconds == $expected_interval and
+                    .slot_epoch_seconds == $expected_epoch and
+                    .automatic_finality_loop_running == $expected_enabled and
+                    (.consensus | type) == "object" and
+                    (.consensus.last_certificate_hash | type) == "string" and
+                    (.consensus.last_certificate_hash |
+                      test("^0x[0-9a-f]{64}$")) and
+                    (.consensus.last_certificate | type) == "object" and
+                    (.consensus.last_certificate | keys | sort) == [
+                      "assets_moved",
+                      "block_hash",
+                      "bridge_activated",
+                      "certificate_hash",
+                      "chain_id",
+                      "finality_status",
+                      "height",
+                      "mainnet_changed",
+                      "round",
+                      "schema_version",
+                      "signed_power",
+                      "total_power",
+                      "validator_ids",
+                      "vote_hashes"
+                    ] and
+                    .consensus.last_certificate.schema_version ==
+                      "junca-finality-certificate/v1" and
+                    .consensus.last_certificate.chain_id == .chain_id and
+                    .consensus.last_certificate.height == .head_height and
+                    (.consensus.last_certificate.round | type) == "number" and
+                    .consensus.last_certificate.round ==
+                      (.consensus.last_certificate.round | floor) and
+                    .consensus.last_certificate.round >= 0 and
+                    .consensus.last_certificate.round <= 2147483647 and
+                    .consensus.last_certificate.block_hash == .head_hash and
+                    .consensus.last_certificate.certificate_hash ==
+                      .consensus.last_certificate_hash and
+                    .consensus.last_certificate.finality_status ==
+                      "FINALIZED" and
+                    .consensus.last_certificate.signed_power == 3 and
+                    .consensus.last_certificate.total_power == 3 and
+                    .consensus.last_certificate.validator_ids == [
+                      "validator-01",
+                      "validator-02",
+                      "validator-03"
+                    ] and
+                    (.consensus.last_certificate.vote_hashes | type) ==
+                      "array" and
+                    (.consensus.last_certificate.vote_hashes | length) == 3 and
+                    (.consensus.last_certificate.vote_hashes |
+                      unique | length) == 3 and
+                    all(.consensus.last_certificate.vote_hashes[];
+                      type == "string" and
+                      test("^0x[0-9a-f]{64}$")) and
+                    .consensus.last_certificate.mainnet_changed == false and
+                    .consensus.last_certificate.assets_moved == false and
+                    .consensus.last_certificate.bridge_activated == false and
+                    .private_key_material_accepted == false and
+                    .mainnet_changed == false and
+                    .assets_moved == false and
+                    .bridge_activated == false
+                  ) then {
+                    head_height: .head_height,
+                    head_timestamp: .head_timestamp,
+                    consensus: {
+                      last_certificate_hash:
+                        .consensus.last_certificate_hash,
+                      last_certificate: .consensus.last_certificate
+                    }
+                  } else error("finality health contract rejected") end
+                ' <<<"$observed"
+            )" || return 1
+            certificate="$(
+              /usr/bin/jq -c '.consensus.last_certificate' <<<"$projected"
+            )" || return 1
+            certificate_digest_matches "$certificate" || return 1
+            last_health_head_height="$(
+              /usr/bin/jq -er '.head_height' <<<"$projected"
+            )" || return 1
+            last_health_head_timestamp="$(
+              /usr/bin/jq -er '.head_timestamp' <<<"$projected"
+            )" || return 1
+            last_health_certificate_hash="$(
+              /usr/bin/jq -er \
+                '.consensus.last_certificate_hash' <<<"$projected"
+            )" || return 1
+          }
+
+          post_mutation_progress_matches() {
+            local observed_now_epoch
+            if [[ "$enabled" != true ]]; then
+              return 0
+            fi
+            observed_now_epoch="$(/usr/bin/date +%s)" || return 1
+            [[ "$observed_now_epoch" =~ ^[0-9]{1,11}$ ]] || return 1
+            test "$observed_now_epoch" -ge "$slot_epoch" || return 1
+            test "$last_health_head_height" -gt \
+              "$pre_mutation_head_height" || return 1
+            test "$last_health_head_timestamp" -ge "$slot_epoch" || return 1
+            test "$last_health_certificate_hash" != \
+              "$pre_mutation_certificate_hash"
+          }
+
+          write_transaction_marker() {
+            local state="$1"
+            /usr/bin/rm -f -- "$TRANSACTION_MARKER_NEXT"
+            /usr/bin/jq -cn \
+              --arg state "$state" \
+              --arg original_runtime_env_sha256 \
+                "$original_runtime_env_sha256" \
+              --arg candidate_runtime_env_sha256 \
+                "$candidate_runtime_env_sha256" '{
+                schema_version: "junca-pt-finality-transaction/v1",
+                state: $state,
+                original_runtime_env_sha256:
+                  $original_runtime_env_sha256,
+                candidate_runtime_env_sha256:
+                  $candidate_runtime_env_sha256,
+                mainnet_changed: false,
+                assets_moved: false,
+                bridge_activated: false
+              }' >"$TRANSACTION_MARKER_NEXT"
+            /usr/bin/chmod 0600 "$TRANSACTION_MARKER_NEXT"
+            test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$TRANSACTION_MARKER_NEXT"
+            )" = root:root:600
+            /usr/bin/sync -f "$TRANSACTION_MARKER_NEXT"
+            /usr/bin/mv -f -- "$TRANSACTION_MARKER_NEXT" "$TRANSACTION_MARKER"
+            /usr/bin/sync -f "$JUNCA_DIRECTORY"
+          }
+
+          read_transaction_marker() {
+            test -f "$TRANSACTION_MARKER" || return 1
+            test ! -L "$TRANSACTION_MARKER" || return 1
+            test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$TRANSACTION_MARKER"
+            )" = root:root:600 || return 1
+            /usr/bin/jq -e '
+              type == "object" and
+              (keys | sort) == [
+                "assets_moved",
+                "bridge_activated",
+                "candidate_runtime_env_sha256",
+                "mainnet_changed",
+                "original_runtime_env_sha256",
+                "schema_version",
+                "state"
+              ] and
+              .schema_version == "junca-pt-finality-transaction/v1" and
+              (.state == "PREPARED" or .state == "ACCEPTED") and
+              (.original_runtime_env_sha256 | type) == "string" and
+              (.original_runtime_env_sha256 |
+                test("^[0-9a-f]{64}$")) and
+              (.candidate_runtime_env_sha256 | type) == "string" and
+              (.candidate_runtime_env_sha256 |
+                test("^[0-9a-f]{64}$")) and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false
+            ' "$TRANSACTION_MARKER" >/dev/null || return 1
+            transaction_state="$(
+              /usr/bin/jq -er '.state' "$TRANSACTION_MARKER"
+            )" || return 1
+            original_runtime_env_sha256="$(
+              /usr/bin/jq -er \
+                '.original_runtime_env_sha256' "$TRANSACTION_MARKER"
+            )" || return 1
+            candidate_runtime_env_sha256="$(
+              /usr/bin/jq -er \
+                '.candidate_runtime_env_sha256' "$TRANSACTION_MARKER"
+            )" || return 1
+          }
+
+          preserve_transaction_artifacts() {
+            local artifact
+            for artifact in \
+              "$RUNTIME_BACKUP" \
+              "$RUNTIME_CANDIDATE" \
+              "$RUNTIME_RECOVERY" \
+              "$TRANSACTION_MARKER" \
+              "$TRANSACTION_MARKER_NEXT"
+            do
+              if test -f "$artifact" && test ! -L "$artifact"; then
+                /usr/bin/chmod 0600 "$artifact" || return 1
+              fi
+            done
+          }
+
+          cleanup_uncommitted_artifacts() {
+            /usr/bin/rm -f -- \
+              "$RUNTIME_BACKUP" \
+              "$RUNTIME_CANDIDATE" \
+              "$RUNTIME_RECOVERY" \
+              "$TRANSACTION_MARKER_NEXT" &&
+              /usr/bin/sync -f "$JUNCA_DIRECTORY"
+          }
+
+          cleanup_accepted_transaction() {
+            /usr/bin/rm -f -- \
+              "$RUNTIME_BACKUP" \
+              "$RUNTIME_CANDIDATE" \
+              "$RUNTIME_RECOVERY" \
+              "$TRANSACTION_MARKER_NEXT" &&
+              /usr/bin/sync -f "$JUNCA_DIRECTORY" &&
+              /usr/bin/rm -f -- "$TRANSACTION_MARKER" &&
+              /usr/bin/sync -f "$JUNCA_DIRECTORY"
+          }
+
+          recover_prepared_transaction() {
+            local recovery_attempt
+            test "$transaction_state" = PREPARED || return 1
+            test -f "$RUNTIME_BACKUP" || return 1
+            test ! -L "$RUNTIME_BACKUP" || return 1
+            test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_BACKUP"
+            )" = root:junca:600 || return 1
+            test "$(
+              /usr/bin/sha256sum "$RUNTIME_BACKUP" |
+                /usr/bin/awk '{print $1}'
+            )" = "$original_runtime_env_sha256" || return 1
+            load_backup_finality || return 1
+            /usr/bin/rm -f -- "$RUNTIME_RECOVERY" || return 1
+            /usr/bin/cp --preserve=mode,ownership --no-dereference \
+              "$RUNTIME_BACKUP" "$RUNTIME_RECOVERY" || return 1
+            /usr/bin/chmod 0640 "$RUNTIME_RECOVERY" || return 1
+            test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_RECOVERY"
+            )" = root:junca:640 || return 1
+            test "$(
+              /usr/bin/sha256sum "$RUNTIME_RECOVERY" |
+                /usr/bin/awk '{print $1}'
+            )" = "$original_runtime_env_sha256" || return 1
+            /usr/bin/sync -f "$RUNTIME_RECOVERY" || return 1
+            /usr/bin/sync -f "$JUNCA_DIRECTORY" || return 1
+            /usr/bin/mv -f -- "$RUNTIME_RECOVERY" "$RUNTIME_ENV" ||
+              return 1
+            /usr/bin/sync -f "$JUNCA_DIRECTORY" || return 1
+            test "$(
+              /usr/bin/sha256sum "$RUNTIME_ENV" |
+                /usr/bin/awk '{print $1}'
+            )" = "$original_runtime_env_sha256" || return 1
+            test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ENV"
+            )" = root:junca:640 || return 1
+            /usr/bin/timeout --signal=TERM --kill-after=10 30 \
+              /usr/bin/systemctl restart "$VALIDATOR_SERVICE" || return 1
+            for recovery_attempt in {1..60}; do
+              if /usr/bin/timeout 5 /usr/bin/systemctl is-active \
+                --quiet "$VALIDATOR_SERVICE" &&
+                health_matches_expected \
+                  "$transaction_original_enabled" \
+                  "$transaction_original_interval" \
+                  "$transaction_original_epoch"
+              then
+                cleanup_uncommitted_artifacts || return 1
+                /usr/bin/rm -f -- "$TRANSACTION_MARKER" || return 1
+                /usr/bin/sync -f "$JUNCA_DIRECTORY" || return 1
+                return 0
+              fi
+              /usr/bin/sleep 2
+            done
+            return 1
+          }
+
+          verify_accepted_transaction() {
+            local accepted_recovery_attempt
+            test "$transaction_state" = ACCEPTED || return 1
+            test -f "$RUNTIME_ENV" || return 1
+            test ! -L "$RUNTIME_ENV" || return 1
+            test "$(
+              /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ENV"
+            )" = root:junca:640 || return 1
+            test "$(
+              /usr/bin/sha256sum "$RUNTIME_ENV" |
+                /usr/bin/awk '{print $1}'
+            )" = "$candidate_runtime_env_sha256" || return 1
+            load_candidate_finality || return 1
+            if /usr/bin/timeout 5 /usr/bin/systemctl is-active \
+              --quiet "$VALIDATOR_SERVICE" &&
+              health_matches_expected \
+                "$transaction_candidate_enabled" \
+                "$transaction_candidate_interval" \
+                "$transaction_candidate_epoch"
+            then
+              return 0
+            fi
+            /usr/bin/timeout --signal=TERM --kill-after=10 30 \
+              /usr/bin/systemctl restart "$VALIDATOR_SERVICE" || return 1
+            for accepted_recovery_attempt in {1..60}; do
+              if /usr/bin/timeout 5 /usr/bin/systemctl is-active \
+                --quiet "$VALIDATOR_SERVICE" &&
+                health_matches_expected \
+                  "$transaction_candidate_enabled" \
+                  "$transaction_candidate_interval" \
+                  "$transaction_candidate_epoch"
+              then
+                return 0
+              fi
+              /usr/bin/sleep 2
+            done
+            return 1
+          }
+
+          transaction_artifact_present() {
+            test -e "$RUNTIME_BACKUP" ||
+              test -L "$RUNTIME_BACKUP" ||
+              test -e "$RUNTIME_CANDIDATE" ||
+              test -L "$RUNTIME_CANDIDATE" ||
+              test -e "$RUNTIME_RECOVERY" ||
+              test -L "$RUNTIME_RECOVERY" ||
+              test -e "$TRANSACTION_MARKER" ||
+              test -L "$TRANSACTION_MARKER" ||
+              test -e "$TRANSACTION_MARKER_NEXT" ||
+              test -L "$TRANSACTION_MARKER_NEXT"
+          }
+
+          failure_guard() {
+            local original_exit="$?"
+            trap - EXIT
+            if [[ -e "$TRANSACTION_MARKER" ||
+                  -L "$TRANSACTION_MARKER" ]]; then
+              if read_transaction_marker; then
+                if [[ "$transaction_state" == PREPARED ]] &&
+                  recover_prepared_transaction
+                then
+                  bounded_json \
+                    '{"schema_version":"junca-pt-finality-set-rollback/v1","document":"JuncaPTFinalitySet","accepted":false,"mutation_rolled_back":true,"runtime_env_restored":true,"service_recovered":true,"recovery_copy_preserved":false,"operational_decision":"BLOCKED_REVIEW_REQUIRED","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                    >&2
+                elif [[ "$transaction_state" == ACCEPTED ]]; then
+                  if verify_accepted_transaction &&
+                    cleanup_accepted_transaction
+                  then
+                    bounded_json \
+                      '{"schema_version":"junca-pt-finality-set-cleanup/v1","document":"JuncaPTFinalitySet","accepted":false,"mutation_applied":true,"runtime_health_accepted":true,"recovery_copy_cleanup_complete":true,"operational_decision":"BLOCKED_REVIEW_REQUIRED","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                      >&2
+                  else
+                    preserve_transaction_artifacts || true
+                    bounded_json \
+                      '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                      >&2
+                  fi
+                else
+                  preserve_transaction_artifacts || true
+                  bounded_json \
+                    '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                    >&2
+                fi
+              else
+                preserve_transaction_artifacts || true
+                bounded_json \
+                  '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                  >&2
+              fi
+            elif [[ "$accepted_transaction_durable" == true ]]; then
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-cleanup/v1","document":"JuncaPTFinalitySet","accepted":false,"mutation_applied":true,"runtime_health_accepted":true,"recovery_copy_cleanup_complete":true,"operational_decision":"BLOCKED_REVIEW_REQUIRED","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+            elif [[ "$mutation_in_progress" == true ]]; then
+              preserve_transaction_artifacts || true
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"transaction_marker_missing":true,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+            else
+              cleanup_uncommitted_artifacts || true
+            fi
+            exit "$original_exit"
+          }
+
+          transaction_state=
+          original_runtime_env_sha256=
+          candidate_runtime_env_sha256=
+          transaction_original_enabled=
+          transaction_original_interval=
+          transaction_original_epoch=
+          transaction_candidate_enabled=
+          transaction_candidate_interval=
+          transaction_candidate_epoch=
+          accepted_transaction_durable=false
+
+          if [[ -e "$TRANSACTION_MARKER" ||
+                -L "$TRANSACTION_MARKER" ]]; then
+            if ! read_transaction_marker; then
+              preserve_transaction_artifacts || true
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+              exit 1
+            fi
+            if [[ "$transaction_state" == PREPARED ]]; then
+              if recover_prepared_transaction; then
+                bounded_json \
+                  '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"interrupted_transaction_recovered":true,"runtime_env_restored":true,"service_recovered":true,"operational_decision":"BLOCKED_REVIEW_REQUIRED","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                  >&2
+              else
+                preserve_transaction_artifacts || true
+                bounded_json \
+                  '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"interrupted_transaction_recovered":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                  >&2
+              fi
+              exit 1
+            fi
+            if verify_accepted_transaction &&
+              cleanup_accepted_transaction
+            then
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"accepted_transaction_cleanup_recovered":true,"operational_decision":"BLOCKED_REVIEW_REQUIRED","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+            else
+              preserve_transaction_artifacts || true
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"accepted_transaction_cleanup_recovered":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+            fi
+            exit 1
+          fi
+
+          if transaction_artifact_present; then
+            if cleanup_uncommitted_artifacts; then
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"precommit_artifacts_removed":true,"operational_decision":"BLOCKED_REVIEW_REQUIRED","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+            else
+              preserve_transaction_artifacts || true
+              bounded_json \
+                '{"schema_version":"junca-pt-finality-set-recovery/v1","document":"JuncaPTFinalitySet","accepted":false,"precommit_artifacts_removed":false,"recovery_required":true,"operational_decision":"BLOCKED_MANUAL_SECURITY_BOOTSTRAP_RECOVERY","mainnet_changed":false,"assets_moved":false,"bridge_activated":false}' \
+                >&2
+            fi
+            exit 1
+          fi
+
+          expected_artifact="${SSM_ExpectedArtifactSha256}"
+          enabled="${SSM_Enabled}"
+          block_interval="${SSM_BlockIntervalSeconds}"
+          slot_epoch="${SSM_SlotEpochSeconds}"
+
+          [[ "$expected_artifact" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$enabled" =~ ^(true|false)$ ]]
+          [[ "$block_interval" =~ ^(0|30)$ ]]
+          [[ "$slot_epoch" =~ ^(0|[1-9][0-9]{0,10})$ ]]
+          if [[ "$enabled" == true ]]; then
+            request_now_epoch="$(/usr/bin/date +%s)"
+            [[ "$request_now_epoch" =~ ^[0-9]{1,11}$ ]]
+            test "$block_interval" = 30
+            test "$slot_epoch" -gt "$request_now_epoch"
+            test "$slot_epoch" -le "$((request_now_epoch + 60))"
+            test "$((slot_epoch % 30))" = 0
+          else
+            test "$block_interval" = 0
+            test "$slot_epoch" = 0
+          fi
+
+          test -f "$RUNTIME_ENV"
+          test ! -L "$RUNTIME_ENV"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ENV"
+          )" = root:junca:640
+          test -f "$RUNTIME_ARCHIVE"
+          test ! -L "$RUNTIME_ARCHIVE"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ARCHIVE"
+          )" = root:root:644
+          test "$(env_count NODE_ARTIFACT_SHA256 "$RUNTIME_ENV")" = 1
+          test "$(
+            env_value NODE_ARTIFACT_SHA256 "$RUNTIME_ENV"
+          )" = "$expected_artifact"
+          archive_artifact="$(
+            /usr/bin/sha256sum "$RUNTIME_ARCHIVE" |
+              /usr/bin/awk '{print $1}'
+          )"
+          test "$archive_artifact" = "$expected_artifact"
+
+          enabled_count="$(env_count AUTOMATIC_FINALITY_ENABLED "$RUNTIME_ENV")"
+          interval_count="$(
+            env_count TESTNET_BLOCK_INTERVAL_SECONDS "$RUNTIME_ENV"
+          )"
+          epoch_count="$(env_count TESTNET_SLOT_EPOCH_SECONDS "$RUNTIME_ENV")"
+          if [[ "$enabled_count" == 0 &&
+                "$interval_count" == 0 &&
+                "$epoch_count" == 0 ]]; then
+            test "$enabled" = false
+            test "$block_interval" = 0
+            test "$slot_epoch" = 0
+            initialize_finality_keys=true
+            original_enabled=false
+            original_interval=0
+            original_epoch=0
+          else
+            test "$enabled_count" = 1
+            test "$interval_count" = 1
+            test "$epoch_count" = 1
+            initialize_finality_keys=false
+            original_enabled="$(
+              env_value AUTOMATIC_FINALITY_ENABLED "$RUNTIME_ENV"
+            )"
+            original_interval="$(
+              env_value TESTNET_BLOCK_INTERVAL_SECONDS "$RUNTIME_ENV"
+            )"
+            original_epoch="$(
+              env_value TESTNET_SLOT_EPOCH_SECONDS "$RUNTIME_ENV"
+            )"
+            [[ "$original_enabled" =~ ^(true|false)$ ]]
+            [[ "$original_interval" =~ ^(0|30)$ ]]
+            [[ "$original_epoch" =~ ^(0|[1-9][0-9]{0,10})$ ]]
+            if [[ "$original_enabled" == true ]]; then
+              test "$original_interval" = 30
+              test "$original_epoch" -gt 0
+              test "$((original_epoch % 30))" = 0
+            else
+              test "$original_interval" = 0
+              test "$original_epoch" = 0
+            fi
+          fi
+          /usr/bin/timeout 10 /usr/bin/systemctl is-active \
+            --quiet "$VALIDATOR_SERVICE"
+          health_matches_expected \
+            "$original_enabled" \
+            "$original_interval" \
+            "$original_epoch"
+          pre_mutation_head_height="$last_health_head_height"
+          pre_mutation_certificate_hash="$last_health_certificate_hash"
+
+          before_non_finality_sha256="$(
+            /usr/bin/awk '
+              !/^(AUTOMATIC_FINALITY_ENABLED|TESTNET_BLOCK_INTERVAL_SECONDS|TESTNET_SLOT_EPOCH_SECONDS)=/
+            ' "$RUNTIME_ENV" |
+              /usr/bin/sha256sum |
+              /usr/bin/awk '{print $1}'
+          )"
+          original_runtime_env_sha256="$(
+            /usr/bin/sha256sum "$RUNTIME_ENV" |
+              /usr/bin/awk '{print $1}'
+          )"
+
+          /usr/bin/cp --preserve=mode,ownership --no-dereference \
+            "$RUNTIME_ENV" "$RUNTIME_BACKUP"
+          /usr/bin/chmod 0600 "$RUNTIME_BACKUP"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_BACKUP"
+          )" = root:junca:600
+          test "$(
+            /usr/bin/sha256sum "$RUNTIME_BACKUP" |
+              /usr/bin/awk '{print $1}'
+          )" = "$original_runtime_env_sha256"
+          /usr/bin/cp --preserve=mode,ownership --no-dereference \
+            "$RUNTIME_ENV" "$RUNTIME_CANDIDATE"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_CANDIDATE"
+          )" = root:junca:640
+
+          if [[ "$initialize_finality_keys" == true ]]; then
+            test "$(
+              /usr/bin/tail -c 1 "$RUNTIME_CANDIDATE" |
+                /usr/bin/wc -l
+            )" = 1
+            printf '%s\n' \
+              'AUTOMATIC_FINALITY_ENABLED=false' \
+              'TESTNET_BLOCK_INTERVAL_SECONDS=0' \
+              'TESTNET_SLOT_EPOCH_SECONDS=0' >>"$RUNTIME_CANDIDATE"
+          fi
+          /usr/bin/sed -i -E \
+            "s/^AUTOMATIC_FINALITY_ENABLED=.*/AUTOMATIC_FINALITY_ENABLED=${enabled}/" \
+            "$RUNTIME_CANDIDATE"
+          /usr/bin/sed -i -E \
+            "s/^TESTNET_BLOCK_INTERVAL_SECONDS=.*/TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval}/" \
+            "$RUNTIME_CANDIDATE"
+          /usr/bin/sed -i -E \
+            "s/^TESTNET_SLOT_EPOCH_SECONDS=.*/TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch}/" \
+            "$RUNTIME_CANDIDATE"
+          assert_desired_runtime "$RUNTIME_CANDIDATE"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_CANDIDATE"
+          )" = root:junca:640
+          after_non_finality_sha256="$(
+            /usr/bin/awk '
+              !/^(AUTOMATIC_FINALITY_ENABLED|TESTNET_BLOCK_INTERVAL_SECONDS|TESTNET_SLOT_EPOCH_SECONDS)=/
+            ' "$RUNTIME_CANDIDATE" |
+              /usr/bin/sha256sum |
+              /usr/bin/awk '{print $1}'
+          )"
+          test "$after_non_finality_sha256" = "$before_non_finality_sha256"
+          candidate_runtime_env_sha256="$(
+            /usr/bin/sha256sum "$RUNTIME_CANDIDATE" |
+              /usr/bin/awk '{print $1}'
+          )"
+          [[ "$candidate_runtime_env_sha256" =~ ^[0-9a-f]{64}$ ]]
+
+          /usr/bin/sync -f "$RUNTIME_BACKUP"
+          /usr/bin/sync -f "$RUNTIME_CANDIDATE"
+          /usr/bin/sync -f "$JUNCA_DIRECTORY"
+          write_transaction_marker PREPARED
+          mutation_in_progress=true
+          accepted_transaction_durable=false
+          trap failure_guard EXIT
+          /usr/bin/mv -f -- "$RUNTIME_CANDIDATE" "$RUNTIME_ENV"
+          /usr/bin/sync -f "$JUNCA_DIRECTORY"
+          assert_desired_runtime "$RUNTIME_ENV"
+          test "$(
+            /usr/bin/sha256sum "$RUNTIME_ENV" |
+              /usr/bin/awk '{print $1}'
+          )" = "$candidate_runtime_env_sha256"
+          test "$(
+            /usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ENV"
+          )" = root:junca:640
+
+          /usr/bin/timeout --signal=TERM --kill-after=10 30 \
+            /usr/bin/systemctl restart "$VALIDATOR_SERVICE"
+          accepted=false
+          for attempt in {1..60}; do
+            if /usr/bin/timeout 5 /usr/bin/systemctl is-active \
+              --quiet "$VALIDATOR_SERVICE" &&
+              health_matches_expected \
+                "$enabled" \
+                "$block_interval" \
+                "$slot_epoch" &&
+              post_mutation_progress_matches
+            then
+              accepted=true
+              break
+            fi
+            /usr/bin/sleep 2
+          done
+          test "$accepted" = true
+          assert_desired_runtime "$RUNTIME_ENV"
+
+          runtime_env_sha256="$(
+            /usr/bin/sha256sum "$RUNTIME_ENV" |
+              /usr/bin/awk '{print $1}'
+          )"
+          result="$(
+            /usr/bin/jq -cn \
+              --arg artifact_sha256 "$archive_artifact" \
+              --arg runtime_env_sha256 "$runtime_env_sha256" \
+              --arg non_finality_sha256 "$after_non_finality_sha256" \
+              --argjson enabled "$enabled" \
+              --argjson block_interval_seconds "$block_interval" \
+              --argjson slot_epoch_seconds "$slot_epoch" '{
+                schema_version: "junca-pt-finality-set/v1",
+                document: "JuncaPTFinalitySet",
+                access_class: "mutating",
+                accepted: true,
+                service_active: true,
+                artifact_sha256: $artifact_sha256,
+                runtime_env_sha256: $runtime_env_sha256,
+                non_finality_content_sha256: $non_finality_sha256,
+                finality: {
+                  enabled: $enabled,
+                  block_interval_seconds: $block_interval_seconds,
+                  slot_epoch_seconds: $slot_epoch_seconds
+                },
+                transaction_state: "ACCEPTED",
+                mainnet_changed: false,
+                assets_moved: false,
+                bridge_activated: false
+              }'
+          )"
+          write_transaction_marker ACCEPTED
+          accepted_transaction_durable=true
+          cleanup_accepted_transaction
+          mutation_in_progress=false
+          trap - EXIT
+          bounded_json "$result"

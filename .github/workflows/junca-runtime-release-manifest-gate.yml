@@ -50,7 +50,7 @@ jobs:
         with:
           ref: ${{ inputs.source_commit }}
 
-      - name: Verify pre-rollout evidence run provenance
+      - name: Verify exact child run binding before manifest output
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
@@ -80,13 +80,13 @@ jobs:
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg source_commit "$SOURCE_COMMIT" \
-            --arg candidate_ref "release-candidate/$SOURCE_COMMIT" '
+            --arg execution_ref "main" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Evidence Collector" and
             .path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == $candidate_ref and
+            .head_branch == $execution_ref and
             .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository

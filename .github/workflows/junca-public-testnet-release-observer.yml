@@ -49,6 +49,7 @@ jobs:
       - name: Record governed workflow evidence
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           [[ "$OBSERVED_RUN_ID" =~ ^[1-9][0-9]*$ ]]

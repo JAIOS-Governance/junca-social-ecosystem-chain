@@ -11,19 +11,83 @@ from jaios.social_ecosystem_chain.public_gateway import (
 class PublicGatewayTests(unittest.TestCase):
     def setUp(self) -> None:
         self.calls = []
+        self.now = 1_800_000_060
+        self.head_timestamp = 1_800_000_030
+        certificate = {
+            "schema_version": "junca-finality-certificate/v1",
+            "chain_id": 20260723,
+            "height": 7,
+            "round": 0,
+            "block_hash": "0x" + "ab" * 32,
+            "certificate_hash": "0x" + "cd" * 32,
+            "signed_power": 3,
+            "total_power": 3,
+            "validator_ids": [
+                "validator-01",
+                "validator-02",
+                "validator-03",
+            ],
+            "vote_hashes": [
+                "0x" + "01" * 32,
+                "0x" + "02" * 32,
+                "0x" + "03" * 32,
+            ],
+            "finality_status": "FINALIZED",
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+        certificate_proof = {
+            "schema_version": (
+                "junca-public-finality-certificate-proof/v1"
+            ),
+            "certificate": certificate,
+            "votes": [
+                {
+                    "chain_id": 20260723,
+                    "height": 7,
+                    "round": 0,
+                    "block_hash": "0x" + "ab" * 32,
+                    "validator_id": validator_id,
+                    "signature": f"{index:02x}" * 64,
+                }
+                for index, validator_id in enumerate(
+                    (
+                        "validator-01",
+                        "validator-02",
+                        "validator-03",
+                    ),
+                    start=1,
+                )
+            ],
+        }
         self.health = {
             "status": "healthy",
             "head_height": 7,
             "head_hash": "0x" + "ab" * 32,
+            "head_timestamp": self.head_timestamp,
+            "peer_count": 2,
+            "automatic_finality_enabled": True,
+            "automatic_finality_loop_running": True,
+            "block_interval_seconds": 30,
+            "slot_epoch_seconds": 1_800_000_000,
+            "automatic_finality_last_successful_slot": 1,
+            "automatic_finality_last_successful_height": 7,
+            "health_gates": {
+                "authenticated_peer_quorum": True,
+                "automatic_finality": True,
+                "current_three_of_three_certificate": True,
+                "fresh_finalized_head": True,
+            },
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
             "consensus": {
                 "last_certificate_hash": "0x" + "cd" * 32,
-                "last_certificate": {
-                    "finality_status": "FINALIZED",
-                    "height": 7,
-                    "block_hash": "0x" + "ab" * 32,
-                    "signed_power": 3,
-                    "total_power": 3,
-                },
+                "head_height": 7,
+                "required_vote_count": 3,
+                "last_certificate": certificate,
+                "last_certificate_proof": certificate_proof,
             },
         }
 
@@ -43,7 +107,7 @@ class PublicGatewayTests(unittest.TestCase):
                     "hash": "0x" + "ab" * 32,
                     "parentHash": "0x" + "11" * 32,
                     "stateRoot": "0x" + "22" * 32,
-                    "timestamp": "0x1234",
+                    "timestamp": hex(self.head_timestamp),
                     "transactions": [],
                 }
             else:
@@ -61,6 +125,7 @@ class PublicGatewayTests(unittest.TestCase):
             runtime_artifact_commit=self.runtime_artifact_commit,
             genesis_sha256=self.genesis_sha256,
             node_artifact_sha256=self.node_artifact_sha256,
+            clock=lambda: self.now,
         )
 
     def test_only_explicit_read_only_methods_are_forwarded(self) -> None:
@@ -108,6 +173,7 @@ class PublicGatewayTests(unittest.TestCase):
         status, body = self.gateway.health()
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "healthy")
+        self.assertEqual(body["validator"]["peer_count"], 2)
         self.assertTrue(body["read_only"])
         self.assertFalse(body["mainnet_changed"])
         self.assertFalse(body["assets_moved"])
@@ -117,7 +183,7 @@ class PublicGatewayTests(unittest.TestCase):
     def test_explorer_returns_only_certificate_backed_finalized_head(self) -> None:
         status, body = self.gateway.explorer()
         self.assertEqual(status, 200)
-        self.assertEqual(body["schema_version"], "junca-public-explorer/v4")
+        self.assertEqual(body["schema_version"], "junca-public-explorer/v5")
         self.assertEqual(
             body["runtime_artifact"]["source_commit"],
             self.runtime_artifact_commit,
@@ -146,7 +212,20 @@ class PublicGatewayTests(unittest.TestCase):
         )
         self.assertEqual(body["head"]["height"], 7)
         self.assertEqual(body["head"]["signed_power"], 3)
-        self.assertEqual(body["head"]["timestamp"], "0x1234")
+        self.assertEqual(
+            body["head"]["certificate"]["certificate"][
+                "validator_ids"
+            ],
+            ["validator-01", "validator-02", "validator-03"],
+        )
+        self.assertEqual(
+            len(body["head"]["certificate"]["votes"]),
+            3,
+        )
+        self.assertEqual(
+            body["head"]["timestamp"],
+            hex(self.head_timestamp),
+        )
         self.assertEqual(body["head"]["parent_hash"], "0x" + "11" * 32)
         self.assertEqual(body["head"]["state_root"], "0x" + "22" * 32)
         self.assertEqual(body["head"]["transaction_count"], 0)
@@ -178,6 +257,32 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertEqual(body["status"], "syncing")
         self.assertIsNone(body["head"])
 
+    def test_explorer_requires_complete_exact_certificate_proof(self) -> None:
+        proof = self.health["consensus"]["last_certificate_proof"]
+        self.health["consensus"]["last_certificate_proof"] = None
+        status, body = self.gateway.explorer()
+        self.assertEqual(status, 503)
+        self.assertIsNone(body["head"])
+
+        self.health["consensus"]["last_certificate_proof"] = proof
+        proof["votes"][0]["signature"] = "00" * 63
+        status, body = self.gateway.explorer()
+        self.assertEqual(status, 503)
+        self.assertIsNone(body["head"])
+
+    def test_health_rejects_zero_or_one_peer_and_stale_head(self) -> None:
+        for peer_count in (0, 1):
+            self.health["peer_count"] = peer_count
+            status, body = self.gateway.health()
+            self.assertEqual(status, 503)
+            self.assertEqual(body["status"], "unhealthy")
+        self.health["peer_count"] = 2
+        self.health["head_timestamp"] = self.now - 121
+        self.health["slot_epoch_seconds"] = self.now - 151
+        status, body = self.gateway.health()
+        self.assertEqual(status, 503)
+        self.assertEqual(body["status"], "unhealthy")
+
     def test_explorer_does_not_expose_unverified_block_metadata(self) -> None:
         original_transport = self.gateway._transport
 
@@ -201,10 +306,9 @@ class PublicGatewayTests(unittest.TestCase):
 
         self.gateway._transport = mismatched_block
         status, body = self.gateway.explorer()
-        self.assertEqual(status, 200)
-        self.assertIsNone(body["head"]["timestamp"])
-        self.assertIsNone(body["head"]["state_root"])
-        self.assertIsNone(body["head"]["transaction_count"])
+        self.assertEqual(status, 503)
+        self.assertEqual(body["status"], "syncing")
+        self.assertIsNone(body["head"])
         self.assertNotIn("private-value-must-not-leak", str(body))
 
     def test_upstream_must_remain_loopback_http(self) -> None:

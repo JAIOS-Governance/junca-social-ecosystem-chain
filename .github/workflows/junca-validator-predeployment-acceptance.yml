@@ -40,6 +40,7 @@ jobs:
             config/junca_validator_predeployment_inputs.pending.json
 
       - name: Produce truthful current-state evidence
+        shell: bash
         run: |
           mkdir -p artifacts
           python scripts/junca_validator_artifact_handoff.py \

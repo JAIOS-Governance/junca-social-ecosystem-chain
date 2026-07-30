@@ -14,14 +14,21 @@ from scripts.junca_dispatch_workflow_and_wait import (
     DispatchError,
     ensure_candidate_ref,
     parse_inputs,
+    require_execution_ref,
     validate_arguments,
     verify_completed_run,
+    verify_discovered_run,
+    write_dispatch_outputs,
 )
 from scripts.junca_release_child_provenance import (
     PARENT_NAME,
     PARENT_PATH,
     ProvenanceError,
+    RUN_BINDING_SCHEMA,
+    build_run_binding,
     canonical_inputs_sha256,
+    fetch_run_binding,
+    run_binding_artifact_name,
     validate as validate_child_provenance,
 )
 from scripts.junca_release_dispatch_attestation import build_attestation
@@ -38,6 +45,7 @@ FOUNDATION = WORKFLOWS / "junca-validator-foundation-release.yml"
 PUBLIC_RELEASE = WORKFLOWS / "junca-public-testnet-release.yml"
 SHA = "a" * 40
 REF = f"release-candidate/{SHA}"
+EXECUTION_REF = "main"
 PINNED_ACTIONS = {
     "actions/checkout": frozenset(
         {"11d5960a326750d5838078e36cf38b85af677262"}
@@ -106,6 +114,13 @@ def run_blocks(text: str) -> list[str]:
             index += 1
         blocks.append("\n".join(body).strip())
     return blocks
+
+
+def step_block(text: str, name: str) -> str:
+    marker = f"      - name: {name}\n"
+    start = text.index(marker)
+    end = text.find("\n      - ", start + len(marker))
+    return text[start:] if end == -1 else text[start:end]
 
 
 class FakeGitHub:
@@ -253,12 +268,15 @@ class ReleaseOrchestrationTests(unittest.TestCase):
         self.assertNotIn("if:", job_prefix)
         self.assertIn("Authorize exact release trigger", text)
         self.assertIn(
-            'test "$GITHUB_REF" = \\\n'
-            '                "refs/heads/release-candidate/$GITHUB_SHA"',
+            'test "$GITHUB_REF" = "refs/heads/main"',
             text,
         )
         self.assertIn(
-            '"release-candidate/$WORKFLOW_RUN_HEAD_SHA"',
+            'test "$WORKFLOW_RUN_HEAD_BRANCH" = "main"',
+            text,
+        )
+        self.assertIn(
+            'test "$WORKFLOW_RUN_HEAD_SHA" = "$GITHUB_SHA"',
             text,
         )
         self.assertIn(
@@ -273,10 +291,20 @@ class ReleaseOrchestrationTests(unittest.TestCase):
         self.assertIn("release-candidate/$SOURCE_COMMIT", text)
         self.assertEqual(
             text.count("python3 scripts/junca_dispatch_workflow_and_wait.py"),
+            6,
+        )
+        self.assertEqual(text.count("--operation dispatch"), 3)
+        self.assertEqual(text.count("--operation wait"), 3)
+        self.assertEqual(text.count("--dispatch-ref main"), 6)
+        self.assertEqual(
+            text.count('--candidate-ref "$CANDIDATE_REF"'), 6
+        )
+        self.assertEqual(
+            text.count("python3 scripts/junca_release_child_run_binding.py"),
             3,
         )
-        self.assertEqual(text.count('--dispatch-ref "$CANDIDATE_REF"'), 3)
-        self.assertEqual(text.count("--dispatch-token"), 6)
+        self.assertEqual(text.count("--child-run-id"), 3)
+        self.assertEqual(text.count("--child-run-attempt"), 3)
         self.assertIn(
             "junca-release-dispatch-attestation-"
             "${{ github.run_id }}-${{ github.run_attempt }}-ami",
@@ -291,6 +319,57 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             3,
         )
         self.assertIn("--candidate-ami-run-id", text)
+        for key in ("ami", "evidence", "manifest"):
+            self.assertIn(
+                "junca-release-child-run-binding-"
+                "${{ github.run_id }}-${{ github.run_attempt }}-"
+                f"{key}-",
+                text,
+            )
+
+    def test_parent_dispatches_binds_uploads_then_waits_each_child(
+        self,
+    ) -> None:
+        text = PARENT.read_text(encoding="utf-8")
+        sequences = (
+            (
+                "Dispatch exact-request immutable AMI child",
+                "Bind exact immutable AMI child run",
+                "Publish exact immutable AMI child run binding",
+                "Wait for bound exact-request immutable AMI",
+            ),
+            (
+                "Dispatch V2 pre-rollout baseline child",
+                "Bind exact V2 pre-rollout baseline child run",
+                "Publish exact V2 pre-rollout baseline child run binding",
+                "Wait for bound V2 pre-rollout baseline evidence",
+            ),
+            (
+                "Dispatch release manifest gate child",
+                "Bind exact release manifest gate child run",
+                "Publish exact release manifest gate child run binding",
+                "Wait for bound release manifest gate",
+            ),
+        )
+        for sequence in sequences:
+            with self.subTest(child=sequence[0]):
+                indexes = [
+                    text.index(f"- name: {name}")
+                    for name in sequence
+                ]
+                self.assertEqual(indexes, sorted(indexes))
+                dispatch = step_block(text, sequence[0])
+                binding = step_block(text, sequence[1])
+                wait = step_block(text, sequence[3])
+                self.assertIn("--operation dispatch", dispatch)
+                self.assertIn('--github-output "$GITHUB_OUTPUT"', dispatch)
+                self.assertIn(
+                    "junca_release_child_run_binding.py",
+                    binding,
+                )
+                self.assertIn("--operation wait", wait)
+                self.assertIn("--run-id", wait)
+                self.assertIn("--dispatched-at", wait)
 
     def test_ami_child_parent_request_and_dispatch_contracts_are_exact(
         self,
@@ -332,27 +411,24 @@ class ReleaseOrchestrationTests(unittest.TestCase):
                 "request_sha256",
             },
         )
-        ami_path = (
-            '--workflow-path ".github/workflows/'
-            'junca-validator-ami-build.yml"'
-        )
-        first = parent.index(ami_path)
-        attestation_block = parent[
-            first : parent.index("\n          {\n", first)
-        ]
-        second = parent.index(ami_path, first + 1)
-        dispatch_block = parent[
-            second : parent.index('\n          )"', second)
-        ]
         key_pattern = r'--input (?:\\\n\s+)?"([a-z0-9_]+)='
-        self.assertEqual(
-            set(re.findall(key_pattern, attestation_block)),
-            expected_business_inputs,
+        contract_steps = (
+            "Bind exact runtime and immutable request",
+            "Dispatch exact-request immutable AMI child",
+            "Bind exact immutable AMI child run",
+            "Wait for bound exact-request immutable AMI",
         )
-        self.assertEqual(
-            set(re.findall(key_pattern, dispatch_block)),
-            expected_business_inputs,
-        )
+        for step_name in contract_steps:
+            with self.subTest(step=step_name):
+                block = step_block(parent, step_name)
+                self.assertIn(
+                    ".github/workflows/junca-validator-ami-build.yml",
+                    block,
+                )
+                self.assertEqual(
+                    set(re.findall(key_pattern, block)),
+                    expected_business_inputs,
+                )
         self.assertIn(
             'schema_version: "junca-validator-ami-build-request/v2"',
             parent,
@@ -375,6 +451,34 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             self.assertIn("--workflow-path", text)
             self.assertIn("--input", text)
             self.assertIn("ref: ${{ inputs.source_commit }}", text)
+            binding_gate = text.index(
+                "python3 scripts/junca_release_child_provenance.py"
+            )
+            self.assertNotIn(
+                "aws-actions/configure-aws-credentials",
+                text[:binding_gate],
+            )
+            self.assertNotIn("aws imagebuilder", text[:binding_gate])
+            self.assertNotIn("aws ec2 ", text[:binding_gate])
+            self.assertNotIn("terraform ", text[:binding_gate])
+            self.assertNotIn("actions/upload-artifact", text[:binding_gate])
+            self.assertIn("GH_TOKEN: ${{ github.token }}", text[:binding_gate])
+        self.assertLess(
+            AMI.read_text(encoding="utf-8").index(
+                "junca_release_child_provenance.py"
+            ),
+            AMI.read_text(encoding="utf-8").index(
+                "aws-actions/configure-aws-credentials"
+            ),
+        )
+        self.assertLess(
+            EVIDENCE.read_text(encoding="utf-8").index(
+                "junca_release_child_provenance.py"
+            ),
+            EVIDENCE.read_text(encoding="utf-8").index(
+                "aws-actions/configure-aws-credentials"
+            ),
+        )
         manifest = MANIFEST.read_text(encoding="utf-8")
         self.assertIn(
             '.path == ".github/workflows/'
@@ -419,53 +523,39 @@ class ReleaseOrchestrationTests(unittest.TestCase):
         self.assertNotIn("pending_deployments", text)
         self.assertNotIn('"approved"', text)
 
-    def test_serial_rollout_consumes_only_immutable_candidate_runs(self) -> None:
+    def test_serial_rollout_executes_exact_workflows_from_main(self) -> None:
         foundation = FOUNDATION.read_text(encoding="utf-8")
         public_release = PUBLIC_RELEASE.read_text(encoding="utf-8")
         for text in (foundation, public_release):
-            self.assertIn("refs/heads/release-candidate/", text)
-            self.assertIn(
-                '"release-candidate/" + .head_sha',
-                text,
-            )
-        self.assertEqual(
-            foundation.count(
-                '.head_branch == ("release-candidate/" + $head)'
-            ),
-            2,
+            self.assertIn('.head_branch == "main"', text)
+        self.assertIn(
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            foundation,
         )
         self.assertIn(
-            'test "$GITHUB_REF" = '
-            '"refs/heads/release-candidate/$GITHUB_SHA"',
+            "git/ref/heads/release-candidate/${GITHUB_SHA}",
             foundation,
         )
         self.assertEqual(
             foundation.count("sha256sum --strict --check SHA256SUMS"),
             2,
         )
-        self.assertNotIn(
-            "github.ref == 'refs/heads/main'",
-            foundation,
-        )
 
-    def test_post_release_chain_accepts_candidate_foundation_only(self) -> None:
+    def test_post_release_chain_accepts_main_execution_only(self) -> None:
         for path in (
             WORKFLOWS / "junca-public-testnet-live-soak.yml",
             WORKFLOWS
             / "junca-public-testnet-runtime-acceptance-gate.yml",
         ):
             text = path.read_text(encoding="utf-8")
-            self.assertIn(
-                '.head_branch == ("release-candidate/" + $source_commit)',
-                text,
-            )
+            self.assertIn('.head_branch == "main"', text)
             self.assertIn(".head_sha == $source_commit", text)
             foundation_block = text.split(
                 ".github/workflows/"
                 "junca-validator-foundation-release.yml",
                 1,
             )[1]
-            self.assertNotIn('.head_branch == "main"', foundation_block[:600])
+            self.assertIn('.head_branch == "main"', foundation_block[:700])
 
     def test_dispatch_inputs_reject_ambiguity_and_newlines(self) -> None:
         self.assertEqual(parse_inputs(["alpha=one=two"]), {"alpha": "one=two"})
@@ -479,20 +569,31 @@ class ReleaseOrchestrationTests(unittest.TestCase):
                 with self.assertRaises(DispatchError):
                     parse_inputs(values)
 
-    def test_dispatch_ref_is_exact_sha_bound(self) -> None:
+    def test_dispatch_uses_main_and_candidate_ref_is_exact_sha_bound(
+        self,
+    ) -> None:
         valid = argparse.Namespace(
             workflow_name="JUNCA Runtime Release Manifest Gate",
             workflow_path=".github/workflows/"
             "junca-runtime-release-manifest-gate.yml",
             expected_head=SHA,
-            dispatch_ref=REF,
+            dispatch_ref=EXECUTION_REF,
+            candidate_ref=REF,
             dispatch_token="12-3-" + "f" * 32,
             attempts=1,
             sleep_seconds=1,
+            operation="dispatch-and-wait",
+            run_id=None,
+            dispatched_at=None,
+            github_output=None,
         )
         validate_arguments(valid)
-        valid.dispatch_ref = f"release-candidate/{'b' * 40}"
+        valid.candidate_ref = f"release-candidate/{'b' * 40}"
         with self.assertRaisesRegex(DispatchError, "not bound"):
+            validate_arguments(valid)
+        valid.candidate_ref = REF
+        valid.dispatch_ref = REF
+        with self.assertRaisesRegex(DispatchError, "protected main"):
             validate_arguments(valid)
 
     def test_candidate_ref_is_create_once_and_never_moved(self) -> None:
@@ -510,18 +611,33 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             with self.assertRaisesRegex(DispatchError, "mismatch"):
                 ensure_candidate_ref(github, REF, SHA)
 
+    def test_main_execution_ref_must_already_equal_source_commit(self) -> None:
+        github = FakeGitHub(None)
+        with mock.patch(
+            "scripts.junca_dispatch_workflow_and_wait.resolve_candidate_ref",
+            return_value=SHA,
+        ):
+            require_execution_ref(github, EXECUTION_REF, SHA)
+        with mock.patch(
+            "scripts.junca_dispatch_workflow_and_wait.resolve_candidate_ref",
+            return_value="b" * 40,
+        ):
+            with self.assertRaisesRegex(DispatchError, "execution ref"):
+                require_execution_ref(github, EXECUTION_REF, SHA)
+
     def test_completed_run_requires_token_ref_sha_and_repository(self) -> None:
         token = "12-3-" + "f" * 32
         title = f"JSEC dispatch {token}"
         run = {
             "id": 44,
+            "run_attempt": 1,
             "status": "completed",
             "conclusion": "success",
             "name": "JUNCA Runtime Release Manifest Gate",
             "path": ".github/workflows/"
             "junca-runtime-release-manifest-gate.yml",
             "event": "workflow_dispatch",
-            "head_branch": REF,
+            "head_branch": EXECUTION_REF,
             "head_sha": SHA,
             "display_title": title,
             "repository": {"full_name": FakeGitHub.repository},
@@ -533,7 +649,7 @@ class ReleaseOrchestrationTests(unittest.TestCase):
                 repository=FakeGitHub.repository,
                 workflow_name=run["name"],
                 workflow_path=run["path"],
-                dispatch_ref=REF,
+                dispatch_ref=EXECUTION_REF,
                 expected_head=SHA,
                 display_title=title,
             ),
@@ -546,9 +662,69 @@ class ReleaseOrchestrationTests(unittest.TestCase):
                 repository=FakeGitHub.repository,
                 workflow_name=run["name"],
                 workflow_path=run["path"],
-                dispatch_ref=REF,
+                dispatch_ref=EXECUTION_REF,
                 expected_head=SHA,
                 display_title=title,
+            )
+
+    def test_initial_discovery_requires_first_attempt_and_exact_repository(
+        self,
+    ) -> None:
+        token = "12-3-" + "f" * 32
+        title = f"JSEC dispatch {token}"
+        run = {
+            "id": 44,
+            "run_attempt": 1,
+            "status": "waiting",
+            "name": "JUNCA Runtime Release Manifest Gate",
+            "path": ".github/workflows/"
+            "junca-runtime-release-manifest-gate.yml",
+            "event": "workflow_dispatch",
+            "head_branch": EXECUTION_REF,
+            "head_sha": SHA,
+            "display_title": title,
+            "repository": {"full_name": FakeGitHub.repository},
+            "head_repository": {"full_name": FakeGitHub.repository},
+        }
+        self.assertEqual(
+            verify_discovered_run(
+                run,
+                repository=FakeGitHub.repository,
+                workflow_name=run["name"],
+                workflow_path=run["path"],
+                dispatch_ref=EXECUTION_REF,
+                expected_head=SHA,
+                display_title=title,
+            ),
+            44,
+        )
+        run["run_attempt"] = 2
+        with self.assertRaisesRegex(DispatchError, "identity rejected"):
+            verify_discovered_run(
+                run,
+                repository=FakeGitHub.repository,
+                workflow_name=run["name"],
+                workflow_path=run["path"],
+                dispatch_ref=EXECUTION_REF,
+                expected_head=SHA,
+                display_title=title,
+            )
+
+    def test_dispatch_output_seals_run_attempt_and_correlation_time(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory, "github-output")
+            write_dispatch_outputs(
+                output,
+                run_id=44,
+                dispatched_at="2026-07-30T01:02:03Z",
+            )
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                "run_id=44\n"
+                "run_attempt=1\n"
+                "dispatched_at=2026-07-30T01:02:03Z\n",
             )
 
     def test_child_provenance_is_live_parent_bound(self) -> None:
@@ -574,6 +750,24 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             attestation["dispatch"]["inputs_sha256"],
             canonical_inputs_sha256(workflow_inputs),
         )
+        run_binding = build_run_binding(
+            repository=FakeGitHub.repository,
+            orchestrator_run_id="12",
+            orchestrator_run_attempt="3",
+            source_commit=SHA,
+            workflow_path=workflow_path,
+            dispatch_token=token,
+            child_run_id="44",
+            child_run_attempt="1",
+            workflow_inputs=workflow_inputs,
+        )
+        self.assertEqual(
+            run_binding["schema_version"],
+            RUN_BINDING_SCHEMA,
+        )
+        workflow_ref = (
+            f"{FakeGitHub.repository}/{workflow_path}@refs/heads/main"
+        )
         parent = {
             "id": 12,
             "run_attempt": 3,
@@ -589,13 +783,17 @@ class ReleaseOrchestrationTests(unittest.TestCase):
         validate_child_provenance(
             parent,
             attestation,
+            run_binding,
             repository=FakeGitHub.repository,
             source_commit=SHA,
             dispatch_token=token,
             orchestrator_run_id="12",
             orchestrator_run_attempt="3",
-            github_ref=f"refs/heads/{REF}",
+            github_ref="refs/heads/main",
             github_sha=SHA,
+            github_run_id="44",
+            github_run_attempt="1",
+            github_workflow_ref=workflow_ref,
             workflow_path=workflow_path,
             workflow_inputs=workflow_inputs,
         )
@@ -612,13 +810,17 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             validate_child_provenance(
                 parent,
                 forged,
+                run_binding,
                 repository=FakeGitHub.repository,
                 source_commit=SHA,
                 dispatch_token=token,
                 orchestrator_run_id="12",
                 orchestrator_run_attempt="3",
-                github_ref=f"refs/heads/{REF}",
+                github_ref="refs/heads/main",
                 github_sha=SHA,
+                github_run_id="44",
+                github_run_attempt="1",
+                github_workflow_ref=workflow_ref,
                 workflow_path=workflow_path,
                 workflow_inputs=workflow_inputs,
             )
@@ -627,13 +829,17 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             validate_child_provenance(
                 parent,
                 attestation,
+                run_binding,
                 repository=FakeGitHub.repository,
                 source_commit=SHA,
                 dispatch_token=token,
                 orchestrator_run_id="12",
                 orchestrator_run_attempt="3",
-                github_ref=f"refs/heads/{REF}",
+                github_ref="refs/heads/main",
                 github_sha=SHA,
+                github_run_id="44",
+                github_run_attempt="1",
+                github_workflow_ref=workflow_ref,
                 workflow_path=workflow_path,
                 workflow_inputs=swapped_inputs,
             )
@@ -644,13 +850,17 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             validate_child_provenance(
                 parent,
                 attestation,
+                run_binding,
                 repository=FakeGitHub.repository,
                 source_commit=SHA,
                 dispatch_token=token,
                 orchestrator_run_id="12",
                 orchestrator_run_attempt="3",
-                github_ref=f"refs/heads/{REF}",
+                github_ref="refs/heads/main",
                 github_sha=SHA,
+                github_run_id="44",
+                github_run_attempt="1",
+                github_workflow_ref=workflow_ref,
                 workflow_path=workflow_path,
                 workflow_inputs=workflow_inputs,
             )
@@ -662,16 +872,236 @@ class ReleaseOrchestrationTests(unittest.TestCase):
             validate_child_provenance(
                 parent,
                 attestation,
+                run_binding,
                 repository=FakeGitHub.repository,
                 source_commit=SHA,
                 dispatch_token=token,
                 orchestrator_run_id="12",
                 orchestrator_run_attempt="3",
-                github_ref=f"refs/heads/{REF}",
+                github_ref="refs/heads/main",
                 github_sha=SHA,
+                github_run_id="44",
+                github_run_attempt="1",
+                github_workflow_ref=workflow_ref,
                 workflow_path=workflow_path,
                 workflow_inputs=workflow_inputs,
             )
+
+    def test_public_dispatch_token_cannot_authorize_a_duplicate_child(
+        self,
+    ) -> None:
+        token = "12-3-" + "f" * 32
+        workflow_path = (
+            ".github/workflows/junca-runtime-release-manifest-gate.yml"
+        )
+        workflow_inputs = {
+            "evidence_run_id": "44",
+            "source_commit": SHA,
+            "node_artifact_sha256": "b" * 64,
+            "genesis_sha256": "c" * 64,
+        }
+        attestation = build_attestation(
+            orchestrator_run_id="12",
+            orchestrator_run_attempt="3",
+            source_commit=SHA,
+            workflow_path=workflow_path,
+            dispatch_token=token,
+            workflow_inputs=workflow_inputs,
+        )
+        binding_for_canonical_run = build_run_binding(
+            repository=FakeGitHub.repository,
+            orchestrator_run_id="12",
+            orchestrator_run_attempt="3",
+            source_commit=SHA,
+            workflow_path=workflow_path,
+            dispatch_token=token,
+            child_run_id="44",
+            child_run_attempt="1",
+            workflow_inputs=workflow_inputs,
+        )
+        parent = {
+            "id": 12,
+            "run_attempt": 3,
+            "name": PARENT_NAME,
+            "path": PARENT_PATH,
+            "event": "workflow_dispatch",
+            "status": "in_progress",
+            "head_branch": "main",
+            "head_sha": SHA,
+            "repository": {"full_name": FakeGitHub.repository},
+            "head_repository": {"full_name": FakeGitHub.repository},
+        }
+        duplicate_workflow_ref = (
+            f"{FakeGitHub.repository}/{workflow_path}@refs/heads/main"
+        )
+        with self.assertRaisesRegex(
+            ProvenanceError,
+            "exact child run binding rejected before side effects",
+        ):
+            validate_child_provenance(
+                parent,
+                attestation,
+                binding_for_canonical_run,
+                repository=FakeGitHub.repository,
+                source_commit=SHA,
+                dispatch_token=token,
+                orchestrator_run_id="12",
+                orchestrator_run_attempt="3",
+                github_ref="refs/heads/main",
+                github_sha=SHA,
+                github_run_id="45",
+                github_run_attempt="1",
+                github_workflow_ref=duplicate_workflow_ref,
+                workflow_path=workflow_path,
+                workflow_inputs=workflow_inputs,
+            )
+        tampered_digest = {
+            **binding_for_canonical_run,
+            "binding_sha256": "0" * 64,
+        }
+        with self.assertRaisesRegex(
+            ProvenanceError,
+            "exact child run binding rejected before side effects",
+        ):
+            validate_child_provenance(
+                parent,
+                attestation,
+                tampered_digest,
+                repository=FakeGitHub.repository,
+                source_commit=SHA,
+                dispatch_token=token,
+                orchestrator_run_id="12",
+                orchestrator_run_attempt="3",
+                github_ref="refs/heads/main",
+                github_sha=SHA,
+                github_run_id="44",
+                github_run_attempt="1",
+                github_workflow_ref=duplicate_workflow_ref,
+                workflow_path=workflow_path,
+                workflow_inputs=workflow_inputs,
+            )
+
+    def test_child_run_binding_cli_emits_exact_schema_and_digests(
+        self,
+    ) -> None:
+        token = "12-3-" + "f" * 32
+        workflow_path = (
+            ".github/workflows/"
+            "junca-runtime-release-evidence-collector-v2.yml"
+        )
+        workflow_inputs = {
+            "ami_run_id": "44",
+            "migration_run_id": "45",
+            "migration_evidence_sha256": "b" * 64,
+            "source_commit": SHA,
+        }
+        with TemporaryDirectory() as directory:
+            output = Path(directory, "run-binding")
+            command = [
+                "python",
+                str(ROOT / "scripts/junca_release_child_run_binding.py"),
+                "--source-commit",
+                SHA,
+                "--workflow-path",
+                workflow_path,
+                "--dispatch-token",
+                token,
+                "--child-run-id",
+                "46",
+                "--child-run-attempt",
+                "1",
+                "--output-dir",
+                str(output),
+            ]
+            for key, value in workflow_inputs.items():
+                command.extend(("--input", f"{key}={value}"))
+            environment = {
+                **os.environ,
+                "GITHUB_REPOSITORY": FakeGitHub.repository,
+                "GITHUB_RUN_ID": "12",
+                "GITHUB_RUN_ATTEMPT": "3",
+            }
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                sorted(path.name for path in output.iterdir()),
+                ["SHA256SUMS", "run-binding.json"],
+            )
+            binding_path = output / "run-binding.json"
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                binding,
+                build_run_binding(
+                    repository=FakeGitHub.repository,
+                    orchestrator_run_id="12",
+                    orchestrator_run_attempt="3",
+                    source_commit=SHA,
+                    workflow_path=workflow_path,
+                    dispatch_token=token,
+                    child_run_id="46",
+                    child_run_attempt="1",
+                    workflow_inputs=workflow_inputs,
+                ),
+            )
+            completed = subprocess.run(
+                ["sha256sum", "--check", "SHA256SUMS"],
+                cwd=output,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            run_binding_artifact_name(
+                "12",
+                "3",
+                workflow_path,
+                "46",
+                "1",
+            ),
+            "junca-release-child-run-binding-12-3-evidence-46-1",
+        )
+
+    def test_child_binding_download_poll_is_bounded(self) -> None:
+        failed = subprocess.CompletedProcess(
+            args=["gh"],
+            returncode=1,
+            stdout="",
+            stderr="artifact not found",
+        )
+        with (
+            mock.patch(
+                "scripts.junca_release_child_provenance.subprocess.run",
+                return_value=failed,
+            ) as run,
+            mock.patch(
+                "scripts.junca_release_child_provenance.time.sleep"
+            ) as sleep,
+        ):
+            with self.assertRaisesRegex(
+                ProvenanceError,
+                "bounded poll",
+            ):
+                fetch_run_binding(
+                    FakeGitHub.repository,
+                    "12",
+                    "3",
+                    ".github/workflows/"
+                    "junca-runtime-release-manifest-gate.yml",
+                    "44",
+                    "1",
+                    attempts=3,
+                    sleep_seconds=1,
+                )
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_dispatch_attestation_cli_binds_exact_inputs(self) -> None:
         token = "12-3-" + "f" * 32

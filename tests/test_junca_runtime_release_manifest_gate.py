@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from datetime import datetime, timezone
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -53,6 +54,11 @@ BOTO3_NEVRA = "python3-boto3-0:1.40.31-1.amzn2023.0.1.noarch"
 BOTOCORE_NEVRA = (
     "python3-botocore-0:1.40.31-1.amzn2023.0.1.noarch"
 )
+FINALIZED_TIMESTAMP = 2_000_000_000
+OBSERVED_AT = datetime.fromtimestamp(
+    FINALIZED_TIMESTAMP + 30,
+    timezone.utc,
+).isoformat()
 
 
 def binding():
@@ -135,11 +141,11 @@ def evidence():
         "unsafe_rpc_rejection": True,
         "readback": {
             "mode": "public_endpoints",
-            "observed_at": "2026-07-27T00:00:00Z",
+            "observed_at": OBSERVED_AT,
             "finalized_head": {
                 "height": 1,
                 "hash": "0x" + "4" * 64,
-                "timestamp": "0x1234",
+                "timestamp": hex(FINALIZED_TIMESTAMP),
                 "state_root": "0x" + "6" * 64,
                 "certificate_hash": "0x" + "5" * 64,
             },
@@ -152,7 +158,7 @@ def evidence():
                     "signed_power": 3,
                     "total_power": 3,
                     "certificate_hash": "0x" + "5" * 64,
-                    "peer_count": 0,
+                    "peer_count": 2,
                 },
                 "safe_rpc": {
                     "result": "PASS",
@@ -347,6 +353,7 @@ def private_ssm_readback(
         "scope": (
             "Public Testnet Pre-rollout Baseline / Private SSM Read-only"
         ),
+        "observed_at": "2033-05-18T03:34:20Z",
         "validator_count": 3,
         "chain_id": 20260723,
         "validators": [
@@ -359,6 +366,7 @@ def private_ssm_readback(
                         f"validator-0{index}"
                     ).encode()
                 ).hexdigest(),
+                "peer_count": 2,
                 "runtime_certificate_state": "ACTIVATION_PENDING",
                 "durable_certificate_hash": head["certificate_hash"],
                 "durable_timestamp_state": timestamp_state,
@@ -403,6 +411,32 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
                 "python3_boto3_nevra": BOTO3_NEVRA,
                 "python3_botocore_nevra": BOTOCORE_NEVRA,
             },
+        )
+
+    def test_public_baseline_requires_exact_two_peer_quorum(self):
+        for peer_count in (0, 1):
+            with self.subTest(peer_count=peer_count):
+                manifest, explorer, ebs = evidence()
+                explorer["readback"]["checks"]["explorer"][
+                    "peer_count"
+                ] = peer_count
+                decision = evaluate(manifest, explorer, ebs)
+                self.assertFalse(decision["accepted"])
+                self.assertIn(
+                    "public_endpoints.explorer_check:invalid",
+                    decision["failures"],
+                )
+
+    def test_public_baseline_rejects_stale_finalized_head(self):
+        manifest, explorer, ebs = evidence()
+        explorer["readback"]["finalized_head"]["timestamp"] = hex(
+            FINALIZED_TIMESTAMP - 121
+        )
+        decision = evaluate(manifest, explorer, ebs)
+        self.assertFalse(decision["accepted"])
+        self.assertIn(
+            "public_endpoints.finalized_head:stale_or_future",
+            decision["failures"],
         )
 
     def test_ami_supply_chain_provenance_is_fail_closed(self):
@@ -765,6 +799,61 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             decision["failures"],
         )
 
+    def test_private_ssm_rejects_non_quorum_peer_counts(self):
+        for peer_count in (0, 1, 3, True, None):
+            with self.subTest(peer_count=peer_count):
+                manifest, explorer, ebs = evidence()
+                manifest["baseline_mode"] = "private_ssm"
+                manifest["public_services_enabled"] = False
+                manifest["public_endpoint_acceptance"] = False
+                readback = private_ssm_readback()
+                readback["validators"][0]["peer_count"] = peer_count
+                explorer.update(
+                    {
+                        "schema_version":
+                            "junca-private-ssm-pre-rollout-baseline/v1",
+                        "baseline_mode": "private_ssm",
+                        "public_services_enabled": False,
+                        "public_endpoint_acceptance": False,
+                        "unsafe_rpc_rejection":
+                            "NOT_APPLICABLE_PRIVATE_SSM",
+                        "readback": readback,
+                    }
+                )
+                decision = evaluate(manifest, explorer, ebs)
+                self.assertFalse(decision["accepted"])
+                self.assertIn(
+                    "private_ssm.peer_count:not_exact_two",
+                    decision["failures"],
+                )
+
+    def test_private_ssm_rejects_stale_or_future_finalized_head(self):
+        for timestamp in (2_000_000_000 - 121, 2_000_000_000 + 61):
+            with self.subTest(timestamp=timestamp):
+                manifest, explorer, ebs = evidence()
+                manifest["baseline_mode"] = "private_ssm"
+                manifest["public_services_enabled"] = False
+                manifest["public_endpoint_acceptance"] = False
+                readback = private_ssm_readback(timestamp=timestamp)
+                explorer.update(
+                    {
+                        "schema_version":
+                            "junca-private-ssm-pre-rollout-baseline/v1",
+                        "baseline_mode": "private_ssm",
+                        "public_services_enabled": False,
+                        "public_endpoint_acceptance": False,
+                        "unsafe_rpc_rejection":
+                            "NOT_APPLICABLE_PRIVATE_SSM",
+                        "readback": readback,
+                    }
+                )
+                decision = evaluate(manifest, explorer, ebs)
+                self.assertFalse(decision["accepted"])
+                self.assertIn(
+                    "private_ssm.finalized_head:stale_or_future",
+                    decision["failures"],
+                )
+
     def test_public_outage_private_ssm_is_not_public_endpoint_acceptance(self):
         manifest, explorer, ebs = evidence()
         outage = endpoint_outage()
@@ -820,7 +909,11 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             }
         )
         decision = evaluate(manifest, explorer, ebs)
-        self.assertTrue(decision["accepted"], decision["failures"])
+        self.assertFalse(decision["accepted"])
+        self.assertIn(
+            "private_ssm.finalized_head:freshness_unverifiable",
+            decision["failures"],
+        )
 
         explorer["readback"]["validators"][1][
             "durable_timestamp_state"
@@ -953,7 +1046,10 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn("evidence_workflow_name:", workflow)
         self.assertNotIn("evidence_artifact_name:", workflow)
-        self.assertIn("Verify pre-rollout evidence run provenance", workflow)
+        self.assertIn(
+            "Verify exact child run binding before manifest output",
+            workflow,
+        )
         self.assertIn(
             '"repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}"',
             workflow,
@@ -964,7 +1060,7 @@ class RuntimeReleaseManifestGateTests(unittest.TestCase):
             '.name == "JUNCA Runtime Release Evidence Collector"',
             '.path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"',
             '.event == "workflow_dispatch"',
-            ".head_branch == $candidate_ref",
+            ".head_branch == $execution_ref",
             ".head_sha == $source_commit",
             ".repository.full_name == $repository",
             ".head_repository.full_name == $repository",

@@ -58,6 +58,7 @@ jobs:
 
       - name: Validate fail-closed AWS binding
         if: matrix.module == 'infrastructure/aws'
+        shell: bash
         run: |
           python - <<'PY'
           import json

@@ -82,7 +82,7 @@ class AwsCanonicalInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(InventoryError, "account identity"):
             build_inventory(region="us-east-1", run=self.run_aws)
 
-    def test_oidc_handoff_matches_verified_immutable_subject(self) -> None:
+    def test_retired_handoff_subject_is_recorded_as_prohibited_legacy(self) -> None:
         handoff = json.loads(
             (
                 ROOT
@@ -94,27 +94,50 @@ class AwsCanonicalInventoryTests(unittest.TestCase):
             "junca-social-ecosystem-chain@1310568313:"
             "environment:public-testnet"
         )
-        self.assertEqual(handoff["expected_subject"], expected)
-        self.assertEqual(handoff["current_token_subject"], expected)
-        condition = handoff["minimum_statement_patch"]["Condition"]["StringEquals"]
-        self.assertEqual(condition["token.actions.githubusercontent.com:sub"], expected)
+        cloud_role_policy = json.loads(
+            (
+                ROOT / "config/junca_public_testnet_cloud_role_policy.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(handoff["state"], "RETIRED_NON_EXECUTABLE")
+        self.assertFalse(handoff["executable"])
+        self.assertEqual(handoff["prohibited_legacy_subject"], expected)
         self.assertEqual(
-            condition["token.actions.githubusercontent.com:aud"], "sts.amazonaws.com"
+            cloud_role_policy["prohibited_legacy_subject"],
+            expected,
         )
-        self.assertEqual(len(handoff["target_role_arns"]), 2)
-        self.assertNotIn(
-            handoff["prohibited_deployment_role_arn"], handoff["target_role_arns"]
-        )
+        for executable_field in (
+            "minimum_statement_patch",
+            "readback_command",
+            "rollback_policy",
+            "workflow_rerun_url",
+            "target_role_arns",
+            "expected_subject",
+            "current_token_subject",
+        ):
+            self.assertNotIn(executable_field, handoff)
+        for retired_path in handoff["retired_artifacts"]:
+            self.assertFalse((ROOT / retired_path).exists(), retired_path)
         self.assertFalse(handoff["deployment_performed"])
 
-    def test_inventory_workflow_does_not_mutate_repository_oidc_subject(self) -> None:
-        workflow = (
-            ROOT / ".github/workflows/junca-chain-aws-canonical-inventory.yml"
-        ).read_text(encoding="utf-8")
-        self.assertNotIn("/actions/oidc/customization/sub", workflow)
-        self.assertNotIn("JuncaChainDocsProductionDeployment", workflow)
-        self.assertIn("if: always()", workflow)
-        self.assertIn("junca-github-oidc-redacted.json", workflow)
+    def test_inventory_workflow_is_deleted_and_quarantined_by_policy(self) -> None:
+        workflow = ROOT / ".github/workflows/junca-chain-aws-canonical-inventory.yml"
+        self.assertFalse(workflow.exists())
+        policy = json.loads(
+            (
+                ROOT / "config/junca_public_testnet_cloud_role_policy.json"
+            ).read_text(encoding="utf-8")
+        )
+        entries = {
+            item["workflow"]: item
+            for item in policy["quarantine"]
+        }
+        entry = entries["junca-chain-aws-canonical-inventory.yml"]
+        self.assertEqual(
+            entry["original_name"],
+            "JUNCA Chain AWS Canonical Inventory",
+        )
+        self.assertIn("scoped Observer readback", entry["retired_reason"])
 
 
 if __name__ == "__main__":

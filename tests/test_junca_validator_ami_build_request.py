@@ -692,6 +692,73 @@ class ValidatorAmiBuildRequestTests(unittest.TestCase):
         self.assertIn("ASSETS_MOVED=false", component)
         self.assertIn("BRIDGE_ACTIVATED=false", component)
 
+    def test_component_seals_fixed_ssm_runtime_contract_across_reboot(self):
+        component = COMPONENT.read_text(encoding="utf-8")
+        self.assertIn(
+            "d /run/lock/junca-validator-mutation 0700 root root -",
+            component,
+        )
+        self.assertIn(
+            "/usr/lib/tmpfiles.d/junca-validator-mutation.conf",
+            component,
+        )
+        self.assertIn("RemoveEphemeralMutationLockBeforeReboot", component)
+        self.assertIn("RebootForRuntimeContract", component)
+        self.assertIn("action: Reboot", component)
+        self.assertIn("VerifyPostRebootRuntime", component)
+        self.assertLess(
+            component.index("RemoveEphemeralMutationLockBeforeReboot"),
+            component.index("RebootForRuntimeContract"),
+        )
+        self.assertLess(
+            component.index("RebootForRuntimeContract"),
+            component.index("VerifyPostRebootRuntime"),
+        )
+        self.assertIn(
+            'test "$(cat /proc/sys/kernel/random/boot_id)" != '
+            '"$(cat /opt/junca/ami-build-boot-id)"',
+            component,
+        )
+        for key in (
+            "BASH_NEVRA",
+            "BASH_SHA256",
+            "JQ_NEVRA",
+            "JQ_SHA256",
+            "SQLITE_NEVRA",
+            "SQLITE_SHA256",
+            "SSM_AGENT_NEVRA",
+            "SSM_AGENT_SHA256",
+            "TMPFILES_RULE_SHA256",
+            "SSM_SHELL_CONTRACT_SHA256",
+        ):
+            self.assertIn(key, component)
+        self.assertIn("/usr/bin/amazon-ssm-agent", component)
+        self.assertIn("rpm -q amazon-ssm-agent", component)
+        self.assertIn("#!/usr/bin/bash", component)
+        self.assertIn('exec /usr/bin/bash "$0" "$@"', component)
+        self.assertIn('/bin/sh -c "$script_path"', component)
+        self.assertIn(
+            "SSM_AGENT_SH_C_FIXED_BASH=verified",
+            component,
+        )
+        self.assertIn("REBOOT_READBACK_VERIFIED=true", component)
+        self.assertIn(
+            "TMPFILES_RECREATED_AFTER_REBOOT=true",
+            component,
+        )
+        self.assertIn(
+            "SSM_AGENT_SH_C_CONTRACT_VERIFIED_AFTER_REBOOT=true",
+            component,
+        )
+        self.assertIn(
+            "RUNTIME_INVENTORY_SHA256=",
+            component,
+        )
+        self.assertIn(
+            "RUNTIME_REBOOT_EVIDENCE_SHA256=",
+            component,
+        )
+
     def test_supply_chain_lock_forbids_mutable_values(self):
         lock = json.loads(SUPPLY_CHAIN_LOCK.read_text(encoding="utf-8"))
         self.assertEqual(

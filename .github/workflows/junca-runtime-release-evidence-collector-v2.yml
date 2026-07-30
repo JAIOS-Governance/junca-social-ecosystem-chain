@@ -50,25 +50,24 @@ jobs:
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
-      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      OBSERVER_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
       AMI_RUN_ID: ${{ inputs.ami_run_id }}
       MIGRATION_RUN_ID: ${{ inputs.migration_run_id }}
       MIGRATION_EVIDENCE_SHA256: ${{ inputs.migration_evidence_sha256 }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
     steps:
-      - name: Verify exact immutable-candidate execution ref
+      - name: Verify protected workflow execution ref
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = \
-            "refs/heads/release-candidate/$SOURCE_COMMIT"
+          test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_SHA" = "$SOURCE_COMMIT"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_commit }}
 
-      - name: Verify immutable workflow provenance
+      - name: Verify exact child run binding before AWS readback
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
@@ -97,13 +96,13 @@ jobs:
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg head "$SOURCE_COMMIT" \
-            --arg candidate_ref "release-candidate/$SOURCE_COMMIT" '
+            --arg execution_ref "main" '
               .status == "completed" and
               .conclusion == "success" and
               .name == "JUNCA Validator Immutable AMI Build" and
               .path == ".github/workflows/junca-validator-ami-build.yml" and
               .event == "workflow_dispatch" and
-              .head_branch == $candidate_ref and
+              .head_branch == $execution_ref and
               .head_sha == $head and
               .repository.full_name == $repository and
               .head_repository.full_name == $repository
@@ -236,9 +235,18 @@ jobs:
               .bridge_activated == false
             ' evidence/state-migration/junca-validator-state-migration-binding.json
 
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
+            --role-arn "$OBSERVER_ROLE_ARN" \
+            --output evidence/release/oidc-claim-attestation.json
+
       - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.OBSERVER_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-release-evidence-v2-${{ github.run_id }}
 

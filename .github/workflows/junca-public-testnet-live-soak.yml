@@ -91,7 +91,7 @@ jobs:
               ) or
               (
                 .event == "workflow_dispatch" and
-                (.head_branch | startswith("release-candidate/"))
+                .head_branch == "main"
               )
             ) and
             .repository.full_name == $repository and
@@ -130,7 +130,7 @@ jobs:
             ) or
             (
               .event == "workflow_dispatch" and
-              .head_branch == ("release-candidate/" + $source_commit) and
+              .head_branch == "main" and
               .head_sha == $source_commit
             )
           ' <<<"$public_run_json"
@@ -144,7 +144,7 @@ jobs:
             .name == "JUNCA Validator Foundation Release" and
             .path == ".github/workflows/junca-validator-foundation-release.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == ("release-candidate/" + $source_commit) and
+            .head_branch == "main" and
             .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
@@ -275,14 +275,23 @@ jobs:
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
-      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      OBSERVER_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-public-testnet-live-soak.yml" \
+            --role-arn "$OBSERVER_ROLE_ARN" \
+            --output artifacts/oidc-claim-attestation.json
+
       - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.OBSERVER_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-live-soak-readback-${{ github.run_id }}
 
