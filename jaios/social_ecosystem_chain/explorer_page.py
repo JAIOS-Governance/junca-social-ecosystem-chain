@@ -589,7 +589,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
     <section aria-labelledby="future-title">
       <div class="section-head">
         <div><p class="eyebrow">Progressive disclosure</p><h2 id="future-title">Planned Data Surfaces</h2></div>
-        <p>Unavailable fields are not inferred or shown as zero.</p>
+        <p>Fields not currently published are not inferred or shown as zero.</p>
       </div>
       <div class="unavailable-grid">
         <article class="unavailable"><h3>Transactions</h3><span>NOT YET PUBLISHED</span></article>
