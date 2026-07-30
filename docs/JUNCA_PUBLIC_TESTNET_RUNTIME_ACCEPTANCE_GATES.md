@@ -2,6 +2,13 @@
 
 The release path uses two deliberately different decisions.
 
+The automatic immutable release owner is
+`JUNCA Hardened Immutable Candidate Release V2`. The legacy candidate-release
+job remains in the repository as historical executable evidence but is
+fail-closed and cannot dispatch an AMI build, evidence collector, manifest
+gate, or validator rollout. This prevents two release parents from replacing
+the same three-validator fleet.
+
 1. `JUNCA Runtime Release Manifest Gate` is a **predeployment readiness**
    decision. Its three inputs use `pre-rollout-baseline/v1` schemas. They prove
    that the candidate AMI is immutable, the existing runtime is a distinct
@@ -11,6 +18,12 @@ The release path uses two deliberately different decisions.
    acceptance** decision. It runs only after a successful Foundation Release
    and Public Testnet Release, and requires the completed live soak plus the
    end-of-soak Terraform/AWS candidate identity readback.
+
+Pre-rollout endpoint evidence requires the exact
+`junca-public-explorer/v4` read-only schema. Its hexadecimal and decimal Chain
+ID and peer-count projections must agree before RPC parity is evaluated. An
+older Explorer schema or contradictory duplicate projection fails the bounded
+sample; it is never treated as transient parity.
 
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a

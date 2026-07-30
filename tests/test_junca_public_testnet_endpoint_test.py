@@ -38,7 +38,7 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             return endpoint_test.HttpResponse(
                 200,
                 {
-                    "schema_version": "junca-public-explorer/v3",
+                    "schema_version": "junca-public-explorer/v4",
                     "status": "ready",
                     "finalized_only": True,
                     "read_only": True,
@@ -103,6 +103,10 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
         report = endpoint_test.run_acceptance(self.transport)
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["checks"]["health"], "PASS")
+        self.assertEqual(
+            report["checks"]["explorer"]["schema_version"],
+            "junca-public-explorer/v4",
+        )
         self.assertEqual(report["checks"]["explorer"]["finalized_height"], 7)
         self.assertEqual(report["finalized_head"]["height"], 7)
         self.assertEqual(report["finalized_head"]["timestamp"], "0x1234")
@@ -159,17 +163,54 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             endpoint_test.run_acceptance(legacy_transport)
         self.assertEqual(len(self.calls), 2)
 
-    def test_explorer_v1_cannot_pass_v3_rollout_gate(self):
-        def v1_transport(method, url, payload):
+    def test_explorer_v3_cannot_pass_v4_rollout_gate(self):
+        def v3_transport(method, url, payload):
             response = self.transport(method, url, payload)
             if url == endpoint_test.EXPLORER_URL:
                 body = dict(response.body)
-                body["schema_version"] = "junca-public-explorer/v1"
+                body["schema_version"] = "junca-public-explorer/v3"
                 return endpoint_test.HttpResponse(response.status, body)
             return response
 
-        with self.assertRaisesRegex(endpoint_test.AcceptanceError, "v3 schema is required"):
-            endpoint_test.run_acceptance(v1_transport)
+        with self.assertRaisesRegex(
+            endpoint_test.AcceptanceError,
+            "v4 schema is required",
+        ):
+            endpoint_test.run_acceptance(v3_transport)
+
+    def test_explorer_chain_id_dual_projection_must_agree(self):
+        def contradictory_transport(method, url, payload):
+            response = self.transport(method, url, payload)
+            if url == endpoint_test.EXPLORER_URL:
+                body = dict(response.body)
+                body["network"] = dict(body["network"])
+                body["network"]["chain_id_decimal"] = 1
+                return endpoint_test.HttpResponse(response.status, body)
+            return response
+
+        with self.assertRaisesRegex(
+            endpoint_test.AcceptanceError,
+            "chain id hex/decimal mismatch",
+        ):
+            endpoint_test.run_acceptance(contradictory_transport)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_explorer_peer_count_dual_projection_must_agree(self):
+        def contradictory_transport(method, url, payload):
+            response = self.transport(method, url, payload)
+            if url == endpoint_test.EXPLORER_URL:
+                body = dict(response.body)
+                body["network"] = dict(body["network"])
+                body["network"]["peer_count_hex"] = "0x1"
+                return endpoint_test.HttpResponse(response.status, body)
+            return response
+
+        with self.assertRaisesRegex(
+            endpoint_test.AcceptanceError,
+            "peer count hex/decimal mismatch",
+        ):
+            endpoint_test.run_acceptance(contradictory_transport)
+        self.assertEqual(len(self.calls), 2)
 
     def test_missing_certificate_body_projection_fails_closed(self):
         def incomplete_transport(method, url, payload):

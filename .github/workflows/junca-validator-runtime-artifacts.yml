@@ -27,6 +27,7 @@ on:
       - "tests/test_junca_runtime_release_ami_drift.py"
       - "tests/test_junca_hardened_release_v2.py"
       - "tests/test_junca_live_rollout_prefix_gate.py"
+      - "tests/test_junca_public_testnet_endpoint_test.py"
       - "tests/test_junca_public_endpoint_sampling.py"
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
@@ -61,6 +62,7 @@ on:
       - "tests/test_junca_runtime_release_ami_drift.py"
       - "tests/test_junca_hardened_release_v2.py"
       - "tests/test_junca_live_rollout_prefix_gate.py"
+      - "tests/test_junca_public_testnet_endpoint_test.py"
       - "tests/test_junca_public_endpoint_sampling.py"
       - ".github/image-builder/validator-component.yml"
       - ".github/workflows/junca-validator-ami-build.yml"
@@ -92,6 +94,7 @@ jobs:
             tests.test_junca_runtime_release_ami_drift \
             tests.test_junca_hardened_release_v2 \
             tests.test_junca_live_rollout_prefix_gate \
+            tests.test_junca_public_testnet_endpoint_test \
             tests.test_junca_public_endpoint_sampling \
             tests.test_junca_social_ecosystem_chain_validator_node -v
           python scripts/junca_hardened_immutable_candidate_policy.py \

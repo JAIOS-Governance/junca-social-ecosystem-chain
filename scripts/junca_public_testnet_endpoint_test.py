@@ -49,7 +49,7 @@ UNSAFE_RPC_METHODS = (
 )
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
 HEALTH_SCHEMA = "junca-public-gateway-health/v1"
-EXPLORER_SCHEMA = "junca-public-explorer/v3"
+EXPLORER_SCHEMA = "junca-public-explorer/v4"
 MAX_SAMPLE_ATTEMPTS = 10
 MAX_SAMPLE_INTERVAL_SECONDS = 60.0
 DEFAULT_SAMPLE_ATTEMPTS = 5
@@ -116,6 +116,10 @@ def _require(condition: bool, message: str) -> None:
         raise AcceptanceError(message)
 
 
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _verify_boundaries(body: Mapping[str, Any], endpoint: str) -> None:
     for field in BOUNDARY_FIELDS:
         _require(body.get(field) is False, f"{endpoint}: {field} must be false")
@@ -157,7 +161,7 @@ def run_acceptance(
     _require(explorer.status == 200, "explorer: expected HTTP 200")
     _require(
         explorer.body.get("schema_version") == EXPLORER_SCHEMA,
-        "explorer: v3 schema is required",
+        "explorer: v4 schema is required",
     )
     _require(
         explorer.body.get("status") == "ready",
@@ -177,9 +181,12 @@ def run_acceptance(
     _require(
         isinstance(network.get("chain_id"), str)
         and network["chain_id"].startswith("0x")
-        and isinstance(network.get("chain_id_decimal"), int)
-        and network["chain_id_decimal"] >= 0,
+        and _is_nonnegative_int(network.get("chain_id_decimal")),
         "explorer: invalid chain id",
+    )
+    _require(
+        network["chain_id"] == hex(network["chain_id_decimal"]),
+        "explorer: chain id hex/decimal mismatch",
     )
     _require(
         isinstance(network.get("client_version"), str)
@@ -187,16 +194,19 @@ def run_acceptance(
         "explorer: invalid client version",
     )
     _require(
-        isinstance(network.get("peer_count"), int)
-        and network["peer_count"] >= 0
+        _is_nonnegative_int(network.get("peer_count"))
         and isinstance(network.get("peer_count_hex"), str)
         and network["peer_count_hex"].startswith("0x"),
         "explorer: invalid peer count",
     )
+    _require(
+        network["peer_count_hex"] == hex(network["peer_count"]),
+        "explorer: peer count hex/decimal mismatch",
+    )
     head = explorer.body.get("head")
     _require(isinstance(head, Mapping), "explorer: finalized head is missing")
     _require(
-        isinstance(head.get("height"), int) and head["height"] >= 0,
+        _is_nonnegative_int(head.get("height")),
         "explorer: invalid finalized height",
     )
     _require(
@@ -209,8 +219,8 @@ def run_acceptance(
         "explorer: finalized certificate is missing",
     )
     _require(
-        isinstance(head.get("signed_power"), int)
-        and isinstance(head.get("total_power"), int)
+        _is_nonnegative_int(head.get("signed_power"))
+        and _is_nonnegative_int(head.get("total_power"))
         and 0 < head["signed_power"] <= head["total_power"],
         "explorer: invalid finality power",
     )
@@ -225,12 +235,12 @@ def run_acceptance(
         "explorer: finalized block state root is missing",
     )
     _require(
-        isinstance(head.get("transaction_count"), int)
-        and head["transaction_count"] >= 0,
+        _is_nonnegative_int(head.get("transaction_count")),
         "explorer: invalid transaction count",
     )
     checks["explorer"] = {
         "result": "PASS",
+        "schema_version": explorer.body["schema_version"],
         "finalized_height": head["height"],
         "finalized_hash": head["hash"],
         "signed_power": head["signed_power"],

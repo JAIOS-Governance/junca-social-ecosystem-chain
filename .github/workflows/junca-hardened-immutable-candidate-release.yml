@@ -17,6 +17,7 @@ concurrency:
 jobs:
   release:
     if: >-
+      false &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.name == 'JUNCA Validator Runtime Artifacts' &&
       github.event.workflow_run.event == 'push' &&

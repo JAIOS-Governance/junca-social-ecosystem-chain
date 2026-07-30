@@ -33,6 +33,13 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(value, self.workflow)
 
+    def test_legacy_release_route_is_disabled_before_v2_rollout(self) -> None:
+        self.assertIn(
+            "if: >-\n      false &&\n"
+            "      github.event.workflow_run.conclusion == 'success'",
+            self.workflow,
+        )
+
     def test_old_pr145_candidate_is_not_reused_or_resumed(self) -> None:
         self.assertNotIn(
             "a64b7762bc561ce1ab3fe24bff95a4f1dc756f9e27d8270f4126e54e496815ec",
