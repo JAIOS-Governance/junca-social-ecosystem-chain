@@ -47,6 +47,14 @@ stable height alone is never activation evidence.
    the same strict readback; it never treats the restart itself as acceptance.
    A failed prerequisite or failed health readback stops before Terraform
    mutation and preserves service diagnostics for the next repair.
+   When the exact failure is a missing `/etc/junca/runtime.env`, reconstruction
+   is allowed only before any validator replacement (`updated_count=0`) and only
+   after exact current AMI, runtime archive, genesis, retained state,
+   `PRAGMA quick_check`, KMS signer binding and peer binding readback. Generate
+   the file from those Terraform-canonical values, write it atomically as
+   `root:junca` mode `0640`, and require its calculated SHA-256 before restart.
+   Never repair a symlink, overwrite an existing contradictory file, accept an
+   operator-supplied value, or reconstruct during a mixed/resumed prefix.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the

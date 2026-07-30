@@ -866,16 +866,92 @@ def finality_readback:
     '.validator_id == $validator_id' "$output_path" >/dev/null
 }
 
+render_canonical_validator_runtime_env() {
+  local validator_id="$1"
+  local runtime_version="$2"
+  local genesis_sha256="$3"
+  local signer_arn="$4"
+  local signer_bindings="$5"
+  local peer_endpoints="$6"
+  local automatic_finality_enabled="$7"
+  local block_interval_seconds="$8"
+  local slot_epoch_seconds="$9"
+  local binding_01
+  local binding_02
+  local binding_03
+  local binding_extra
+  local selected_binding
+  [[ "$validator_id" =~ ^validator-0[1-3]$ ]]
+  [[ "$runtime_version" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$signer_arn" =~ ^arn:aws:kms:us-east-1:[0-9]{12}:key/[0-9a-f-]{36}$ ]]
+  IFS=, read -r binding_01 binding_02 binding_03 binding_extra \
+    <<<"$signer_bindings"
+  [[ -z "$binding_extra" ]]
+  [[ "$binding_01" =~ ^validator-01=arn:aws:kms:us-east-1:[0-9]{12}:key/[0-9a-f-]{36}$ ]]
+  [[ "$binding_02" =~ ^validator-02=arn:aws:kms:us-east-1:[0-9]{12}:key/[0-9a-f-]{36}$ ]]
+  [[ "$binding_03" =~ ^validator-03=arn:aws:kms:us-east-1:[0-9]{12}:key/[0-9a-f-]{36}$ ]]
+  case "$validator_id" in
+    validator-01) selected_binding="${binding_01#*=}" ;;
+    validator-02) selected_binding="${binding_02#*=}" ;;
+    validator-03) selected_binding="${binding_03#*=}" ;;
+  esac
+  test "$selected_binding" = "$signer_arn"
+  test "$peer_endpoints" = \
+    "validator-01=10.67.16.10:30303,validator-02=10.67.32.10:30303,validator-03=10.67.48.10:30303"
+  case "$automatic_finality_enabled" in
+    true)
+      test "$block_interval_seconds" = 30
+      [[ "$slot_epoch_seconds" =~ ^[1-9][0-9]*$ ]]
+      test "$((slot_epoch_seconds % 30))" = 0
+      ;;
+    false)
+      test "$block_interval_seconds" = 0
+      test "$slot_epoch_seconds" = 0
+      ;;
+    *) return 2 ;;
+  esac
+  cat <<EOF
+CHAIN_NAME=JUNCA Social Ecosystem Chain
+GOVERNANCE=JAIOS Institutional Governance
+NETWORK_NOTICE=Public Testnet / No Monetary Value
+VALIDATOR_ID=${validator_id}
+CHAIN_ID=20260723
+GENESIS_SHA256=${genesis_sha256}
+NODE_ARTIFACT_SHA256=${runtime_version}
+SIGNER_RESOURCE_ARN=${signer_arn}
+AWS_REGION=us-east-1
+AWS_DEFAULT_REGION=us-east-1
+PUBLIC_RPC=false
+P2P_PORT=30303
+# Comma-separated exact-three contracts:
+# validator-01=arn:aws:kms:...,... and validator-01=10.x.x.x:30303,...
+VALIDATOR_SIGNER_BINDINGS=${signer_bindings}
+VALIDATOR_PEER_ENDPOINTS=${peer_endpoints}
+AUTOMATIC_FINALITY_ENABLED=${automatic_finality_enabled}
+TESTNET_BLOCK_INTERVAL_SECONDS=${block_interval_seconds}
+TESTNET_SLOT_EPOCH_SECONDS=${slot_epoch_seconds}
+BRIDGE_ACTIVATED=false
+EOF
+}
+
 validate_validator_service_recovery_evidence() {
   local evidence_path="$1"
   local validator_id="$2"
   local instance_id="$3"
+  local expected_ami_id="$4"
+  local expected_runtime_version="$5"
+  local expected_runtime_env_sha256="$6"
   jq -e \
     --arg validator_id "$validator_id" \
-    --arg instance_id "$instance_id" '
+    --arg instance_id "$instance_id" \
+    --arg expected_ami_id "$expected_ami_id" \
+    --arg expected_runtime_version "$expected_runtime_version" \
+    --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" '
       .schema_version == "junca-validator-service-recovery/v1" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
+      .ami_id == $expected_ami_id and
       (.before_status | type) == "string" and
       (.restart_attempted | type) == "boolean" and
       .restart_exit == 0 and
@@ -888,9 +964,25 @@ validate_validator_service_recovery_evidence() {
       ) and
       .durable_mount_verified == true and
       .state_store_integrity == true and
+      .binary_artifact_verified == true and
+      .genesis_verified == true and
+      .runtime_directory_verified == true and
       .runtime_env_verified == true and
-      (.runtime_version | type) == "string" and
-      (.runtime_version | test("^[0-9a-f]{64}$")) and
+      .runtime_version == $expected_runtime_version and
+      (.runtime_env_repair_attempted | type) == "boolean" and
+      (.runtime_env_repaired | type) == "boolean" and
+      .service_stop_exit == 0 and
+      (
+        if .runtime_env_repaired then
+          .runtime_env_repair_attempted == true and
+          .runtime_env_source == "canonical" and
+          .runtime_env_sha256 == $expected_runtime_env_sha256
+        else
+          .runtime_env_repair_attempted == false and
+          .runtime_env_source == "existing" and
+          (.runtime_env_sha256 | test("^[0-9a-f]{64}$"))
+        end
+      ) and
       .after_status == "active" and
       .health_status == "healthy" and
       (.attempts | type) == "number" and
@@ -907,21 +999,89 @@ validate_validator_service_recovery_evidence() {
 ensure_validator_service_available() {
   local validator_id="$1"
   local instance_id="$2"
-  local output_path="$3"
+  local expected_ami_id="$3"
+  local expected_runtime_version="$4"
+  local genesis_sha256="$5"
+  local signer_arn="$6"
+  local signer_bindings="$7"
+  local peer_endpoints="$8"
+  local automatic_finality_enabled="$9"
+  shift 9
+  local block_interval_seconds="$1"
+  local slot_epoch_seconds="$2"
+  local allow_runtime_env_repair="$3"
+  local output_path="$4"
   local recovery_command
+  local canonical_runtime_b64
+  local canonical_runtime_env_sha256
   local command_id
   local invocation
+  local ami_id
+  [[ "$expected_ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+  [[ "$expected_runtime_version" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+  case "$allow_runtime_env_repair" in
+    true|false) ;;
+    *) return 2 ;;
+  esac
+  canonical_runtime_b64="$(
+    render_canonical_validator_runtime_env \
+      "$validator_id" "$expected_runtime_version" "$genesis_sha256" \
+      "$signer_arn" "$signer_bindings" "$peer_endpoints" \
+      "$automatic_finality_enabled" "$block_interval_seconds" \
+      "$slot_epoch_seconds" |
+      base64 -w0
+  )"
+  canonical_runtime_env_sha256="$(
+    render_canonical_validator_runtime_env \
+      "$validator_id" "$expected_runtime_version" "$genesis_sha256" \
+      "$signer_arn" "$signer_bindings" "$peer_endpoints" \
+      "$automatic_finality_enabled" "$block_interval_seconds" \
+      "$slot_epoch_seconds" |
+      sha256sum |
+      awk '{print $1}'
+  )"
   wait_for_ssm_online \
     "$instance_id" \
     "artifacts/ssm-online-service-recovery-${validator_id}-${instance_id}.json"
-  recovery_command='
+  ami_id="$(
+    aws ec2 describe-instances \
+      --instance-ids "$instance_id" \
+      --query 'Reservations[0].Instances[0].ImageId' \
+      --output text
+  )"
+  test "$ami_id" = "$expected_ami_id"
+  recovery_command="$(
+    printf 'expected_runtime_version=%q\n' "$expected_runtime_version"
+    printf 'expected_genesis_sha256=%q\n' "$genesis_sha256"
+    printf 'expected_validator_id=%q\n' "$validator_id"
+    printf 'expected_signer_arn=%q\n' "$signer_arn"
+    printf 'expected_signer_bindings=%q\n' "$signer_bindings"
+    printf 'expected_peer_endpoints=%q\n' "$peer_endpoints"
+    printf 'expected_automatic_finality_enabled=%q\n' \
+      "$automatic_finality_enabled"
+    printf 'expected_block_interval_seconds=%q\n' "$block_interval_seconds"
+    printf 'expected_slot_epoch_seconds=%q\n' "$slot_epoch_seconds"
+    printf 'allow_runtime_env_repair=%q\n' "$allow_runtime_env_repair"
+    printf 'canonical_runtime_b64=%q\n' "$canonical_runtime_b64"
+    printf 'canonical_runtime_env_sha256=%q\n' \
+      "$canonical_runtime_env_sha256"
+    cat <<'EOF'
 set -u -o pipefail
 before_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
 restart_attempted=false
 durable_mount_verified=false
 state_store_integrity=false
+binary_artifact_verified=false
+genesis_verified=false
+runtime_directory_verified=false
 runtime_env_verified=false
 runtime_version=""
+runtime_env_repair_attempted=false
+runtime_env_repaired=false
+runtime_env_source=""
+runtime_env_sha256=""
+service_stop_exit=0
 restart_exit=0
 after_status="$before_status"
 health_status=""
@@ -934,24 +1094,93 @@ fi
 if [[ "$durable_mount_verified" == true &&
       -f /var/lib/junca/state.sqlite &&
       ! -L /var/lib/junca/state.sqlite ]]; then
-  quick_check="$(python3 -c '"'"'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro", uri=True); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()'"'"' 2>/dev/null || true)"
+  quick_check="$(python3 -c 'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro", uri=True); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()' 2>/dev/null || true)"
   if [[ "$quick_check" == "ok" ]]; then
     state_store_integrity=true
   fi
 fi
+if [[ -d /etc/junca && ! -L /etc/junca ]] &&
+    getent group junca >/dev/null; then
+  runtime_directory_verified=true
+fi
+if [[ -f /opt/junca/validator-runtime.tar.gz &&
+      ! -L /opt/junca/validator-runtime.tar.gz ]] &&
+    printf '%s  %s\n' "$expected_runtime_version" \
+      /opt/junca/validator-runtime.tar.gz |
+      sha256sum --check --strict >/dev/null 2>&1; then
+  binary_artifact_verified=true
+fi
+if [[ -f /etc/junca/genesis.json && ! -L /etc/junca/genesis.json ]] &&
+    printf '%s  %s\n' "$expected_genesis_sha256" /etc/junca/genesis.json |
+      sha256sum --check --strict >/dev/null 2>&1; then
+  genesis_verified=true
+fi
 if [[ -f /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env ]]; then
-  runtime_count="$(awk '"'"'/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}'"'"' /etc/junca/runtime.env)"
-  runtime_version="$(sed -n '"'"'s/^NODE_ARTIFACT_SHA256=//p'"'"' /etc/junca/runtime.env)"
+  runtime_count="$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+  runtime_version="$(sed -n 's/^NODE_ARTIFACT_SHA256=//p' /etc/junca/runtime.env)"
+  runtime_env_sha256="$(sha256sum /etc/junca/runtime.env | awk '{print $1}')"
   if [[ "$runtime_count" == 1 &&
-        "$runtime_version" =~ ^[0-9a-f]{64}$ ]]; then
+        "$runtime_version" == "$expected_runtime_version" ]] &&
+      grep -Fxq "VALIDATOR_ID=$expected_validator_id" /etc/junca/runtime.env &&
+      grep -Fxq "CHAIN_ID=20260723" /etc/junca/runtime.env &&
+      grep -Fxq "GENESIS_SHA256=$expected_genesis_sha256" /etc/junca/runtime.env &&
+      grep -Fxq "SIGNER_RESOURCE_ARN=$expected_signer_arn" /etc/junca/runtime.env &&
+      grep -Fxq "VALIDATOR_SIGNER_BINDINGS=$expected_signer_bindings" /etc/junca/runtime.env &&
+      grep -Fxq "VALIDATOR_PEER_ENDPOINTS=$expected_peer_endpoints" /etc/junca/runtime.env &&
+      grep -Fxq "BRIDGE_ACTIVATED=false" /etc/junca/runtime.env; then
     runtime_env_verified=true
+    runtime_env_source=existing
+  fi
+fi
+
+if [[ "$runtime_env_verified" != true &&
+      "$allow_runtime_env_repair" == true &&
+      "$before_status" != "active" &&
+      ! -e /etc/junca/runtime.env &&
+      ! -L /etc/junca/runtime.env &&
+      "$durable_mount_verified" == true &&
+      "$state_store_integrity" == true &&
+      "$binary_artifact_verified" == true &&
+      "$genesis_verified" == true &&
+      "$runtime_directory_verified" == true ]]; then
+  runtime_env_repair_attempted=true
+  systemctl stop junca-validator.service || service_stop_exit=$?
+  if [[ "$service_stop_exit" == 0 ]]; then
+    runtime_env_tmp="$(mktemp /etc/junca/.runtime.env.XXXXXX)"
+    trap 'rm -f "$runtime_env_tmp"' EXIT
+    printf '%s' "$canonical_runtime_b64" |
+      base64 -d >"$runtime_env_tmp"
+    runtime_env_sha256="$(
+      sha256sum "$runtime_env_tmp" |
+        awk '{print $1}'
+    )"
+    if [[ "$runtime_env_sha256" == "$canonical_runtime_env_sha256" ]]; then
+      chown root:junca "$runtime_env_tmp"
+      chmod 0640 "$runtime_env_tmp"
+      mv -f "$runtime_env_tmp" /etc/junca/runtime.env
+      trap - EXIT
+      if [[ -f /etc/junca/runtime.env &&
+            ! -L /etc/junca/runtime.env &&
+            "$(stat -c '%U:%G' /etc/junca/runtime.env)" == "root:junca" &&
+            "$(stat -c '%a' /etc/junca/runtime.env)" == "640" &&
+            "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
+              "$canonical_runtime_env_sha256" ]]; then
+        runtime_env_repaired=true
+        runtime_env_source=canonical
+        runtime_env_verified=true
+        runtime_version="$expected_runtime_version"
+      fi
+    fi
   fi
 fi
 
 if [[ "$before_status" != "active" &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
+      "$binary_artifact_verified" == true &&
+      "$genesis_verified" == true &&
+      "$runtime_directory_verified" == true &&
       "$runtime_env_verified" == true ]]; then
   restart_attempted=true
   systemctl restart junca-validator.service || restart_exit=$?
@@ -961,11 +1190,14 @@ for attempts in $(seq 1 60); do
   after_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
   if [[ "$after_status" == "active" ]] &&
       health="$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null)"; then
-    health_status="$(jq -r '"'"'.status // empty'"'"' <<<"$health" 2>/dev/null || true)"
+    health_status="$(jq -r '.status // empty' <<<"$health" 2>/dev/null || true)"
     if [[ "$health_status" == "healthy" &&
           "$restart_exit" == 0 &&
           "$durable_mount_verified" == true &&
           "$state_store_integrity" == true &&
+          "$binary_artifact_verified" == true &&
+          "$genesis_verified" == true &&
+          "$runtime_directory_verified" == true &&
           "$runtime_env_verified" == true ]]; then
       accepted=true
       break
@@ -983,20 +1215,36 @@ jq -n \
   --argjson restart_exit "$restart_exit" \
   --argjson durable_mount_verified "$durable_mount_verified" \
   --argjson state_store_integrity "$state_store_integrity" \
+  --argjson binary_artifact_verified "$binary_artifact_verified" \
+  --argjson genesis_verified "$genesis_verified" \
+  --argjson runtime_directory_verified "$runtime_directory_verified" \
   --argjson runtime_env_verified "$runtime_env_verified" \
   --arg runtime_version "$runtime_version" \
+  --argjson runtime_env_repair_attempted "$runtime_env_repair_attempted" \
+  --argjson runtime_env_repaired "$runtime_env_repaired" \
+  --arg runtime_env_source "$runtime_env_source" \
+  --arg runtime_env_sha256 "$runtime_env_sha256" \
+  --argjson service_stop_exit "$service_stop_exit" \
   --arg after_status "$after_status" \
   --arg health_status "$health_status" \
   --argjson attempts "$attempts" \
-  --argjson accepted "$accepted" '"'"'{
+  --argjson accepted "$accepted" '{
     schema_version: $schema_version,
     before_status: $before_status,
     restart_attempted: $restart_attempted,
     restart_exit: $restart_exit,
     durable_mount_verified: $durable_mount_verified,
     state_store_integrity: $state_store_integrity,
+    binary_artifact_verified: $binary_artifact_verified,
+    genesis_verified: $genesis_verified,
+    runtime_directory_verified: $runtime_directory_verified,
     runtime_env_verified: $runtime_env_verified,
     runtime_version: $runtime_version,
+    runtime_env_repair_attempted: $runtime_env_repair_attempted,
+    runtime_env_repaired: $runtime_env_repaired,
+    runtime_env_source: $runtime_env_source,
+    runtime_env_sha256: $runtime_env_sha256,
+    service_stop_exit: $service_stop_exit,
     after_status: $after_status,
     health_status: $health_status,
     attempts: $attempts,
@@ -1005,14 +1253,15 @@ jq -n \
     assets_moved: false,
     bridge_activated: false,
     mainnet_activation_authorized: false
-  }'"'"'
+  }'
 
 if [[ "$accepted" != true ]]; then
   systemctl status junca-validator.service --no-pager -l >&2 || true
   journalctl -u junca-validator.service --no-pager -n 100 >&2 || true
   exit 1
 fi
-'
+EOF
+  )"
   jq -n --arg command "$recovery_command" '{commands: [$command]}' \
     >"artifacts/ssm-service-recovery-${validator_id}.json"
   command_id="$(
@@ -1034,12 +1283,15 @@ fi
     jq \
       --arg validator_id "$validator_id" \
       --arg instance_id "$instance_id" \
+      --arg ami_id "$ami_id" \
       '. + {
         validator_id: $validator_id,
-        instance_id: $instance_id
+        instance_id: $instance_id,
+        ami_id: $ami_id
       }' >"$output_path"
   validate_validator_service_recovery_evidence \
-    "$output_path" "$validator_id" "$instance_id"
+    "$output_path" "$validator_id" "$instance_id" "$expected_ami_id" \
+    "$expected_runtime_version" "$canonical_runtime_env_sha256"
   jq -e '.Status == "Success"' "$invocation" >/dev/null
 }
 
@@ -1050,7 +1302,16 @@ write_live_rollout_prefix_readback() {
   local previous_ami_id="$4"
   local rollback_path="$5"
   local -a current_instances
+  local -a validator_signer_arns
+  local allow_runtime_env_repair
+  local baseline_automatic_finality_enabled
+  local baseline_block_interval_seconds
+  local baseline_slot_epoch_seconds
+  local expected_ami_id
+  local expected_runtime_version
   local index
+  local peer_endpoints
+  local signer_bindings
   local state_volume_id
   local validator_state_rollback
   local observation_path
@@ -1069,6 +1330,47 @@ write_live_rollout_prefix_readback() {
       artifacts/live-prefix-foundation-outputs.json
   )
   test "${#current_instances[@]}" = 3
+  mapfile -t validator_signer_arns < <(
+    jq -er '.validator_signer_readback.value[].arn' \
+      artifacts/live-prefix-foundation-outputs.json
+  )
+  test "${#validator_signer_arns[@]}" = 3
+  for signer_arn in "${validator_signer_arns[@]}"; do
+    [[ "$signer_arn" =~ ^arn:aws:kms:us-east-1:[0-9]{12}:key/[0-9a-f-]{36}$ ]]
+  done
+  signer_bindings="$(
+    jq -er '
+      .validator_signer_readback.value
+      | to_entries
+      | map("validator-0\(.key + 1)=\(.value.arn)")
+      | join(",")
+    ' artifacts/live-prefix-foundation-outputs.json
+  )"
+  peer_endpoints="validator-01=10.67.16.10:30303,validator-02=10.67.32.10:30303,validator-03=10.67.48.10:30303"
+  baseline_automatic_finality_enabled="$(
+    jq -er '.automatic_finality_readback.value.enabled' \
+      artifacts/live-prefix-foundation-outputs.json
+  )"
+  baseline_block_interval_seconds="$(
+    jq -er '.automatic_finality_readback.value.block_interval_seconds' \
+      artifacts/live-prefix-foundation-outputs.json
+  )"
+  baseline_slot_epoch_seconds="$(
+    jq -er '.automatic_finality_readback.value.slot_epoch_seconds' \
+      artifacts/live-prefix-foundation-outputs.json
+  )"
+  case "$baseline_automatic_finality_enabled" in
+    true)
+      test "$baseline_block_interval_seconds" = 30
+      [[ "$baseline_slot_epoch_seconds" =~ ^[1-9][0-9]*$ ]]
+      test "$((baseline_slot_epoch_seconds % 30))" = 0
+      ;;
+    false)
+      test "$baseline_block_interval_seconds" = 0
+      test "$baseline_slot_epoch_seconds" = 0
+      ;;
+    *) return 2 ;;
+  esac
   validator_state_rollback="$(
     jq -ce '
       .validator_state_volume_readback.value
@@ -1094,10 +1396,32 @@ write_live_rollout_prefix_readback() {
     "$validator_state_rollback" \
     artifacts/live-prefix-rollback-snapshots.json
   for index in 0 1 2; do
+    if [[ "$index" -lt "$evidence_updated_count" ]]; then
+      expected_ami_id="$NODE_AMI_ID"
+      expected_runtime_version="$NODE_ARTIFACT_SHA256"
+    else
+      expected_ami_id="$previous_ami_id"
+      expected_runtime_version="$previous_artifact_sha256"
+    fi
+    if [[ "$evidence_updated_count" == 0 ]]; then
+      allow_runtime_env_repair=true
+    else
+      allow_runtime_env_repair=false
+    fi
     observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
     ensure_validator_service_available \
       "validator-0$((index + 1))" \
       "${current_instances[$index]}" \
+      "$expected_ami_id" \
+      "$expected_runtime_version" \
+      "$GENESIS_SHA256" \
+      "${validator_signer_arns[$index]}" \
+      "$signer_bindings" \
+      "$peer_endpoints" \
+      "$baseline_automatic_finality_enabled" \
+      "$baseline_block_interval_seconds" \
+      "$baseline_slot_epoch_seconds" \
+      "$allow_runtime_env_repair" \
       "artifacts/live-prefix-service-recovery-$((index + 1)).json"
     capture_validator_observation \
       "validator-0$((index + 1))" \
