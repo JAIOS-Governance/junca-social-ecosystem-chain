@@ -976,6 +976,8 @@ validate_validator_service_recovery_evidence() {
       .runtime_env_owner == "root:junca" and
       .runtime_env_mode == "640" and
       .runtime_env_link_count == 1 and
+      .runtime_env_schema_verified == true and
+      .runtime_env_required_assignment_count == 18 and
       (.runtime_env_repaired | type) == "boolean" and
       (.runtime_env_persistence_verified | type) == "boolean" and
       .runtime_env_post_restart_verified == true and
@@ -1105,6 +1107,8 @@ runtime_env_admission_identity=""
 runtime_env_owner=""
 runtime_env_mode=""
 runtime_env_link_count=0
+runtime_env_schema_verified=false
+runtime_env_required_assignment_count=0
 runtime_env_repaired=false
 runtime_env_persistence_verified=false
 runtime_env_post_restart_verified=false
@@ -1119,6 +1123,89 @@ after_status="$before_status"
 health_status=""
 attempts=1
 accepted=false
+
+runtime_env_has_exact_assignment() {
+  local path="$1"
+  local key="$2"
+  local expected="$3"
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]]
+  [[ "$(
+    awk -v key="$key" '
+      $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { count++ }
+      END { print count + 0 }
+    ' "$path"
+  )" == 1 ]] &&
+    grep -Fxq "${key}=${expected}" "$path"
+}
+
+runtime_env_has_only_canonical_assignments() {
+  local path="$1"
+  awk '
+    BEGIN {
+      split("CHAIN_NAME GOVERNANCE NETWORK_NOTICE VALIDATOR_ID CHAIN_ID GENESIS_SHA256 NODE_ARTIFACT_SHA256 SIGNER_RESOURCE_ARN AWS_REGION AWS_DEFAULT_REGION PUBLIC_RPC P2P_PORT VALIDATOR_SIGNER_BINDINGS VALIDATOR_PEER_ENDPOINTS AUTOMATIC_FINALITY_ENABLED TESTNET_BLOCK_INTERVAL_SECONDS TESTNET_SLOT_EPOCH_SECONDS BRIDGE_ACTIVATED", names, " ")
+      for (item_index in names) {
+        canonical[names[item_index]] = 1
+      }
+    }
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      if (line !~ /^[A-Z][A-Z0-9_]*=/) {
+        exit 1
+      }
+      key = line
+      sub(/=.*/, "", key)
+      if (!(key in canonical)) {
+        exit 1
+      }
+      count++
+    }
+    END {
+      if (count != 18) {
+        exit 1
+      }
+    }
+  ' "$path"
+}
+
+verify_runtime_env_schema() {
+  local path="$1"
+  [[ -f "$path" && ! -L "$path" ]] &&
+    runtime_env_has_only_canonical_assignments "$path" &&
+    runtime_env_has_exact_assignment \
+      "$path" CHAIN_NAME "JUNCA Social Ecosystem Chain" &&
+    runtime_env_has_exact_assignment \
+      "$path" GOVERNANCE "JAIOS Institutional Governance" &&
+    runtime_env_has_exact_assignment \
+      "$path" NETWORK_NOTICE "Public Testnet / No Monetary Value" &&
+    runtime_env_has_exact_assignment \
+      "$path" VALIDATOR_ID "$expected_validator_id" &&
+    runtime_env_has_exact_assignment "$path" CHAIN_ID 20260723 &&
+    runtime_env_has_exact_assignment \
+      "$path" GENESIS_SHA256 "$expected_genesis_sha256" &&
+    runtime_env_has_exact_assignment \
+      "$path" NODE_ARTIFACT_SHA256 "$expected_runtime_version" &&
+    runtime_env_has_exact_assignment \
+      "$path" SIGNER_RESOURCE_ARN "$expected_signer_arn" &&
+    runtime_env_has_exact_assignment "$path" AWS_REGION us-east-1 &&
+    runtime_env_has_exact_assignment "$path" AWS_DEFAULT_REGION us-east-1 &&
+    runtime_env_has_exact_assignment "$path" PUBLIC_RPC false &&
+    runtime_env_has_exact_assignment "$path" P2P_PORT 30303 &&
+    runtime_env_has_exact_assignment \
+      "$path" VALIDATOR_SIGNER_BINDINGS "$expected_signer_bindings" &&
+    runtime_env_has_exact_assignment \
+      "$path" VALIDATOR_PEER_ENDPOINTS "$expected_peer_endpoints" &&
+    runtime_env_has_exact_assignment \
+      "$path" AUTOMATIC_FINALITY_ENABLED \
+      "$expected_automatic_finality_enabled" &&
+    runtime_env_has_exact_assignment \
+      "$path" TESTNET_BLOCK_INTERVAL_SECONDS \
+      "$expected_block_interval_seconds" &&
+    runtime_env_has_exact_assignment \
+      "$path" TESTNET_SLOT_EPOCH_SECONDS "$expected_slot_epoch_seconds" &&
+    runtime_env_has_exact_assignment "$path" BRIDGE_ACTIVATED false
+}
 
 if mountpoint -q /var/lib/junca; then
   durable_mount_verified=true
@@ -1151,28 +1238,20 @@ if [[ -f /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env &&
       "$(stat -c '%U:%G' /etc/junca/runtime.env)" == "root:junca" &&
       "$(stat -c '%a' /etc/junca/runtime.env)" == "640" &&
-      "$(stat -c '%h' /etc/junca/runtime.env)" == 1 ]]; then
-  runtime_count="$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)"
+      "$(stat -c '%h' /etc/junca/runtime.env)" == 1 ]] &&
+    verify_runtime_env_schema /etc/junca/runtime.env; then
+  runtime_env_schema_verified=true
+  runtime_env_required_assignment_count=18
   runtime_version="$(sed -n 's/^NODE_ARTIFACT_SHA256=//p' /etc/junca/runtime.env)"
   runtime_env_sha256="$(sha256sum /etc/junca/runtime.env | awk '{print $1}')"
-  if [[ "$runtime_count" == 1 &&
-        "$runtime_version" == "$expected_runtime_version" ]] &&
-      grep -Fxq "VALIDATOR_ID=$expected_validator_id" /etc/junca/runtime.env &&
-      grep -Fxq "CHAIN_ID=20260723" /etc/junca/runtime.env &&
-      grep -Fxq "GENESIS_SHA256=$expected_genesis_sha256" /etc/junca/runtime.env &&
-      grep -Fxq "SIGNER_RESOURCE_ARN=$expected_signer_arn" /etc/junca/runtime.env &&
-      grep -Fxq "VALIDATOR_SIGNER_BINDINGS=$expected_signer_bindings" /etc/junca/runtime.env &&
-      grep -Fxq "VALIDATOR_PEER_ENDPOINTS=$expected_peer_endpoints" /etc/junca/runtime.env &&
-      grep -Fxq "BRIDGE_ACTIVATED=false" /etc/junca/runtime.env; then
-    runtime_env_verified=true
-    runtime_env_source=existing
-    runtime_env_admission_identity="$(
-      stat -Lc '%d:%i' /etc/junca/runtime.env
-    )"
-    runtime_env_owner="$(stat -c '%U:%G' /etc/junca/runtime.env)"
-    runtime_env_mode="$(stat -c '%a' /etc/junca/runtime.env)"
-    runtime_env_link_count="$(stat -c '%h' /etc/junca/runtime.env)"
-  fi
+  runtime_env_verified=true
+  runtime_env_source=existing
+  runtime_env_admission_identity="$(
+    stat -Lc '%d:%i' /etc/junca/runtime.env
+  )"
+  runtime_env_owner="$(stat -c '%U:%G' /etc/junca/runtime.env)"
+  runtime_env_mode="$(stat -c '%a' /etc/junca/runtime.env)"
+  runtime_env_link_count="$(stat -c '%h' /etc/junca/runtime.env)"
 fi
 
 if [[ "$runtime_env_verified" != true &&
@@ -1219,8 +1298,11 @@ if [[ "$runtime_env_verified" != true &&
             "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
               "$canonical_runtime_env_sha256" &&
             "$(stat -c '%h' /etc/junca/runtime.env)" == 1 ]] &&
+          verify_runtime_env_schema /etc/junca/runtime.env &&
           sync -f /etc/junca; then
         runtime_env_persistence_verified=true
+        runtime_env_schema_verified=true
+        runtime_env_required_assignment_count=18
         runtime_env_repaired=true
         runtime_env_source=canonical
         runtime_env_verified=true
@@ -1241,6 +1323,8 @@ if [[ "$before_status" != "active" &&
       "$genesis_verified" == true &&
       "$runtime_directory_verified" == true &&
       "$runtime_env_verified" == true &&
+      "$runtime_env_schema_verified" == true &&
+      "$runtime_env_required_assignment_count" == 18 &&
       -f /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env &&
       "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
@@ -1278,6 +1362,8 @@ for attempts in $(seq 1 60); do
           "$genesis_verified" == true &&
           "$runtime_directory_verified" == true &&
           "$runtime_env_verified" == true &&
+          "$runtime_env_schema_verified" == true &&
+          "$runtime_env_required_assignment_count" == 18 &&
           "$runtime_env_post_restart_verified" == true ]]; then
       accepted=true
       break
@@ -1338,6 +1424,9 @@ jq -n \
   --arg runtime_env_owner "$runtime_env_owner" \
   --arg runtime_env_mode "$runtime_env_mode" \
   --argjson runtime_env_link_count "$runtime_env_link_count" \
+  --argjson runtime_env_schema_verified "$runtime_env_schema_verified" \
+  --argjson runtime_env_required_assignment_count \
+    "$runtime_env_required_assignment_count" \
   --argjson runtime_env_repaired "$runtime_env_repaired" \
   --argjson runtime_env_persistence_verified \
     "$runtime_env_persistence_verified" \
@@ -1372,6 +1461,9 @@ jq -n \
     runtime_env_owner: $runtime_env_owner,
     runtime_env_mode: $runtime_env_mode,
     runtime_env_link_count: $runtime_env_link_count,
+    runtime_env_schema_verified: $runtime_env_schema_verified,
+    runtime_env_required_assignment_count:
+      $runtime_env_required_assignment_count,
     runtime_env_repaired: $runtime_env_repaired,
     runtime_env_persistence_verified: $runtime_env_persistence_verified,
     runtime_env_post_restart_verified:

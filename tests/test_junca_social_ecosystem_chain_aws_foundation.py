@@ -100,6 +100,16 @@ def validator_service_recovery_remote_script(script: str) -> str:
     return definition.split("cat <<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
 
 
+def runtime_env_schema_functions(script: str) -> str:
+    remote = validator_service_recovery_remote_script(script)
+    return (
+        "runtime_env_has_exact_assignment() {"
+        + remote.split("runtime_env_has_exact_assignment() {", 1)[1].split(
+            "\n\nif mountpoint -q", 1
+        )[0]
+    )
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -1397,6 +1407,8 @@ class AwsFoundationTests(unittest.TestCase):
             'runtime_env_owner="$(stat -c',
             'runtime_env_mode="$(stat -c',
             'runtime_env_link_count="$(stat -c',
+            "runtime_env_schema_verified=true",
+            "runtime_env_required_assignment_count=18",
             "runtime_env_persistence_verified=true",
             "runtime_env_post_restart_verified=true",
             "runtime_env_repaired=true",
@@ -1474,6 +1486,108 @@ class AwsFoundationTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_runtime_env_schema_rejects_ambiguous_security_assignments(
+        self,
+    ) -> None:
+        runtime_version = "a" * 64
+        genesis_sha256 = "b" * 64
+        signer = (
+            "arn:aws:kms:us-east-1:595710543956:key/"
+            "72960fd3-1860-41b7-bd2f-4f5b682805d1"
+        )
+        signer_bindings = (
+            f"validator-01={signer},"
+            "validator-02=arn:aws:kms:us-east-1:595710543956:key/"
+            "f7c2e12c-43d0-45dc-a3ff-487253939a21,"
+            "validator-03=arn:aws:kms:us-east-1:595710543956:key/"
+            "96dfadf9-21ca-4169-9f2d-61120d173b13"
+        )
+        peers = (
+            "validator-01=10.67.16.10:30303,"
+            "validator-02=10.67.32.10:30303,"
+            "validator-03=10.67.48.10:30303"
+        )
+        canonical = "\n".join(
+            (
+                "CHAIN_NAME=JUNCA Social Ecosystem Chain",
+                "GOVERNANCE=JAIOS Institutional Governance",
+                "NETWORK_NOTICE=Public Testnet / No Monetary Value",
+                "VALIDATOR_ID=validator-01",
+                "CHAIN_ID=20260723",
+                f"GENESIS_SHA256={genesis_sha256}",
+                f"NODE_ARTIFACT_SHA256={runtime_version}",
+                f"SIGNER_RESOURCE_ARN={signer}",
+                "AWS_REGION=us-east-1",
+                "AWS_DEFAULT_REGION=us-east-1",
+                "PUBLIC_RPC=false",
+                "P2P_PORT=30303",
+                f"VALIDATOR_SIGNER_BINDINGS={signer_bindings}",
+                f"VALIDATOR_PEER_ENDPOINTS={peers}",
+                "AUTOMATIC_FINALITY_ENABLED=false",
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0",
+                "TESTNET_SLOT_EPOCH_SECONDS=0",
+                "BRIDGE_ACTIVATED=false",
+                "",
+            )
+        )
+        variables = "\n".join(
+            (
+                "expected_validator_id=validator-01",
+                f"expected_genesis_sha256={genesis_sha256}",
+                f"expected_runtime_version={runtime_version}",
+                f"expected_signer_arn={signer}",
+                f"expected_signer_bindings={signer_bindings}",
+                f"expected_peer_endpoints={peers}",
+                "expected_automatic_finality_enabled=false",
+                "expected_block_interval_seconds=0",
+                "expected_slot_epoch_seconds=0",
+            )
+        )
+        command = (
+            "set -euo pipefail\n"
+            + variables
+            + "\n"
+            + runtime_env_schema_functions(self.foundation_script)
+            + '\nverify_runtime_env_schema "$1"'
+        )
+        invalid_contents = (
+            canonical + "VALIDATOR_ID=validator-02\n",
+            canonical + "  CHAIN_ID =20260723\n",
+            canonical.replace("PUBLIC_RPC=false", "PUBLIC_RPC=true"),
+            canonical.replace("BRIDGE_ACTIVATED=false\n", ""),
+            canonical + "AUTOMATIC_FINALITY_ENABLED=true\n",
+            canonical + "JUNCA_DEBUG=true\n",
+            canonical + "export CHAIN_ID=20260723\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "runtime.env"
+            path.write_text(canonical, encoding="utf-8")
+            accepted = subprocess.run(
+                ["bash", "-c", command, "runtime-schema-positive", str(path)],
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            for content in invalid_contents:
+                with self.subTest(content=content[-80:]):
+                    path.write_text(content, encoding="utf-8")
+                    rejected = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            command,
+                            "runtime-schema-negative",
+                            str(path),
+                        ],
+                        env={"PATH": "/usr/bin:/bin"},
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(rejected.returncode, 0)
 
     def test_canonical_runtime_env_renderer_is_exact_and_fail_closed(
         self,
@@ -1628,6 +1742,8 @@ class AwsFoundationTests(unittest.TestCase):
             "runtime_env_owner": "root:junca",
             "runtime_env_mode": "640",
             "runtime_env_link_count": 1,
+            "runtime_env_schema_verified": True,
+            "runtime_env_required_assignment_count": 18,
             "runtime_env_repaired": True,
             "runtime_env_persistence_verified": True,
             "runtime_env_post_restart_verified": True,
@@ -1662,6 +1778,9 @@ class AwsFoundationTests(unittest.TestCase):
             {"runtime_env_owner": "root:root"},
             {"runtime_env_mode": "644"},
             {"runtime_env_link_count": 2},
+            {"runtime_env_schema_verified": False},
+            {"runtime_env_required_assignment_count": 17},
+            {"runtime_env_required_assignment_count": 19},
             {"runtime_env_persistence_verified": False},
             {"runtime_env_post_restart_verified": False},
             {"runtime_env_source": "operator"},
@@ -1732,6 +1851,8 @@ class AwsFoundationTests(unittest.TestCase):
             "runtime_env_owner": "root:junca",
             "runtime_env_mode": "640",
             "runtime_env_link_count": 1,
+            "runtime_env_schema_verified": True,
+            "runtime_env_required_assignment_count": 18,
             "runtime_env_repaired": False,
             "runtime_env_persistence_verified": False,
             "runtime_env_post_restart_verified": True,

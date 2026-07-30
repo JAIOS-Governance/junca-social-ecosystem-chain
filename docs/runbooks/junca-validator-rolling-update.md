@@ -62,6 +62,11 @@ stable height alone is never activation evidence.
    and pin its device/inode and SHA-256. Re-read all of those properties after
    the validator reports healthy. A path replacement, permission drift, or
    hard-link race blocks activation even when the health endpoint is healthy.
+   Parse all 18 canonical runtime assignments and require every key exactly
+   once with its exact expected value. Reject duplicates even when whitespace
+   hides the second assignment; never rely on `grep` finding one good line when
+   systemd may consume a later contradictory line. Reject unknown assignments
+   and non-canonical syntax rather than allowing an unreviewed runtime toggle.
    Never repair a symlink, overwrite an existing contradictory file, accept an
    operator-supplied value, or reconstruct during a mixed/resumed prefix.
    If the reconstructed runtime does not reach an active, healthy state within

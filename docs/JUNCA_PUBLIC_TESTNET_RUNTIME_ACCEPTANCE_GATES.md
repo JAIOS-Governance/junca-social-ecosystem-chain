@@ -65,6 +65,16 @@ deleted by rollback. Recovery evidence records the exact admitted identity,
 owner, mode, and link count rather than reducing those properties to an
 unverifiable success claim.
 
+Before either an existing or reconstructed file is admitted, all 18 canonical
+runtime assignments must appear exactly once with exact values. Duplicate,
+whitespace-disguised, missing, or contradictory assignments for chain,
+validator, genesis, artifact, signer, peer, region, public-RPC, finality, or
+bridge controls fail closed before restart. This prevents systemd
+`EnvironmentFile` last-assignment behavior from selecting a different value
+than the recovery evidence inspected. Non-comment content is restricted to
+those 18 assignments; unknown variables and non-canonical assignment syntax
+are rejected so an unreviewed environment toggle cannot enter the validator.
+
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a
 single GitHub-hosted job cannot safely own a 24-hour observation. Every segment
