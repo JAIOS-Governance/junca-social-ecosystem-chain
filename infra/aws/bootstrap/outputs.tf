@@ -20,7 +20,7 @@ output "lock_table" {
 
 output "deployment_principal_arn" {
   description = "Compatibility alias for the narrowed Foundation role ARN."
-  value = aws_iam_role.deployment.arn
+  value       = aws_iam_role.deployment.arn
 }
 
 output "foundation_principal_arn" {
@@ -52,10 +52,10 @@ output "security_bootstrap_policy_allowlist_contract" {
 
 output "iam_migration_phase" {
   value = {
-    phase = var.iam_migration_phase
-    legacy_subject_accepted = false
+    phase                                 = var.iam_migration_phase
+    legacy_subject_accepted               = false
     stage_enforces_exclusive_policy_purge = true
-    finalize_requires_live_sts_readback = true
+    finalize_requires_live_sts_readback   = true
   }
 }
 
@@ -65,11 +65,11 @@ output "bootstrap_evidence_manifest_sha256" {
 
 output "github_oidc_subject_template_contract" {
   value = {
-    include_claim_keys   = local.github_oidc_subject_template_contract.include_claim_keys
-    use_default          = local.github_oidc_subject_template_contract.use_default
+    include_claim_keys    = local.github_oidc_subject_template_contract.include_claim_keys
+    use_default           = local.github_oidc_subject_template_contract.use_default
     use_immutable_subject = local.github_oidc_subject_template_contract.use_immutable_subject
-    desired_sha256       = sha256(local.github_oidc_subject_template_json)
-    get_projection       = local.github_oidc_subject_template_projection_contract
+    desired_sha256        = sha256(local.github_oidc_subject_template_json)
+    get_projection        = local.github_oidc_subject_template_projection_contract
     get_projection_sha256 = sha256(local.github_oidc_subject_template_projection_json)
   }
 }
@@ -83,9 +83,9 @@ output "github_oidc_provider_contract" {
 
 output "github_oidc_subject_readback_contract" {
   value = {
-    subjects      = local.github_oidc_subject_readback_contract
-    attestations  = local.github_oidc_live_sts_attestation_contract.attestations
-    sha256        = sha256(local.github_oidc_subject_readback_json)
+    subjects     = local.github_oidc_subject_readback_contract
+    attestations = local.github_oidc_live_sts_attestation_contract.attestations
+    sha256       = sha256(local.github_oidc_subject_readback_json)
     artifact_sha256 = {
       for evidence in var.github_oidc_live_sts_attestation_readback :
       evidence.workflow_path => evidence.attestation_sha256
@@ -119,7 +119,7 @@ output "protected_role_boundary_contract" {
       for name, policy_json in local.boundary_policy_document_json :
       name => sha256(policy_json)
     }
-    owner            = "ExternalTwoPersonRemediation"
+    owner = "ExternalTwoPersonRemediation"
   }
 }
 
@@ -132,8 +132,8 @@ output "protected_iam_prefix_inventory_contract" {
 
 output "security_remediation_contract" {
   value = {
-    contract = local.security_remediation_contract
-    sha256   = sha256(local.security_remediation_contract_json)
+    contract               = local.security_remediation_contract
+    sha256                 = sha256(local.security_remediation_contract_json)
     current_state_required = "Disabled"
   }
 }
@@ -177,11 +177,11 @@ output "validator_workload_identity_contract" {
 output "foundation_mutation_contract" {
   description = "Explicit fail-closed operations pending fixed SSM documents and an immutable launch-template contract."
   value = {
-    ec2_run_instances = false
-    iam_pass_role      = false
-    ssm_send_command   = false
+    ec2_run_instances   = false
+    iam_pass_role       = false
+    ssm_send_command    = false
     validator_ssm_agent = false
-    rollout_state      = "BLOCKED_PENDING_ATTESTED_LAUNCH_AND_SSM_CONTRACT"
+    rollout_state       = "BLOCKED_PENDING_ATTESTED_LAUNCH_AND_SSM_CONTRACT"
   }
 }
 

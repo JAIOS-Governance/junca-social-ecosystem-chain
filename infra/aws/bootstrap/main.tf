@@ -64,20 +64,20 @@ resource "terraform_data" "account_gate" {
         try(
           local.security_bootstrap_trust.Statement[0].Principal,
           {}
-        ) == {
+          ) == {
           AWS = var.security_bootstrap_trusted_admin_principal_arn
         } &&
         try(
           local.security_bootstrap_trust.Statement[0].Action,
           []
-        ) == [
+          ) == [
           "sts:AssumeRole",
           "sts:TagSession",
         ] &&
         sort(keys(try(
           local.security_bootstrap_trust.Statement[0].Condition,
           {}
-        ))) == sort([
+          ))) == sort([
           "Bool",
           "ForAllValues:StringEquals",
           "StringEquals",
@@ -273,8 +273,8 @@ resource "terraform_data" "account_gate" {
           [
             for evidence in var.github_oidc_live_sts_attestation_readback :
             evidence.workflow_path
-          ] == sort(keys(
-            local.github_oidc_workflow_attestation_binding_contract
+            ] == sort(keys(
+              local.github_oidc_workflow_attestation_binding_contract
           )) &&
           length(distinct([
             for evidence in var.github_oidc_live_sts_attestation_readback :
@@ -334,38 +334,38 @@ resource "terraform_data" "account_gate" {
             try(
               local.repo_global_oidc_cutover_gate.canonical_call_count,
               -1
-            ) + try(
+              ) + try(
               local.repo_global_oidc_cutover_gate.migrated_exact_call_count,
               -1
-            ) + try(
+              ) + try(
               local.repo_global_oidc_cutover_gate.retired_call_count,
               -1
             ) == 27 &&
             try(
               local.repo_global_oidc_cutover_gate.active_credential_call_count,
               -1
-            ) + try(
+              ) + try(
               local.repo_global_oidc_cutover_gate.retired_call_count,
               -1
             ) == 27 &&
             length(try(
               local.repo_global_oidc_cutover_gate.active_credential_calls,
               []
-            )) == try(
+              )) == try(
               local.repo_global_oidc_cutover_gate.active_credential_call_count,
               -1
             ) &&
             length(try(
               local.repo_global_oidc_cutover_gate.retired_credential_calls,
               []
-            )) == try(
+              )) == try(
               local.repo_global_oidc_cutover_gate.retired_call_count,
               -1
             ) &&
             try(
               local.repo_global_oidc_cutover_gate.external_preparation_evidence.state,
               ""
-            ) == try(
+              ) == try(
               local.repo_global_oidc_cutover_gate.external_preparation_evidence.accepted_state,
               "NEVER"
             ) &&
@@ -376,7 +376,7 @@ resource "terraform_data" "account_gate" {
             try(
               local.repo_global_oidc_cutover_gate.external_activation_evidence.state,
               ""
-            ) == try(
+              ) == try(
               local.repo_global_oidc_cutover_gate.external_activation_evidence.accepted_state,
               "NEVER"
             ) &&
@@ -455,7 +455,7 @@ resource "aws_kms_key" "terraform_state" {
         Condition = {
           StringEquals = {
             "kms:EncryptionContext:aws:s3:arn" = local.security_state_kms_encryption_context_arns
-            "kms:ViaService"                    = "s3.${var.aws_region}.amazonaws.com"
+            "kms:ViaService"                   = "s3.${var.aws_region}.amazonaws.com"
           }
         }
       },
@@ -479,8 +479,8 @@ resource "aws_kms_key" "terraform_state" {
         }
       },
       {
-        Sid       = "FoundationDescribeStateKey"
-        Effect    = "Allow"
+        Sid    = "FoundationDescribeStateKey"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -493,8 +493,8 @@ resource "aws_kms_key" "terraform_state" {
         }
       },
       {
-        Sid       = "FoundationUseStateKeyOnlyThroughS3"
-        Effect    = "Allow"
+        Sid    = "FoundationUseStateKeyOnlyThroughS3"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -510,13 +510,13 @@ resource "aws_kms_key" "terraform_state" {
           }
           StringEquals = {
             "kms:EncryptionContext:aws:s3:arn" = local.runtime_state_kms_encryption_context_arns
-            "kms:ViaService"                    = "s3.${var.aws_region}.amazonaws.com"
+            "kms:ViaService"                   = "s3.${var.aws_region}.amazonaws.com"
           }
         }
       },
       {
-        Sid       = "ObserverDescribeStateKey"
-        Effect    = "Allow"
+        Sid    = "ObserverDescribeStateKey"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -529,8 +529,8 @@ resource "aws_kms_key" "terraform_state" {
         }
       },
       {
-        Sid       = "ObserverDecryptStateOnlyThroughS3"
-        Effect    = "Allow"
+        Sid    = "ObserverDecryptStateOnlyThroughS3"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -542,13 +542,13 @@ resource "aws_kms_key" "terraform_state" {
           }
           StringEquals = {
             "kms:EncryptionContext:aws:s3:arn" = local.runtime_state_kms_encryption_context_arns
-            "kms:ViaService"                    = "s3.${var.aws_region}.amazonaws.com"
+            "kms:ViaService"                   = "s3.${var.aws_region}.amazonaws.com"
           }
         }
       },
       {
-        Sid       = "DenyOidcStateKeyAdministration"
-        Effect    = "Deny"
+        Sid    = "DenyOidcStateKeyAdministration"
+        Effect = "Deny"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -632,8 +632,8 @@ resource "aws_kms_key" "validator_signer" {
         Resource = "*"
       },
       {
-        Sid       = "AutomationEvidenceDescribeSignerOnly"
-        Effect    = "Allow"
+        Sid    = "AutomationEvidenceDescribeSignerOnly"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -649,8 +649,8 @@ resource "aws_kms_key" "validator_signer" {
         }
       },
       {
-        Sid       = "ValidatorQuorumVerify"
-        Effect    = "Allow"
+        Sid    = "ValidatorQuorumVerify"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -667,8 +667,8 @@ resource "aws_kms_key" "validator_signer" {
         }
       },
       {
-        Sid       = "AssignedValidatorSignOnly"
-        Effect    = "Allow"
+        Sid    = "AssignedValidatorSignOnly"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -681,8 +681,8 @@ resource "aws_kms_key" "validator_signer" {
         }
       },
       {
-        Sid       = "DenyAutomationSignerEscalation"
-        Effect    = "Deny"
+        Sid    = "DenyAutomationSignerEscalation"
+        Effect = "Deny"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }
@@ -702,8 +702,8 @@ resource "aws_kms_key" "validator_signer" {
         }
       },
       {
-        Sid       = "DenyOtherValidatorSigning"
-        Effect    = "Deny"
+        Sid    = "DenyOtherValidatorSigning"
+        Effect = "Deny"
         Principal = {
           AWS = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:root"
         }

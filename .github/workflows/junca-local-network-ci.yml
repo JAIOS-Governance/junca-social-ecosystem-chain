@@ -13,6 +13,7 @@ on:
       - "tests/test_junca_development_liveness.py"
       - "tests/test_junca_development_signer.py"
       - "tests/test_junca_finality_gossip.py"
+      - "tests/test_junca_local_network_acceptance.py"
       - "Makefile"
       - ".github/workflows/junca-local-network-ci.yml"
   push:
@@ -28,6 +29,7 @@ on:
       - "tests/test_junca_development_liveness.py"
       - "tests/test_junca_development_signer.py"
       - "tests/test_junca_finality_gossip.py"
+      - "tests/test_junca_local_network_acceptance.py"
       - "Makefile"
       - ".github/workflows/junca-local-network-ci.yml"
 
@@ -55,7 +57,8 @@ jobs:
           python -m unittest \
             tests.test_junca_development_liveness \
             tests.test_junca_development_signer \
-            tests.test_junca_finality_gossip -v
+            tests.test_junca_finality_gossip \
+            tests.test_junca_local_network_acceptance -v
           python -m py_compile \
             jaios/social_ecosystem_chain/development_liveness.py \
             jaios/social_ecosystem_chain/development_signer.py \

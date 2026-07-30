@@ -135,7 +135,7 @@ locals {
     attestations = [
       for workflow_path in sort(keys(
         local.github_oidc_workflow_attestation_binding_contract
-      )) : {
+        )) : {
         assets_moved              = false
         audience                  = "sts.amazonaws.com"
         bridge_activated          = false
@@ -639,9 +639,9 @@ resource "aws_iam_role_policy" "automation_self_mutation_deny" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "DenyAutomationRoleMutation"
-        Effect   = "Deny"
-        Action   = local.automation_self_mutation_actions
+        Sid    = "DenyAutomationRoleMutation"
+        Effect = "Deny"
+        Action = local.automation_self_mutation_actions
         Resource = concat(
           local.protected_automation_role_arns,
           local.validator_role_arns
@@ -746,9 +746,9 @@ resource "aws_iam_role_policy" "deployment_state" {
         }
       },
       {
-        Sid      = "ReadExactCanonicalStateObjects"
-        Effect   = "Allow"
-        Action   = "s3:GetObject"
+        Sid    = "ReadExactCanonicalStateObjects"
+        Effect = "Allow"
+        Action = "s3:GetObject"
         Resource = [
           "${aws_s3_bucket.terraform_state.arn}/public-testnet/terraform.tfstate",
         ]
@@ -864,7 +864,7 @@ resource "aws_iam_policy" "deployment_infrastructure_allow" {
           StringEquals = {
             "aws:RequestTag/Network" = local.public_testnet_network
             "aws:RequestTag/Project" = local.public_testnet_project
-            "aws:RequestedRegion"     = var.aws_region
+            "aws:RequestedRegion"    = var.aws_region
           }
         }
       },
@@ -877,7 +877,7 @@ resource "aws_iam_policy" "deployment_infrastructure_allow" {
           StringEquals = {
             "aws:RequestTag/Network" = local.public_testnet_network
             "aws:RequestTag/Project" = local.public_testnet_project
-            "aws:RequestedRegion"     = var.aws_region
+            "aws:RequestedRegion"    = var.aws_region
             "ec2:CreateAction" = [
               "CreateInternetGateway",
               "CreateVpc",
@@ -1109,7 +1109,7 @@ resource "aws_iam_policy" "deployment_edge" {
           StringEquals = {
             "aws:RequestTag/Network" = local.public_testnet_network
             "aws:RequestTag/Project" = local.public_testnet_project
-            "aws:RequestedRegion"     = var.aws_region
+            "aws:RequestedRegion"    = var.aws_region
           }
         }
       },
@@ -1209,8 +1209,8 @@ resource "aws_iam_policy" "deployment_observability" {
           StringEquals = {
             "aws:RequestTag/Network" = local.public_testnet_network
             "aws:RequestTag/Project" = local.public_testnet_project
-            "aws:RequestedRegion"     = var.aws_region
-            "acm:ValidationMethod"    = "DNS"
+            "aws:RequestedRegion"    = var.aws_region
+            "acm:ValidationMethod"   = "DNS"
           }
           Null = {
             "acm:DomainNames" = "false"
@@ -1247,7 +1247,7 @@ resource "aws_iam_policy" "deployment_observability" {
           StringEquals = {
             "aws:RequestTag/Network" = local.public_testnet_network
             "aws:RequestTag/Project" = local.public_testnet_project
-            "aws:RequestedRegion"     = var.aws_region
+            "aws:RequestedRegion"    = var.aws_region
           }
         }
       },
@@ -1598,9 +1598,9 @@ resource "aws_iam_policy" "validator_image_builder_boundary" {
         }
       },
       {
-        Sid      = "ReadSameAccountIsoInputs"
-        Effect   = "Allow"
-        Action   = "s3:GetObject"
+        Sid    = "ReadSameAccountIsoInputs"
+        Effect = "Allow"
+        Action = "s3:GetObject"
         Resource = [
           "arn:${data.aws_partition.current.partition}:s3:::*/*.ISO",
           "arn:${data.aws_partition.current.partition}:s3:::*/*.Iso",
@@ -1628,7 +1628,7 @@ resource "aws_iam_policy" "validator_image_builder_boundary" {
         Resource = "*"
         Condition = {
           "ForAnyValue:StringEquals" = {
-            "aws:CalledVia"            = ["imagebuilder.amazonaws.com"]
+            "aws:CalledVia"             = ["imagebuilder.amazonaws.com"]
             "kms:EncryptionContextKeys" = "aws:imagebuilder:arn"
           }
         }
@@ -1640,8 +1640,8 @@ resource "aws_iam_policy" "validator_image_builder_boundary" {
         Resource = "arn:${data.aws_partition.current.partition}:s3:::ec2imagebuilder*"
       },
       {
-        Sid      = "WriteOnlyImageBuilderLogs"
-        Effect   = "Allow"
+        Sid    = "WriteOnlyImageBuilderLogs"
+        Effect = "Allow"
         Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
@@ -1836,7 +1836,7 @@ resource "aws_iam_role_policy" "ami_builder_controller" {
         Condition = {
           StringEquals = {
             "aws:RequestTag/Network" = local.public_testnet_network
-            "aws:RequestedRegion"     = var.aws_region
+            "aws:RequestedRegion"    = var.aws_region
           }
         }
       },
@@ -1966,9 +1966,9 @@ resource "aws_iam_role_policy" "observer" {
         }
       },
       {
-        Sid      = "ReadCanonicalStateObjectsOnly"
-        Effect   = "Allow"
-        Action   = "s3:GetObject"
+        Sid    = "ReadCanonicalStateObjectsOnly"
+        Effect = "Allow"
+        Action = "s3:GetObject"
         Resource = [
           "${aws_s3_bucket.terraform_state.arn}/public-testnet/terraform.tfstate",
         ]
@@ -2117,6 +2117,6 @@ resource "aws_iam_role_policies_exclusive" "validator" {
 resource "aws_iam_role_policy_attachments_exclusive" "validator" {
   count = 3
 
-  role_name = aws_iam_role.validator[count.index].name
+  role_name   = aws_iam_role.validator[count.index].name
   policy_arns = []
 }

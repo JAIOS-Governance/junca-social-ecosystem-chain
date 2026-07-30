@@ -66,6 +66,7 @@ class WorkflowShellContractTests(unittest.TestCase):
             "cbfda66a1befcdc\n",
         )
         for workflow_name in (
+            "junca-developer-environment-ci.yml",
             "junca-validator-runtime-artifacts.yml",
             "junca-social-ecosystem-chain-repository-governance.yml",
             "junca-social-ecosystem-chain-aws-plan.yml",

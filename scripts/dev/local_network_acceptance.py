@@ -22,6 +22,7 @@ PORTS = {
     "validator-02": 18546,
     "validator-03": 18547,
 }
+VALIDATOR_IDS = tuple(PORTS)
 HEALTH_ENDPOINTS = {
     validator_id: f"http://127.0.0.1:{port}/health"
     for validator_id, port in PORTS.items()
@@ -159,7 +160,123 @@ def wait_for(
     raise RuntimeError(message)
 
 
-def converged(value: dict[str, dict[str, object]], minimum_height: int) -> bool:
+def _hex_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 66
+        and value.startswith("0x")
+        and all(character in "0123456789abcdef" for character in value[2:])
+    )
+
+
+def _certificate_hash(certificate: dict[str, object]) -> str | None:
+    body = {
+        "block_hash": certificate.get("block_hash"),
+        "chain_id": certificate.get("chain_id"),
+        "height": certificate.get("height"),
+        "round": certificate.get("round"),
+        "signed_power": certificate.get("signed_power"),
+        "total_power": certificate.get("total_power"),
+        "validator_ids": certificate.get("validator_ids"),
+        "vote_hashes": certificate.get("vote_hashes"),
+    }
+    if (
+        not _hex_digest(body["block_hash"])
+        or body["chain_id"] != 20260723
+        or isinstance(body["height"], bool)
+        or not isinstance(body["height"], int)
+        or int(body["height"]) < 1
+        or isinstance(body["round"], bool)
+        or not isinstance(body["round"], int)
+        or int(body["round"]) < 0
+        or body["signed_power"] != 3
+        or body["total_power"] != 3
+        or body["validator_ids"] != list(VALIDATOR_IDS)
+        or not isinstance(body["vote_hashes"], list)
+        or len(body["vote_hashes"]) != 3
+        or len(set(body["vote_hashes"])) != 3
+        or not all(_hex_digest(item) for item in body["vote_hashes"])
+    ):
+        return None
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    return "0x" + hashlib.sha256(
+        b"JUNCA_FINALITY_CERTIFICATE_V1\x00" + encoded
+    ).hexdigest()
+
+
+def development_manual_mode_ready(
+    value: dict[str, dict[str, object]],
+) -> bool:
+    """Require an exact reachable, intentionally non-operational local mode.
+
+    The isolated simulation drives finality through the allowlisted
+    ``junca_broadcastVote`` method. It must therefore keep automatic finality
+    disabled and must never pass the production ``healthy`` contract.
+    """
+
+    if tuple(value) != VALIDATOR_IDS:
+        return False
+    for validator_id, item in value.items():
+        gates = item.get("health_gates")
+        automatic = item.get("automatic_finality")
+        consensus = item.get("consensus")
+        sync_recovery = item.get("sync_recovery")
+        if (
+            item.get("validator_id") != validator_id
+            or item.get("status") != "unhealthy"
+            or item.get("network") != "Public Testnet / No Monetary Value"
+            or item.get("chain_id") != 20260723
+            or isinstance(item.get("head_height"), bool)
+            or not isinstance(item.get("head_height"), int)
+            or int(item["head_height"]) < 0
+            or not _hex_digest(item.get("head_hash"))
+            or not _hex_digest(item.get("genesis_hash"))
+            or item.get("head_timestamp") is not None
+            and (
+                isinstance(item.get("head_timestamp"), bool)
+                or not isinstance(item.get("head_timestamp"), int)
+                or int(item["head_timestamp"]) <= 0
+            )
+            or isinstance(item.get("peer_count"), bool)
+            or not isinstance(item.get("peer_count"), int)
+            or not 0 <= int(item["peer_count"]) <= 2
+            or item.get("private_key_material_accepted") is not False
+            or item.get("automatic_finality_enabled") is not False
+            or item.get("automatic_finality_loop_running") is not False
+            or item.get("block_interval_seconds") != 0
+            or item.get("slot_epoch_seconds") != 0
+            or not isinstance(gates, dict)
+            or gates.get("automatic_finality") is not False
+            or not isinstance(automatic, dict)
+            or automatic.get("enabled") is not False
+            or automatic.get("loop_running") is not False
+            or automatic.get("block_interval_seconds") != 0
+            or automatic.get("slot_epoch_seconds") != 0
+            or not isinstance(consensus, dict)
+            or consensus.get("schema_version")
+            != "junca-public-testnet-consensus-runtime/v1"
+            or consensus.get("chain_id") != 20260723
+            or consensus.get("head_height") != item.get("head_height")
+            or consensus.get("required_vote_count") != 3
+            or consensus.get("quorum_rule")
+            != "strictly-greater-than-two-thirds"
+            or consensus.get("private_key_material_accepted") is not False
+            or not isinstance(sync_recovery, dict)
+            or sync_recovery.get("schema_version")
+            != "junca-validator-sync-recovery/v1"
+            or sync_recovery.get("recovery_action") != "CLEAN"
+            or sync_recovery.get("chain_id") != 20260723
+            or sync_recovery.get("genesis_hash") != item.get("genesis_hash")
+        ):
+            return False
+    return True
+
+
+def manual_finality_converged(
+    value: dict[str, dict[str, object]], minimum_height: int
+) -> bool:
+    if not development_manual_mode_ready(value):
+        return False
     heights = {item.get("head_height") for item in value.values()}
     hashes = {item.get("head_hash") for item in value.values()}
     certificate_hashes = {
@@ -170,13 +287,40 @@ def converged(value: dict[str, dict[str, object]], minimum_height: int) -> bool:
         )
         for item in value.values()
     }
-    statuses = {item.get("status") for item in value.values()}
+    exact_finality = []
+    for item in value.values():
+        gates = item["health_gates"]
+        consensus = item.get("consensus")
+        certificate = (
+            consensus.get("last_certificate")
+            if isinstance(consensus, dict)
+            else None
+        )
+        certificate_hash = (
+            _certificate_hash(certificate)
+            if isinstance(certificate, dict)
+            else None
+        )
+        exact_finality.append(
+            item.get("peer_count") == 2
+            and gates.get("authenticated_peer_quorum") is True
+            and gates.get("current_three_of_three_certificate") is True
+            and gates.get("fresh_finalized_head") is True
+            and gates.get("automatic_finality") is False
+            and isinstance(certificate, dict)
+            and certificate.get("height") == item.get("head_height")
+            and certificate.get("block_hash") == item.get("head_hash")
+            and certificate.get("finality_status") == "FINALIZED"
+            and certificate_hash is not None
+            and certificate.get("certificate_hash") == certificate_hash
+            and consensus.get("last_certificate_hash") == certificate_hash
+        )
     return (
         len(heights) == 1
         and len(hashes) == 1
         and len(certificate_hashes) == 1
         and None not in certificate_hashes
-        and statuses == {"healthy"}
+        and all(exact_finality)
         and next(iter(heights), -1) >= minimum_height
     )
 
@@ -203,14 +347,14 @@ def source_sha() -> str:
 
 
 def main() -> int:
-    all_validators = tuple(PORTS)
+    all_validators = VALIDATOR_IDS
     active_validators = ("validator-01", "validator-02")
 
     ready = wait_for(
         lambda: snapshot(all_validators),
-        lambda value: all(item.get("status") == "healthy" for item in value.values()),
+        development_manual_mode_ready,
         timeout=60,
-        label="three-validator readiness",
+        label="three-validator manual-mode reachability",
     )
     if {item.get("head_height") for item in ready.values()} != {0}:
         raise RuntimeError("fresh local network did not start from genesis height")
@@ -218,7 +362,7 @@ def main() -> int:
     initial_inputs = drive_finality(all_validators)
     baseline = wait_for(
         lambda: snapshot(all_validators),
-        lambda value: converged(value, 1),
+        lambda value: manual_finality_converged(value, 1),
         timeout=60,
         label="initial deterministic authenticated finality",
     )
@@ -248,25 +392,27 @@ def main() -> int:
     compose("start", "validator-03")
     wait_for(
         lambda: snapshot(all_validators),
-        lambda value: all(item.get("status") == "healthy" for item in value.values()),
+        development_manual_mode_ready,
         timeout=60,
-        label="validator restart readiness",
+        label="validator restart manual-mode reachability",
     )
     recovery_inputs = drive_finality(all_validators)
     recovered = wait_for(
         lambda: snapshot(all_validators),
-        lambda value: converged(value, stalled_height + 1),
+        lambda value: manual_finality_converged(value, stalled_height + 1),
         timeout=60,
         label="deterministic validator restart recovery and resumed finality",
     )
 
     evidence = {
-        "schema_version": "junca-local-network-acceptance/v2",
+        "schema_version": "junca-local-network-acceptance/v3",
         "state": "ACCEPTED",
         "network": "isolated-local-development-only",
         "source_commit": source_sha(),
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "input_mode": "deterministic-allowlisted-junca_broadcastVote",
+        "production_health_claimed": False,
+        "automatic_finality_enabled": False,
         "initial_inputs": initial_inputs,
         "baseline": baseline,
         "quorum_loss": {

@@ -377,14 +377,14 @@ variable "canonical_kms_alias_target_readback_sha256" {
 variable "external_boundary_policy_readback_sha256" {
   description = "Exact eight-name canonical live default-version document digests for every protected permissions boundary."
   type = object({
-    foundation          = string
-    ami_builder         = string
-    observer            = string
-    remediation         = string
+    foundation           = string
+    ami_builder          = string
+    observer             = string
+    remediation          = string
     image_builder_worker = string
-    validator01         = string
-    validator02         = string
-    validator03         = string
+    validator01          = string
+    validator02          = string
+    validator03          = string
   })
 
   validation {
