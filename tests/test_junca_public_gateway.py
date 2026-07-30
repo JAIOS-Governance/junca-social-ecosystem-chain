@@ -173,6 +173,14 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("https://chain.jaios-governance.org/api/operational", document)
         self.assertIn("Local Evidence Only", document)
         self.assertIn("Verification in Progress", document)
+        self.assertIn(
+            "Fields not currently published are not inferred or shown as zero.",
+            document,
+        )
+        self.assertNotIn(
+            "Unavailable fields are not inferred or shown as zero.",
+            document,
+        )
         for forbidden in ("Failures", "Data unavailable", "Live readback unavailable", "RETRYING"):
             self.assertNotIn(forbidden, document)
         self.assertIn("/junca-chain-logo.png", document)
