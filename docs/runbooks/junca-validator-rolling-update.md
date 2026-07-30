@@ -58,6 +58,10 @@ stable height alone is never activation evidence.
    Record the installed device/inode identity. Treat a concurrent destination,
    unresolved multi-link result, or failed persistence sync as a blocked
    recovery, never as a reason to overwrite.
+   Before restart, admit only a single-link `root:junca` `0640` regular file
+   and pin its device/inode and SHA-256. Re-read all of those properties after
+   the validator reports healthy. A path replacement, permission drift, or
+   hard-link race blocks activation even when the health endpoint is healthy.
    Never repair a symlink, overwrite an existing contradictory file, accept an
    operator-supplied value, or reconstruct during a mixed/resumed prefix.
    If the reconstructed runtime does not reach an active, healthy state within

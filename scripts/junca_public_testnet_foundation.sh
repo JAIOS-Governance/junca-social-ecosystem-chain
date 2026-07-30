@@ -972,8 +972,13 @@ validate_validator_service_recovery_evidence() {
       (.runtime_env_repair_attempted | type) == "boolean" and
       (.runtime_env_created | type) == "boolean" and
       (.runtime_env_created_identity | type) == "string" and
+      (.runtime_env_admission_identity | type) == "string" and
+      .runtime_env_owner == "root:junca" and
+      .runtime_env_mode == "640" and
+      .runtime_env_link_count == 1 and
       (.runtime_env_repaired | type) == "boolean" and
       (.runtime_env_persistence_verified | type) == "boolean" and
+      .runtime_env_post_restart_verified == true and
       .repair_rollback_attempted == false and
       .repair_rollback_succeeded == false and
       .repair_rollback_persistence_verified == false and
@@ -983,6 +988,8 @@ validate_validator_service_recovery_evidence() {
           .runtime_env_repair_attempted == true and
           .runtime_env_created == true and
           (.runtime_env_created_identity | test("^[0-9]+:[0-9]+$")) and
+          .runtime_env_admission_identity ==
+            .runtime_env_created_identity and
           .runtime_env_persistence_verified == true and
           .runtime_env_source == "canonical" and
           .runtime_env_sha256 == $expected_runtime_env_sha256
@@ -990,6 +997,8 @@ validate_validator_service_recovery_evidence() {
           .runtime_env_repair_attempted == false and
           .runtime_env_created == false and
           .runtime_env_created_identity == "" and
+          (.runtime_env_admission_identity |
+            test("^[0-9]+:[0-9]+$")) and
           .runtime_env_persistence_verified == false and
           .runtime_env_source == "existing" and
           (.runtime_env_sha256 | test("^[0-9a-f]{64}$"))
@@ -1092,8 +1101,13 @@ runtime_version=""
 runtime_env_repair_attempted=false
 runtime_env_created=false
 runtime_env_created_identity=""
+runtime_env_admission_identity=""
+runtime_env_owner=""
+runtime_env_mode=""
+runtime_env_link_count=0
 runtime_env_repaired=false
 runtime_env_persistence_verified=false
+runtime_env_post_restart_verified=false
 repair_rollback_attempted=false
 repair_rollback_succeeded=false
 repair_rollback_persistence_verified=false
@@ -1134,7 +1148,10 @@ if [[ -f /etc/junca/genesis.json && ! -L /etc/junca/genesis.json ]] &&
   genesis_verified=true
 fi
 if [[ -f /etc/junca/runtime.env &&
-      ! -L /etc/junca/runtime.env ]]; then
+      ! -L /etc/junca/runtime.env &&
+      "$(stat -c '%U:%G' /etc/junca/runtime.env)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/runtime.env)" == "640" &&
+      "$(stat -c '%h' /etc/junca/runtime.env)" == 1 ]]; then
   runtime_count="$(awk '/^NODE_ARTIFACT_SHA256=/{count++} END{print count+0}' /etc/junca/runtime.env)"
   runtime_version="$(sed -n 's/^NODE_ARTIFACT_SHA256=//p' /etc/junca/runtime.env)"
   runtime_env_sha256="$(sha256sum /etc/junca/runtime.env | awk '{print $1}')"
@@ -1149,6 +1166,12 @@ if [[ -f /etc/junca/runtime.env &&
       grep -Fxq "BRIDGE_ACTIVATED=false" /etc/junca/runtime.env; then
     runtime_env_verified=true
     runtime_env_source=existing
+    runtime_env_admission_identity="$(
+      stat -Lc '%d:%i' /etc/junca/runtime.env
+    )"
+    runtime_env_owner="$(stat -c '%U:%G' /etc/junca/runtime.env)"
+    runtime_env_mode="$(stat -c '%a' /etc/junca/runtime.env)"
+    runtime_env_link_count="$(stat -c '%h' /etc/junca/runtime.env)"
   fi
 fi
 
@@ -1202,6 +1225,10 @@ if [[ "$runtime_env_verified" != true &&
         runtime_env_source=canonical
         runtime_env_verified=true
         runtime_version="$expected_runtime_version"
+        runtime_env_admission_identity="$runtime_env_created_identity"
+        runtime_env_owner="$(stat -c '%U:%G' /etc/junca/runtime.env)"
+        runtime_env_mode="$(stat -c '%a' /etc/junca/runtime.env)"
+        runtime_env_link_count="$(stat -c '%h' /etc/junca/runtime.env)"
       fi
     fi
   fi
@@ -1213,7 +1240,16 @@ if [[ "$before_status" != "active" &&
       "$binary_artifact_verified" == true &&
       "$genesis_verified" == true &&
       "$runtime_directory_verified" == true &&
-      "$runtime_env_verified" == true ]]; then
+      "$runtime_env_verified" == true &&
+      -f /etc/junca/runtime.env &&
+      ! -L /etc/junca/runtime.env &&
+      "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
+        "$runtime_env_admission_identity" &&
+      "$(stat -c '%U:%G' /etc/junca/runtime.env)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/runtime.env)" == "640" &&
+      "$(stat -c '%h' /etc/junca/runtime.env)" == 1 &&
+      "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
+        "$runtime_env_sha256" ]]; then
   restart_attempted=true
   systemctl restart junca-validator.service || restart_exit=$?
 fi
@@ -1223,6 +1259,17 @@ for attempts in $(seq 1 60); do
   if [[ "$after_status" == "active" ]] &&
       health="$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null)"; then
     health_status="$(jq -r '.status // empty' <<<"$health" 2>/dev/null || true)"
+    if [[ -f /etc/junca/runtime.env &&
+          ! -L /etc/junca/runtime.env &&
+          "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
+            "$runtime_env_admission_identity" &&
+          "$(stat -c '%U:%G' /etc/junca/runtime.env)" == "root:junca" &&
+          "$(stat -c '%a' /etc/junca/runtime.env)" == "640" &&
+          "$(stat -c '%h' /etc/junca/runtime.env)" == 1 &&
+          "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
+            "$runtime_env_sha256" ]]; then
+      runtime_env_post_restart_verified=true
+    fi
     if [[ "$health_status" == "healthy" &&
           "$restart_exit" == 0 &&
           "$durable_mount_verified" == true &&
@@ -1230,7 +1277,8 @@ for attempts in $(seq 1 60); do
           "$binary_artifact_verified" == true &&
           "$genesis_verified" == true &&
           "$runtime_directory_verified" == true &&
-          "$runtime_env_verified" == true ]]; then
+          "$runtime_env_verified" == true &&
+          "$runtime_env_post_restart_verified" == true ]]; then
       accepted=true
       break
     fi
@@ -1265,6 +1313,7 @@ if [[ "$accepted" != true &&
     repair_rollback_succeeded=true
     repair_rollback_persistence_verified=true
     runtime_env_verified=false
+    runtime_env_post_restart_verified=false
     runtime_env_source=""
     runtime_env_sha256=""
   fi
@@ -1285,9 +1334,15 @@ jq -n \
   --argjson runtime_env_repair_attempted "$runtime_env_repair_attempted" \
   --argjson runtime_env_created "$runtime_env_created" \
   --arg runtime_env_created_identity "$runtime_env_created_identity" \
+  --arg runtime_env_admission_identity "$runtime_env_admission_identity" \
+  --arg runtime_env_owner "$runtime_env_owner" \
+  --arg runtime_env_mode "$runtime_env_mode" \
+  --argjson runtime_env_link_count "$runtime_env_link_count" \
   --argjson runtime_env_repaired "$runtime_env_repaired" \
   --argjson runtime_env_persistence_verified \
     "$runtime_env_persistence_verified" \
+  --argjson runtime_env_post_restart_verified \
+    "$runtime_env_post_restart_verified" \
   --argjson repair_rollback_attempted "$repair_rollback_attempted" \
   --argjson repair_rollback_succeeded "$repair_rollback_succeeded" \
   --argjson repair_rollback_persistence_verified \
@@ -1313,8 +1368,14 @@ jq -n \
     runtime_env_repair_attempted: $runtime_env_repair_attempted,
     runtime_env_created: $runtime_env_created,
     runtime_env_created_identity: $runtime_env_created_identity,
+    runtime_env_admission_identity: $runtime_env_admission_identity,
+    runtime_env_owner: $runtime_env_owner,
+    runtime_env_mode: $runtime_env_mode,
+    runtime_env_link_count: $runtime_env_link_count,
     runtime_env_repaired: $runtime_env_repaired,
     runtime_env_persistence_verified: $runtime_env_persistence_verified,
+    runtime_env_post_restart_verified:
+      $runtime_env_post_restart_verified,
     repair_rollback_attempted: $repair_rollback_attempted,
     repair_rollback_succeeded: $repair_rollback_succeeded,
     repair_rollback_persistence_verified:

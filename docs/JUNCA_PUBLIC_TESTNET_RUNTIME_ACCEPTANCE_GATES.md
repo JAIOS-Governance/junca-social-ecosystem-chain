@@ -56,6 +56,15 @@ expected digest and the same recorded device/inode identity, and syncs
 `/etc/junca`. Failure to prove either install or rollback persistence remains
 blocked for operator inspection.
 
+Both repaired and pre-existing `runtime.env` files must be single-link regular
+files owned by `root:junca` with mode `0640`. Recovery pins the admitted
+device/inode and digest before restart, then revalidates identity, ownership,
+mode, link count, and digest after the validator reports healthy. Any
+replacement or hard-link race blocks activation; a changed path is never
+deleted by rollback. Recovery evidence records the exact admitted identity,
+owner, mode, and link count rather than reducing those properties to an
+unverifiable success claim.
+
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a
 single GitHub-hosted job cannot safely own a 24-hour observation. Every segment
