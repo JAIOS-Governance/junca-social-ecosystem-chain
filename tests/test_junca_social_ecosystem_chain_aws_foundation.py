@@ -77,6 +77,14 @@ def rollback_snapshot_function(script: str) -> str:
     )[0].join(("verify_rollback_snapshots() {", "\n}"))
 
 
+def validator_service_recovery_validation_function(script: str) -> str:
+    return script.split(
+        "validate_validator_service_recovery_evidence() {", 1
+    )[1].split("\n}\n\nensure_validator_service_available()", 1)[0].join(
+        ("validate_validator_service_recovery_evidence() {", "\n}")
+    )
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -1351,6 +1359,151 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(volume_readback, first_mutation)
         self.assertLess(snapshot_readback, first_mutation)
         self.assertLess(rollback_floor, first_mutation)
+
+    def test_live_prefix_repairs_only_a_safely_readable_stopped_service(self) -> None:
+        for required in (
+            "validate_validator_service_recovery_evidence() {",
+            "ensure_validator_service_available() {",
+            'before_status="$(systemctl is-active '
+            'junca-validator.service 2>/dev/null || true)"',
+            "mountpoint -q /var/lib/junca",
+            "PRAGMA quick_check",
+            'test("^[0-9a-f]{64}$")',
+            '"$before_status" != "active"',
+            '"$durable_mount_verified" == true',
+            '"$state_store_integrity" == true',
+            '"$runtime_env_verified" == true',
+            "systemctl restart junca-validator.service || restart_exit=$?",
+            "for attempts in $(seq 1 60)",
+            'health_status="$(jq -r ',
+            ".status // empty",
+            "junca-validator-service-recovery/v1",
+            "wait_for_ssm_command_result",
+            "mainnet_activation_authorized: false",
+        ):
+            self.assertIn(required, self.foundation_script)
+        definition = self.foundation_script.index(
+            "write_live_rollout_prefix_readback() {"
+        )
+        recovery = self.foundation_script.index(
+            "ensure_validator_service_available \\", definition
+        )
+        strict_readback = self.foundation_script.index(
+            "capture_validator_observation \\", recovery
+        )
+        first_mutation = self.foundation_script.index(
+            "set_runtime_finality \\\n    0 0", strict_readback
+        )
+        self.assertLess(recovery, strict_readback)
+        self.assertLess(strict_readback, first_mutation)
+
+    def test_service_recovery_evidence_rejects_unsafe_or_false_acceptance(
+        self,
+    ) -> None:
+        valid = {
+            "schema_version": "junca-validator-service-recovery/v1",
+            "validator_id": "validator-01",
+            "instance_id": "i-00000000000000001",
+            "before_status": "inactive",
+            "restart_attempted": True,
+            "restart_exit": 0,
+            "durable_mount_verified": True,
+            "state_store_integrity": True,
+            "runtime_env_verified": True,
+            "runtime_version": "a" * 64,
+            "after_status": "active",
+            "health_status": "healthy",
+            "attempts": 2,
+            "accepted": True,
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+            "mainnet_activation_authorized": False,
+        }
+        invalid_cases = (
+            {"restart_attempted": False},
+            {"restart_exit": 1},
+            {"state_store_integrity": False},
+            {"runtime_version": "local-only"},
+            {"after_status": "failed"},
+            {"health_status": "degraded"},
+            {"accepted": False},
+            {"mainnet_changed": True},
+            {"assets_moved": True},
+            {"bridge_activated": True},
+            {"mainnet_activation_authorized": True},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = pathlib.Path(directory) / "service-recovery.json"
+            for update in invalid_cases:
+                with self.subTest(update=update):
+                    evidence.write_text(
+                        json.dumps(valid | update),
+                        encoding="utf-8",
+                    )
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            "set -euo pipefail\n"
+                            + validator_service_recovery_validation_function(
+                                self.foundation_script
+                            )
+                            + "\nvalidate_validator_service_recovery_evidence "
+                            + '"$1" validator-01 i-00000000000000001',
+                            "service-recovery-negative-test",
+                            str(evidence),
+                        ],
+                        env={"PATH": "/usr/bin:/bin"},
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+
+    def test_service_recovery_evidence_accepts_active_without_restart(self) -> None:
+        evidence = {
+            "schema_version": "junca-validator-service-recovery/v1",
+            "validator_id": "validator-01",
+            "instance_id": "i-00000000000000001",
+            "before_status": "active",
+            "restart_attempted": False,
+            "restart_exit": 0,
+            "durable_mount_verified": True,
+            "state_store_integrity": True,
+            "runtime_env_verified": True,
+            "runtime_version": "b" * 64,
+            "after_status": "active",
+            "health_status": "healthy",
+            "attempts": 1,
+            "accepted": True,
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+            "mainnet_activation_authorized": False,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "service-recovery.json"
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + validator_service_recovery_validation_function(
+                        self.foundation_script
+                    )
+                    + "\nvalidate_validator_service_recovery_evidence "
+                    + '"$1" validator-01 i-00000000000000001',
+                    "service-recovery-positive-test",
+                    str(path),
+                ],
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_post_apply_failures_are_checkpointed_and_ssm_errors_retry(self) -> None:
         for required in (
