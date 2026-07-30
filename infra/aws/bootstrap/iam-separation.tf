@@ -73,12 +73,7 @@ locals {
   github_oidc_provider_contract_json = jsonencode(
     local.github_oidc_provider_contract
   )
-  github_oidc_subject_prefix = (
-    "repo:JAIOS-Governance@308604370/" +
-    "junca-social-ecosystem-chain@1310568313:" +
-    "environment:public-testnet:workflow_ref:" +
-    "JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/"
-  )
+  github_oidc_subject_prefix = "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/"
   github_oidc_subject_suffix = ":runner_environment:github-hosted"
 
   # Every value is an exact StringEquals subject. Wildcard workflow identities
@@ -198,27 +193,12 @@ locals {
     local.runtime_state_lock_contract
   )
 
-  foundation_role_arn = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/JuncaChainPublicTestnetDeployment"
-  ami_builder_controller_role_arn = (
-    "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-    "role/JuncaChainPublicTestnetAmiBuilder"
-  )
-  observer_role_arn = (
-    "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-    "role/JuncaChainPublicTestnetObserver"
-  )
-  image_builder_instance_role_arn = (
-    "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-    "role/JuncaChainPublicTestnetImageBuilder"
-  )
-  security_remediation_role_arn = (
-    "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-    "role/JuncaChainSecurityBootstrapRemediation"
-  )
-  security_remediation_boundary_arn = (
-    "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-    "policy/JuncaChainSecurityBootstrapRemediationBoundary"
-  )
+  foundation_role_arn               = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/JuncaChainPublicTestnetDeployment"
+  ami_builder_controller_role_arn   = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/JuncaChainPublicTestnetAmiBuilder"
+  observer_role_arn                 = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/JuncaChainPublicTestnetObserver"
+  image_builder_instance_role_arn   = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/JuncaChainPublicTestnetImageBuilder"
+  security_remediation_role_arn     = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:role/JuncaChainSecurityBootstrapRemediation"
+  security_remediation_boundary_arn = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:policy/JuncaChainSecurityBootstrapRemediationBoundary"
   security_remediation_contract = {
     role_arn                 = local.security_remediation_role_arn
     permissions_boundary_arn = local.security_remediation_boundary_arn
@@ -312,29 +292,14 @@ locals {
   ]
   validator_permissions_boundary_arns = [
     for index in range(3) :
-    (
-      "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-      "policy/JuncaChainPublicTestnetValidator${format("%02d", index + 1)}Boundary"
-    )
+    "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:policy/JuncaChainPublicTestnetValidator${format("%02d", index + 1)}Boundary"
   ]
   protected_role_boundary_contract = merge(
     {
-      JuncaChainPublicTestnetDeployment = (
-        "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-        "policy/JuncaChainPublicTestnetFoundationBoundary"
-      )
-      JuncaChainPublicTestnetAmiBuilder = (
-        "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-        "policy/JuncaChainPublicTestnetAmiBuilderBoundary"
-      )
-      JuncaChainPublicTestnetObserver = (
-        "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-        "policy/JuncaChainPublicTestnetObserverBoundary"
-      )
-      JuncaChainPublicTestnetImageBuilder = (
-        "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:" +
-        "policy/JuncaChainPublicTestnetImageBuilderBoundary"
-      )
+      JuncaChainPublicTestnetDeployment   = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:policy/JuncaChainPublicTestnetFoundationBoundary"
+      JuncaChainPublicTestnetAmiBuilder   = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:policy/JuncaChainPublicTestnetAmiBuilderBoundary"
+      JuncaChainPublicTestnetObserver     = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:policy/JuncaChainPublicTestnetObserverBoundary"
+      JuncaChainPublicTestnetImageBuilder = "arn:${data.aws_partition.current.partition}:iam::${var.aws_account_id}:policy/JuncaChainPublicTestnetImageBuilderBoundary"
     },
     {
       for index, name in local.validator_role_names :
@@ -411,26 +376,14 @@ locals {
   public_testnet_waf_resource_arns = [
     "arn:${data.aws_partition.current.partition}:wafv2:${var.aws_region}:${var.aws_account_id}:regional/webacl/junca-testnet-public/*",
   ]
-  public_testnet_acm_resource_arn = (
-    "arn:${data.aws_partition.current.partition}:acm:${var.aws_region}:" +
-    "${var.aws_account_id}:certificate/*"
-  )
+  public_testnet_acm_resource_arn = "arn:${data.aws_partition.current.partition}:acm:${var.aws_region}:${var.aws_account_id}:certificate/*"
   public_testnet_log_resource_arns = [
     "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${var.aws_account_id}:log-group:/junca/social-ecosystem-chain/public-testnet/validator",
     "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${var.aws_account_id}:log-group:/junca/social-ecosystem-chain/public-testnet/validator:*",
   ]
-  public_testnet_alarm_resource_arn = (
-    "arn:${data.aws_partition.current.partition}:cloudwatch:${var.aws_region}:" +
-    "${var.aws_account_id}:alarm:junca-social-ecosystem-chain-testnet-validator-*-status"
-  )
-  public_testnet_sns_resource_arn = (
-    "arn:${data.aws_partition.current.partition}:sns:${var.aws_region}:" +
-    "${var.aws_account_id}:junca-social-ecosystem-chain-testnet-validator-alerts"
-  )
-  route53_hosted_zone_arn = (
-    "arn:${data.aws_partition.current.partition}:route53:::hostedzone/" +
-    var.route53_zone_id
-  )
+  public_testnet_alarm_resource_arn = "arn:${data.aws_partition.current.partition}:cloudwatch:${var.aws_region}:${var.aws_account_id}:alarm:junca-social-ecosystem-chain-testnet-validator-*-status"
+  public_testnet_sns_resource_arn   = "arn:${data.aws_partition.current.partition}:sns:${var.aws_region}:${var.aws_account_id}:junca-social-ecosystem-chain-testnet-validator-alerts"
+  route53_hosted_zone_arn           = "arn:${data.aws_partition.current.partition}:route53:::hostedzone/${var.route53_zone_id}"
   public_testnet_dns_record_names = [
     "rpc.${local.public_testnet_domain}",
     "explorer.${local.public_testnet_domain}",
@@ -1368,9 +1321,9 @@ resource "aws_iam_policy" "validator_permissions_boundary" {
     "JuncaChainPublicTestnetValidator%02dBoundary",
     count.index + 1
   )
-  description = (
-    "Maximum permissions for Public Testnet validator " +
-    format("%02d", count.index + 1)
+  description = format(
+    "Maximum permissions for Public Testnet validator %02d",
+    count.index + 1
   )
 
   policy = jsonencode({

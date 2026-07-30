@@ -294,12 +294,7 @@ resource "terraform_data" "account_gate" {
               ["workflow_dispatch", "workflow_run"],
               evidence.event_name
             ) &&
-            evidence.sts_assumed_role_arn == (
-              "arn:${data.aws_partition.current.partition}:sts::" +
-              "${var.aws_account_id}:assumed-role/" +
-              "${element(reverse(split("/", evidence.role_arn)), 0)}/" +
-              "jsec-oidc-attest-${evidence.run_id}"
-            )
+            evidence.sts_assumed_role_arn == "arn:${data.aws_partition.current.partition}:sts::${var.aws_account_id}:assumed-role/${element(reverse(split("/", evidence.role_arn)), 0)}/jsec-oidc-attest-${evidence.run_id}"
           ]) &&
           local.github_oidc_live_sts_attestation_readback_static_json ==
           local.github_oidc_subject_readback_json &&
