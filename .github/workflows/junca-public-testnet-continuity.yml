@@ -82,6 +82,11 @@ jobs:
           fi
           python scripts/ops/public_testnet_continuity.py \
             --source-sha "${GITHUB_SHA}" \
+            --expected-chain-id 20260723 \
+            --expected-peer-count 2 \
+            --expected-signed-power 3 \
+            --expected-total-power 3 \
+            --max-head-age-seconds 300 \
             --samples "${SAMPLES}" \
             --interval-seconds "${INTERVAL_SECONDS}" \
             --output artifacts/public-testnet-continuity/evidence.json \

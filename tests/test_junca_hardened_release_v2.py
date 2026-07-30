@@ -51,6 +51,17 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         self.assertNotIn("eth_send", self.parent)
         self.assertNotIn("junca_broadcast", self.parent)
 
+    def test_parent_accepts_only_boolean_exact_request_ami_reuse(self) -> None:
+        self.assertIn(
+            '(.reused_existing_ami | type == "boolean")',
+            self.parent,
+        )
+        self.assertNotIn(".reused_existing_ami == false", self.parent)
+        self.assertIn(
+            'echo "reused_existing_ami=$(jq -er .reused_existing_ami',
+            self.parent,
+        )
+
     def test_v2_baseline_is_read_only_and_drift_explicit(self) -> None:
         for value in (
             "environment: public-testnet",

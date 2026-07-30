@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
@@ -29,6 +30,8 @@ class NormalizedSnapshot:
     source: str
     chain_id: int
     finalized_height: int
+    authenticated_peer_count: int
+    finalized_timestamp: int
     finalized_hash: str | None
     certificate_hash: str | None
     signed_power: int
@@ -65,16 +68,32 @@ def _integer(value: Any, label: str) -> int:
     if isinstance(value, int):
         result = value
     elif isinstance(value, str):
-        text = value.strip()
-        try:
-            result = int(text, 16) if text.lower().startswith("0x") else int(text)
-        except ValueError as exc:
-            raise ContinuityError(f"{label} must be an integer") from exc
+        if re.fullmatch(r"[0-9]+", value):
+            result = int(value, 10)
+        elif re.fullmatch(r"0[xX][0-9a-fA-F]+", value):
+            result = int(value, 16)
+        else:
+            raise ContinuityError(f"{label} must be an integer")
     else:
         raise ContinuityError(f"{label} must be an integer")
     if result < 0:
         raise ContinuityError(f"{label} must not be negative")
     return result
+
+
+def _consistent_integer(
+    value: Mapping[str, Any], paths: Iterable[str], label: str
+) -> int:
+    observed = [
+        _integer(found, label)
+        for path in paths
+        if (found := _path(value, path)) is not None
+    ]
+    if not observed:
+        raise ContinuityError(f"{label} must be an integer")
+    if len(set(observed)) != 1:
+        raise ContinuityError(f"{label} evidence diverges")
+    return observed[0]
 
 
 def _boolean(value: Any, label: str) -> bool:
@@ -107,6 +126,7 @@ def _quorum(value: Mapping[str, Any]) -> tuple[int, int]:
             "runtime_evidence.signed_power",
             "consensus.signed_power",
             "consensus.last_certificate.signed_power",
+            "head.signed_power",
         ),
     )
     total = _first(
@@ -117,6 +137,7 @@ def _quorum(value: Mapping[str, Any]) -> tuple[int, int]:
             "runtime_evidence.total_power",
             "consensus.total_power",
             "consensus.last_certificate.total_power",
+            "head.total_power",
         ),
     )
     if signed is not None or total is not None:
@@ -124,7 +145,15 @@ def _quorum(value: Mapping[str, Any]) -> tuple[int, int]:
             raise ContinuityError("finality power evidence is incomplete")
         return _integer(signed, "signed_power"), _integer(total, "total_power")
 
-    ratio = _first(value, ("quorum", "finality.quorum", "runtime_evidence.quorum"))
+    ratio = _first(
+        value,
+        (
+            "quorum",
+            "finality.quorum",
+            "runtime_evidence.quorum",
+            "network.finality",
+        ),
+    )
     if isinstance(ratio, str) and "/" in ratio:
         left, right = ratio.split("/", 1)
         return _integer(left.strip(), "signed_power"), _integer(
@@ -139,16 +168,16 @@ def normalize_snapshot(
     if not isinstance(payload, Mapping):
         raise ContinuityError(f"{source} payload must be an object")
 
-    chain_id = _integer(
-        _first(
-            payload,
-            (
-                "chain_id",
-                "chainId",
-                "runtime_evidence.chain_id",
-                "network.chain_id",
-                "status.chain_id",
-            ),
+    chain_id = _consistent_integer(
+        payload,
+        (
+            "chain_id",
+            "chainId",
+            "runtime_evidence.chain_id",
+            "network.chain_id",
+            "network.chainId",
+            "network.chain_id_decimal",
+            "status.chain_id",
         ),
         f"{source} chain_id",
     )
@@ -161,11 +190,39 @@ def normalize_snapshot(
                 "height",
                 "runtime_evidence.finalized_height",
                 "consensus.head_height",
+                "network.height",
+                "head.height",
                 "status.finalized_height",
                 "latest.height",
             ),
         ),
         f"{source} finalized_height",
+    )
+    authenticated_peer_count = _consistent_integer(
+        payload,
+        (
+            "authenticated_peer_count",
+            "peer_count",
+            "runtime_evidence.authenticated_peer_count",
+            "network.peers",
+            "network.peer_count",
+            "network.peer_count_hex",
+            "recovery.rpcPeers",
+        ),
+        f"{source} authenticated_peer_count",
+    )
+    finalized_timestamp = _consistent_integer(
+        payload,
+        (
+            "finalized_timestamp",
+            "block_timestamp",
+            "runtime_evidence.finalized_timestamp",
+            "consensus.head_timestamp",
+            "head.timestamp",
+            "recovery.rpcTimestamp",
+            "latest.timestamp",
+        ),
+        f"{source} finalized_timestamp",
     )
     finalized_hash = _hash(
         _first(
@@ -176,6 +233,8 @@ def normalize_snapshot(
                 "block_hash",
                 "runtime_evidence.finalized_hash",
                 "consensus.head_hash",
+                "network.headHash",
+                "head.hash",
                 "latest.hash",
             ),
         ),
@@ -191,6 +250,8 @@ def normalize_snapshot(
                 "runtime_evidence.certificate_hash",
                 "consensus.last_certificate_hash",
                 "consensus.last_certificate.certificate_hash",
+                "network.certificateHash",
+                "head.certificate_hash",
             ),
         ),
         f"{source} certificate_hash",
@@ -204,16 +265,19 @@ def normalize_snapshot(
             "mainnet_changed",
             "runtime_evidence.mainnet_changed",
             "safety.mainnet_changed",
+            "network.mainnetChanged",
         ),
         "assets_moved": (
             "assets_moved",
             "runtime_evidence.assets_moved",
             "safety.assets_moved",
+            "network.assetsMoved",
         ),
         "bridge_activated": (
             "bridge_activated",
             "runtime_evidence.bridge_activated",
             "safety.bridge_activated",
+            "network.bridgeActivated",
         ),
     }
     safety: dict[str, bool] = {}
@@ -232,6 +296,8 @@ def normalize_snapshot(
         source=source,
         chain_id=chain_id,
         finalized_height=height,
+        authenticated_peer_count=authenticated_peer_count,
+        finalized_timestamp=finalized_timestamp,
         finalized_hash=finalized_hash,
         certificate_hash=certificate_hash,
         signed_power=signed_power,
@@ -247,11 +313,26 @@ def compare_pair(
     explorer: NormalizedSnapshot,
     *,
     expected_chain_id: int,
+    expected_peer_count: int = 2,
+    expected_signed_power: int = 3,
+    expected_total_power: int = 3,
 ) -> None:
     if operational.chain_id != expected_chain_id or explorer.chain_id != expected_chain_id:
         raise ContinuityError("public evidence chain_id does not match the approved network")
     if operational.finalized_height != explorer.finalized_height:
         raise ContinuityError("Operational API and Explorer finalized heights diverge")
+    if operational.authenticated_peer_count != explorer.authenticated_peer_count:
+        raise ContinuityError(
+            "Operational API and Explorer authenticated peer counts diverge"
+        )
+    if operational.authenticated_peer_count != expected_peer_count:
+        raise ContinuityError(
+            "authenticated peer count does not match the approved network"
+        )
+    if operational.finalized_timestamp != explorer.finalized_timestamp:
+        raise ContinuityError(
+            "Operational API and Explorer finalized timestamps diverge"
+        )
     if (
         operational.finalized_hash is not None
         and explorer.finalized_hash is not None
@@ -269,6 +350,24 @@ def compare_pair(
         or operational.total_power != explorer.total_power
     ):
         raise ContinuityError("Operational API and Explorer finality power diverges")
+    if (
+        operational.signed_power != expected_signed_power
+        or operational.total_power != expected_total_power
+    ):
+        raise ContinuityError("finality power does not match the approved network")
+
+
+def validate_freshness(
+    snapshot: NormalizedSnapshot,
+    *,
+    observed_at: int,
+    max_age_seconds: int,
+    max_future_skew_seconds: int = 60,
+) -> None:
+    if snapshot.finalized_timestamp > observed_at + max_future_skew_seconds:
+        raise ContinuityError(f"{snapshot.source} finalized timestamp is in the future")
+    if observed_at - snapshot.finalized_timestamp > max_age_seconds:
+        raise ContinuityError(f"{snapshot.source} finalized head is stale")
 
 
 def evaluate_observations(
@@ -277,8 +376,17 @@ def evaluate_observations(
     if len(observations) < 2:
         raise ContinuityError("at least two observations are required")
     heights = [int(item["operational"]["finalized_height"]) for item in observations]
+    timestamps = [
+        int(item["operational"]["finalized_timestamp"]) for item in observations
+    ]
     if any(current < previous for previous, current in zip(heights, heights[1:])):
         raise ContinuityError("finalized height regressed during the observation window")
+    if any(
+        current < previous for previous, current in zip(timestamps, timestamps[1:])
+    ):
+        raise ContinuityError(
+            "finalized timestamp regressed during the observation window"
+        )
     advanced = heights[-1] > heights[0]
     if require_advancement and not advanced:
         raise ContinuityError("finalized height did not advance during the observation window")
@@ -334,6 +442,10 @@ def parser() -> ArgumentParser:
         default="https://explorer.jaios-governance.org/explorer.json",
     )
     result.add_argument("--expected-chain-id", type=int, default=20260723)
+    result.add_argument("--expected-peer-count", type=int, default=2)
+    result.add_argument("--expected-signed-power", type=int, default=3)
+    result.add_argument("--expected-total-power", type=int, default=3)
+    result.add_argument("--max-head-age-seconds", type=int, default=300)
     result.add_argument("--samples", type=int, default=3)
     result.add_argument("--interval-seconds", type=int, default=30)
     result.add_argument("--timeout-seconds", type=int, default=15)
@@ -351,6 +463,14 @@ def main() -> int:
         raise ContinuityError("interval must be between 1 and 900 seconds")
     if not 1 <= args.timeout_seconds <= 60:
         raise ContinuityError("timeout must be between 1 and 60 seconds")
+    if args.expected_peer_count < 1:
+        raise ContinuityError("expected peer count must be positive")
+    if args.expected_signed_power < 1 or args.expected_total_power < 1:
+        raise ContinuityError("expected finality power must be positive")
+    if args.expected_signed_power > args.expected_total_power:
+        raise ContinuityError("expected signed power must not exceed total power")
+    if not 1 <= args.max_head_age_seconds <= 3600:
+        raise ContinuityError("maximum head age must be between 1 and 3600 seconds")
     if len(args.source_sha) != 40:
         raise ContinuityError("source SHA must contain 40 hexadecimal characters")
     try:
@@ -372,19 +492,28 @@ def main() -> int:
                 source="explorer_json",
                 require_safety=False,
             )
+            observation = {
+                "sample": index + 1,
+                "observed_at": utc_now(),
+                "accepted": False,
+                "operational": asdict(operational),
+                "explorer": asdict(explorer),
+            }
+            observations.append(observation)
             compare_pair(
                 operational,
                 explorer,
                 expected_chain_id=args.expected_chain_id,
+                expected_peer_count=args.expected_peer_count,
+                expected_signed_power=args.expected_signed_power,
+                expected_total_power=args.expected_total_power,
             )
-            observations.append(
-                {
-                    "sample": index + 1,
-                    "observed_at": utc_now(),
-                    "operational": asdict(operational),
-                    "explorer": asdict(explorer),
-                }
+            validate_freshness(
+                operational,
+                observed_at=int(time.time()),
+                max_age_seconds=args.max_head_age_seconds,
             )
+            observation["accepted"] = True
             if index + 1 < args.samples:
                 time.sleep(args.interval_seconds)
         state = evaluate_observations(
@@ -395,6 +524,10 @@ def main() -> int:
             "state": state,
             "source_sha": args.source_sha,
             "expected_chain_id": args.expected_chain_id,
+            "expected_peer_count": args.expected_peer_count,
+            "expected_signed_power": args.expected_signed_power,
+            "expected_total_power": args.expected_total_power,
+            "max_head_age_seconds": args.max_head_age_seconds,
             "observation_started_at": observations[0]["observed_at"],
             "observation_completed_at": observations[-1]["observed_at"],
             "sample_count": len(observations),

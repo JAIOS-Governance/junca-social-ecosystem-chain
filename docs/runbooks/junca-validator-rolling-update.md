@@ -4,6 +4,18 @@ This runbook is limited to the three Public Testnet validators. It does not
 authorize Terraform apply, deployment, Mainnet changes, asset movement, or
 bridge activation.
 
+Complete and review the bounded implementation before starting the rollout.
+Run the formal audit only after the live activation readback succeeds; pre-live
+contract tests and fail-closed release gates are development controls, not the
+post-activation audit.
+
+The activation readback consumes the current Operational API and Explorer v4
+shapes. It must prove, in the same bounded observation window: chain ID
+`20260723`, advancing finalized height, authenticated peers exactly `2/2`,
+fresh matching finalized timestamps, matching head and certificate hashes, and
+exact finality power `3/3`. An HTTP 200 response, a parseable payload, or a
+stable height alone is never activation evidence.
+
 1. Record the target runtime version, its exact 40-character lowercase source
    commit, immutable artifact SHA-256, rollback version and rollback artifact
    SHA-256. Pass the recorded runtime commit as the release manifest gate's
@@ -13,6 +25,10 @@ bridge activation.
    successful gate run ID as the Foundation Release `manifest_gate_run_id`;
    its AMI ID, source commit, runtime artifact SHA-256 and genesis SHA-256 must
    exactly match the selected AMI Build evidence.
+   An immutable AMI may be reused only when the AMI Build evidence proves the
+   exact same canonical request digest and all bound source/artifact digests.
+   The `reused_existing_ami` field must be a boolean and never weakens any
+   provenance, manifest, rollout or live-readback gate.
 2. Read back the exact three retained EBS volume IDs and completed encrypted
    rollback snapshots. A runtime rollback must reuse each validator's current
    durable volume. Snapshot restoration or any reduction of finalized height
