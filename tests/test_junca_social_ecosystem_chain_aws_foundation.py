@@ -1389,7 +1389,18 @@ class AwsFoundationTests(unittest.TestCase):
             "! -e /etc/junca/runtime.env",
             "mktemp /etc/junca/.runtime.env.XXXXXX",
             "systemctl stop junca-validator.service",
+            'sync -f "$runtime_env_tmp"',
+            'ln "$runtime_env_tmp" /etc/junca/runtime.env',
+            "runtime_env_created=true",
+            "runtime_env_created_identity",
+            "runtime_env_persistence_verified=true",
             "runtime_env_repaired=true",
+            "repair_rollback_attempted=true",
+            "repair_rollback_succeeded=true",
+            "repair_rollback_persistence_verified=true",
+            'systemctl stop junca-validator.service || true',
+            "rm -f /etc/junca/runtime.env",
+            "sync -f /etc/junca",
             'test("^[0-9a-f]{64}$")',
             '"$before_status" != "active"',
             '"$durable_mount_verified" == true',
@@ -1418,6 +1429,31 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertLess(recovery, strict_readback)
         self.assertLess(strict_readback, first_mutation)
+
+        rollback = self.foundation_script.index(
+            'if [[ "$accepted" != true &&',
+        )
+        evidence = self.foundation_script.index(
+            "jq -n \\\n  --arg schema_version "
+            '"junca-validator-service-recovery/v1"',
+            rollback,
+        )
+        self.assertLess(rollback, evidence)
+        self.assertLess(evidence, definition)
+        self.assertIn(
+            '"$(sha256sum /etc/junca/runtime.env | awk '
+            "'{print $1}')\" == \\\n"
+            '          "$canonical_runtime_env_sha256"',
+            self.foundation_script[rollback:evidence],
+        )
+        self.assertIn(
+            ".repair_rollback_attempted == false",
+            self.foundation_script,
+        )
+        self.assertNotIn(
+            'mv -f "$runtime_env_tmp" /etc/junca/runtime.env',
+            self.foundation_script[rollback:evidence],
+        )
 
     def test_service_recovery_remote_command_is_valid_bash(self) -> None:
         remote_script = validator_service_recovery_remote_script(
@@ -1581,7 +1617,13 @@ class AwsFoundationTests(unittest.TestCase):
             "runtime_env_verified": True,
             "runtime_version": expected_runtime_version,
             "runtime_env_repair_attempted": True,
+            "runtime_env_created": True,
+            "runtime_env_created_identity": "2049:3100",
             "runtime_env_repaired": True,
+            "runtime_env_persistence_verified": True,
+            "repair_rollback_attempted": False,
+            "repair_rollback_succeeded": False,
+            "repair_rollback_persistence_verified": False,
             "runtime_env_source": "canonical",
             "runtime_env_sha256": expected_runtime_env_sha256,
             "service_stop_exit": 0,
@@ -1602,6 +1644,10 @@ class AwsFoundationTests(unittest.TestCase):
             {"genesis_verified": False},
             {"runtime_directory_verified": False},
             {"runtime_env_repair_attempted": False},
+            {"runtime_env_created": False},
+            {"runtime_env_created_identity": ""},
+            {"runtime_env_created_identity": "not-an-inode"},
+            {"runtime_env_persistence_verified": False},
             {"runtime_env_source": "operator"},
             {"runtime_env_sha256": "d" * 64},
             {"service_stop_exit": 1},
@@ -1664,7 +1710,13 @@ class AwsFoundationTests(unittest.TestCase):
             "runtime_env_verified": True,
             "runtime_version": expected_runtime_version,
             "runtime_env_repair_attempted": False,
+            "runtime_env_created": False,
+            "runtime_env_created_identity": "",
             "runtime_env_repaired": False,
+            "runtime_env_persistence_verified": False,
+            "repair_rollback_attempted": False,
+            "repair_rollback_succeeded": False,
+            "repair_rollback_persistence_verified": False,
             "runtime_env_source": "existing",
             "runtime_env_sha256": "d" * 64,
             "service_stop_exit": 0,

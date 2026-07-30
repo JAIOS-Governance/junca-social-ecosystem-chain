@@ -37,13 +37,24 @@ the prefix length must still be zero. Only then may the workflow stop the
 service and atomically reconstruct that file from Terraform-canonical values.
 It cannot copy operator input or another host's file. The reconstructed file
 must have the exact calculated SHA-256, owner `root:junca`, and mode `0640`
-before the service is restarted. A symlink, an existing but contradictory
+before the service is restarted. Installation uses an atomic no-overwrite
+hard-link from a same-directory temporary file, so a file appearing after
+preflight cannot be replaced. The temporary file is synced before linking and
+the `/etc/junca` directory is synced after linking; recovery evidence must prove
+that persistence boundary and the created device/inode identity before restart.
+A symlink, an existing but contradictory
 environment, an AMI/runtime/genesis mismatch, or any resumed mixed prefix
 rejects reconstruction. Recovery must emit exact before/after service, repair
 source/hash, and health evidence, preserve all four safety boundaries as false,
 and then pass the unchanged strict live-prefix readback. Missing durable state,
 corrupt SQLite, ambiguous provenance, or failed local health remains
 fail-closed and prevents Terraform mutation.
+
+If health never becomes accepted after this attempt created the file, rollback
+stops the service, removes only a single-link canonical file with the exact
+expected digest and the same recorded device/inode identity, and syncs
+`/etc/junca`. Failure to prove either install or rollback persistence remains
+blocked for operator inspection.
 
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a

@@ -970,15 +970,27 @@ validate_validator_service_recovery_evidence() {
       .runtime_env_verified == true and
       .runtime_version == $expected_runtime_version and
       (.runtime_env_repair_attempted | type) == "boolean" and
+      (.runtime_env_created | type) == "boolean" and
+      (.runtime_env_created_identity | type) == "string" and
       (.runtime_env_repaired | type) == "boolean" and
+      (.runtime_env_persistence_verified | type) == "boolean" and
+      .repair_rollback_attempted == false and
+      .repair_rollback_succeeded == false and
+      .repair_rollback_persistence_verified == false and
       .service_stop_exit == 0 and
       (
         if .runtime_env_repaired then
           .runtime_env_repair_attempted == true and
+          .runtime_env_created == true and
+          (.runtime_env_created_identity | test("^[0-9]+:[0-9]+$")) and
+          .runtime_env_persistence_verified == true and
           .runtime_env_source == "canonical" and
           .runtime_env_sha256 == $expected_runtime_env_sha256
         else
           .runtime_env_repair_attempted == false and
+          .runtime_env_created == false and
+          .runtime_env_created_identity == "" and
+          .runtime_env_persistence_verified == false and
           .runtime_env_source == "existing" and
           (.runtime_env_sha256 | test("^[0-9a-f]{64}$"))
         end
@@ -1078,7 +1090,13 @@ runtime_directory_verified=false
 runtime_env_verified=false
 runtime_version=""
 runtime_env_repair_attempted=false
+runtime_env_created=false
+runtime_env_created_identity=""
 runtime_env_repaired=false
+runtime_env_persistence_verified=false
+repair_rollback_attempted=false
+repair_rollback_succeeded=false
+repair_rollback_persistence_verified=false
 runtime_env_source=""
 runtime_env_sha256=""
 service_stop_exit=0
@@ -1158,14 +1176,28 @@ if [[ "$runtime_env_verified" != true &&
     if [[ "$runtime_env_sha256" == "$canonical_runtime_env_sha256" ]]; then
       chown root:junca "$runtime_env_tmp"
       chmod 0640 "$runtime_env_tmp"
-      mv -f "$runtime_env_tmp" /etc/junca/runtime.env
-      trap - EXIT
-      if [[ -f /etc/junca/runtime.env &&
+      if sync -f "$runtime_env_tmp" &&
+          ln "$runtime_env_tmp" /etc/junca/runtime.env; then
+        runtime_env_created=true
+        runtime_env_created_identity="$(
+          stat -Lc '%d:%i' /etc/junca/runtime.env
+        )"
+        if rm -f "$runtime_env_tmp"; then
+          trap - EXIT
+        fi
+      fi
+      if [[ "$runtime_env_created" == true &&
+            ! -e "$runtime_env_tmp" &&
+            ! -L "$runtime_env_tmp" &&
+            -f /etc/junca/runtime.env &&
             ! -L /etc/junca/runtime.env &&
             "$(stat -c '%U:%G' /etc/junca/runtime.env)" == "root:junca" &&
             "$(stat -c '%a' /etc/junca/runtime.env)" == "640" &&
             "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
-              "$canonical_runtime_env_sha256" ]]; then
+              "$canonical_runtime_env_sha256" &&
+            "$(stat -c '%h' /etc/junca/runtime.env)" == 1 ]] &&
+          sync -f /etc/junca; then
+        runtime_env_persistence_verified=true
         runtime_env_repaired=true
         runtime_env_source=canonical
         runtime_env_verified=true
@@ -1208,6 +1240,36 @@ for attempts in $(seq 1 60); do
   fi
 done
 
+if [[ "$accepted" != true &&
+      "$runtime_env_created" == true ]]; then
+  repair_rollback_attempted=true
+  systemctl stop junca-validator.service || true
+  if [[ -e "${runtime_env_tmp:-}" &&
+        ! -L "${runtime_env_tmp:-}" &&
+        "$(stat -Lc '%d:%i' "${runtime_env_tmp:-}")" == \
+          "$runtime_env_created_identity" ]]; then
+    rm -f "${runtime_env_tmp:-}"
+  fi
+  if [[ -f /etc/junca/runtime.env &&
+        ! -L /etc/junca/runtime.env &&
+        "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
+          "$runtime_env_created_identity" &&
+        "$(stat -c '%h' /etc/junca/runtime.env)" == 1 &&
+        "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
+          "$canonical_runtime_env_sha256" ]]; then
+    rm -f /etc/junca/runtime.env
+  fi
+  if [[ ! -e /etc/junca/runtime.env &&
+        ! -L /etc/junca/runtime.env ]] &&
+      sync -f /etc/junca; then
+    repair_rollback_succeeded=true
+    repair_rollback_persistence_verified=true
+    runtime_env_verified=false
+    runtime_env_source=""
+    runtime_env_sha256=""
+  fi
+fi
+
 jq -n \
   --arg schema_version "junca-validator-service-recovery/v1" \
   --arg before_status "$before_status" \
@@ -1221,7 +1283,15 @@ jq -n \
   --argjson runtime_env_verified "$runtime_env_verified" \
   --arg runtime_version "$runtime_version" \
   --argjson runtime_env_repair_attempted "$runtime_env_repair_attempted" \
+  --argjson runtime_env_created "$runtime_env_created" \
+  --arg runtime_env_created_identity "$runtime_env_created_identity" \
   --argjson runtime_env_repaired "$runtime_env_repaired" \
+  --argjson runtime_env_persistence_verified \
+    "$runtime_env_persistence_verified" \
+  --argjson repair_rollback_attempted "$repair_rollback_attempted" \
+  --argjson repair_rollback_succeeded "$repair_rollback_succeeded" \
+  --argjson repair_rollback_persistence_verified \
+    "$repair_rollback_persistence_verified" \
   --arg runtime_env_source "$runtime_env_source" \
   --arg runtime_env_sha256 "$runtime_env_sha256" \
   --argjson service_stop_exit "$service_stop_exit" \
@@ -1241,7 +1311,14 @@ jq -n \
     runtime_env_verified: $runtime_env_verified,
     runtime_version: $runtime_version,
     runtime_env_repair_attempted: $runtime_env_repair_attempted,
+    runtime_env_created: $runtime_env_created,
+    runtime_env_created_identity: $runtime_env_created_identity,
     runtime_env_repaired: $runtime_env_repaired,
+    runtime_env_persistence_verified: $runtime_env_persistence_verified,
+    repair_rollback_attempted: $repair_rollback_attempted,
+    repair_rollback_succeeded: $repair_rollback_succeeded,
+    repair_rollback_persistence_verified:
+      $repair_rollback_persistence_verified,
     runtime_env_source: $runtime_env_source,
     runtime_env_sha256: $runtime_env_sha256,
     service_stop_exit: $service_stop_exit,
