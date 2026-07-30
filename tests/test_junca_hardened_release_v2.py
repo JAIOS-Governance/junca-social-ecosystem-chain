@@ -104,12 +104,17 @@ class HardenedReleaseV2Tests(unittest.TestCase):
             '"scripts/junca_runtime_release_evidence_collector_drift.py"',
             '"tests/test_junca_runtime_release_ami_drift.py"',
             '"tests/test_junca_hardened_release_v2.py"',
+            '"tests/test_junca_public_testnet_endpoint_test.py"',
             '".github/workflows/junca-runtime-release-evidence-collector-v2.yml"',
             '".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"',
             '".github/workflows/junca-runtime-release-manifest-gate.yml"',
         ):
             self.assertGreaterEqual(self.runtime.count(path), 2)
         self.assertIn("tests.test_junca_hardened_release_v2", self.runtime)
+        self.assertIn(
+            "tests.test_junca_public_testnet_endpoint_test",
+            self.runtime,
+        )
         self.assertIn("tests.test_junca_runtime_release_ami_drift", self.runtime)
 
 
