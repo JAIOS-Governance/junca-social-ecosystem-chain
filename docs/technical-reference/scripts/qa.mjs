@@ -131,7 +131,7 @@ for (const required of [
   "AWS Runtime",
   "Read-only Operations",
   "Assets Moved",
-  "Revision · 2026.07.29 / R32",
+  "Revision · 2026.07.29 / R33",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -204,7 +204,7 @@ for (const route of routes) {
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R32") failures.push("release manifest revision must be R32");
+if (releaseManifest.revision !== "R33") failures.push("release manifest revision must be R33");
 if (!/^[0-9a-f]{40}$/.test(releaseManifest.chain_source_commit ?? "")) {
   failures.push("release manifest must bind the exact development source commit");
 }
@@ -214,11 +214,28 @@ if (
 ) {
   failures.push("release manifest development source must match the workflow commit");
 }
-if (releaseManifest.runtime_artifact_commit !== null) {
-  failures.push("runtime artifact commit must not be inferred without public runtime evidence");
+if (!/^[0-9a-f]{40}$/.test(releaseManifest.runtime_artifact_commit ?? "")) {
+  failures.push("runtime artifact commit must be an exact public evidence SHA");
 }
-if (releaseManifest.runtime_artifact_commit_status !== "NOT_CURRENTLY_PUBLISHED") {
-  failures.push("runtime artifact provenance publication boundary is missing");
+if (releaseManifest.runtime_artifact_commit_status !== "VERIFIED") {
+  failures.push("runtime artifact provenance must be verified");
+}
+if (
+  releaseManifest.runtime_evidence?.source_evidence?.runtime_artifact_commit !==
+  releaseManifest.runtime_artifact_commit
+) {
+  failures.push("runtime artifact commit must match nested source evidence");
+}
+for (const field of ["runtime_genesis_sha256", "runtime_node_artifact_sha256"]) {
+  if (!/^[0-9a-f]{64}$/.test(releaseManifest[field] ?? "")) {
+    failures.push(`${field} must be an exact public evidence digest`);
+  }
+  if (
+    releaseManifest.runtime_evidence?.source_evidence?.[field] !==
+    releaseManifest[field]
+  ) {
+    failures.push(`${field} must match nested source evidence`);
+  }
 }
 if (releaseManifest.runtime_status !== "VERIFIED_READY_READ_ONLY") {
   failures.push("release manifest must record the verified read-only runtime state");

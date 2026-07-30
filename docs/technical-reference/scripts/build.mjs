@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.29";
-const revision = "R32";
+const revision = "R33";
 const chainSource =
   process.env.GITHUB_SHA ?? "cb8c3c0494b04c8e99b01ba9525db3b899f0d075";
 const canonicalFoundationCommit = "6de0979b97254c5b4777ede8c82378fd4e143137";
@@ -36,6 +36,14 @@ if (
 const observedAt = String(explorer.observed_at);
 const head = explorer.head ?? {};
 const network = explorer.network ?? {};
+const runtimeArtifact = explorer.runtime_artifact ?? {};
+if (
+  !/^[0-9a-f]{40}$/.test(runtimeArtifact.source_commit ?? "") ||
+  !/^[0-9a-f]{64}$/.test(runtimeArtifact.genesis_sha256 ?? "") ||
+  !/^[0-9a-f]{64}$/.test(runtimeArtifact.node_artifact_sha256 ?? "")
+) {
+  throw new Error("Live Explorer runtime artifact provenance is missing or invalid");
+}
 const publicValue = (value) =>
   value === null || value === undefined || value === ""
     ? "NOT CURRENTLY PUBLISHED"
@@ -108,6 +116,9 @@ const runtimePanel = [
   `<div><dt>State Root</dt><dd>${publicValue(head.state_root)}</dd></div>`,
   `<div><dt>Chain ID</dt><dd>${publicValue(network.chain_id_decimal)}</dd></div>`,
   `<div><dt>Client Version</dt><dd>${publicValue(network.client_version)}</dd></div>`,
+  `<div><dt>Runtime Artifact Commit</dt><dd>${runtimeArtifact.source_commit}</dd></div>`,
+  `<div><dt>Genesis SHA-256</dt><dd>${runtimeArtifact.genesis_sha256}</dd></div>`,
+  `<div><dt>Node Artifact SHA-256</dt><dd>${runtimeArtifact.node_artifact_sha256}</dd></div>`,
   `<div><dt>Transactions</dt><dd>${publicValue(head.transaction_count)}</dd></div>`,
   `<div><dt>Peer Count</dt><dd>${publicValue(network.peer_count)}</dd></div>`,
   '<div><dt>Block Timestamp</dt><dd>NOT CURRENTLY PUBLISHED</dd></div></dl>',
@@ -286,11 +297,11 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.29 / R32")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.29 / R33")
       .replaceAll("20260727-r29", "20260729-r32")
       .replaceAll("official-brand-lockup-r29.js", "official-brand-lockup-r32.js")
       .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-07-29"')
-      .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R32"')
+      .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R33"')
       .replaceAll('"inLanguage":["en","ja"]', '"inLanguage":["en","ja","zh-Hans","es","it","ar"]')
       .replaceAll("Runtime Deployment in Progress", "Governed Read-only Operations")
       .replaceAll("Pending Live Acceptance", "Finality Certificate Observed")
@@ -388,8 +399,10 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   design_source: "Sites Version 15",
   chain_source_commit: chainSource,
   development_source_commit: chainSource,
-  runtime_artifact_commit: null,
-  runtime_artifact_commit_status: "NOT_CURRENTLY_PUBLISHED",
+  runtime_artifact_commit: runtimeArtifact.source_commit,
+  runtime_artifact_commit_status: "VERIFIED",
+  runtime_genesis_sha256: runtimeArtifact.genesis_sha256,
+  runtime_node_artifact_sha256: runtimeArtifact.node_artifact_sha256,
   canonical_origin: "https://docs.jaios-governance.org",
   network_label: "Public Testnet / Read-only / Finalized / No Monetary Value",
   runtime_status: "VERIFIED_READY_READ_ONLY",
@@ -418,8 +431,10 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
       operational_api: "https://chain.jaios-governance.org/api/operational",
       explorer_json: "https://explorer.jaios-governance.org/explorer.json",
       documentation_source_commit: chainSource,
-      runtime_artifact_commit: null,
-      runtime_artifact_commit_status: "NOT_CURRENTLY_PUBLISHED",
+      runtime_artifact_commit: runtimeArtifact.source_commit,
+      runtime_artifact_commit_status: "VERIFIED",
+      runtime_genesis_sha256: runtimeArtifact.genesis_sha256,
+      runtime_node_artifact_sha256: runtimeArtifact.node_artifact_sha256,
     },
     mainnet_changed: explorer.mainnet_changed,
     assets_moved: explorer.assets_moved,
