@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
 const release = "2026.07.29";
-const revision = "R34";
+const revision = "R35";
 const chainSource =
   process.env.GITHUB_SHA ?? "cb8c3c0494b04c8e99b01ba9525db3b899f0d075";
 const canonicalFoundationCommit = "6de0979b97254c5b4777ede8c82378fd4e143137";
@@ -284,10 +284,10 @@ for (const route of routes) {
   }
   const decorated = decorateSecondaryCopy(
     source
-      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260729-r34" alt="JUNCA" width="190" height="57"></a>')
-      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260729-r34" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
-      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260729-r34" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
-      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260729-r34"></script></head>`)
+      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260729-r35" alt="JUNCA" width="190" height="57"></a>')
+      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260729-r35" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
+      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260729-r35" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
+      .replace("</head>", `<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260729-r35"></script></head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace("</header>", `</header>${secondaryLanguageToolbar}`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
@@ -297,11 +297,11 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.29 / R34")
-      .replaceAll("20260727-r29", "20260729-r34")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.07.29 / R35")
+      .replaceAll("20260727-r29", "20260729-r35")
       .replaceAll("official-brand-lockup-r29.js", "official-brand-lockup-r32.js")
       .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-07-29"')
-      .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R34"')
+      .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R35"')
       .replaceAll('"inLanguage":["en","ja"]', '"inLanguage":["en","ja","zh-Hans","es","it","ar"]')
       .replaceAll("Runtime Deployment in Progress", "Governed Read-only Operations")
       .replaceAll("Pending Live Acceptance", "Finality Certificate Observed")
@@ -309,6 +309,11 @@ for (const route of routes) {
         "throw new Error(&quot;BLOCKED: accepted network registry is required&quot;);",
         "console.info(&quot;Registry verification in progress&quot;);",
       )
+      .replaceAll(
+        "Any BLOCKED item blocks release.",
+        "Any VERIFICATION IN PROGRESS item keeps release acceptance open.",
+      )
+      .replaceAll("BLOCKED", "VERIFICATION IN PROGRESS")
       .replaceAll("Pending Runtime Binding", "Evidence-bound Read-only Access")
       .replaceAll("Runtime Unverified", "Operational Evidence Available")
       .replaceAll("Runtime unverified", "operational evidence available")
@@ -320,10 +325,19 @@ for (const route of routes) {
       .replaceAll("pending verification", "verification in progress")
       .replaceAll("pending acceptance", "acceptance in progress")
       .replaceAll("pending runtime evidence", "runtime verification in progress")
-      .replaceAll("Known, pending and blocked", "Known, under verification and blocked")
-      .replaceAll("verified, targeted, pending and blocked", "verified, targeted, under-verification and blocked")
-      .replaceAll("Verified, targeted, pending and blocked", "Verified, targeted, under-verification and blocked")
-      .replaceAll("Meaning of verified, targeted, pending and blocked", "Meaning of verified, targeted, under-verification and blocked")
+      .replaceAll("Known, pending and blocked", "Known, under verification and not activated")
+      .replaceAll("verified, targeted, pending and blocked", "verified, targeted, under-verification and not-activated")
+      .replaceAll("Verified, targeted, pending and blocked", "Verified, targeted, under-verification and not-activated")
+      .replaceAll("Meaning of verified, targeted, pending and blocked", "Meaning of verified, targeted, under-verification and not-activated")
+      .replaceAll(
+        "What is known, targeted and still blocked.",
+        "What is known, targeted and still under verification.",
+      )
+      .replaceAll(
+        "Public administrative, debug, mining, personal and txpool methods must remain unavailable.",
+        "Public administrative, debug, mining, personal and txpool methods are intentionally not exposed.",
+      )
+      .replaceAll("All routes remain blocked.", "All routes remain not activated.")
       .replaceAll("FINALITY_PENDING", "FINALITY_VERIFICATION")
       .replaceAll("finality_pending", "finality_verification")
       .replaceAll("保留中", "検証継続中")
@@ -345,10 +359,10 @@ for (const route of routes) {
       .replace('<tr><td>Finality Policy</td><td>Certified finality / strict &gt;2/3 voting power</td><td>Implemented in source; runtime evidence pending</td></tr>', '<tr><td>Finality Policy</td><td>Certified finality · 3 / 3 observed</td><td>Verified against the current read-only Explorer snapshot</td></tr>')
       .replaceAll("34d838b8a59c", "052598647079")
       .replaceAll("052598647079", "6de0979b9725")
-      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260729-r34")
-      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r34")
-      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r34")
-      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260729-r34"></script></body>'),
+      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260729-r35")
+      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r35")
+      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r35")
+      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260729-r35"></script></body>'),
     route,
   );
   await writeFile(path, decorated, "utf8");
@@ -356,7 +370,7 @@ for (const route of routes) {
 const installManifestPath = join(dist, "manifest.webmanifest");
 const installManifest = JSON.parse(await readFile(installManifestPath, "utf8"));
 for (const icon of installManifest.icons) {
-  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260729-r34");
+  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260729-r35");
 }
 await writeFile(
   installManifestPath,
