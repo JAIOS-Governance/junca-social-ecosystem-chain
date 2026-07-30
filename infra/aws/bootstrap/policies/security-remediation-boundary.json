@@ -1,0 +1,282 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyKmsSigningAndGrantCreation",
+      "Effect": "Deny",
+      "Action": [
+        "kms:CreateGrant",
+        "kms:GenerateMac",
+        "kms:Sign"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyStateObjectDataPlane",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1/*"
+    },
+    {
+      "Sid": "DenyApplicationMutation",
+      "Effect": "Deny",
+      "Action": [
+        "acm:*",
+        "ec2:*",
+        "elasticloadbalancing:*",
+        "imagebuilder:*",
+        "route53:*",
+        "ssm:*",
+        "wafv2:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyRemediationBoundaryMutation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:PutRolePermissionsBoundary"
+      ],
+      "Resource": "arn:aws:iam::595710543956:role/JuncaChainSecurityBootstrapRemediation"
+    },
+    {
+      "Sid": "RepairOnlySecurityBootstrapRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::595710543956:role/JuncaChainSecurityBootstrap"
+    },
+    {
+      "Sid": "AttachOnlySecurityBootstrapPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::595710543956:role/JuncaChainSecurityBootstrap",
+      "Condition": {
+        "StringEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapCore",
+            "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapState"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RepairOnlySecurityBootstrapPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:SetDefaultPolicyVersion"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapCore",
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapState"
+      ]
+    },
+    {
+      "Sid": "CreateOnlyCanonicalStateKey",
+      "Effect": "Allow",
+      "Action": "kms:CreateKey",
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "kms:BypassPolicyLockoutSafetyCheck": "false",
+          "kms:MultiRegion": "false"
+        },
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "Governance",
+            "ManagedBy",
+            "MonetaryUse",
+            "Network",
+            "Project",
+            "Purpose"
+          ]
+        },
+        "Null": {
+          "aws:RequestTag/Governance": "false",
+          "aws:RequestTag/ManagedBy": "false",
+          "aws:RequestTag/MonetaryUse": "false",
+          "aws:RequestTag/Network": "false",
+          "aws:RequestTag/Project": "false",
+          "aws:RequestTag/Purpose": "false"
+        },
+        "StringEquals": {
+          "aws:RequestTag/Governance": "JAIOS Institutional Governance",
+          "aws:RequestTag/ManagedBy": "TerraformBootstrap",
+          "aws:RequestTag/MonetaryUse": "None",
+          "aws:RequestTag/Network": "Public Testnet",
+          "aws:RequestTag/Project": "JUNCA Social Ecosystem Chain",
+          "aws:RequestTag/Purpose": "TerraformState",
+          "aws:RequestedRegion": "us-east-1",
+          "kms:KeyOrigin": "AWS_KMS",
+          "kms:KeySpec": "SYMMETRIC_DEFAULT",
+          "kms:KeyUsage": "ENCRYPT_DECRYPT"
+        }
+      }
+    },
+    {
+      "Sid": "CreateOnlyCanonicalValidatorSigner",
+      "Effect": "Allow",
+      "Action": "kms:CreateKey",
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "kms:BypassPolicyLockoutSafetyCheck": "false",
+          "kms:MultiRegion": "false"
+        },
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "Governance",
+            "ManagedBy",
+            "MonetaryUse",
+            "Network",
+            "Project",
+            "Purpose",
+            "Validator"
+          ]
+        },
+        "Null": {
+          "aws:RequestTag/Governance": "false",
+          "aws:RequestTag/ManagedBy": "false",
+          "aws:RequestTag/MonetaryUse": "false",
+          "aws:RequestTag/Network": "false",
+          "aws:RequestTag/Project": "false",
+          "aws:RequestTag/Purpose": "false",
+          "aws:RequestTag/Validator": "false"
+        },
+        "StringEquals": {
+          "aws:RequestTag/Governance": "JAIOS Institutional Governance",
+          "aws:RequestTag/ManagedBy": "TerraformBootstrap",
+          "aws:RequestTag/MonetaryUse": "None",
+          "aws:RequestTag/Network": "Public Testnet",
+          "aws:RequestTag/Project": "JUNCA Social Ecosystem Chain",
+          "aws:RequestTag/Purpose": "ValidatorSigner",
+          "aws:RequestTag/Validator": [
+            "01",
+            "02",
+            "03"
+          ],
+          "aws:RequestedRegion": "us-east-1",
+          "kms:KeyOrigin": "AWS_KMS",
+          "kms:KeySpec": "ECC_SECG_P256K1",
+          "kms:KeyUsage": "SIGN_VERIFY"
+        }
+      }
+    },
+    {
+      "Sid": "RepairOnlyResolvedCanonicalKeys",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CancelKeyDeletion",
+        "kms:DescribeKey",
+        "kms:DisableKey",
+        "kms:EnableKey",
+        "kms:GetKeyPolicy",
+        "kms:ListGrants",
+        "kms:ListKeyPolicies",
+        "kms:ListResourceTags",
+        "kms:PutKeyPolicy",
+        "kms:RevokeGrant",
+        "kms:ScheduleKeyDeletion",
+        "kms:UpdateKeyDescription"
+      ],
+      "Resource": [
+        "${state_key_arn}",
+        "${validator01_key_arn}",
+        "${validator02_key_arn}",
+        "${validator03_key_arn}"
+      ],
+      "Condition": {
+        "Bool": {
+          "kms:MultiRegion": "false"
+        },
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "kms:KeyOrigin": "AWS_KMS"
+        }
+      }
+    },
+    {
+      "Sid": "RepairOnlyResolvedStateKeyRotation",
+      "Effect": "Allow",
+      "Action": [
+        "kms:EnableKeyRotation",
+        "kms:GetKeyRotationStatus"
+      ],
+      "Resource": "${state_key_arn}"
+    },
+    {
+      "Sid": "DenyCanonicalAliasMutation",
+      "Effect": "Deny",
+      "Action": [
+        "kms:CreateAlias",
+        "kms:DeleteAlias",
+        "kms:UpdateAlias"
+      ],
+      "Resource": [
+        "arn:aws:kms:us-east-1:595710543956:alias/junca-social-ecosystem-chain-testnet-state",
+        "arn:aws:kms:us-east-1:595710543956:alias/junca-social-ecosystem-chain-testnet-validator-01",
+        "arn:aws:kms:us-east-1:595710543956:alias/junca-social-ecosystem-chain-testnet-validator-02",
+        "arn:aws:kms:us-east-1:595710543956:alias/junca-social-ecosystem-chain-testnet-validator-03"
+      ]
+    },
+    {
+      "Sid": "ReadKmsInventory",
+      "Effect": "Allow",
+      "Action": [
+        "kms:ListAliases",
+        "kms:ListRetirableGrants"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "RepairOnlyStateBucketControlPlane",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketOwnershipControls",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1"
+    },
+    {
+      "Sid": "ReadRemediationEvidence",
+      "Effect": "Allow",
+      "Action": [
+        "cloudtrail:LookupEvents",
+        "iam:GetRole"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

@@ -21,6 +21,10 @@ from .explorer_page import EXPLORER_DOCUMENT
 NOTICE = "Public Testnet / No Monetary Value"
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+HEX_DIGEST = re.compile(r"^0x[0-9a-f]{64}$")
+HEX_SIGNATURE = re.compile(r"^[0-9a-f]{128}$")
+CERTIFICATE_PROOF_SCHEMA = "junca-public-finality-certificate-proof/v1"
+VALIDATOR_IDS = ("validator-01", "validator-02", "validator-03")
 ALLOWED_METHODS = frozenset(
     {
         "eth_blockNumber",
@@ -132,6 +136,7 @@ class PublicGateway:
         runtime_artifact_commit: str | None = None,
         genesis_sha256: str | None = None,
         node_artifact_sha256: str | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.upstream = validate_upstream(upstream)
         if runtime_artifact_commit is not None and not COMMIT_SHA.fullmatch(
@@ -151,6 +156,9 @@ class PublicGateway:
                 )
         self.genesis_sha256 = genesis_sha256
         self.node_artifact_sha256 = node_artifact_sha256
+        self._clock = clock or (
+            lambda: datetime.now(timezone.utc).timestamp()
+        )
         self._transport = transport or (
             lambda _upstream, payload: http_transport(self.upstream, payload)
         )
@@ -189,7 +197,10 @@ class PublicGateway:
 
     def health(self) -> tuple[int, Mapping[str, Any]]:
         evidence = self._validator_health()
-        healthy = evidence.get("status") == "healthy"
+        peer_count = self._hex_quantity(
+            self._public_rpc_result("net_peerCount", [])
+        )
+        healthy = self._validator_is_ready(evidence, peer_count)
         body = {
             "schema_version": "junca-public-gateway-health/v1",
             "status": "healthy" if healthy else "unhealthy",
@@ -197,6 +208,8 @@ class PublicGateway:
             "validator": {
                 "head_height": evidence.get("head_height"),
                 "head_hash": evidence.get("head_hash"),
+                "head_timestamp": evidence.get("head_timestamp"),
+                "peer_count": peer_count,
             },
             "read_only": True,
             "mainnet_changed": False,
@@ -212,22 +225,33 @@ class PublicGateway:
             if isinstance(evidence.get("consensus"), Mapping)
             else None
         )
-        finalized = (
-            isinstance(certificate, Mapping)
-            and certificate.get("finality_status") == "FINALIZED"
-            and certificate.get("height") == evidence.get("head_height")
-            and certificate.get("block_hash") == evidence.get("head_hash")
+        certificate_proof = (
+            evidence.get("consensus", {}).get(
+                "last_certificate_proof"
+            )
+            if isinstance(evidence.get("consensus"), Mapping)
+            else None
         )
         network = self._public_network_metadata()
+        validator_ready = self._validator_is_ready(
+            evidence,
+            network.get("peer_count"),
+        )
         block = (
             self._finalized_block_metadata(
                 certificate.get("height"), certificate.get("block_hash")
             )
-            if finalized
+            if validator_ready and isinstance(certificate, Mapping)
             else None
         )
+        finalized = (
+            validator_ready
+            and block is not None
+            and block.get("timestamp")
+            == hex(evidence.get("head_timestamp"))
+        )
         body = {
-            "schema_version": "junca-public-explorer/v4",
+            "schema_version": "junca-public-explorer/v5",
             "notice": NOTICE,
             "runtime_artifact": {
                 "source_commit": self.runtime_artifact_commit,
@@ -248,6 +272,7 @@ class PublicGateway:
                     ),
                     "signed_power": certificate.get("signed_power"),
                     "total_power": certificate.get("total_power"),
+                    "certificate": certificate_proof,
                     "timestamp": block.get("timestamp") if block else None,
                     "parent_hash": block.get("parent_hash") if block else None,
                     "state_root": block.get("state_root") if block else None,
@@ -264,6 +289,152 @@ class PublicGateway:
             "bridge_activated": False,
         }
         return (200 if finalized else 503), body
+
+    def _validator_is_ready(
+        self,
+        evidence: Mapping[str, Any],
+        rpc_peer_count: object,
+    ) -> bool:
+        head_height = evidence.get("head_height")
+        head_hash = evidence.get("head_hash")
+        head_timestamp = evidence.get("head_timestamp")
+        interval = evidence.get("block_interval_seconds")
+        epoch = evidence.get("slot_epoch_seconds")
+        last_slot = evidence.get(
+            "automatic_finality_last_successful_slot"
+        )
+        last_height = evidence.get(
+            "automatic_finality_last_successful_height"
+        )
+        consensus = evidence.get("consensus")
+        certificate = (
+            consensus.get("last_certificate")
+            if isinstance(consensus, Mapping)
+            else None
+        )
+        certificate_hash = (
+            consensus.get("last_certificate_hash")
+            if isinstance(consensus, Mapping)
+            else None
+        )
+        certificate_proof = (
+            consensus.get("last_certificate_proof")
+            if isinstance(consensus, Mapping)
+            else None
+        )
+        health_gates = evidence.get("health_gates")
+        now = int(self._clock())
+        fresh_window = (
+            max(120, interval * 3)
+            if isinstance(interval, int)
+            and not isinstance(interval, bool)
+            else -1
+        )
+        return (
+            evidence.get("status") == "healthy"
+            and evidence.get("peer_count") == 2
+            and rpc_peer_count == 2
+            and isinstance(head_height, int)
+            and not isinstance(head_height, bool)
+            and head_height >= 1
+            and isinstance(head_hash, str)
+            and HEX_DIGEST.fullmatch(head_hash) is not None
+            and isinstance(head_timestamp, int)
+            and not isinstance(head_timestamp, bool)
+            and 0 <= now - head_timestamp <= fresh_window
+            and isinstance(interval, int)
+            and not isinstance(interval, bool)
+            and 5 <= interval <= 3600
+            and isinstance(epoch, int)
+            and not isinstance(epoch, bool)
+            and epoch > 0
+            and isinstance(last_slot, int)
+            and not isinstance(last_slot, bool)
+            and last_slot > 0
+            and epoch + (last_slot * interval) == head_timestamp
+            and last_height == head_height
+            and evidence.get("automatic_finality_enabled") is True
+            and evidence.get("automatic_finality_loop_running") is True
+            and isinstance(consensus, Mapping)
+            and consensus.get("head_height") == head_height
+            and consensus.get("required_vote_count") == 3
+            and isinstance(certificate, Mapping)
+            and certificate.get("finality_status") == "FINALIZED"
+            and certificate.get("height") == head_height
+            and certificate.get("block_hash") == head_hash
+            and certificate.get("signed_power") == 3
+            and certificate.get("total_power") == 3
+            and isinstance(certificate_hash, str)
+            and HEX_DIGEST.fullmatch(certificate_hash) is not None
+            and certificate.get("certificate_hash") == certificate_hash
+            and self._certificate_proof_is_complete(
+                certificate_proof,
+                certificate,
+            )
+            and isinstance(health_gates, Mapping)
+            and set(health_gates)
+            == {
+                "authenticated_peer_quorum",
+                "automatic_finality",
+                "current_three_of_three_certificate",
+                "fresh_finalized_head",
+            }
+            and all(value is True for value in health_gates.values())
+            and evidence.get("mainnet_changed") is False
+            and evidence.get("assets_moved") is False
+            and evidence.get("bridge_activated") is False
+        )
+
+    @staticmethod
+    def _certificate_proof_is_complete(
+        proof: object,
+        certificate: Mapping[str, Any],
+    ) -> bool:
+        if (
+            not isinstance(proof, Mapping)
+            or set(proof) != {"schema_version", "certificate", "votes"}
+            or proof.get("schema_version") != CERTIFICATE_PROOF_SCHEMA
+            or proof.get("certificate") != certificate
+            or certificate.get("validator_ids") != list(VALIDATOR_IDS)
+        ):
+            return False
+        vote_hashes = certificate.get("vote_hashes")
+        votes = proof.get("votes")
+        if (
+            not isinstance(vote_hashes, list)
+            or len(vote_hashes) != 3
+            or len(set(vote_hashes)) != 3
+            or any(
+                not isinstance(item, str)
+                or HEX_DIGEST.fullmatch(item) is None
+                for item in vote_hashes
+            )
+            or not isinstance(votes, list)
+            or len(votes) != 3
+        ):
+            return False
+        for validator_id, vote in zip(VALIDATOR_IDS, votes):
+            if (
+                not isinstance(vote, Mapping)
+                or set(vote)
+                != {
+                    "chain_id",
+                    "height",
+                    "round",
+                    "block_hash",
+                    "validator_id",
+                    "signature",
+                }
+                or vote.get("chain_id") != certificate.get("chain_id")
+                or vote.get("height") != certificate.get("height")
+                or vote.get("round") != certificate.get("round")
+                or vote.get("block_hash") != certificate.get("block_hash")
+                or vote.get("validator_id") != validator_id
+                or not isinstance(vote.get("signature"), str)
+                or HEX_SIGNATURE.fullmatch(vote["signature"]) is None
+            ):
+                return False
+        return True
 
     def explorer_html(self) -> tuple[int, str]:
         status, _evidence = self.explorer()

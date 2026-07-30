@@ -1,0 +1,369 @@
+schemaVersion: '2.2'
+description: >-
+  Read-only bounded JUNCA Public Testnet runtime, durable state, finality,
+  certificate, and constitutional safety observation. Repository contract
+  only; live document version and digest remain unattested.
+parameters:
+  ValidatorId:
+    type: String
+    description: Exact immutable Public Testnet validator identity.
+    allowedPattern: '^validator-0[1-3]$'
+    interpolationType: ENV_VAR
+mainSteps:
+  - action: aws:runShellScript
+    name: observeRuntime
+    inputs:
+      runCommand:
+        - |-
+          #!/usr/bin/bash
+          if [ -z "${BASH_VERSION:-}" ]; then
+            exec /usr/bin/bash "$0" "$@"
+          fi
+          set -euo pipefail
+          readonly RUNTIME_ENV=/etc/junca/runtime.env
+          readonly RUNTIME_ARCHIVE=/opt/junca/validator-runtime.tar.gz
+          readonly GENESIS_FILE=/etc/junca/genesis.json
+          readonly SUPPLY_CHAIN_EVIDENCE=/opt/junca/ami-supply-chain.env
+          readonly STATE_DIRECTORY=/var/lib/junca
+          readonly STATE_DATABASE=/var/lib/junca/state.sqlite
+          readonly HEALTH_ENDPOINT=http://127.0.0.1:8545/health
+          readonly VALIDATOR_SERVICE=junca-validator.service
+          readonly MAX_JSON_BYTES=65536
+
+          bounded_json() {
+            local payload="$1"
+            local byte_count
+            byte_count="$(printf '%s' "$payload" | /usr/bin/wc -c)"
+            [[ "$byte_count" =~ ^[0-9]+$ ]]
+            test "$byte_count" -le "$MAX_JSON_BYTES"
+            printf '%s\n' "$payload"
+          }
+
+          certificate_digest_matches() {
+            local certificate="$1"
+            local canonical_body
+            local calculated_hash
+            local claimed_hash
+            canonical_body="$(
+              /usr/bin/jq -cS '{
+                block_hash: .block_hash,
+                chain_id: .chain_id,
+                height: .height,
+                round: .round,
+                signed_power: .signed_power,
+                total_power: .total_power,
+                validator_ids: .validator_ids,
+                vote_hashes: .vote_hashes
+              }' <<<"$certificate"
+            )" || return 1
+            claimed_hash="$(
+              /usr/bin/jq -er '.certificate_hash' <<<"$certificate"
+            )" || return 1
+            calculated_hash="$(
+              {
+                printf 'JUNCA_FINALITY_CERTIFICATE_V1\0'
+                printf '%s' "$canonical_body"
+              } |
+                /usr/bin/sha256sum |
+                /usr/bin/awk '{print $1}'
+            )" || return 1
+            test "$claimed_hash" = "0x${calculated_hash}"
+          }
+
+          fixed_env_value() {
+            local source_file="$1"
+            local key="$2"
+            /usr/bin/awk -F= -v expected_key="$key" '
+              $1 == expected_key {
+                print substr($0, index($0, "=") + 1)
+              }
+            ' "$source_file"
+          }
+
+          fixed_env_count() {
+            local source_file="$1"
+            local key="$2"
+            /usr/bin/awk -F= -v expected_key="$key" '
+              $1 == expected_key { count++ }
+              END { print count + 0 }
+            ' "$source_file"
+          }
+
+          validator_id="${SSM_ValidatorId}"
+          [[ "$validator_id" =~ ^validator-0[1-3]$ ]]
+          /usr/bin/timeout 10 /usr/bin/systemctl is-active \
+            --quiet "$VALIDATOR_SERVICE"
+          /usr/bin/mountpoint -q "$STATE_DIRECTORY"
+          test -f "$STATE_DATABASE"
+          test ! -L "$STATE_DATABASE"
+          test "$(/usr/bin/stat -c '%U:%G:%a' "$STATE_DATABASE")" = junca:junca:640
+
+          quick_check="$(
+            /usr/bin/timeout 15 /usr/bin/sqlite3 -batch -noheader -readonly \
+              "$STATE_DATABASE" 'PRAGMA query_only=ON; PRAGMA quick_check;'
+          )"
+          test "$quick_check" = ok
+          durable_raw="$(
+            /usr/bin/timeout 15 /usr/bin/sqlite3 -batch -readonly -json \
+              -cmd '.limit length 65536' "$STATE_DATABASE" '
+                PRAGMA query_only=ON;
+                SELECT
+                  b.height AS height,
+                  b.block_hash AS block_hash,
+                  b.certificate_hash AS certificate_hash,
+                  f.certificate_json AS certificate_json
+                FROM blocks AS b
+                JOIN finality_certificates AS f ON f.height = b.height
+                WHERE b.finalized = 1 AND b.height >= 1
+                ORDER BY b.height DESC
+                LIMIT 1;
+              '
+          )"
+          test "$(printf '%s' "$durable_raw" | /usr/bin/wc -c)" -le "$MAX_JSON_BYTES"
+          durable="$(
+            /usr/bin/jq -ce '
+              if (type == "array" and length == 1) then
+                .[0] as $row |
+                ($row.certificate_json | fromjson) as $certificate |
+                if (
+                  ($row.height | type) == "number" and
+                  $row.height == ($row.height | floor) and
+                  $row.height >= 1 and
+                  ($row.block_hash | type) == "string" and
+                  ($row.block_hash | test("^0x[0-9a-f]{64}$")) and
+                  ($row.certificate_hash | type) == "string" and
+                  ($row.certificate_hash | test("^0x[0-9a-f]{64}$")) and
+                  ($certificate | type) == "object" and
+                  ($certificate | keys | sort) == [
+                    "assets_moved",
+                    "block_hash",
+                    "bridge_activated",
+                    "certificate_hash",
+                    "chain_id",
+                    "finality_status",
+                    "height",
+                    "mainnet_changed",
+                    "round",
+                    "schema_version",
+                    "signed_power",
+                    "total_power",
+                    "validator_ids",
+                    "vote_hashes"
+                  ] and
+                  $certificate.schema_version == "junca-finality-certificate/v1" and
+                  $certificate.chain_id == 20260723 and
+                  $certificate.height == $row.height and
+                  ($certificate.round | type) == "number" and
+                  $certificate.round == ($certificate.round | floor) and
+                  $certificate.round >= 0 and
+                  $certificate.round <= 2147483647 and
+                  $certificate.block_hash == $row.block_hash and
+                  $certificate.certificate_hash == $row.certificate_hash and
+                  $certificate.finality_status == "FINALIZED" and
+                  ($certificate.signed_power | type) == "number" and
+                  $certificate.signed_power ==
+                    ($certificate.signed_power | floor) and
+                  $certificate.signed_power == 3 and
+                  ($certificate.total_power | type) == "number" and
+                  $certificate.total_power ==
+                    ($certificate.total_power | floor) and
+                  $certificate.total_power == 3 and
+                  $certificate.validator_ids ==
+                    ["validator-01", "validator-02", "validator-03"] and
+                  ($certificate.vote_hashes | type) == "array" and
+                  ($certificate.vote_hashes | length) == 3 and
+                  ($certificate.vote_hashes | unique | length) == 3 and
+                  all($certificate.vote_hashes[];
+                    type == "string" and test("^0x[0-9a-f]{64}$")) and
+                  $certificate.mainnet_changed == false and
+                  $certificate.assets_moved == false and
+                  $certificate.bridge_activated == false
+                ) then {
+                  height: $row.height,
+                  block_hash: $row.block_hash,
+                  certificate_hash: $row.certificate_hash,
+                  certificate: $certificate
+                } else error("durable certificate contract rejected") end
+              else error("durable finalized head cardinality rejected") end
+            ' <<<"$durable_raw"
+          )"
+          durable_certificate="$(
+            /usr/bin/jq -c '.certificate' <<<"$durable"
+          )"
+          certificate_digest_matches "$durable_certificate"
+
+          test -f "$RUNTIME_ENV"
+          test ! -L "$RUNTIME_ENV"
+          test "$(/usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ENV")" = root:junca:640
+          for runtime_key in \
+            VALIDATOR_ID NODE_ARTIFACT_SHA256 GENESIS_SHA256 \
+            AUTOMATIC_FINALITY_ENABLED TESTNET_BLOCK_INTERVAL_SECONDS \
+            TESTNET_SLOT_EPOCH_SECONDS BRIDGE_ACTIVATED
+          do
+            test "$(fixed_env_count "$RUNTIME_ENV" "$runtime_key")" = 1
+          done
+          test "$(fixed_env_value "$RUNTIME_ENV" VALIDATOR_ID)" = "$validator_id"
+          test "$(fixed_env_value "$RUNTIME_ENV" BRIDGE_ACTIVATED)" = false
+          runtime_version="$(fixed_env_value "$RUNTIME_ENV" NODE_ARTIFACT_SHA256)"
+          genesis_version="$(fixed_env_value "$RUNTIME_ENV" GENESIS_SHA256)"
+          runtime_enabled="$(fixed_env_value "$RUNTIME_ENV" AUTOMATIC_FINALITY_ENABLED)"
+          runtime_interval="$(fixed_env_value "$RUNTIME_ENV" TESTNET_BLOCK_INTERVAL_SECONDS)"
+          runtime_epoch="$(fixed_env_value "$RUNTIME_ENV" TESTNET_SLOT_EPOCH_SECONDS)"
+          [[ "$runtime_version" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$genesis_version" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$runtime_enabled" =~ ^(true|false)$ ]]
+          [[ "$runtime_interval" =~ ^(0|30)$ ]]
+          [[ "$runtime_epoch" =~ ^(0|[1-9][0-9]{0,10})$ ]]
+          if [[ "$runtime_enabled" == true ]]; then
+            test "$runtime_interval" = 30
+            test "$runtime_epoch" -gt 0
+            test "$((runtime_epoch % 30))" = 0
+          else
+            test "$runtime_interval" = 0
+            test "$runtime_epoch" = 0
+          fi
+
+          test -f "$RUNTIME_ARCHIVE"
+          test ! -L "$RUNTIME_ARCHIVE"
+          test "$(/usr/bin/stat -c '%U:%G:%a' "$RUNTIME_ARCHIVE")" = root:root:644
+          artifact_sha256="$(
+            /usr/bin/sha256sum "$RUNTIME_ARCHIVE" | /usr/bin/awk '{print $1}'
+          )"
+          test "$artifact_sha256" = "$runtime_version"
+          test -f "$GENESIS_FILE"
+          test ! -L "$GENESIS_FILE"
+          test "$(/usr/bin/stat -c '%U:%G:%a' "$GENESIS_FILE")" = root:root:644
+          genesis_sha256="$(
+            /usr/bin/sha256sum "$GENESIS_FILE" | /usr/bin/awk '{print $1}'
+          )"
+          test "$genesis_sha256" = "$genesis_version"
+          /usr/bin/jq -e '
+            type == "object" and
+            .schema_version == "junca-public-testnet-genesis/v1" and
+            .chain_id == 20260723 and
+            .network == "public-testnet" and
+            .validator_ids == ["validator-01", "validator-02", "validator-03"] and
+            .allocations == {} and
+            .mainnet == false and
+            .monetary_value == false and
+            .assets_moved == false and
+            .bridge_activated == false and
+            (.genesis_hash | type) == "string" and
+            (.genesis_hash | test("^0x[0-9a-f]{64}$"))
+          ' "$GENESIS_FILE" >/dev/null
+          genesis_hash="$(/usr/bin/jq -er '.genesis_hash' "$GENESIS_FILE")"
+
+          test -f "$SUPPLY_CHAIN_EVIDENCE"
+          test ! -L "$SUPPLY_CHAIN_EVIDENCE"
+          test "$(/usr/bin/stat -c '%U:%G:%a' "$SUPPLY_CHAIN_EVIDENCE")" = root:root:444
+          for safety_key in MAINNET_CHANGED ASSETS_MOVED BRIDGE_ACTIVATED; do
+            test "$(fixed_env_count "$SUPPLY_CHAIN_EVIDENCE" "$safety_key")" = 1
+            test "$(fixed_env_value "$SUPPLY_CHAIN_EVIDENCE" "$safety_key")" = false
+          done
+
+          health="$(
+            /usr/bin/curl --fail --silent --show-error --noproxy '*' \
+              --proto '=http' --connect-timeout 2 --max-time 5 \
+              --max-filesize "$MAX_JSON_BYTES" "$HEALTH_ENDPOINT"
+          )"
+          test "$(printf '%s' "$health" | /usr/bin/wc -c)" -le "$MAX_JSON_BYTES"
+          health="$(
+            /usr/bin/jq -ce \
+              --arg validator_id "$validator_id" \
+              --arg genesis_hash "$genesis_hash" \
+              --argjson runtime_enabled "$runtime_enabled" \
+              --argjson runtime_interval "$runtime_interval" \
+              --argjson runtime_epoch "$runtime_epoch" \
+              --argjson durable "$durable" '
+                if (
+                  type == "object" and
+                  .status == "healthy" and
+                  .network == "Public Testnet / No Monetary Value" and
+                  .chain_id == 20260723 and
+                  .validator_id == $validator_id and
+                  .genesis_hash == $genesis_hash and
+                  .head_height == $durable.height and
+                  .head_hash == $durable.block_hash and
+                  .peer_count == 2 and
+                  .automatic_finality_enabled == $runtime_enabled and
+                  .block_interval_seconds == $runtime_interval and
+                  .slot_epoch_seconds == $runtime_epoch and
+                  .automatic_finality_loop_running == $runtime_enabled and
+                  (.consensus | type) == "object" and
+                  .consensus.last_certificate_hash ==
+                    $durable.certificate_hash and
+                  .consensus.last_certificate == $durable.certificate and
+                  .private_key_material_accepted == false and
+                  .mainnet_changed == false and
+                  .assets_moved == false and
+                  .bridge_activated == false
+                ) then {
+                  status: .status,
+                  network: .network,
+                  chain_id: .chain_id,
+                  automatic_finality_enabled:
+                    .automatic_finality_enabled,
+                  block_interval_seconds: .block_interval_seconds,
+                  slot_epoch_seconds: .slot_epoch_seconds
+                } else error("runtime health contract rejected") end
+              ' <<<"$health"
+          )"
+          result="$(
+            /usr/bin/jq -cn \
+              --arg validator_id "$validator_id" \
+              --arg runtime_version "$runtime_version" \
+              --arg genesis_sha256 "$genesis_sha256" \
+              --argjson runtime_enabled "$runtime_enabled" \
+              --argjson runtime_interval "$runtime_interval" \
+              --argjson runtime_epoch "$runtime_epoch" \
+              --argjson durable "$durable" \
+              --argjson health "$health" '{
+                schema_version: "junca-pt-runtime-observation/v1",
+                document: "JuncaPTRuntimeObservation",
+                access_class: "read-only",
+                validator_id: $validator_id,
+                runtime_version: $runtime_version,
+                genesis_sha256: $genesis_sha256,
+                healthy: true,
+                health_status: $health.status,
+                network: $health.network,
+                chain_id: $health.chain_id,
+                ssm_online: true,
+                service_active: true,
+                durable_mount_verified: true,
+                state_store_integrity: true,
+                head_height: $durable.height,
+                head_hash: $durable.block_hash,
+                certificate_hash: $durable.certificate_hash,
+                durable_certificate_hash: $durable.certificate_hash,
+                certificate_height: $durable.certificate.height,
+                certificate_block_hash: $durable.certificate.block_hash,
+                certificate_finality_status:
+                  $durable.certificate.finality_status,
+                certificate_signed_power: $durable.certificate.signed_power,
+                certificate_total_power: $durable.certificate.total_power,
+                certificate_validator_ids: $durable.certificate.validator_ids,
+                certificate_vote_hashes: $durable.certificate.vote_hashes,
+                automatic_finality_enabled: $runtime_enabled,
+                block_interval_seconds: $runtime_interval,
+                slot_epoch_seconds: $runtime_epoch,
+                finality_readback: {
+                  runtime_env: {
+                    automatic_finality_enabled: $runtime_enabled,
+                    block_interval_seconds: $runtime_interval,
+                    slot_epoch_seconds: $runtime_epoch
+                  },
+                  health: {
+                    automatic_finality_enabled:
+                      $health.automatic_finality_enabled,
+                    block_interval_seconds: $health.block_interval_seconds,
+                    slot_epoch_seconds: $health.slot_epoch_seconds
+                  },
+                  health_supported: true
+                },
+                mainnet_changed: false,
+                assets_moved: false,
+                bridge_activated: false
+              }'
+          )"
+          bounded_json "$result"

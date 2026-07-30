@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Compile controls
@@ -40,6 +40,7 @@ jobs:
           python -m unittest \
             tests.test_junca_social_ecosystem_chain_global_major_architecture_v1 -v
       - name: Generate architecture evidence
+        shell: bash
         run: |
           mkdir -p artifacts
           python - <<'PY'
@@ -64,6 +65,7 @@ jobs:
             "(世界一|world.?s best|best blockchain|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|mnemonic|seed_phrase|secret_value|private_key)" \
             artifacts config docs/JUNCA_SOCIAL_ECOSYSTEM_CHAIN_GLOBAL_MAJOR_ARCHITECTURE_V1.md
       - name: Record evidence digests and SBOM
+        shell: bash
         run: |
           python -m pip freeze --all > artifacts/python-dependencies.txt
           python - <<'PY'
@@ -92,7 +94,7 @@ jobs:
           PY
           sha256sum artifacts/* > artifacts/SHA256SUMS
       - name: Upload architecture evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-global-major-chain-architecture-v1-${{ github.run_id }}
           path: artifacts/

@@ -1,4 +1,5 @@
 name: JUNCA Runtime Release Evidence Collector
+run-name: JSEC dispatch ${{ inputs.dispatch_token }}
 
 on:
   workflow_dispatch:
@@ -19,6 +20,18 @@ on:
         description: Exact 40-character source commit bound to the immutable AMI
         required: true
         type: string
+      dispatch_token:
+        description: Unique canonical-parent dispatch correlation token
+        required: true
+        type: string
+      orchestrator_run_id:
+        description: Canonical immutable-candidate parent run ID
+        required: true
+        type: string
+      orchestrator_run_attempt:
+        description: Canonical immutable-candidate parent run attempt
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -31,42 +44,65 @@ concurrency:
 
 jobs:
   collect:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     environment: public-testnet
     timeout-minutes: 25
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
-      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      OBSERVER_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver
       STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
       AMI_RUN_ID: ${{ inputs.ami_run_id }}
       MIGRATION_RUN_ID: ${{ inputs.migration_run_id }}
       MIGRATION_EVIDENCE_SHA256: ${{ inputs.migration_evidence_sha256 }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
     steps:
-      - name: Verify immutable workflow provenance
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Verify protected workflow execution ref
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+
+      - name: Verify exact child run binding before AWS readback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_release_child_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --dispatch-token "$DISPATCH_TOKEN" \
+            --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT" \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
+            --input "ami_run_id=$AMI_RUN_ID" \
+            --input "migration_run_id=$MIGRATION_RUN_ID" \
+            --input "migration_evidence_sha256=$MIGRATION_EVIDENCE_SHA256" \
+            --input "source_commit=$SOURCE_COMMIT"
           [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$MIGRATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$MIGRATION_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_SHA" = "$SOURCE_COMMIT"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"
 
           ami_run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${AMI_RUN_ID}")"
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
-            --arg head "$SOURCE_COMMIT" '
+            --arg head "$SOURCE_COMMIT" \
+            --arg execution_ref "main" '
               .status == "completed" and
               .conclusion == "success" and
               .name == "JUNCA Validator Immutable AMI Build" and
               .path == ".github/workflows/junca-validator-ami-build.yml" and
               .event == "workflow_dispatch" and
-              .head_branch == "main" and
+              .head_branch == $execution_ref and
               .head_sha == $head and
               .repository.full_name == $repository and
               .head_repository.full_name == $repository
@@ -87,18 +123,14 @@ jobs:
             ' <<<"$migration_run_json"
           echo "MIGRATION_RUN_HEAD_SHA=$(jq -er .head_sha <<<"$migration_run_json")" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-validator-ami-build-${{ env.AMI_RUN_ID }}
           path: evidence/ami
           github-token: ${{ github.token }}
           run-id: ${{ env.AMI_RUN_ID }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-validator-state-migration-${{ env.MIGRATION_RUN_ID }}
           path: evidence/state-migration
@@ -113,13 +145,35 @@ jobs:
           test -f evidence/ami/SHA256SUMS
           (cd evidence/ami && sha256sum -c SHA256SUMS)
           jq -e --arg source_commit "$SOURCE_COMMIT" '
-            .schema_version == "junca-validator-ami-build/v1" and
+            .schema_version == "junca-validator-ami-build/v2" and
             .state == "AMI_VERIFIED" and
             .network == "Public Testnet" and
             .notice == "Public Testnet / No Monetary Value" and
+            .governance == "JAIOS Institutional Governance" and
             .source_commit == $source_commit and
             (.ami_id | test("^ami-[0-9a-f]{8,17}$")) and
             (.request_sha256 | test("^[0-9a-f]{64}$")) and
+            .request_schema ==
+              "junca-validator-ami-build-request/v2" and
+            (.image_builder_arn |
+              test("^arn:aws:imagebuilder:us-east-1:595710543956:image/")) and
+            (.parent_ami_id | test("^ami-[0-9a-f]{8,17}$")) and
+            .parent_ami_owner_id == "137112412989" and
+            (.parent_ami_name |
+              test("^al2023-ami-2023\\.[0-9]+\\.[0-9]{8}\\.[0-9]+-kernel-")) and
+            (.component_source_sha256 |
+              test("^[0-9a-f]{64}$")) and
+            (.dependency_lock_sha256 |
+              test("^[0-9a-f]{64}$")) and
+            (.supply_chain_policy_sha256 |
+              test("^[0-9a-f]{64}$")) and
+            (.dnf_releasever |
+              test("^2023\\.[0-9]+\\.[0-9]{8}$")) and
+            (.python3_boto3_nevra |
+              startswith("python3-boto3-")) and
+            (.python3_botocore_nevra |
+              startswith("python3-botocore-")) and
+            (.reused_existing_ami | type == "boolean") and
             .terraform_state_changed == false and
             .mainnet_changed == false and
             .assets_moved == false and
@@ -181,13 +235,22 @@ jobs:
               .bridge_activated == false
             ' evidence/state-migration/junca-validator-state-migration-binding.json
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
+            --role-arn "$OBSERVER_ROLE_ARN" \
+            --output evidence/release/oidc-claim-attestation.json
+
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.OBSERVER_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-release-evidence-v2-${{ github.run_id }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -290,7 +353,7 @@ jobs:
 
       - name: Preserve failed readback diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-runtime-readback-failure-v2-${{ github.run_id }}
           path: |
@@ -300,7 +363,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-runtime-release-evidence-${{ github.run_id }}
           path: evidence/release/

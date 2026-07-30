@@ -25,16 +25,9 @@ MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS = 7230
 RECOVERY_FILE_ALLOWLIST = frozenset(
     {
         ".github/workflows/junca-validator-foundation-release.yml",
-        ".github/workflows/junca-validator-public-testnet-orchestrator.yml",
-        "config/junca_validator_ami_build_request.json",
-        "infra/aws/public-testnet/main.tf",
-        "infra/aws/public-testnet/outputs.tf",
-        "infra/aws/public-testnet/variables.tf",
         "jaios/social_ecosystem_chain/rolling_compatibility.py",
         "scripts/junca_public_testnet_foundation.sh",
-        "scripts/junca_validator_ami_build_request.py",
         "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
-        "tests/test_junca_validator_ami_workflow.py",
         "tests/test_junca_validator_rolling_compatibility.py",
     }
 )

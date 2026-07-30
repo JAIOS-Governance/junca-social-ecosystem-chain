@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -30,9 +31,24 @@ BOUNDARY = {
     "assets_moved": False,
     "bridge_activated": False,
 }
+MAX_FINALIZED_HEAD_AGE_SECONDS = 120
 COMMIT = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 AMI = re.compile(r"ami-[0-9a-f]{8,17}")
+IMAGE_BUILDER_ARN = re.compile(
+    r"arn:aws:imagebuilder:us-east-1:595710543956:"
+    r"image/[a-zA-Z0-9_-]+/[0-9]+\.[0-9]+\.[0-9]+/[0-9]+"
+)
+PARENT_AMI_NAME = re.compile(
+    r"al2023-ami-2023\.[0-9]+\.[0-9]{8}\.[0-9]+-kernel-"
+    r"[0-9]+\.[0-9]+-x86_64"
+)
+DNF_RELEASEVER = re.compile(r"2023\.[0-9]+\.[0-9]{8}")
+RPM_NEVRA = re.compile(
+    r"[a-z0-9][a-z0-9+_.-]*-[0-9]+:"
+    r"[A-Za-z0-9][A-Za-z0-9+_.~^%-]*-"
+    r"[A-Za-z0-9][A-Za-z0-9+_.~^%-]*\.[a-z0-9_]+"
+)
 INSTANCE = re.compile(r"i-[0-9a-f]{8,17}")
 VOLUME = re.compile(r"vol-[0-9a-f]{8,17}")
 SNAPSHOT = re.compile(r"snap-[0-9a-f]{8,17}")
@@ -40,6 +56,37 @@ HASH = re.compile(r"0x[0-9a-f]{64}")
 RUN_ID = re.compile(r"[1-9][0-9]*")
 MIGRATION_TOKEN = re.compile(r"[0-9]+-[1-9][0-9]*")
 REPOSITORY = "JAIOS-Governance/junca-social-ecosystem-chain"
+AMI_SUPPLY_CHAIN_FIELDS = {
+    "request_schema",
+    "image_builder_arn",
+    "parent_ami_id",
+    "parent_ami_owner_id",
+    "parent_ami_name",
+    "component_source_sha256",
+    "dependency_lock_sha256",
+    "supply_chain_policy_sha256",
+    "dnf_releasever",
+    "python3_boto3_nevra",
+    "python3_botocore_nevra",
+}
+AMI_BUILD_EVIDENCE_FIELDS = AMI_SUPPLY_CHAIN_FIELDS | {
+    "schema_version",
+    "state",
+    "network",
+    "notice",
+    "governance",
+    "ami_id",
+    "source_run_id",
+    "source_commit",
+    "node_artifact_sha256",
+    "genesis_sha256",
+    "request_sha256",
+    "reused_existing_ami",
+    "terraform_state_changed",
+    "mainnet_changed",
+    "assets_moved",
+    "bridge_activated",
+}
 CERTIFICATE_FIELDS = {
     "schema_version",
     "chain_id",
@@ -222,20 +269,109 @@ def candidate_binding(candidate: Mapping[str, Any]) -> dict[str, str]:
     return result  # type: ignore[return-value]
 
 
-def verify_candidate(candidate: Mapping[str, Any], expected_source_commit: str) -> dict[str, str]:
-    require(candidate.get("schema_version") == "junca-validator-ami-build/v1", "candidate.schema_version:mismatch")
+def candidate_supply_chain(
+    candidate: Mapping[str, Any],
+) -> dict[str, str]:
+    result = {
+        field: candidate.get(field)
+        for field in AMI_SUPPLY_CHAIN_FIELDS
+    }
+    require(
+        result["request_schema"]
+        == "junca-validator-ami-build-request/v2",
+        "candidate.request_schema:mismatch",
+    )
+    require(
+        IMAGE_BUILDER_ARN.fullmatch(
+            str(result["image_builder_arn"])
+        )
+        is not None,
+        "candidate.image_builder_arn:invalid",
+    )
+    require(
+        AMI.fullmatch(str(result["parent_ami_id"])) is not None,
+        "candidate.parent_ami_id:invalid",
+    )
+    require(
+        result["parent_ami_owner_id"] == "137112412989",
+        "candidate.parent_ami_owner_id:mismatch",
+    )
+    require(
+        PARENT_AMI_NAME.fullmatch(str(result["parent_ami_name"]))
+        is not None,
+        "candidate.parent_ami_name:invalid",
+    )
+    for field in (
+        "component_source_sha256",
+        "dependency_lock_sha256",
+        "supply_chain_policy_sha256",
+    ):
+        require(
+            SHA256.fullmatch(str(result[field])) is not None,
+            f"candidate.{field}:invalid",
+        )
+    require(
+        DNF_RELEASEVER.fullmatch(str(result["dnf_releasever"]))
+        is not None,
+        "candidate.dnf_releasever:invalid",
+    )
+    require(
+        str(result["parent_ami_name"]).startswith(
+            f"al2023-ami-{result['dnf_releasever']}."
+        ),
+        "candidate.parent_ami_release:mismatch",
+    )
+    for field, package in (
+        ("python3_boto3_nevra", "python3-boto3"),
+        ("python3_botocore_nevra", "python3-botocore"),
+    ):
+        require(
+            RPM_NEVRA.fullmatch(str(result[field])) is not None
+            and str(result[field]).startswith(f"{package}-"),
+            f"candidate.{field}:invalid",
+        )
+    return result  # type: ignore[return-value]
+
+
+def verify_candidate(
+    candidate: Mapping[str, Any],
+    expected_source_commit: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    require(
+        set(candidate) == AMI_BUILD_EVIDENCE_FIELDS,
+        "candidate.fields:not_exact",
+    )
+    require(candidate.get("schema_version") == "junca-validator-ami-build/v2", "candidate.schema_version:mismatch")
     require(candidate.get("state") == "AMI_VERIFIED", "candidate.state:not_verified")
     require(candidate.get("network") == "Public Testnet", "candidate.network:mismatch")
     require(candidate.get("notice") == "Public Testnet / No Monetary Value", "candidate.notice:mismatch")
+    require(
+        candidate.get("governance")
+        == "JAIOS Institutional Governance",
+        "candidate.governance:mismatch",
+    )
+    require(
+        RUN_ID.fullmatch(str(candidate.get("source_run_id"))) is not None,
+        "candidate.source_run_id:invalid",
+    )
+    require(
+        isinstance(candidate.get("reused_existing_ami"), bool),
+        "candidate.reused_existing_ami:invalid",
+    )
     require(candidate.get("terraform_state_changed") is False, "candidate.terraform_state_changed:not_false")
     for field in BOUNDARY:
         require(candidate.get(field) is False, f"candidate.{field}:not_false")
     binding = candidate_binding(candidate)
+    supply_chain = candidate_supply_chain(candidate)
     require(binding["source_commit"] == expected_source_commit, "candidate.source_commit:unexpected")
-    return binding
+    return binding, supply_chain
 
 
-def verify_image(image: Mapping[str, Any], binding: Mapping[str, str]) -> dict[str, str]:
+def verify_image(
+    image: Mapping[str, Any],
+    binding: Mapping[str, str],
+    supply_chain: Mapping[str, str],
+) -> dict[str, str]:
     require(image.get("ImageId") == binding["ami_id"], "candidate_image.ami_id:mismatch")
     require(image.get("State") == "available", "candidate_image.state:not_available")
     require(image.get("OwnerId") == ACCOUNT_ID, "candidate_image.owner:mismatch")
@@ -247,6 +383,20 @@ def verify_image(image: Mapping[str, Any], binding: Mapping[str, str]) -> dict[s
         "NodeArtifactSHA256": binding["node_artifact_sha256"],
         "GenesisSHA256": binding["genesis_sha256"],
         "RequestDigest": binding["request_sha256"],
+        "RequestSchema": supply_chain["request_schema"],
+        "ImageBuilderArn": supply_chain["image_builder_arn"],
+        "ParentAMIId": supply_chain["parent_ami_id"],
+        "ParentAMIOwnerId": supply_chain["parent_ami_owner_id"],
+        "ParentAMIName": supply_chain["parent_ami_name"],
+        "ComponentSourceSHA256":
+            supply_chain["component_source_sha256"],
+        "DependencyLockSHA256":
+            supply_chain["dependency_lock_sha256"],
+        "SupplyChainPolicySHA256":
+            supply_chain["supply_chain_policy_sha256"],
+        "DnfReleasever": supply_chain["dnf_releasever"],
+        "Boto3NEVRA": supply_chain["python3_boto3_nevra"],
+        "BotocoreNEVRA": supply_chain["python3_botocore_nevra"],
         "MainnetChanged": "false",
         "AssetsMoved": "false",
         "BridgeActivated": "false",
@@ -821,6 +971,23 @@ def verify_private_validator_health(
         == "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
         "private_ssm.scope:mismatch",
     )
+    observed_at = report.get("observed_at")
+    require(
+        isinstance(observed_at, str) and bool(observed_at),
+        "private_ssm.observed_at:invalid",
+    )
+    try:
+        observed_datetime = datetime.fromisoformat(
+            observed_at.replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise EvidenceError("private_ssm.observed_at:invalid") from exc
+    require(
+        observed_datetime.tzinfo is not None
+        and observed_datetime.utcoffset() is not None,
+        "private_ssm.observed_at:invalid",
+    )
+    observed_epoch = int(observed_datetime.timestamp())
     validators = report.get("validators")
     require(
         isinstance(validators, list)
@@ -839,6 +1006,7 @@ def verify_private_validator_health(
     certificates: list[str] = []
     chain_ids: list[Any] = []
     runtime_certificate_states: list[str] = []
+    legacy_freshness_unverifiable = False
     migration_height = migration_finality.get("height")
     migration_hash = migration_finality.get("hash")
     migration_certificate_hash = migration_finality.get("certificate_hash")
@@ -869,6 +1037,13 @@ def verify_private_validator_health(
         require(
             health.get("validator_id") == validator_id,
             f"private_ssm.{validator_id}.runtime_identity:mismatch",
+        )
+        peer_count = health.get("peer_count")
+        require(
+            isinstance(peer_count, int)
+            and not isinstance(peer_count, bool)
+            and peer_count == 2,
+            f"private_ssm.{validator_id}.peer_count:not_exact_two",
         )
         height = health.get("head_height")
         head_hash = health.get("head_hash")
@@ -1005,6 +1180,13 @@ def verify_private_validator_health(
                 f"private_ssm.{validator_id}."
                 "timestamp_schema_tables:invalid",
             )
+            require(
+                0
+                <= observed_epoch - durable_head_timestamp
+                <= MAX_FINALIZED_HEAD_AGE_SECONDS,
+                f"private_ssm.{validator_id}."
+                "durable_head_timestamp:stale_or_future",
+            )
         elif durable_timestamp_state == "LEGACY_NOT_PERSISTED":
             require(
                 durable_head_timestamp is None,
@@ -1026,6 +1208,7 @@ def verify_private_validator_health(
                 f"private_ssm.{validator_id}."
                 "timestamp_schema_tables:invalid",
             )
+            legacy_freshness_unverifiable = True
         else:
             raise EvidenceError(
                 f"private_ssm.{validator_id}."
@@ -1076,6 +1259,7 @@ def verify_private_validator_health(
                 "validator_id": validator_id,
                 "instance_id": instance_id,
                 "signer_resource_digest": health.get("signer_resource_digest"),
+                "peer_count": peer_count,
                 "runtime_certificate_state":
                     runtime_certificate_states[-1],
                 "durable_certificate_hash":
@@ -1085,6 +1269,10 @@ def verify_private_validator_health(
             }
         )
 
+    require(
+        not legacy_freshness_unverifiable,
+        "private_ssm.durable_head_timestamp:freshness_unverifiable",
+    )
     require(len(set(chain_ids)) == 1, "private_ssm.chain_id:mismatch")
     require(len(set(heads)) == 1, "private_ssm.finalized_head:mismatch")
     require(
@@ -1101,6 +1289,7 @@ def verify_private_validator_health(
     return {
         "mode": "private_ssm",
         "scope": report.get("scope"),
+        "observed_at": observed_at,
         "validator_count": 3,
         "validators": normalized,
         "chain_id": chain_ids[0],
@@ -1153,9 +1342,12 @@ def collect(
         SHA256.fullmatch(migration_evidence_sha256) is not None,
         "migration_evidence_sha256:invalid",
     )
-    binding = verify_candidate(candidate, expected_source_commit)
+    binding, supply_chain = verify_candidate(
+        candidate,
+        expected_source_commit,
+    )
     image_items = exact_items(images, "Images", 1)
-    provenance = verify_image(image_items[0], binding)
+    provenance = verify_image(image_items[0], binding, supply_chain)
     (
         signers,
         previous,

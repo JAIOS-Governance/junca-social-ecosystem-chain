@@ -40,9 +40,9 @@ jobs:
           - module: infrastructure/aws
             evidence_name: legacy-runtime
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -58,6 +58,7 @@ jobs:
 
       - name: Validate fail-closed AWS binding
         if: matrix.module == 'infrastructure/aws'
+        shell: bash
         run: |
           python - <<'PY'
           import json
@@ -87,7 +88,7 @@ jobs:
           python -m unittest tests.test_junca_social_ecosystem_chain_aws_foundation -v
 
       - name: Upload AWS foundation gate evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-aws-foundation-gates-${{ matrix.evidence_name }}-${{ github.run_id }}
           path: artifacts/junca-aws-foundation-gates.json

@@ -19,13 +19,13 @@ ENDPOINTS = {
 }
 
 
-def packet() -> AuthenticatedVote:
+def packet(validator_id: str = "validator-02") -> AuthenticatedVote:
     return AuthenticatedVote(
         chain_id=20260723,
         height=1,
         round=0,
         block_hash="0x" + ("11" * 32),
-        validator_id="validator-02",
+        validator_id=validator_id,
         signature=b"s" * 64,
         peer_signature=b"p" * 64,
         block_timestamp=10,
@@ -100,6 +100,47 @@ class ReliableAuthenticatedVoteGossipTests(unittest.TestCase):
 
         self.assertEqual(received, [packet()])
         self.assertEqual([endpoint for endpoint, _ in sent], [ENDPOINTS["validator-03"]])
+        self.assertEqual(transport.observed_peer_count(), 1)
+
+    def test_forwarded_vote_does_not_authenticate_the_transport_source(self) -> None:
+        received: list[AuthenticatedVote] = []
+        transport = self.make_transport(received)
+
+        with patch(
+            "jaios.social_ecosystem_chain.finality_gossip.socket.create_connection",
+            side_effect=lambda endpoint, timeout: FakeConnection(endpoint, []),
+        ):
+            self.assertTrue(
+                transport.ingest_from_peer(
+                    packet("validator-02"),
+                    source_validator_id="validator-03",
+                )
+            )
+
+        self.assertEqual(transport.observed_peer_count(), 0)
+
+    def test_duplicate_direct_vote_authenticates_its_matching_source(self) -> None:
+        received: list[AuthenticatedVote] = []
+        transport = self.make_transport(received)
+
+        with patch(
+            "jaios.social_ecosystem_chain.finality_gossip.socket.create_connection",
+            side_effect=lambda endpoint, timeout: FakeConnection(endpoint, []),
+        ):
+            self.assertTrue(
+                transport.ingest_from_peer(
+                    packet("validator-02"),
+                    source_validator_id="validator-03",
+                )
+            )
+            self.assertFalse(
+                transport.ingest_from_peer(
+                    packet("validator-02"),
+                    source_validator_id="validator-02",
+                )
+            )
+
+        self.assertEqual(transport.observed_peer_count(), 1)
 
     def test_failed_authentication_is_not_forwarded(self) -> None:
         sent: list[tuple[tuple[str, int], bytes]] = []
@@ -124,6 +165,44 @@ class ReliableAuthenticatedVoteGossipTests(unittest.TestCase):
                 )
 
         self.assertEqual(sent, [])
+        self.assertEqual(transport.observed_peer_count(), 0)
+
+    def test_failed_authentication_does_not_poison_a_later_retry(self) -> None:
+        received: list[AuthenticatedVote] = []
+        reject_once = [True]
+
+        def receive(value: AuthenticatedVote) -> None:
+            if reject_once:
+                reject_once.pop()
+                raise ValidatorNodeError("peer vote authentication failed")
+            received.append(value)
+
+        transport = ReliableAuthenticatedVoteGossip(
+            validator_id="validator-01",
+            endpoints=ENDPOINTS,
+            receive_vote=receive,
+        )
+        with patch(
+            "jaios.social_ecosystem_chain.finality_gossip.socket.create_connection",
+            side_effect=lambda endpoint, timeout: FakeConnection(endpoint, []),
+        ):
+            with self.assertRaisesRegex(
+                ValidatorNodeError,
+                "peer vote authentication failed",
+            ):
+                transport.ingest_from_peer(
+                    packet(),
+                    source_validator_id="validator-02",
+                )
+            self.assertTrue(
+                transport.ingest_from_peer(
+                    packet(),
+                    source_validator_id="validator-02",
+                )
+            )
+
+        self.assertEqual(received, [packet()])
+        self.assertEqual(transport.observed_peer_count(), 1)
 
     def test_evidence_preserves_protocol_boundaries(self) -> None:
         transport = self.make_transport([])

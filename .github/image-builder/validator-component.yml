@@ -1,6 +1,37 @@
 name: JUNCAValidatorRuntime
 description: Install and verify the immutable JUNCA Public Testnet validator runtime
 schemaVersion: 1.0
+parameters:
+  - ArtifactBucket:
+      type: string
+      description: Exact ephemeral S3 bucket containing digest-bound build inputs
+  - NodeSHA256:
+      type: string
+      description: Exact validator runtime archive SHA-256
+  - GenesisSHA256:
+      type: string
+      description: Exact canonical genesis SHA-256
+  - ParentAMIId:
+      type: string
+      description: Exact Amazon Linux 2023 parent AMI ID
+  - DnfReleasever:
+      type: string
+      description: Exact Amazon Linux 2023 repository release
+  - Boto3Nevra:
+      type: string
+      description: Exact python3-boto3 package NEVRA
+  - BotocoreNevra:
+      type: string
+      description: Exact python3-botocore package NEVRA
+  - ComponentSourceSHA256:
+      type: string
+      description: Exact SHA-256 of this component source
+  - DependencyLockSHA256:
+      type: string
+      description: Exact canonical dependency-lock SHA-256
+  - SupplyChainPolicySHA256:
+      type: string
+      description: Exact repository supply-chain policy SHA-256
 phases:
   - name: build
     steps:
@@ -9,19 +40,194 @@ phases:
         inputs:
           commands:
             - set -euo pipefail
-            - install -d -m 0755 /opt/junca /etc/junca /var/log/junca
+            - install -d -o root -g root -m 0755 /opt/junca /var/log/junca /usr/local/libexec
+            - install -d -o root -g root -m 0750 /etc/junca
             - getent group junca >/dev/null || groupadd --system junca
             - id -u junca >/dev/null 2>&1 || useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
-            - dnf install -y python3-boto3
-            - aws s3 cp s3://__BUCKET__/validator-runtime.tar.gz /tmp/validator-runtime.tar.gz
-            - aws s3 cp s3://__BUCKET__/genesis.json /tmp/genesis.json
-            - echo "__NODE_SHA256__  /tmp/validator-runtime.tar.gz" | sha256sum --check
-            - echo "__GENESIS_SHA256__  /tmp/genesis.json" | sha256sum --check
+            - 'test "$(rpm -q --qf "%{VERSION}" system-release)" = "{{ DnfReleasever }}"'
+            - 'dnf install -y --releasever="{{ DnfReleasever }}" --setopt=install_weak_deps=False "{{ Boto3Nevra }}" "{{ BotocoreNevra }}" bash jq sqlite'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-boto3)" = "{{ Boto3Nevra }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-botocore)" = "{{ BotocoreNevra }}"'
+            - rpm -q amazon-ssm-agent >/dev/null
+            - 'aws s3 cp "s3://{{ ArtifactBucket }}/validator-runtime.tar.gz" /tmp/validator-runtime.tar.gz'
+            - 'aws s3 cp "s3://{{ ArtifactBucket }}/genesis.json" /tmp/genesis.json'
+            - 'echo "{{ NodeSHA256 }}  /tmp/validator-runtime.tar.gz" | sha256sum --check'
+            - 'echo "{{ GenesisSHA256 }}  /tmp/genesis.json" | sha256sum --check'
             - install -m 0644 /tmp/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz
             - tar -xzf /opt/junca/validator-runtime.tar.gz -C /
+            - chown root:root /etc/junca
+            - chmod 0750 /etc/junca
             - install -m 0644 /tmp/genesis.json /etc/junca/genesis.json
-            - systemctl enable junca-validator.service junca-public-rpc.service junca-public-explorer.service
+            - 'printf "%s\n" "d /run/lock/junca-validator-mutation 0700 root root -" > /usr/lib/tmpfiles.d/junca-validator-mutation.conf'
+            - chown root:root /usr/lib/tmpfiles.d/junca-validator-mutation.conf
+            - chmod 0644 /usr/lib/tmpfiles.d/junca-validator-mutation.conf
+            - systemd-tmpfiles --create /usr/lib/tmpfiles.d/junca-validator-mutation.conf
+            - test -d /run/lock/junca-validator-mutation
+            - test ! -L /run/lock/junca-validator-mutation
+            - 'test "$(stat -c "%U:%G:%a" /run/lock/junca-validator-mutation)" = "root:root:700"'
+            - |
+              printf '%s\n' \
+                '#!/usr/bin/bash' \
+                'if [ -z "${BASH_VERSION:-}" ]; then' \
+                '  exec /usr/bin/bash "$0" "$@"' \
+                'fi' \
+                'set -euo pipefail' \
+                'test "${BASH:-}" = /usr/bin/bash' \
+                'printf "%s\n" SSM_AGENT_SH_C_FIXED_BASH=verified' \
+                > /usr/local/libexec/junca-ssm-bash-contract
+              chown root:root /usr/local/libexec/junca-ssm-bash-contract
+              chmod 0555 /usr/local/libexec/junca-ssm-bash-contract
+              script_path=/usr/local/libexec/junca-ssm-bash-contract
+              test "$(/bin/sh -c "$script_path")" = \
+                "SSM_AGENT_SH_C_FIXED_BASH=verified"
+            - |
+              bash_nevra="$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' bash)"
+              jq_nevra="$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' jq)"
+              sqlite_nevra="$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' sqlite)"
+              ssm_agent_nevra="$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' amazon-ssm-agent)"
+              [[ "$bash_nevra" =~ ^bash-[-[:alnum:]._:+~]+\.x86_64$ ]]
+              [[ "$jq_nevra" =~ ^jq-[-[:alnum:]._:+~]+\.x86_64$ ]]
+              [[ "$sqlite_nevra" =~ ^sqlite-[-[:alnum:]._:+~]+\.x86_64$ ]]
+              [[ "$ssm_agent_nevra" =~ ^amazon-ssm-agent-[-[:alnum:]._:+~]+\.x86_64$ ]]
+              for binary in \
+                /usr/bin/bash \
+                /usr/bin/jq \
+                /usr/bin/sqlite3 \
+                /usr/bin/amazon-ssm-agent; do
+                test -f "$binary"
+                test -x "$binary"
+                rpm -qf "$binary" >/dev/null
+              done
+              bash_sha="$(sha256sum /usr/bin/bash)"
+              bash_sha="${bash_sha%% *}"
+              jq_sha="$(sha256sum /usr/bin/jq)"
+              jq_sha="${jq_sha%% *}"
+              sqlite_sha="$(sha256sum /usr/bin/sqlite3)"
+              sqlite_sha="${sqlite_sha%% *}"
+              ssm_agent_sha="$(sha256sum /usr/bin/amazon-ssm-agent)"
+              ssm_agent_sha="${ssm_agent_sha%% *}"
+              tmpfiles_rule_sha="$(sha256sum /usr/lib/tmpfiles.d/junca-validator-mutation.conf)"
+              tmpfiles_rule_sha="${tmpfiles_rule_sha%% *}"
+              ssm_shell_contract_sha="$(sha256sum /usr/local/libexec/junca-ssm-bash-contract)"
+              ssm_shell_contract_sha="${ssm_shell_contract_sha%% *}"
+              for digest in \
+                "$bash_sha" \
+                "$jq_sha" \
+                "$sqlite_sha" \
+                "$ssm_agent_sha" \
+                "$tmpfiles_rule_sha" \
+                "$ssm_shell_contract_sha"; do
+                [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+              done
+              printf '%s\n' \
+                'SCHEMA_VERSION=junca-validator-ami-runtime-inventory/v1' \
+                "BASH_NEVRA=$bash_nevra" \
+                "BASH_SHA256=$bash_sha" \
+                "JQ_NEVRA=$jq_nevra" \
+                "JQ_SHA256=$jq_sha" \
+                "SQLITE_NEVRA=$sqlite_nevra" \
+                "SQLITE_SHA256=$sqlite_sha" \
+                "SSM_AGENT_NEVRA=$ssm_agent_nevra" \
+                "SSM_AGENT_SHA256=$ssm_agent_sha" \
+                "TMPFILES_RULE_SHA256=$tmpfiles_rule_sha" \
+                "SSM_SHELL_CONTRACT_SHA256=$ssm_shell_contract_sha" \
+                'SSM_AGENT_SH_C_CONTRACT=verified' \
+                > /opt/junca/ami-runtime-inventory.env
+              chown root:root /opt/junca/ami-runtime-inventory.env
+              chmod 0444 /opt/junca/ami-runtime-inventory.env
+              test "$(wc -l < /opt/junca/ami-runtime-inventory.env)" -eq 12
+            - install -o root -g root -m 0444 /proc/sys/kernel/random/boot_id /opt/junca/ami-build-boot-id
+            - systemctl enable amazon-ssm-agent.service junca-validator.service junca-public-rpc.service junca-public-explorer.service
             - rm -f /tmp/validator-runtime.tar.gz /tmp/genesis.json
+      - name: RemoveEphemeralMutationLockBeforeReboot
+        action: ExecuteBash
+        inputs:
+          commands:
+            - set -euo pipefail
+            - test -d /run/lock/junca-validator-mutation
+            - test ! -L /run/lock/junca-validator-mutation
+            - 'test "$(stat -c "%U:%G:%a" /run/lock/junca-validator-mutation)" = "root:root:700"'
+            - rmdir /run/lock/junca-validator-mutation
+            - test ! -e /run/lock/junca-validator-mutation
+      - name: RebootForRuntimeContract
+        action: Reboot
+        onFailure: Abort
+        maxAttempts: 2
+        inputs:
+          delaySeconds: 10
+      - name: VerifyPostRebootRuntime
+        action: ExecuteBash
+        inputs:
+          commands:
+            - set -euo pipefail
+            - 'test "$(cat /proc/sys/kernel/random/boot_id)" != "$(cat /opt/junca/ami-build-boot-id)"'
+            - 'test "$(cat /usr/lib/tmpfiles.d/junca-validator-mutation.conf)" = "d /run/lock/junca-validator-mutation 0700 root root -"'
+            - test -d /run/lock/junca-validator-mutation
+            - test ! -L /run/lock/junca-validator-mutation
+            - 'test "$(stat -c "%U:%G:%a" /run/lock/junca-validator-mutation)" = "root:root:700"'
+            - |
+              inventory=/opt/junca/ami-runtime-inventory.env
+              test -f "$inventory"
+              test ! -L "$inventory"
+              test "$(stat -c '%U:%G:%a' "$inventory")" = "root:root:444"
+              test "$(wc -l < "$inventory")" -eq 12
+              grep -Fxq \
+                'SCHEMA_VERSION=junca-validator-ami-runtime-inventory/v1' \
+                "$inventory"
+              grep -Fxq 'SSM_AGENT_SH_C_CONTRACT=verified' "$inventory"
+              for spec in \
+                'BASH|bash|/usr/bin/bash' \
+                'JQ|jq|/usr/bin/jq' \
+                'SQLITE|sqlite|/usr/bin/sqlite3' \
+                'SSM_AGENT|amazon-ssm-agent|/usr/bin/amazon-ssm-agent'; do
+                IFS='|' read -r key package binary <<< "$spec"
+                nevra="$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' "$package")"
+                sha_line="$(sha256sum "$binary")"
+                digest="${sha_line%% *}"
+                grep -Fxq "${key}_NEVRA=$nevra" "$inventory"
+                grep -Fxq "${key}_SHA256=$digest" "$inventory"
+              done
+              tmpfiles_sha_line="$(sha256sum /usr/lib/tmpfiles.d/junca-validator-mutation.conf)"
+              tmpfiles_sha="${tmpfiles_sha_line%% *}"
+              grep -Fxq "TMPFILES_RULE_SHA256=$tmpfiles_sha" "$inventory"
+              shell_contract_sha_line="$(sha256sum /usr/local/libexec/junca-ssm-bash-contract)"
+              shell_contract_sha="${shell_contract_sha_line%% *}"
+              grep -Fxq \
+                "SSM_SHELL_CONTRACT_SHA256=$shell_contract_sha" \
+                "$inventory"
+              script_path=/usr/local/libexec/junca-ssm-bash-contract
+              test "$(/bin/sh -c "$script_path")" = \
+                "SSM_AGENT_SH_C_FIXED_BASH=verified"
+            - |
+              printf '%s\n' \
+                'SCHEMA_VERSION=junca-validator-ami-runtime-reboot/v1' \
+                'REBOOT_READBACK_VERIFIED=true' \
+                'TMPFILES_RECREATED_AFTER_REBOOT=true' \
+                'RUNTIME_INVENTORY_VERIFIED_AFTER_REBOOT=true' \
+                'SSM_AGENT_SH_C_CONTRACT_VERIFIED_AFTER_REBOOT=true' \
+                > /opt/junca/ami-runtime-reboot.env
+              chown root:root /opt/junca/ami-runtime-reboot.env
+              chmod 0444 /opt/junca/ami-runtime-reboot.env
+              runtime_inventory_sha="$(sha256sum /opt/junca/ami-runtime-inventory.env)"
+              runtime_inventory_sha="${runtime_inventory_sha%% *}"
+              runtime_reboot_sha="$(sha256sum /opt/junca/ami-runtime-reboot.env)"
+              runtime_reboot_sha="${runtime_reboot_sha%% *}"
+              printf '%s\n' \
+                "PARENT_AMI_ID={{ ParentAMIId }}" \
+                "DNF_RELEASEVER={{ DnfReleasever }}" \
+                "BOTO3_NEVRA={{ Boto3Nevra }}" \
+                "BOTOCORE_NEVRA={{ BotocoreNevra }}" \
+                "COMPONENT_SOURCE_SHA256={{ ComponentSourceSHA256 }}" \
+                "DEPENDENCY_LOCK_SHA256={{ DependencyLockSHA256 }}" \
+                "SUPPLY_CHAIN_POLICY_SHA256={{ SupplyChainPolicySHA256 }}" \
+                "RUNTIME_INVENTORY_SHA256=$runtime_inventory_sha" \
+                "RUNTIME_REBOOT_EVIDENCE_SHA256=$runtime_reboot_sha" \
+                'MAINNET_CHANGED=false' \
+                'ASSETS_MOVED=false' \
+                'BRIDGE_ACTIVATED=false' \
+                > /opt/junca/ami-supply-chain.env
+              chown root:root /opt/junca/ami-supply-chain.env
+              chmod 0444 /opt/junca/ami-supply-chain.env
   - name: validate
     steps:
       - name: VerifyRuntime
@@ -34,8 +240,14 @@ phases:
             - test -s /etc/junca/genesis.json
             - id -u junca
             - getent group junca
+            - 'test "$(stat -c "%U:%G:%a" /etc/junca)" = "root:root:750"'
             - test "$(stat -c '%U:%G' /var/log/junca)" = "root:root"
+            - 'test "$(cat /usr/lib/tmpfiles.d/junca-validator-mutation.conf)" = "d /run/lock/junca-validator-mutation 0700 root root -"'
+            - test -d /run/lock/junca-validator-mutation
+            - test ! -L /run/lock/junca-validator-mutation
+            - 'test "$(stat -c "%U:%G:%a" /run/lock/junca-validator-mutation)" = "root:root:700"'
             - systemd-analyze verify /etc/systemd/system/junca-validator.service /etc/systemd/system/junca-public-rpc.service /etc/systemd/system/junca-public-explorer.service
+            - test "$(systemctl is-enabled amazon-ssm-agent.service)" = enabled
             - test "$(systemctl is-enabled junca-validator.service)" = enabled
             - test "$(systemctl is-enabled junca-public-rpc.service)" = enabled
             - test "$(systemctl is-enabled junca-public-explorer.service)" = enabled
@@ -48,6 +260,66 @@ phases:
             - grep -Fq -- '--http.port 8545' /etc/systemd/system/junca-validator.service
             - grep -Fq -- '--http.port 3000' /etc/systemd/system/junca-public-explorer.service
             - grep -Fq -- '--http.port 8546' /etc/systemd/system/junca-public-rpc.service
-            - echo "__NODE_SHA256__  /opt/junca/validator-runtime.tar.gz" | sha256sum --check
-            - echo "__GENESIS_SHA256__  /etc/junca/genesis.json" | sha256sum --check
+            - 'echo "{{ NodeSHA256 }}  /opt/junca/validator-runtime.tar.gz" | sha256sum --check'
+            - 'echo "{{ GenesisSHA256 }}  /etc/junca/genesis.json" | sha256sum --check'
+            - 'test "$(rpm -q --qf "%{VERSION}" system-release)" = "{{ DnfReleasever }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-boto3)" = "{{ Boto3Nevra }}"'
+            - 'test "$(rpm -q --qf "%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}" python3-botocore)" = "{{ BotocoreNevra }}"'
+            - python3 -c 'import boto3, botocore; assert boto3.__version__; assert botocore.__version__'
+            - |
+              inventory=/opt/junca/ami-runtime-inventory.env
+              test -f "$inventory"
+              test ! -L "$inventory"
+              test "$(stat -c '%U:%G:%a' "$inventory")" = "root:root:444"
+              test "$(wc -l < "$inventory")" -eq 12
+              grep -Fxq \
+                'SCHEMA_VERSION=junca-validator-ami-runtime-inventory/v1' \
+                "$inventory"
+              grep -Fxq 'SSM_AGENT_SH_C_CONTRACT=verified' "$inventory"
+              for spec in \
+                'BASH|bash|/usr/bin/bash' \
+                'JQ|jq|/usr/bin/jq' \
+                'SQLITE|sqlite|/usr/bin/sqlite3' \
+                'SSM_AGENT|amazon-ssm-agent|/usr/bin/amazon-ssm-agent'; do
+                IFS='|' read -r key package binary <<< "$spec"
+                nevra="$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' "$package")"
+                sha_line="$(sha256sum "$binary")"
+                digest="${sha_line%% *}"
+                grep -Fxq "${key}_NEVRA=$nevra" "$inventory"
+                grep -Fxq "${key}_SHA256=$digest" "$inventory"
+              done
+              tmpfiles_sha_line="$(sha256sum /usr/lib/tmpfiles.d/junca-validator-mutation.conf)"
+              tmpfiles_sha="${tmpfiles_sha_line%% *}"
+              grep -Fxq "TMPFILES_RULE_SHA256=$tmpfiles_sha" "$inventory"
+              shell_contract_sha_line="$(sha256sum /usr/local/libexec/junca-ssm-bash-contract)"
+              shell_contract_sha="${shell_contract_sha_line%% *}"
+              grep -Fxq \
+                "SSM_SHELL_CONTRACT_SHA256=$shell_contract_sha" \
+                "$inventory"
+              script_path=/usr/local/libexec/junca-ssm-bash-contract
+              test "$(/bin/sh -c "$script_path")" = \
+                "SSM_AGENT_SH_C_FIXED_BASH=verified"
+            - grep -Fxq 'SCHEMA_VERSION=junca-validator-ami-runtime-reboot/v1' /opt/junca/ami-runtime-reboot.env
+            - grep -Fxq 'REBOOT_READBACK_VERIFIED=true' /opt/junca/ami-runtime-reboot.env
+            - grep -Fxq 'TMPFILES_RECREATED_AFTER_REBOOT=true' /opt/junca/ami-runtime-reboot.env
+            - grep -Fxq 'RUNTIME_INVENTORY_VERIFIED_AFTER_REBOOT=true' /opt/junca/ami-runtime-reboot.env
+            - grep -Fxq 'SSM_AGENT_SH_C_CONTRACT_VERIFIED_AFTER_REBOOT=true' /opt/junca/ami-runtime-reboot.env
+            - 'grep -Fxq "PARENT_AMI_ID={{ ParentAMIId }}" /opt/junca/ami-supply-chain.env'
+            - 'grep -Fxq "COMPONENT_SOURCE_SHA256={{ ComponentSourceSHA256 }}" /opt/junca/ami-supply-chain.env'
+            - 'grep -Fxq "DEPENDENCY_LOCK_SHA256={{ DependencyLockSHA256 }}" /opt/junca/ami-supply-chain.env'
+            - 'grep -Fxq "SUPPLY_CHAIN_POLICY_SHA256={{ SupplyChainPolicySHA256 }}" /opt/junca/ami-supply-chain.env'
+            - |
+              runtime_inventory_sha="$(sha256sum /opt/junca/ami-runtime-inventory.env)"
+              runtime_inventory_sha="${runtime_inventory_sha%% *}"
+              runtime_reboot_sha="$(sha256sum /opt/junca/ami-runtime-reboot.env)"
+              runtime_reboot_sha="${runtime_reboot_sha%% *}"
+              grep -Fxq \
+                "RUNTIME_INVENTORY_SHA256=$runtime_inventory_sha" \
+                /opt/junca/ami-supply-chain.env
+              grep -Fxq \
+                "RUNTIME_REBOOT_EVIDENCE_SHA256=$runtime_reboot_sha" \
+                /opt/junca/ami-supply-chain.env
+            - grep -Fxq 'MAINNET_CHANGED=false' /opt/junca/ami-supply-chain.env
+            - grep -Fxq 'ASSETS_MOVED=false' /opt/junca/ami-supply-chain.env
+            - grep -Fxq 'BRIDGE_ACTIVATED=false' /opt/junca/ami-supply-chain.env
             - python3 -c 'import json; d=json.load(open("/etc/junca/genesis.json")); assert d["network"] == "public-testnet"; assert d["notice"] == "Public Testnet / No Monetary Value"; assert d["validator_ids"] == ["validator-01", "validator-02", "validator-03"]'

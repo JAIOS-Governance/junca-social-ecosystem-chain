@@ -1,38 +1,82 @@
-name: JUNCA Hardened Immutable Candidate Release V2
+name: JUNCA Hardened Immutable Candidate Release
 
 on:
-  workflow_run:
-    workflows:
-      - "JUNCA Validator Runtime Artifacts"
-    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful main-branch runtime artifact workflow run
+        required: true
+        type: string
+      source_commit:
+        description: Exact 40-character main commit produced by source_run_id
+        required: true
+        type: string
+      parent_ami_id:
+        description: Approved exact Amazon Linux 2023 parent AMI ID
+        required: true
+        type: string
+      parent_ami_owner_id:
+        description: Approved exact parent AMI owner account
+        required: true
+        type: string
+      parent_ami_name:
+        description: Approved exact immutable parent AMI name
+        required: true
+        type: string
+      dnf_releasever:
+        description: Approved exact Amazon Linux repository release
+        required: true
+        type: string
+      python3_boto3_nevra:
+        description: Approved exact python3-boto3 NEVRA
+        required: true
+        type: string
+      python3_botocore_nevra:
+        description: Approved exact python3-botocore NEVRA
+        required: true
+        type: string
+      approval_phrase:
+        description: Enter PUBLIC_TESTNET_IMMUTABLE_CANDIDATE
+        required: true
+        type: string
 
 permissions:
   actions: write
-  contents: read
+  contents: write
   issues: write
 
 concurrency:
-  group: junca-hardened-immutable-candidate-release-v2
+  group: junca-hardened-immutable-candidate-release
   cancel-in-progress: false
 
 jobs:
   release:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.name == 'JUNCA Validator Runtime Artifacts' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
+    environment: public-testnet
     timeout-minutes: 420
     env:
       POLICY_PATH: config/junca_hardened_immutable_candidate_policy.json
-      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
-      SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      PARENT_AMI_ID: ${{ inputs.parent_ami_id }}
+      PARENT_AMI_OWNER_ID: ${{ inputs.parent_ami_owner_id }}
+      PARENT_AMI_NAME: ${{ inputs.parent_ami_name }}
+      DNF_RELEASEVER: ${{ inputs.dnf_releasever }}
+      PYTHON3_BOTO3_NEVRA: ${{ inputs.python3_boto3_nevra }}
+      PYTHON3_BOTOCORE_NEVRA: ${{ inputs.python3_botocore_nevra }}
+      APPROVAL_PHRASE: ${{ inputs.approval_phrase }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Verify explicit immutable-candidate authorization
+        run: |
+          set -euo pipefail
+          test "$APPROVAL_PHRASE" = \
+            "PUBLIC_TESTNET_IMMUTABLE_CANDIDATE"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.source_commit }}
           fetch-depth: 0
 
       - name: Bind exact runtime and immutable request
@@ -57,9 +101,7 @@ jobs:
               .repository.full_name == $repository and
               .head_repository.full_name == $repository
             ' <<<"$run"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"
-
-          python scripts/junca_hardened_immutable_candidate_policy.py \
+          python3 scripts/junca_hardened_immutable_candidate_policy.py \
             --policy "$POLICY_PATH" \
             --candidate-source-commit "$SOURCE_COMMIT" \
             --github-output "$GITHUB_OUTPUT"
@@ -100,6 +142,14 @@ jobs:
 
           migration_run_id="$(jq -er .migration_binding.run_id "$POLICY_PATH")"
           migration_evidence_sha256="$(jq -er .migration_binding.evidence_sha256 "$POLICY_PATH")"
+          component_source_sha256="$(
+            sha256sum .github/image-builder/validator-component.yml |
+              cut -d' ' -f1
+          )"
+          supply_chain_policy_sha256="$(
+            sha256sum config/junca_validator_ami_supply_chain_lock.json |
+              cut -d' ' -f1
+          )"
           jq -n \
             --arg source_run_id "$SOURCE_RUN_ID" \
             --arg source_commit "$SOURCE_COMMIT" \
@@ -108,8 +158,18 @@ jobs:
             --arg node_sha256 "$node_sha256" \
             --arg genesis_sha256 "$genesis_sha256" \
             --arg migration_run_id "$migration_run_id" \
-            --arg migration_evidence_sha256 "$migration_evidence_sha256" '{
-              schema_version: "junca-validator-ami-build-request/v1",
+            --arg migration_evidence_sha256 "$migration_evidence_sha256" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_source_sha256 "$component_source_sha256" \
+            --arg supply_chain_policy_sha256 \
+              "$supply_chain_policy_sha256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg python3_boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg python3_botocore_nevra \
+              "$PYTHON3_BOTOCORE_NEVRA" '{
+              schema_version: "junca-validator-ami-build-request/v2",
               state: "AUTHORIZED",
               network: "Public Testnet",
               environment: "public-testnet",
@@ -122,6 +182,15 @@ jobs:
               genesis_sha256: $genesis_sha256,
               migration_run_id: $migration_run_id,
               migration_evidence_sha256: $migration_evidence_sha256,
+              parent_ami_id: $parent_ami_id,
+              parent_ami_owner_id: $parent_ami_owner_id,
+              parent_ami_name: $parent_ami_name,
+              component_source_sha256: $component_source_sha256,
+              dependency_lock_sha256: "",
+              supply_chain_policy_sha256: $supply_chain_policy_sha256,
+              dnf_releasever: $dnf_releasever,
+              python3_boto3_nevra: $python3_boto3_nevra,
+              python3_botocore_nevra: $python3_botocore_nevra,
               boundaries: {
                 terraform_state_changed: false,
                 mainnet_changed: false,
@@ -130,52 +199,256 @@ jobs:
               },
               request_sha256: ""
             }' > artifacts/release-v2/request.pending.json
-          python scripts/junca_validator_ami_build_request.py \
+          request_outputs="$RUNNER_TEMP/junca-validator-ami-request.outputs"
+          : > "$request_outputs"
+          python3 scripts/junca_validator_ami_build_request.py \
             --request artifacts/release-v2/request.pending.json \
             --seal-missing-digest \
             --require-migration-binding \
-            --github-output "$GITHUB_OUTPUT"
-          request_sha256="$(grep '^request_sha256=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
-          jq --arg request_sha256 "$request_sha256" \
-            '.request_sha256 = $request_sha256' \
+            --github-output "$request_outputs"
+          test "$(grep -c '^request_sha256=' "$request_outputs")" = 1
+          test "$(grep -c '^dependency_lock_sha256=' \
+            "$request_outputs")" = 1
+          request_sha256="$(
+            sed -n 's/^request_sha256=//p' "$request_outputs"
+          )"
+          dependency_lock_sha256="$(
+            sed -n 's/^dependency_lock_sha256=//p' "$request_outputs"
+          )"
+          jq \
+            --arg request_sha256 "$request_sha256" \
+            --arg dependency_lock_sha256 "$dependency_lock_sha256" '
+              .request_sha256 = $request_sha256 |
+              .dependency_lock_sha256 = $dependency_lock_sha256
+            ' \
             artifacts/release-v2/request.pending.json \
             > artifacts/release-v2/request.json
           rm artifacts/release-v2/request.pending.json
-          python scripts/junca_validator_ami_build_request.py \
+          python3 scripts/junca_validator_ami_build_request.py \
             --request artifacts/release-v2/request.json \
             --require-migration-binding
+          ami_dispatch_token="$(
+            printf '%s-%s-%s' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+              "$(openssl rand -hex 16)"
+          )"
+          python3 scripts/junca_release_dispatch_attestation.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --workflow-path ".github/workflows/junca-validator-ami-build.yml" \
+            --dispatch-token "$ami_dispatch_token" \
+            --output-dir artifacts/dispatch-attestation-ami \
+            --input "source_run_id=$SOURCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_name=junca-validator-runtime-$SOURCE_RUN_ID" \
+            --input "genesis_artifact_name=junca-validator-genesis-$SOURCE_RUN_ID" \
+            --input "node_sha256=$node_sha256" \
+            --input "genesis_sha256=$genesis_sha256" \
+            --input "parent_ami_id=$PARENT_AMI_ID" \
+            --input "parent_ami_owner_id=$PARENT_AMI_OWNER_ID" \
+            --input "parent_ami_name=$PARENT_AMI_NAME" \
+            --input \
+              "component_source_sha256=$component_source_sha256" \
+            --input \
+              "dependency_lock_sha256=$dependency_lock_sha256" \
+            --input "dnf_releasever=$DNF_RELEASEVER" \
+            --input "python3_boto3_nevra=$PYTHON3_BOTO3_NEVRA" \
+            --input \
+              "python3_botocore_nevra=$PYTHON3_BOTOCORE_NEVRA" \
+            --input "request_sha256=$request_sha256"
           {
             echo "source_run_id=$SOURCE_RUN_ID"
             echo "node_sha256=$node_sha256"
             echo "genesis_sha256=$genesis_sha256"
             echo "migration_run_id=$migration_run_id"
             echo "migration_evidence_sha256=$migration_evidence_sha256"
+            echo "parent_ami_id=$PARENT_AMI_ID"
+            echo "parent_ami_owner_id=$PARENT_AMI_OWNER_ID"
+            echo "parent_ami_name=$PARENT_AMI_NAME"
+            echo "component_source_sha256=$component_source_sha256"
+            echo "dependency_lock_sha256=$dependency_lock_sha256"
+            echo "supply_chain_policy_sha256=$supply_chain_policy_sha256"
+            echo "dnf_releasever=$DNF_RELEASEVER"
+            echo "python3_boto3_nevra=$PYTHON3_BOTO3_NEVRA"
+            echo "python3_botocore_nevra=$PYTHON3_BOTOCORE_NEVRA"
             echo "request_sha256=$request_sha256"
+            echo "candidate_ref=release-candidate/$SOURCE_COMMIT"
+            echo "ami_dispatch_token=$ami_dispatch_token"
           } >> "$GITHUB_OUTPUT"
           sha256sum artifacts/release-v2/request.json \
             > artifacts/release-v2/request.json.sha256
 
-      - name: Build or reuse exact-request immutable AMI
+      - name: Publish exact AMI dispatch attestation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junca-release-dispatch-attestation-${{ github.run_id }}-${{ github.run_attempt }}-ami
+          path: artifacts/dispatch-attestation-ami/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Dispatch exact-request immutable AMI child
+        id: ami_dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_SOURCE_RUN_ID: ${{ steps.candidate.outputs.source_run_id }}
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          CANDIDATE_PARENT_AMI_ID: ${{ steps.candidate.outputs.parent_ami_id }}
+          CANDIDATE_PARENT_AMI_OWNER_ID: ${{ steps.candidate.outputs.parent_ami_owner_id }}
+          CANDIDATE_PARENT_AMI_NAME: ${{ steps.candidate.outputs.parent_ami_name }}
+          CANDIDATE_COMPONENT_SOURCE_SHA256: ${{ steps.candidate.outputs.component_source_sha256 }}
+          CANDIDATE_DEPENDENCY_LOCK_SHA256: ${{ steps.candidate.outputs.dependency_lock_sha256 }}
+          CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256: ${{ steps.candidate.outputs.supply_chain_policy_sha256 }}
+          CANDIDATE_DNF_RELEASEVER: ${{ steps.candidate.outputs.dnf_releasever }}
+          CANDIDATE_PYTHON3_BOTO3_NEVRA: ${{ steps.candidate.outputs.python3_boto3_nevra }}
+          CANDIDATE_PYTHON3_BOTOCORE_NEVRA: ${{ steps.candidate.outputs.python3_botocore_nevra }}
+          CANDIDATE_REQUEST_SHA256: ${{ steps.candidate.outputs.request_sha256 }}
+          AMI_DISPATCH_TOKEN: ${{ steps.candidate.outputs.ami_dispatch_token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_dispatch_workflow_and_wait.py \
+            --operation dispatch \
+            --github-output "$GITHUB_OUTPUT" \
+            --workflow-name "JUNCA Validator Immutable AMI Build" \
+            --workflow-path ".github/workflows/junca-validator-ami-build.yml" \
+            --expected-head "$SOURCE_COMMIT" \
+            --dispatch-ref main \
+            --candidate-ref "$CANDIDATE_REF" \
+            --dispatch-token "$AMI_DISPATCH_TOKEN" \
+            --input "source_run_id=$CANDIDATE_SOURCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_name=junca-validator-runtime-$CANDIDATE_SOURCE_RUN_ID" \
+            --input "genesis_artifact_name=junca-validator-genesis-$CANDIDATE_SOURCE_RUN_ID" \
+            --input "node_sha256=$CANDIDATE_NODE_SHA256" \
+            --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256" \
+            --input "parent_ami_id=$CANDIDATE_PARENT_AMI_ID" \
+            --input \
+              "parent_ami_owner_id=$CANDIDATE_PARENT_AMI_OWNER_ID" \
+            --input "parent_ami_name=$CANDIDATE_PARENT_AMI_NAME" \
+            --input \
+              "component_source_sha256=$CANDIDATE_COMPONENT_SOURCE_SHA256" \
+            --input \
+              "dependency_lock_sha256=$CANDIDATE_DEPENDENCY_LOCK_SHA256" \
+            --input "dnf_releasever=$CANDIDATE_DNF_RELEASEVER" \
+            --input \
+              "python3_boto3_nevra=$CANDIDATE_PYTHON3_BOTO3_NEVRA" \
+            --input \
+              "python3_botocore_nevra=$CANDIDATE_PYTHON3_BOTOCORE_NEVRA" \
+            --input "request_sha256=$CANDIDATE_REQUEST_SHA256"
+
+      - name: Bind exact immutable AMI child run
+        env:
+          CANDIDATE_SOURCE_RUN_ID: ${{ steps.candidate.outputs.source_run_id }}
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          CANDIDATE_PARENT_AMI_ID: ${{ steps.candidate.outputs.parent_ami_id }}
+          CANDIDATE_PARENT_AMI_OWNER_ID: ${{ steps.candidate.outputs.parent_ami_owner_id }}
+          CANDIDATE_PARENT_AMI_NAME: ${{ steps.candidate.outputs.parent_ami_name }}
+          CANDIDATE_COMPONENT_SOURCE_SHA256: ${{ steps.candidate.outputs.component_source_sha256 }}
+          CANDIDATE_DEPENDENCY_LOCK_SHA256: ${{ steps.candidate.outputs.dependency_lock_sha256 }}
+          CANDIDATE_DNF_RELEASEVER: ${{ steps.candidate.outputs.dnf_releasever }}
+          CANDIDATE_PYTHON3_BOTO3_NEVRA: ${{ steps.candidate.outputs.python3_boto3_nevra }}
+          CANDIDATE_PYTHON3_BOTOCORE_NEVRA: ${{ steps.candidate.outputs.python3_botocore_nevra }}
+          CANDIDATE_REQUEST_SHA256: ${{ steps.candidate.outputs.request_sha256 }}
+          AMI_DISPATCH_TOKEN: ${{ steps.candidate.outputs.ami_dispatch_token }}
+          AMI_RUN_ID: ${{ steps.ami_dispatch.outputs.run_id }}
+          AMI_RUN_ATTEMPT: ${{ steps.ami_dispatch.outputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_release_child_run_binding.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --workflow-path ".github/workflows/junca-validator-ami-build.yml" \
+            --dispatch-token "$AMI_DISPATCH_TOKEN" \
+            --child-run-id "$AMI_RUN_ID" \
+            --child-run-attempt "$AMI_RUN_ATTEMPT" \
+            --output-dir artifacts/run-binding-ami \
+            --input "source_run_id=$CANDIDATE_SOURCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_name=junca-validator-runtime-$CANDIDATE_SOURCE_RUN_ID" \
+            --input "genesis_artifact_name=junca-validator-genesis-$CANDIDATE_SOURCE_RUN_ID" \
+            --input "node_sha256=$CANDIDATE_NODE_SHA256" \
+            --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256" \
+            --input "parent_ami_id=$CANDIDATE_PARENT_AMI_ID" \
+            --input \
+              "parent_ami_owner_id=$CANDIDATE_PARENT_AMI_OWNER_ID" \
+            --input "parent_ami_name=$CANDIDATE_PARENT_AMI_NAME" \
+            --input \
+              "component_source_sha256=$CANDIDATE_COMPONENT_SOURCE_SHA256" \
+            --input \
+              "dependency_lock_sha256=$CANDIDATE_DEPENDENCY_LOCK_SHA256" \
+            --input "dnf_releasever=$CANDIDATE_DNF_RELEASEVER" \
+            --input \
+              "python3_boto3_nevra=$CANDIDATE_PYTHON3_BOTO3_NEVRA" \
+            --input \
+              "python3_botocore_nevra=$CANDIDATE_PYTHON3_BOTOCORE_NEVRA" \
+            --input "request_sha256=$CANDIDATE_REQUEST_SHA256"
+
+      - name: Publish exact immutable AMI child run binding
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junca-release-child-run-binding-${{ github.run_id }}-${{ github.run_attempt }}-ami-${{ steps.ami_dispatch.outputs.run_id }}-${{ steps.ami_dispatch.outputs.run_attempt }}
+          path: artifacts/run-binding-ami/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Wait for bound exact-request immutable AMI
         id: ami
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_SOURCE_RUN_ID: ${{ steps.candidate.outputs.source_run_id }}
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          CANDIDATE_PARENT_AMI_ID: ${{ steps.candidate.outputs.parent_ami_id }}
+          CANDIDATE_PARENT_AMI_OWNER_ID: ${{ steps.candidate.outputs.parent_ami_owner_id }}
+          CANDIDATE_PARENT_AMI_NAME: ${{ steps.candidate.outputs.parent_ami_name }}
+          CANDIDATE_COMPONENT_SOURCE_SHA256: ${{ steps.candidate.outputs.component_source_sha256 }}
+          CANDIDATE_DEPENDENCY_LOCK_SHA256: ${{ steps.candidate.outputs.dependency_lock_sha256 }}
+          CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256: ${{ steps.candidate.outputs.supply_chain_policy_sha256 }}
+          CANDIDATE_DNF_RELEASEVER: ${{ steps.candidate.outputs.dnf_releasever }}
+          CANDIDATE_PYTHON3_BOTO3_NEVRA: ${{ steps.candidate.outputs.python3_boto3_nevra }}
+          CANDIDATE_PYTHON3_BOTOCORE_NEVRA: ${{ steps.candidate.outputs.python3_botocore_nevra }}
+          CANDIDATE_REQUEST_SHA256: ${{ steps.candidate.outputs.request_sha256 }}
+          AMI_DISPATCH_TOKEN: ${{ steps.candidate.outputs.ami_dispatch_token }}
+          AMI_RUN_ID: ${{ steps.ami_dispatch.outputs.run_id }}
+          AMI_DISPATCHED_AT: ${{ steps.ami_dispatch.outputs.dispatched_at }}
         run: |
           set -euo pipefail
           ami_run_id="$(
-            bash scripts/junca_dispatch_workflow_and_wait.sh \
+            python3 scripts/junca_dispatch_workflow_and_wait.py \
+              --operation wait \
+              --run-id "$AMI_RUN_ID" \
+              --dispatched-at "$AMI_DISPATCHED_AT" \
               --workflow-name "JUNCA Validator Immutable AMI Build" \
               --workflow-path ".github/workflows/junca-validator-ami-build.yml" \
               --expected-head "$SOURCE_COMMIT" \
+              --dispatch-ref main \
+              --candidate-ref "$CANDIDATE_REF" \
+              --dispatch-token "$AMI_DISPATCH_TOKEN" \
               --attempts 400 \
               --sleep-seconds 15 \
-              --input "source_run_id=${{ steps.candidate.outputs.source_run_id }}" \
+              --input "source_run_id=$CANDIDATE_SOURCE_RUN_ID" \
               --input "source_commit=$SOURCE_COMMIT" \
-              --input "node_artifact_name=junca-validator-runtime-${{ steps.candidate.outputs.source_run_id }}" \
-              --input "genesis_artifact_name=junca-validator-genesis-${{ steps.candidate.outputs.source_run_id }}" \
-              --input "node_sha256=${{ steps.candidate.outputs.node_sha256 }}" \
-              --input "genesis_sha256=${{ steps.candidate.outputs.genesis_sha256 }}" \
-              --input "request_sha256=${{ steps.candidate.outputs.request_sha256 }}"
+              --input "node_artifact_name=junca-validator-runtime-$CANDIDATE_SOURCE_RUN_ID" \
+              --input "genesis_artifact_name=junca-validator-genesis-$CANDIDATE_SOURCE_RUN_ID" \
+              --input "node_sha256=$CANDIDATE_NODE_SHA256" \
+              --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256" \
+              --input "parent_ami_id=$CANDIDATE_PARENT_AMI_ID" \
+              --input \
+                "parent_ami_owner_id=$CANDIDATE_PARENT_AMI_OWNER_ID" \
+              --input "parent_ami_name=$CANDIDATE_PARENT_AMI_NAME" \
+              --input \
+                "component_source_sha256=$CANDIDATE_COMPONENT_SOURCE_SHA256" \
+              --input \
+                "dependency_lock_sha256=$CANDIDATE_DEPENDENCY_LOCK_SHA256" \
+              --input "dnf_releasever=$CANDIDATE_DNF_RELEASEVER" \
+              --input \
+                "python3_boto3_nevra=$CANDIDATE_PYTHON3_BOTO3_NEVRA" \
+              --input \
+                "python3_botocore_nevra=$CANDIDATE_PYTHON3_BOTOCORE_NEVRA" \
+              --input "request_sha256=$CANDIDATE_REQUEST_SHA256"
           )"
+          test "$ami_run_id" = "$AMI_RUN_ID"
           mkdir -p artifacts/ami
           gh run download "$ami_run_id" \
             --repo "$GITHUB_REPOSITORY" \
@@ -183,17 +456,46 @@ jobs:
             --dir artifacts/ami
           (cd artifacts/ami && sha256sum -c SHA256SUMS)
           jq -e \
-            --arg source_run_id "${{ steps.candidate.outputs.source_run_id }}" \
+            --arg source_run_id "$CANDIDATE_SOURCE_RUN_ID" \
             --arg source_commit "$SOURCE_COMMIT" \
-            --arg node "${{ steps.candidate.outputs.node_sha256 }}" \
-            --arg genesis "${{ steps.candidate.outputs.genesis_sha256 }}" \
-            --arg request "${{ steps.candidate.outputs.request_sha256 }}" '
+            --arg node "$CANDIDATE_NODE_SHA256" \
+            --arg genesis "$CANDIDATE_GENESIS_SHA256" \
+            --arg request "$CANDIDATE_REQUEST_SHA256" \
+            --arg parent_ami_id "$CANDIDATE_PARENT_AMI_ID" \
+            --arg parent_ami_owner_id \
+              "$CANDIDATE_PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$CANDIDATE_PARENT_AMI_NAME" \
+            --arg component_sha \
+              "$CANDIDATE_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha \
+              "$CANDIDATE_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha \
+              "$CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$CANDIDATE_DNF_RELEASEVER" \
+            --arg boto3_nevra "$CANDIDATE_PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra \
+              "$CANDIDATE_PYTHON3_BOTOCORE_NEVRA" '
+              .schema_version == "junca-validator-ami-build/v2" and
               .state == "AMI_VERIFIED" and
               .source_run_id == $source_run_id and
               .source_commit == $source_commit and
               .node_artifact_sha256 == $node and
               .genesis_sha256 == $genesis and
               .request_sha256 == $request and
+              .request_schema ==
+                "junca-validator-ami-build-request/v2" and
+              (.image_builder_arn |
+                test("^arn:aws:imagebuilder:us-east-1:595710543956:image/")) and
+              .parent_ami_id == $parent_ami_id and
+              .parent_ami_owner_id == $parent_ami_owner_id and
+              .parent_ami_name == $parent_ami_name and
+              .component_source_sha256 == $component_sha and
+              .dependency_lock_sha256 == $dependency_lock_sha and
+              .supply_chain_policy_sha256 ==
+                $supply_chain_policy_sha and
+              .dnf_releasever == $dnf_releasever and
+              .python3_boto3_nevra == $boto3_nevra and
+              .python3_botocore_nevra == $botocore_nevra and
               (.reused_existing_ami | type == "boolean") and
               (.ami_id | test("^ami-[0-9a-f]{8,17}$")) and
               .terraform_state_changed == false and
@@ -201,140 +503,418 @@ jobs:
               .assets_moved == false and
               .bridge_activated == false
             ' artifacts/ami/junca-validator-ami-build.json
+          python3 scripts/junca_hardened_immutable_candidate_policy.py \
+            --policy "$POLICY_PATH" \
+            --candidate-source-commit "$SOURCE_COMMIT" \
+            --candidate-request-sha256 "$CANDIDATE_REQUEST_SHA256" \
+            --candidate-ami-run-id "$ami_run_id"
           echo "ami_run_id=$ami_run_id" >> "$GITHUB_OUTPUT"
           echo "ami_id=$(jq -er .ami_id artifacts/ami/junca-validator-ami-build.json)" >> "$GITHUB_OUTPUT"
-          echo "reused_existing_ami=$(jq -er .reused_existing_ami artifacts/ami/junca-validator-ami-build.json)" >> "$GITHUB_OUTPUT"
+          echo "image_builder_arn=$(jq -er .image_builder_arn artifacts/ami/junca-validator-ami-build.json)" >> "$GITHUB_OUTPUT"
+          echo "reused_existing_ami=$(jq -r .reused_existing_ami artifacts/ami/junca-validator-ami-build.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Collect V2 pre-rollout baseline evidence
+      - name: Bind exact evidence collector inputs
+        id: evidence_attestation
+        env:
+          AMI_RUN_ID: ${{ steps.ami.outputs.ami_run_id }}
+          CANDIDATE_MIGRATION_RUN_ID: ${{ steps.candidate.outputs.migration_run_id }}
+          CANDIDATE_MIGRATION_EVIDENCE_SHA256: ${{ steps.candidate.outputs.migration_evidence_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence_dispatch_token="$(
+            printf '%s-%s-%s' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+              "$(openssl rand -hex 16)"
+          )"
+          python3 scripts/junca_release_dispatch_attestation.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --workflow-path ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
+            --dispatch-token "$evidence_dispatch_token" \
+            --output-dir artifacts/dispatch-attestation-evidence \
+            --input "ami_run_id=$AMI_RUN_ID" \
+            --input "migration_run_id=$CANDIDATE_MIGRATION_RUN_ID" \
+            --input "migration_evidence_sha256=$CANDIDATE_MIGRATION_EVIDENCE_SHA256" \
+            --input "source_commit=$SOURCE_COMMIT"
+          echo "dispatch_token=$evidence_dispatch_token" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exact evidence dispatch attestation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junca-release-dispatch-attestation-${{ github.run_id }}-${{ github.run_attempt }}-evidence
+          path: artifacts/dispatch-attestation-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Dispatch V2 pre-rollout baseline child
+        id: evidence_dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_MIGRATION_RUN_ID: ${{ steps.candidate.outputs.migration_run_id }}
+          CANDIDATE_MIGRATION_EVIDENCE_SHA256: ${{ steps.candidate.outputs.migration_evidence_sha256 }}
+          AMI_RUN_ID: ${{ steps.ami.outputs.ami_run_id }}
+          EVIDENCE_DISPATCH_TOKEN: ${{ steps.evidence_attestation.outputs.dispatch_token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_dispatch_workflow_and_wait.py \
+            --operation dispatch \
+            --github-output "$GITHUB_OUTPUT" \
+            --workflow-name "JUNCA Runtime Release Evidence Collector" \
+            --workflow-path ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
+            --expected-head "$SOURCE_COMMIT" \
+            --dispatch-ref main \
+            --candidate-ref "$CANDIDATE_REF" \
+            --dispatch-token "$EVIDENCE_DISPATCH_TOKEN" \
+            --input "ami_run_id=$AMI_RUN_ID" \
+            --input "migration_run_id=$CANDIDATE_MIGRATION_RUN_ID" \
+            --input "migration_evidence_sha256=$CANDIDATE_MIGRATION_EVIDENCE_SHA256" \
+            --input "source_commit=$SOURCE_COMMIT"
+
+      - name: Bind exact V2 pre-rollout baseline child run
+        env:
+          CANDIDATE_MIGRATION_RUN_ID: ${{ steps.candidate.outputs.migration_run_id }}
+          CANDIDATE_MIGRATION_EVIDENCE_SHA256: ${{ steps.candidate.outputs.migration_evidence_sha256 }}
+          AMI_RUN_ID: ${{ steps.ami.outputs.ami_run_id }}
+          EVIDENCE_DISPATCH_TOKEN: ${{ steps.evidence_attestation.outputs.dispatch_token }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence_dispatch.outputs.run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ steps.evidence_dispatch.outputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_release_child_run_binding.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
+            --dispatch-token "$EVIDENCE_DISPATCH_TOKEN" \
+            --child-run-id "$EVIDENCE_RUN_ID" \
+            --child-run-attempt "$EVIDENCE_RUN_ATTEMPT" \
+            --output-dir artifacts/run-binding-evidence \
+            --input "ami_run_id=$AMI_RUN_ID" \
+            --input "migration_run_id=$CANDIDATE_MIGRATION_RUN_ID" \
+            --input "migration_evidence_sha256=$CANDIDATE_MIGRATION_EVIDENCE_SHA256" \
+            --input "source_commit=$SOURCE_COMMIT"
+
+      - name: Publish exact V2 pre-rollout baseline child run binding
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junca-release-child-run-binding-${{ github.run_id }}-${{ github.run_attempt }}-evidence-${{ steps.evidence_dispatch.outputs.run_id }}-${{ steps.evidence_dispatch.outputs.run_attempt }}
+          path: artifacts/run-binding-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Wait for bound V2 pre-rollout baseline evidence
         id: evidence
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_MIGRATION_RUN_ID: ${{ steps.candidate.outputs.migration_run_id }}
+          CANDIDATE_MIGRATION_EVIDENCE_SHA256: ${{ steps.candidate.outputs.migration_evidence_sha256 }}
+          AMI_RUN_ID: ${{ steps.ami.outputs.ami_run_id }}
+          EVIDENCE_DISPATCH_TOKEN: ${{ steps.evidence_attestation.outputs.dispatch_token }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence_dispatch.outputs.run_id }}
+          EVIDENCE_DISPATCHED_AT: ${{ steps.evidence_dispatch.outputs.dispatched_at }}
         run: |
           set -euo pipefail
           evidence_run_id="$(
-            bash scripts/junca_dispatch_workflow_and_wait.sh \
+            python3 scripts/junca_dispatch_workflow_and_wait.py \
+              --operation wait \
+              --run-id "$EVIDENCE_RUN_ID" \
+              --dispatched-at "$EVIDENCE_DISPATCHED_AT" \
               --workflow-name "JUNCA Runtime Release Evidence Collector" \
               --workflow-path ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" \
               --expected-head "$SOURCE_COMMIT" \
+              --dispatch-ref main \
+              --candidate-ref "$CANDIDATE_REF" \
+              --dispatch-token "$EVIDENCE_DISPATCH_TOKEN" \
               --attempts 160 \
               --sleep-seconds 15 \
-              --input "ami_run_id=${{ steps.ami.outputs.ami_run_id }}" \
-              --input "migration_run_id=${{ steps.candidate.outputs.migration_run_id }}" \
-              --input "migration_evidence_sha256=${{ steps.candidate.outputs.migration_evidence_sha256 }}" \
+              --input "ami_run_id=$AMI_RUN_ID" \
+              --input "migration_run_id=$CANDIDATE_MIGRATION_RUN_ID" \
+              --input "migration_evidence_sha256=$CANDIDATE_MIGRATION_EVIDENCE_SHA256" \
               --input "source_commit=$SOURCE_COMMIT"
           )"
+          test "$evidence_run_id" = "$EVIDENCE_RUN_ID"
           echo "evidence_run_id=$evidence_run_id" >> "$GITHUB_OUTPUT"
 
-      - name: Pass release manifest gate
+      - name: Bind exact manifest gate inputs
+        id: manifest_attestation
+        env:
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence.outputs.evidence_run_id }}
+        run: |
+          set -euo pipefail
+          manifest_dispatch_token="$(
+            printf '%s-%s-%s' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+              "$(openssl rand -hex 16)"
+          )"
+          python3 scripts/junca_release_dispatch_attestation.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --workflow-path ".github/workflows/junca-runtime-release-manifest-gate.yml" \
+            --dispatch-token "$manifest_dispatch_token" \
+            --output-dir artifacts/dispatch-attestation-manifest \
+            --input "evidence_run_id=$EVIDENCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_sha256=$CANDIDATE_NODE_SHA256" \
+            --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256"
+          echo "dispatch_token=$manifest_dispatch_token" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exact manifest dispatch attestation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junca-release-dispatch-attestation-${{ github.run_id }}-${{ github.run_attempt }}-manifest
+          path: artifacts/dispatch-attestation-manifest/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Dispatch release manifest gate child
+        id: manifest_dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence.outputs.evidence_run_id }}
+          MANIFEST_DISPATCH_TOKEN: ${{ steps.manifest_attestation.outputs.dispatch_token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_dispatch_workflow_and_wait.py \
+            --operation dispatch \
+            --github-output "$GITHUB_OUTPUT" \
+            --workflow-name "JUNCA Runtime Release Manifest Gate" \
+            --workflow-path ".github/workflows/junca-runtime-release-manifest-gate.yml" \
+            --expected-head "$SOURCE_COMMIT" \
+            --dispatch-ref main \
+            --candidate-ref "$CANDIDATE_REF" \
+            --dispatch-token "$MANIFEST_DISPATCH_TOKEN" \
+            --input "evidence_run_id=$EVIDENCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_sha256=$CANDIDATE_NODE_SHA256" \
+            --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256"
+
+      - name: Bind exact release manifest gate child run
+        env:
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence.outputs.evidence_run_id }}
+          MANIFEST_DISPATCH_TOKEN: ${{ steps.manifest_attestation.outputs.dispatch_token }}
+          MANIFEST_RUN_ID: ${{ steps.manifest_dispatch.outputs.run_id }}
+          MANIFEST_RUN_ATTEMPT: ${{ steps.manifest_dispatch.outputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_release_child_run_binding.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-manifest-gate.yml" \
+            --dispatch-token "$MANIFEST_DISPATCH_TOKEN" \
+            --child-run-id "$MANIFEST_RUN_ID" \
+            --child-run-attempt "$MANIFEST_RUN_ATTEMPT" \
+            --output-dir artifacts/run-binding-manifest \
+            --input "evidence_run_id=$EVIDENCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_sha256=$CANDIDATE_NODE_SHA256" \
+            --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256"
+
+      - name: Publish exact release manifest gate child run binding
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junca-release-child-run-binding-${{ github.run_id }}-${{ github.run_attempt }}-manifest-${{ steps.manifest_dispatch.outputs.run_id }}-${{ steps.manifest_dispatch.outputs.run_attempt }}
+          path: artifacts/run-binding-manifest/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Wait for bound release manifest gate
         id: manifest
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          CANDIDATE_REQUEST_SHA256: ${{ steps.candidate.outputs.request_sha256 }}
+          CANDIDATE_PARENT_AMI_ID: ${{ steps.candidate.outputs.parent_ami_id }}
+          CANDIDATE_PARENT_AMI_OWNER_ID: ${{ steps.candidate.outputs.parent_ami_owner_id }}
+          CANDIDATE_PARENT_AMI_NAME: ${{ steps.candidate.outputs.parent_ami_name }}
+          CANDIDATE_COMPONENT_SOURCE_SHA256: ${{ steps.candidate.outputs.component_source_sha256 }}
+          CANDIDATE_DEPENDENCY_LOCK_SHA256: ${{ steps.candidate.outputs.dependency_lock_sha256 }}
+          CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256: ${{ steps.candidate.outputs.supply_chain_policy_sha256 }}
+          CANDIDATE_DNF_RELEASEVER: ${{ steps.candidate.outputs.dnf_releasever }}
+          CANDIDATE_PYTHON3_BOTO3_NEVRA: ${{ steps.candidate.outputs.python3_boto3_nevra }}
+          CANDIDATE_PYTHON3_BOTOCORE_NEVRA: ${{ steps.candidate.outputs.python3_botocore_nevra }}
+          CANDIDATE_AMI_ID: ${{ steps.ami.outputs.ami_id }}
+          CANDIDATE_IMAGE_BUILDER_ARN: ${{ steps.ami.outputs.image_builder_arn }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence.outputs.evidence_run_id }}
+          MANIFEST_DISPATCH_TOKEN: ${{ steps.manifest_attestation.outputs.dispatch_token }}
+          MANIFEST_RUN_ID: ${{ steps.manifest_dispatch.outputs.run_id }}
+          MANIFEST_DISPATCHED_AT: ${{ steps.manifest_dispatch.outputs.dispatched_at }}
         run: |
           set -euo pipefail
           manifest_run_id="$(
-            bash scripts/junca_dispatch_workflow_and_wait.sh \
+            python3 scripts/junca_dispatch_workflow_and_wait.py \
+              --operation wait \
+              --run-id "$MANIFEST_RUN_ID" \
+              --dispatched-at "$MANIFEST_DISPATCHED_AT" \
               --workflow-name "JUNCA Runtime Release Manifest Gate" \
               --workflow-path ".github/workflows/junca-runtime-release-manifest-gate.yml" \
               --expected-head "$SOURCE_COMMIT" \
+              --dispatch-ref main \
+              --candidate-ref "$CANDIDATE_REF" \
+              --dispatch-token "$MANIFEST_DISPATCH_TOKEN" \
               --attempts 100 \
               --sleep-seconds 15 \
-              --input "evidence_run_id=${{ steps.evidence.outputs.evidence_run_id }}" \
+              --input "evidence_run_id=$EVIDENCE_RUN_ID" \
               --input "source_commit=$SOURCE_COMMIT" \
-              --input "node_artifact_sha256=${{ steps.candidate.outputs.node_sha256 }}" \
-              --input "genesis_sha256=${{ steps.candidate.outputs.genesis_sha256 }}"
+              --input "node_artifact_sha256=$CANDIDATE_NODE_SHA256" \
+              --input "genesis_sha256=$CANDIDATE_GENESIS_SHA256"
           )"
+          test "$manifest_run_id" = "$MANIFEST_RUN_ID"
+          mkdir -p artifacts/manifest
+          gh run download "$manifest_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name \
+              "junca-runtime-release-manifest-gate-${manifest_run_id}" \
+            --dir artifacts/manifest
+          (cd artifacts/manifest && sha256sum -c SHA256SUMS)
+          jq -e \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg node "$CANDIDATE_NODE_SHA256" \
+            --arg genesis "$CANDIDATE_GENESIS_SHA256" \
+            --arg request "$CANDIDATE_REQUEST_SHA256" \
+            --arg ami_id "$CANDIDATE_AMI_ID" \
+            --arg image_builder_arn \
+              "$CANDIDATE_IMAGE_BUILDER_ARN" \
+            --arg parent_ami_id "$CANDIDATE_PARENT_AMI_ID" \
+            --arg parent_ami_owner_id \
+              "$CANDIDATE_PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$CANDIDATE_PARENT_AMI_NAME" \
+            --arg component_sha \
+              "$CANDIDATE_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha \
+              "$CANDIDATE_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha \
+              "$CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$CANDIDATE_DNF_RELEASEVER" \
+            --arg boto3_nevra "$CANDIDATE_PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra \
+              "$CANDIDATE_PYTHON3_BOTOCORE_NEVRA" '
+              .decision == "PROMOTION_GATE_PASS" and
+              .accepted == true and
+              .candidate.source_commit == $source_commit and
+              .candidate.node_artifact_sha256 == $node and
+              .candidate.genesis_sha256 == $genesis and
+              .candidate.request_sha256 == $request and
+              .candidate.ami_id == $ami_id and
+              .candidate.ami_supply_chain == {
+                request_schema:
+                  "junca-validator-ami-build-request/v2",
+                image_builder_arn: $image_builder_arn,
+                parent_ami_id: $parent_ami_id,
+                parent_ami_owner_id: $parent_ami_owner_id,
+                parent_ami_name: $parent_ami_name,
+                component_source_sha256: $component_sha,
+                dependency_lock_sha256: $dependency_lock_sha,
+                supply_chain_policy_sha256:
+                  $supply_chain_policy_sha,
+                dnf_releasever: $dnf_releasever,
+                python3_boto3_nevra: $boto3_nevra,
+                python3_botocore_nevra: $botocore_nevra
+              }
+            ' \
+            artifacts/manifest/junca-runtime-release-manifest-decision.json
           echo "manifest_run_id=$manifest_run_id" >> "$GITHUB_OUTPUT"
 
-      - name: Execute fresh serial validator rollout
-        id: foundation
+      - name: Publish immutable candidate readiness evidence
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          CANDIDATE_SOURCE_RUN_ID: ${{ steps.candidate.outputs.source_run_id }}
+          CANDIDATE_NODE_SHA256: ${{ steps.candidate.outputs.node_sha256 }}
+          CANDIDATE_GENESIS_SHA256: ${{ steps.candidate.outputs.genesis_sha256 }}
+          CANDIDATE_REQUEST_SHA256: ${{ steps.candidate.outputs.request_sha256 }}
+          CANDIDATE_PARENT_AMI_ID: ${{ steps.candidate.outputs.parent_ami_id }}
+          CANDIDATE_PARENT_AMI_OWNER_ID: ${{ steps.candidate.outputs.parent_ami_owner_id }}
+          CANDIDATE_PARENT_AMI_NAME: ${{ steps.candidate.outputs.parent_ami_name }}
+          CANDIDATE_COMPONENT_SOURCE_SHA256: ${{ steps.candidate.outputs.component_source_sha256 }}
+          CANDIDATE_DEPENDENCY_LOCK_SHA256: ${{ steps.candidate.outputs.dependency_lock_sha256 }}
+          CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256: ${{ steps.candidate.outputs.supply_chain_policy_sha256 }}
+          CANDIDATE_DNF_RELEASEVER: ${{ steps.candidate.outputs.dnf_releasever }}
+          CANDIDATE_PYTHON3_BOTO3_NEVRA: ${{ steps.candidate.outputs.python3_boto3_nevra }}
+          CANDIDATE_PYTHON3_BOTOCORE_NEVRA: ${{ steps.candidate.outputs.python3_botocore_nevra }}
+          AMI_RUN_ID: ${{ steps.ami.outputs.ami_run_id }}
+          AMI_ID: ${{ steps.ami.outputs.ami_id }}
+          IMAGE_BUILDER_ARN: ${{ steps.ami.outputs.image_builder_arn }}
+          AMI_REUSED: ${{ steps.ami.outputs.reused_existing_ami }}
+          EVIDENCE_RUN_ID: ${{ steps.evidence.outputs.evidence_run_id }}
+          MANIFEST_RUN_ID: ${{ steps.manifest.outputs.manifest_run_id }}
         run: |
           set -euo pipefail
-          foundation_run_id="$(
-            bash scripts/junca_dispatch_workflow_and_wait.sh \
-              --workflow-name "JUNCA Validator Foundation Release" \
-              --workflow-path ".github/workflows/junca-validator-foundation-release.yml" \
-              --expected-head "$SOURCE_COMMIT" \
-              --attempts 900 \
-              --sleep-seconds 15 \
-              --input "ami_run_id=${{ steps.ami.outputs.ami_run_id }}" \
-              --input "manifest_gate_run_id=${{ steps.manifest.outputs.manifest_run_id }}" \
-              --input "resume_run_id=0" \
-              --input "authorize_rollout=PUBLIC_TESTNET_ROLLOUT"
-          )"
-          echo "foundation_run_id=$foundation_run_id" >> "$GITHUB_OUTPUT"
-
-      - name: Verify advancing finality continuity
-        id: continuity
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          continuity_run_id="$(
-            bash scripts/junca_dispatch_workflow_and_wait.sh \
-              --workflow-name "JUNCA Public Testnet Continuity Evidence" \
-              --workflow-path ".github/workflows/junca-public-testnet-continuity.yml" \
-              --expected-head "$SOURCE_COMMIT" \
-              --attempts 100 \
-              --sleep-seconds 15 \
-              --input "require_advancement=true" \
-              --input "samples=3" \
-              --input "interval_seconds=30"
-          )"
-          mkdir -p artifacts/continuity
-          gh run download "$continuity_run_id" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "junca-public-testnet-continuity-${continuity_run_id}" \
-            --dir artifacts/continuity
-          jq -e --arg source "$SOURCE_COMMIT" '
-            .schema_version == "junca-public-testnet-continuity/v1" and
-            .state == "ACTIVE_ADVANCING" and
-            .source_sha == $source and
-            .advancement_required == true and
-            .sample_count == 3 and
-            .transaction_submission_enabled == false and
-            .mainnet_changed == false and
-            .assets_moved == false and
-            .bridge_activated == false
-          ' artifacts/continuity/evidence.json
-          echo "continuity_run_id=$continuity_run_id" >> "$GITHUB_OUTPUT"
-          echo "finalized_height=$(jq -er '.observations[-1].operational.finalized_height' artifacts/continuity/evidence.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Publish immutable release V2 acceptance evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
+          [[ "$CANDIDATE_REF" == "release-candidate/$SOURCE_COMMIT" ]]
+          [[ "$CANDIDATE_SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$MANIFEST_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$AMI_ID" =~ ^ami-[0-9a-f]{8,17}$ ]]
+          [[ "$AMI_REUSED" =~ ^(true|false)$ ]]
           jq -n \
-            --arg source_run_id "${{ steps.candidate.outputs.source_run_id }}" \
+            --arg candidate_ref "$CANDIDATE_REF" \
+            --arg source_run_id "$CANDIDATE_SOURCE_RUN_ID" \
             --arg source_commit "$SOURCE_COMMIT" \
-            --arg node_sha256 "${{ steps.candidate.outputs.node_sha256 }}" \
-            --arg genesis_sha256 "${{ steps.candidate.outputs.genesis_sha256 }}" \
-            --arg request_sha256 "${{ steps.candidate.outputs.request_sha256 }}" \
-            --arg ami_run_id "${{ steps.ami.outputs.ami_run_id }}" \
-            --arg ami_id "${{ steps.ami.outputs.ami_id }}" \
-            --argjson reused_existing_ami "${{ steps.ami.outputs.reused_existing_ami }}" \
-            --arg evidence_run_id "${{ steps.evidence.outputs.evidence_run_id }}" \
-            --arg manifest_run_id "${{ steps.manifest.outputs.manifest_run_id }}" \
-            --arg foundation_run_id "${{ steps.foundation.outputs.foundation_run_id }}" \
-            --arg continuity_run_id "${{ steps.continuity.outputs.continuity_run_id }}" \
-            --arg finalized_height "${{ steps.continuity.outputs.finalized_height }}" '{
-              schema_version: "junca-hardened-immutable-release-chain/v2",
-              state: "PUBLIC_TESTNET_ACTIVE_ADVANCING",
+            --arg node_sha256 "$CANDIDATE_NODE_SHA256" \
+            --arg genesis_sha256 "$CANDIDATE_GENESIS_SHA256" \
+            --arg request_sha256 "$CANDIDATE_REQUEST_SHA256" \
+            --arg image_builder_arn "$IMAGE_BUILDER_ARN" \
+            --arg parent_ami_id "$CANDIDATE_PARENT_AMI_ID" \
+            --arg parent_ami_owner_id \
+              "$CANDIDATE_PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$CANDIDATE_PARENT_AMI_NAME" \
+            --arg component_source_sha256 \
+              "$CANDIDATE_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha256 \
+              "$CANDIDATE_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha256 \
+              "$CANDIDATE_SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$CANDIDATE_DNF_RELEASEVER" \
+            --arg python3_boto3_nevra \
+              "$CANDIDATE_PYTHON3_BOTO3_NEVRA" \
+            --arg python3_botocore_nevra \
+              "$CANDIDATE_PYTHON3_BOTOCORE_NEVRA" \
+            --arg ami_run_id "$AMI_RUN_ID" \
+            --arg ami_id "$AMI_ID" \
+            --argjson reused_existing_ami "$AMI_REUSED" \
+            --arg evidence_run_id "$EVIDENCE_RUN_ID" \
+            --arg manifest_run_id "$MANIFEST_RUN_ID" '{
+              schema_version: "junca-hardened-immutable-candidate/v3",
+              state: "PUBLIC_TESTNET_CANDIDATE_READY_FOR_SERIAL_ROLLOUT",
+              candidate_ref: $candidate_ref,
               source_run_id: $source_run_id,
               source_commit: $source_commit,
               node_artifact_sha256: $node_sha256,
               genesis_sha256: $genesis_sha256,
               request_sha256: $request_sha256,
+              ami_supply_chain: {
+                request_schema:
+                  "junca-validator-ami-build-request/v2",
+                image_builder_arn: $image_builder_arn,
+                parent_ami_id: $parent_ami_id,
+                parent_ami_owner_id: $parent_ami_owner_id,
+                parent_ami_name: $parent_ami_name,
+                component_source_sha256:
+                  $component_source_sha256,
+                dependency_lock_sha256:
+                  $dependency_lock_sha256,
+                supply_chain_policy_sha256:
+                  $supply_chain_policy_sha256,
+                dnf_releasever: $dnf_releasever,
+                python3_boto3_nevra: $python3_boto3_nevra,
+                python3_botocore_nevra:
+                  $python3_botocore_nevra
+              },
               ami_run_id: $ami_run_id,
               ami_id: $ami_id,
               exact_request_ami_reused: $reused_existing_ami,
               evidence_run_id: $evidence_run_id,
               manifest_run_id: $manifest_run_id,
-              foundation_run_id: $foundation_run_id,
-              continuity_run_id: $continuity_run_id,
-              finalized_height: ($finalized_height | tonumber),
+              serial_rollout_dispatched: false,
+              continuity_dispatched: false,
               transaction_submission_enabled: false,
               mainnet_changed: false,
               assets_moved: false,
@@ -343,29 +923,27 @@ jobs:
             }' > artifacts/release-v2/release-chain.json
           (cd artifacts/release-v2 && sha256sum release-chain.json > SHA256SUMS)
 
-          body="$(cat <<EOF
-          ## Public Testnet V2 release acceptance
-
-          - State: **PUBLIC_TESTNET_ACTIVE_ADVANCING**
-          - Source SHA: \`$SOURCE_COMMIT\`
-          - Runtime run: \`${{ steps.candidate.outputs.source_run_id }}\`
-          - AMI run: \`${{ steps.ami.outputs.ami_run_id }}\`
-          - AMI: \`${{ steps.ami.outputs.ami_id }}\`
-          - Baseline run: \`${{ steps.evidence.outputs.evidence_run_id }}\`
-          - Manifest run: \`${{ steps.manifest.outputs.manifest_run_id }}\`
-          - Foundation run: \`${{ steps.foundation.outputs.foundation_run_id }}\`
-          - Continuity run: \`${{ steps.continuity.outputs.continuity_run_id }}\`
-          - Finalized height: \`${{ steps.continuity.outputs.finalized_height }}\`
-
-          Safety boundary:
-          - Public Testnet / No Monetary Value
-          - Transaction submission disabled
-          - Mainnet Changed: false
-          - Assets Moved: false
-          - Bridge Activated: false
-          - Mainnet Activation Authorized: false
-          EOF
-          )"
+          printf -v body '%s\n' \
+            '## Public Testnet immutable candidate' \
+            '' \
+            '- State: **CANDIDATE_READY_FOR_SERIAL_ROLLOUT**' \
+            "- Candidate ref: \`$CANDIDATE_REF\`" \
+            "- Source SHA: \`$SOURCE_COMMIT\`" \
+            "- Runtime run: \`$CANDIDATE_SOURCE_RUN_ID\`" \
+            "- AMI run: \`$AMI_RUN_ID\`" \
+            "- AMI: \`$AMI_ID\`" \
+            "- Baseline run: \`$EVIDENCE_RUN_ID\`" \
+            "- Manifest run: \`$MANIFEST_RUN_ID\`" \
+            '- Serial validator rollout: **NOT DISPATCHED**' \
+            '- Continuity acceptance: **NOT DISPATCHED**' \
+            '' \
+            'Safety boundary:' \
+            '- Public Testnet / No Monetary Value' \
+            '- Transaction submission disabled' \
+            '- Mainnet Changed: false' \
+            '- Assets Moved: false' \
+            '- Bridge Activated: false' \
+            '- Mainnet Activation Authorized: false'
           for issue in 266 244 248 249 218; do
             gh api --method POST \
               "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" \
@@ -374,7 +952,7 @@ jobs:
 
       - name: Upload V2 release-chain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-hardened-immutable-release-v2-${{ github.run_id }}
           path: artifacts/

@@ -1,0 +1,205 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenySessionWithoutSecurityBootstrapBoundary",
+      "Effect": "Deny",
+      "NotAction": "sts:GetCallerIdentity",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalTag/JuncaChangeBoundary": "SecurityBootstrap"
+        }
+      }
+    },
+    {
+      "Sid": "DenySecurityBootstrapPolicySelfMutation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapCore",
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapState"
+      ]
+    },
+    {
+      "Sid": "ManageCanonicalBootstrapRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:GetInstanceProfile",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies",
+        "iam:PutRolePolicy",
+        "iam:TagInstanceProfile",
+        "iam:TagRole",
+        "iam:UntagInstanceProfile",
+        "iam:UntagRole",
+        "iam:UpdateRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetAmiBuilder",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-1",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-2",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-3",
+        "arn:aws:iam::595710543956:instance-profile/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:instance-profile/junca-social-ecosystem-chain-testnet-validator-1",
+        "arn:aws:iam::595710543956:instance-profile/junca-social-ecosystem-chain-testnet-validator-2",
+        "arn:aws:iam::595710543956:instance-profile/junca-social-ecosystem-chain-testnet-validator-3"
+      ]
+    },
+    {
+      "Sid": "UpdateExactOidcControllerTrust",
+      "Effect": "Allow",
+      "Action": "iam:UpdateAssumeRolePolicy",
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetAmiBuilder",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver"
+      ]
+    },
+    {
+      "Sid": "DenyBoundaryPolicyMutation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnet*Boundary",
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapRemediationBoundary"
+      ]
+    },
+    {
+      "Sid": "AttachOnlyCanonicalBootstrapPolicies",
+      "Effect": "Allow",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+      "Condition": {
+        "StringEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationEc2Create",
+            "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationEc2Mutation",
+            "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationEdge",
+            "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationObservability",
+            "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetValidatorReadOnly"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "AttachOnlyCanonicalImageBuilderWorkerPolicies",
+      "Effect": "Allow",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetImageBuilder",
+      "Condition": {
+        "StringEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder",
+            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ManageCanonicalBootstrapPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:SetDefaultPolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationEc2Create",
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationEc2Mutation",
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationEdge",
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetFoundationObservability",
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnetValidatorReadOnly"
+      ]
+    },
+    {
+      "Sid": "ReadCanonicalBoundaryPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainPublicTestnet*Boundary",
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapRemediationBoundary"
+      ]
+    },
+    {
+      "Sid": "ReadSecurityBootstrapPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapCore",
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapState"
+      ]
+    },
+    {
+      "Sid": "ReadSecurityControlRoles",
+      "Effect": "Allow",
+      "Action": "iam:GetRole",
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainSecurityBootstrap",
+        "arn:aws:iam::595710543956:role/JuncaChainSecurityBootstrapRemediation"
+      ]
+    },
+    {
+      "Sid": "ManageCanonicalGithubProvider",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:CreateOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviderTags",
+        "iam:RemoveClientIDFromOpenIDConnectProvider",
+        "iam:TagOpenIDConnectProvider",
+        "iam:UntagOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint"
+      ],
+      "Resource": "arn:aws:iam::595710543956:oidc-provider/token.actions.githubusercontent.com"
+    },
+    {
+      "Sid": "ReadSecurityEvidence",
+      "Effect": "Allow",
+      "Action": [
+        "access-analyzer:ValidatePolicy",
+        "cloudtrail:LookupEvents",
+        "iam:SimulatePrincipalPolicy"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

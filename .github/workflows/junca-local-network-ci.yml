@@ -13,6 +13,7 @@ on:
       - "tests/test_junca_development_liveness.py"
       - "tests/test_junca_development_signer.py"
       - "tests/test_junca_finality_gossip.py"
+      - "tests/test_junca_local_network_acceptance.py"
       - "Makefile"
       - ".github/workflows/junca-local-network-ci.yml"
   push:
@@ -28,6 +29,7 @@ on:
       - "tests/test_junca_development_liveness.py"
       - "tests/test_junca_development_signer.py"
       - "tests/test_junca_finality_gossip.py"
+      - "tests/test_junca_local_network_acceptance.py"
       - "Makefile"
       - ".github/workflows/junca-local-network-ci.yml"
 
@@ -43,9 +45,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -55,7 +57,8 @@ jobs:
           python -m unittest \
             tests.test_junca_development_liveness \
             tests.test_junca_development_signer \
-            tests.test_junca_finality_gossip -v
+            tests.test_junca_finality_gossip \
+            tests.test_junca_local_network_acceptance -v
           python -m py_compile \
             jaios/social_ecosystem_chain/development_liveness.py \
             jaios/social_ecosystem_chain/development_signer.py \
@@ -72,7 +75,7 @@ jobs:
 
       - name: Upload local network evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-local-network-evidence-${{ github.run_id }}
           path: artifacts/local-network/

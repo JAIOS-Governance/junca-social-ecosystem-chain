@@ -1,4 +1,5 @@
 name: JUNCA Runtime Release Manifest Gate
+run-name: JSEC dispatch ${{ inputs.dispatch_token }}
 
 on:
   workflow_dispatch:
@@ -19,6 +20,18 @@ on:
         description: Expected canonical genesis SHA-256
         required: true
         type: string
+      dispatch_token:
+        description: Unique canonical-parent dispatch correlation token
+        required: true
+        type: string
+      orchestrator_run_id:
+        description: Canonical immutable-candidate parent run ID
+        required: true
+        type: string
+      orchestrator_run_attempt:
+        description: Canonical immutable-candidate parent run attempt
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -33,30 +46,48 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_commit }}
 
-      - name: Verify pre-rollout evidence run provenance
+      - name: Verify exact child run binding before manifest output
         env:
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          NODE_ARTIFACT_SHA256: ${{ inputs.node_artifact_sha256 }}
+          GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
+          DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
         run: |
           set -euo pipefail
+          python3 scripts/junca_release_child_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --dispatch-token "$DISPATCH_TOKEN" \
+            --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT" \
+            --workflow-path \
+              ".github/workflows/junca-runtime-release-manifest-gate.yml" \
+            --input "evidence_run_id=$EVIDENCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_sha256=$NODE_ARTIFACT_SHA256" \
+            --input "genesis_sha256=$GENESIS_SHA256"
           [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           evidence_run_json="$(gh api \
-            "repos/${{ github.repository }}/actions/runs/${EVIDENCE_RUN_ID}")"
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}")"
           jq -e \
-            --arg repository "${{ github.repository }}" '
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg execution_ref "main" '
             .status == "completed" and
             .conclusion == "success" and
             .name == "JUNCA Runtime Release Evidence Collector" and
-            (
-              .path == ".github/workflows/junca-runtime-release-evidence-collector.yml" or
-              .path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml"
-            ) and
+            .path == ".github/workflows/junca-runtime-release-evidence-collector-v2.yml" and
             .event == "workflow_dispatch" and
-            .head_branch == "main" and
+            .head_branch == $execution_ref and
+            .head_sha == $source_commit and
             .repository.full_name == $repository and
             .head_repository.full_name == $repository
           ' <<<"$evidence_run_json"
@@ -68,7 +99,7 @@ jobs:
           test ! -L downloaded-release-evidence
 
       - name: Download exact pre-rollout evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: junca-runtime-release-evidence-${{ inputs.evidence_run_id }}
           path: downloaded-release-evidence
@@ -81,10 +112,16 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           test ! -L downloaded-release-evidence
-          test "$(find downloaded-release-evidence -type f | wc -l)" = 3
+          test "$(
+            find downloaded-release-evidence \
+              -mindepth 1 -maxdepth 1 | wc -l
+          )" = 3
           test -f downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json
           test -f downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json
           test -f downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json
+          test ! -L downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json
 
       - name: Fail-closed release manifest decision
         env:
@@ -96,7 +133,7 @@ jobs:
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$NODE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          python scripts/junca_runtime_release_manifest_gate.py \
+          python3 scripts/junca_runtime_release_manifest_gate.py \
             --manifest downloaded-release-evidence/junca-runtime-pre-rollout-baseline.json \
             --explorer-acceptance downloaded-release-evidence/junca-public-explorer-pre-rollout-baseline.json \
             --ebs-migration downloaded-release-evidence/junca-validator-ebs-pre-rollout-baseline.json \
@@ -112,8 +149,13 @@ jobs:
             .release_boundary.assets_moved == false and
             .release_boundary.bridge_activated == false
           ' artifacts/junca-runtime-release-manifest-decision.json
+          (
+            cd artifacts
+            sha256sum junca-runtime-release-manifest-decision.json \
+              > SHA256SUMS
+          )
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-runtime-release-manifest-gate-${{ github.run_id }}

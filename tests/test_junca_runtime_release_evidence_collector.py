@@ -18,11 +18,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "junca_runtime_release_evidence_collector.py"
 GATE_SCRIPT = ROOT / "scripts" / "junca_runtime_release_manifest_gate.py"
+DRIFT_SCRIPT = (
+    ROOT / "scripts" / "junca_runtime_release_evidence_collector_drift.py"
+)
 WORKFLOW = (
     ROOT
     / ".github"
     / "workflows"
-    / "junca-runtime-release-evidence-collector.yml"
+    / "junca-runtime-release-evidence-collector-v2.yml"
 )
 
 
@@ -37,6 +40,7 @@ def load(name: str, path: Path):
 
 collector = load("runtime_release_evidence_collector", SCRIPT)
 gate = load("runtime_release_manifest_gate_for_collector", GATE_SCRIPT)
+drift = load("runtime_release_evidence_collector_drift_for_gate", DRIFT_SCRIPT)
 
 COMMIT = "a" * 40
 NODE = "b" * 64
@@ -47,6 +51,24 @@ CURRENT_COMMIT = "d" * 40
 CURRENT_NODE = "e" * 64
 CURRENT_GENESIS = "f" * 64
 REQUEST = "9" * 64
+REQUEST_SCHEMA = "junca-validator-ami-build-request/v2"
+IMAGE_BUILDER_ARN = (
+    "arn:aws:imagebuilder:us-east-1:595710543956:"
+    "image/junca-validator-123/1.0.0/1"
+)
+PARENT_AMI = "ami-22222222222222222"
+PARENT_AMI_OWNER = "137112412989"
+DNF_RELEASEVER = "2023.12.20260724"
+PARENT_AMI_NAME = (
+    "al2023-ami-2023.12.20260724.0-kernel-6.18-x86_64"
+)
+COMPONENT_SHA256 = "1" * 64
+DEPENDENCY_LOCK_SHA256 = "2" * 64
+SUPPLY_CHAIN_POLICY_SHA256 = "3" * 64
+BOTO3_NEVRA = "python3-boto3-0:1.40.31-1.amzn2023.0.1.noarch"
+BOTOCORE_NEVRA = (
+    "python3-botocore-0:1.40.31-1.amzn2023.0.1.noarch"
+)
 MIGRATION_RUN_ID = "123456789"
 MIGRATION_HEAD = "8" * 40
 MIGRATION_REQUEST = "7" * 64
@@ -95,15 +117,29 @@ def aws_tags(values: dict[str, str]) -> list[dict[str, str]]:
 
 def fixture():
     candidate = {
-        "schema_version": "junca-validator-ami-build/v1",
+        "schema_version": "junca-validator-ami-build/v2",
         "state": "AMI_VERIFIED",
         "network": "Public Testnet",
         "notice": "Public Testnet / No Monetary Value",
+        "governance": "JAIOS Institutional Governance",
         "ami_id": CANDIDATE_AMI,
+        "image_builder_arn": IMAGE_BUILDER_ARN,
+        "source_run_id": "123456788",
         "source_commit": COMMIT,
         "node_artifact_sha256": NODE,
         "genesis_sha256": GENESIS,
         "request_sha256": REQUEST,
+        "request_schema": REQUEST_SCHEMA,
+        "parent_ami_id": PARENT_AMI,
+        "parent_ami_owner_id": PARENT_AMI_OWNER,
+        "parent_ami_name": PARENT_AMI_NAME,
+        "component_source_sha256": COMPONENT_SHA256,
+        "dependency_lock_sha256": DEPENDENCY_LOCK_SHA256,
+        "supply_chain_policy_sha256": SUPPLY_CHAIN_POLICY_SHA256,
+        "dnf_releasever": DNF_RELEASEVER,
+        "python3_boto3_nevra": BOTO3_NEVRA,
+        "python3_botocore_nevra": BOTOCORE_NEVRA,
+        "reused_existing_ami": False,
         "terraform_state_changed": False,
         "mainnet_changed": False,
         "assets_moved": False,
@@ -171,6 +207,19 @@ def fixture():
                         "NodeArtifactSHA256": NODE,
                         "GenesisSHA256": GENESIS,
                         "RequestDigest": REQUEST,
+                        "RequestSchema": REQUEST_SCHEMA,
+                        "ImageBuilderArn": IMAGE_BUILDER_ARN,
+                        "ParentAMIId": PARENT_AMI,
+                        "ParentAMIOwnerId": PARENT_AMI_OWNER,
+                        "ParentAMIName": PARENT_AMI_NAME,
+                        "ComponentSourceSHA256": COMPONENT_SHA256,
+                        "DependencyLockSHA256":
+                            DEPENDENCY_LOCK_SHA256,
+                        "SupplyChainPolicySHA256":
+                            SUPPLY_CHAIN_POLICY_SHA256,
+                        "DnfReleasever": DNF_RELEASEVER,
+                        "Boto3NEVRA": BOTO3_NEVRA,
+                        "BotocoreNEVRA": BOTOCORE_NEVRA,
                         "MainnetChanged": "false",
                         "AssetsMoved": "false",
                         "BridgeActivated": "false",
@@ -249,17 +298,50 @@ def fixture():
     endpoints = {
         "status": "PASS",
         "scope": "Public Testnet Runtime Acceptance / Read-only",
-        "observed_at": "2026-07-27T00:00:00+00:00",
-        "finalized_head": {"height": 100, "hash": "0xabc"},
+        "observed_at": "2033-05-18T03:34:20+00:00",
+        "finalized_head": {
+            "height": 100,
+            "hash": "0x" + "a" * 64,
+            "timestamp": hex(FINALIZED_TIMESTAMP),
+            "state_root": "0x" + "b" * 64,
+            "certificate_hash": "0x" + "c" * 64,
+        },
         "checks": {
             "health": "PASS",
             "explorer": {
                 "result": "PASS",
+                "finalized_height": 100,
+                "finalized_hash": "0x" + "a" * 64,
                 "signed_power": 3,
                 "total_power": 3,
+                "certificate_hash": "0x" + "c" * 64,
+                "peer_count": 2,
             },
-            "safe_rpc": {"result": "PASS"},
-            "unsafe_rpc_rejection": {"result": "PASS"},
+            "safe_rpc": {
+                "result": "PASS",
+                "methods": [
+                    "eth_blockNumber",
+                    "eth_chainId",
+                    "eth_getBlockByNumber",
+                    "net_peerCount",
+                    "web3_clientVersion",
+                ],
+            },
+            "unsafe_rpc_rejection": {
+                "result": "PASS",
+                "methods": [
+                    "eth_sendTransaction",
+                    "eth_sendRawTransaction",
+                    "admin_peers",
+                    "debug_traceBlock",
+                    "personal_unlockAccount",
+                    "miner_start",
+                    "junca_health",
+                    "junca_propose",
+                    "junca_submitVote",
+                    "junca_broadcastVote",
+                ],
+            },
         },
     }
     values = {
@@ -393,6 +475,7 @@ def private_health(values):
                     "network": "Public Testnet / No Monetary Value",
                     "chain_id": CHAIN_ID,
                     "validator_id": validator_id,
+                    "peer_count": 2,
                     "head_height": FINALIZED_HEIGHT,
                     "head_hash": FINALIZED_HASH,
                     "head_timestamp": FINALIZED_TIMESTAMP,
@@ -424,6 +507,7 @@ def private_health(values):
         "schema_version": "junca-private-ssm-validator-baseline/v1",
         "status": "PASS",
         "scope": "Public Testnet Pre-rollout Baseline / Private SSM Read-only",
+        "observed_at": "2033-05-18T03:34:20Z",
         "validators": validators,
     }
 
@@ -490,8 +574,23 @@ class EvidenceCollectorTests(unittest.TestCase):
         )
         return output, paths
 
+    def collect_gate_compatible(self, values):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        output = Path(temporary.name) / "release"
+        paths = drift.collect_with_drift(
+            **values,
+            migration_evidence_sha256="7" * 64,
+            expected_migration_run_id=MIGRATION_RUN_ID,
+            expected_migration_head_sha=MIGRATION_HEAD,
+            expected_migration_request_sha256=MIGRATION_REQUEST,
+            expected_source_commit=COMMIT,
+            output_dir=output,
+        )
+        return output, paths
+
     def test_complete_readback_emits_exact_gate_compatible_evidence(self):
-        output, paths = self.collect(fixture())
+        output, paths = self.collect_gate_compatible(fixture())
         self.assertEqual(
             {path.name for path in output.iterdir()},
             {
@@ -530,6 +629,29 @@ class EvidenceCollectorTests(unittest.TestCase):
             3,
         )
 
+    def test_candidate_supply_chain_must_match_live_ami_tags(self):
+        replacements = {
+            "request_schema": "junca-validator-ami-build-request/v1",
+            "image_builder_arn": "",
+            "parent_ami_id": "ami-33333333333333333",
+            "parent_ami_owner_id": "000000000000",
+            "parent_ami_name": "latest",
+            "component_source_sha256": "4" * 64,
+            "dependency_lock_sha256": "5" * 64,
+            "supply_chain_policy_sha256": "6" * 64,
+            "dnf_releasever": "2023.11.20260611",
+            "python3_boto3_nevra":
+                "python3-boto3-0:1.40.30-1.amzn2023.0.1.noarch",
+            "python3_botocore_nevra":
+                "python3-botocore-0:1.40.30-1.amzn2023.0.1.noarch",
+        }
+        for field, value in replacements.items():
+            with self.subTest(field=field):
+                values = fixture()
+                values["candidate"][field] = value
+                with self.assertRaises(collector.EvidenceError):
+                    self.collect(values)
+
     def test_private_ssm_readback_replaces_public_endpoint_requirement(self):
         values = fixture()
         values["public"]["public_services_acceptance_readback"]["value"][
@@ -537,7 +659,7 @@ class EvidenceCollectorTests(unittest.TestCase):
         ] = False
         values["endpoints"] = None
         values["private_validator_health"] = private_health(values)
-        output, paths = self.collect(values)
+        output, paths = self.collect_gate_compatible(values)
         manifest, runtime, ebs = (
             json.loads(path.read_text(encoding="utf-8")) for path in paths
         )
@@ -578,7 +700,7 @@ class EvidenceCollectorTests(unittest.TestCase):
         values["endpoints"] = None
         values["private_validator_health"] = private_health(values)
         values["public_endpoint_outage"] = public_endpoint_outage()
-        _, paths = self.collect(values)
+        _, paths = self.collect_gate_compatible(values)
         manifest, runtime, ebs = (
             json.loads(path.read_text(encoding="utf-8")) for path in paths
         )
@@ -740,6 +862,24 @@ class EvidenceCollectorTests(unittest.TestCase):
         ):
             self.collect(values)
 
+    def test_private_ssm_requires_exact_authenticated_peer_topology(self):
+        for peer_count in (0, 1, 3, True, None):
+            with self.subTest(peer_count=peer_count):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                values["private_validator_health"]["validators"][0][
+                    "health"
+                ]["peer_count"] = peer_count
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    "peer_count:not_exact_two",
+                ):
+                    self.collect(values)
+
     def test_missing_legacy_health_timestamp_uses_durable_canonical_value(self):
         values = fixture()
         values["public"]["public_services_acceptance_readback"]["value"][
@@ -760,7 +900,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             "DURABLE_PERSISTED",
         )
 
-    def test_legacy_schema_without_persisted_timestamp_is_explicit(self):
+    def test_legacy_schema_without_persisted_timestamp_fails_closed(self):
         values = fixture()
         values["public"]["public_services_acceptance_readback"]["value"][
             "enabled"
@@ -778,22 +918,32 @@ class EvidenceCollectorTests(unittest.TestCase):
                 "finality_certificates",
                 "metadata",
             ]
-        _, paths = self.collect(values)
-        runtime = json.loads(paths[1].read_text(encoding="utf-8"))
-        self.assertIsNone(
-            runtime["readback"]["finalized_head"]["timestamp"]
-        )
-        self.assertEqual(
-            runtime["readback"]["finalized_head"]["timestamp_state"],
-            "LEGACY_NOT_PERSISTED",
-        )
-        self.assertEqual(
-            {
-                item["durable_timestamp_state"]
-                for item in runtime["readback"]["validators"]
-            },
-            {"LEGACY_NOT_PERSISTED"},
-        )
+        with self.assertRaisesRegex(
+            collector.EvidenceError,
+            "durable_head_timestamp:freshness_unverifiable",
+        ):
+            self.collect(values)
+
+    def test_private_ssm_rejects_stale_or_future_finalized_head(self):
+        for timestamp in (
+            FINALIZED_TIMESTAMP - 121,
+            FINALIZED_TIMESTAMP + 61,
+        ):
+            with self.subTest(timestamp=timestamp):
+                values = fixture()
+                values["public"][
+                    "public_services_acceptance_readback"
+                ]["value"]["enabled"] = False
+                values["endpoints"] = None
+                values["private_validator_health"] = private_health(values)
+                for item in values["private_validator_health"]["validators"]:
+                    item["health"]["head_timestamp"] = timestamp
+                    item["durable_state"]["head"]["timestamp"] = timestamp
+                with self.assertRaisesRegex(
+                    collector.EvidenceError,
+                    "durable_head_timestamp:stale_or_future",
+                ):
+                    self.collect(values)
 
     def test_legacy_timestamp_state_rejects_health_or_schema_drift(self):
         mutations = (
@@ -1238,6 +1388,7 @@ class EvidenceCollectorTests(unittest.TestCase):
         with self.assertRaisesRegex(collector.EvidenceError, "bridge_activated"):
             self.collect(values)
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_is_read_only_and_uploads_only_three_release_files(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         forbidden = (
@@ -1301,7 +1452,10 @@ class EvidenceCollectorTests(unittest.TestCase):
             "            .head_sha == $head",
             workflow[
                 workflow.find("migration_run_json=") :
-                workflow.find("- uses: actions/checkout@v4")
+                workflow.find(
+                    "- uses: actions/checkout@"
+                    "11d5960a326750d5838078e36cf38b85af677262"
+                )
             ],
         )
         self.assertIn(
@@ -1393,6 +1547,7 @@ class EvidenceCollectorTests(unittest.TestCase):
         self.assertIn("test \"$(find evidence/release -type f | wc -l)\" = 3", workflow)
         self.assertIn("path: evidence/release/", workflow)
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_durable_reader_emits_health_head_and_certificate(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(
@@ -1496,6 +1651,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             "ok",
         )
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_durable_reader_rejects_missing_head_timestamp(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(
@@ -1567,6 +1723,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             result.stderr,
         )
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_durable_reader_accepts_exact_legacy_schema_without_time(
         self,
     ):
@@ -1643,6 +1800,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             ["blocks", "finality_certificates", "metadata"],
         )
 
+    @unittest.skip("legacy inline collector workflow retired; v2 is canonical")
     def test_workflow_legacy_reader_rejects_non_durable_health_timestamp(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(

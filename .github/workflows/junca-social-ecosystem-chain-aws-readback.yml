@@ -1,10 +1,6 @@
 name: JUNCA Social Ecosystem Chain AWS Canonical Readback
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml"
   workflow_dispatch:
     inputs:
       role_arn:
@@ -33,8 +29,9 @@ jobs:
       CANONICAL_ACCOUNT_ID: "595710543956"
       CANONICAL_REGION: us-east-1
       CANONICAL_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      OBSERVER_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Enforce exact Public Testnet AWS boundary
         env:
           REQUESTED_ROLE_ARN: ${{ inputs.role_arn || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
@@ -42,12 +39,21 @@ jobs:
           REQUESTED_REGION: ${{ inputs.aws_region || 'us-east-1' }}
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
           test "$REQUESTED_ROLE_ARN" = "$CANONICAL_ROLE_ARN"
           test "$REQUESTED_ACCOUNT_ID" = "$CANONICAL_ACCOUNT_ID"
           test "$REQUESTED_REGION" = "$CANONICAL_REGION"
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-social-ecosystem-chain-aws-readback.yml" \
+            --role-arn "$OBSERVER_ROLE_ARN" \
+            --output artifacts/oidc-claim-attestation.json
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
-          role-to-assume: ${{ inputs.role_arn || 'arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment' }}
+          role-to-assume: ${{ env.OBSERVER_ROLE_ARN }}
           aws-region: ${{ inputs.aws_region || 'us-east-1' }}
           role-session-name: junca-chain-readback-${{ github.run_id }}
       - name: Verify canonical AWS identity
@@ -65,7 +71,7 @@ jobs:
           test "${configured_region}" = "${EXPECTED_REGION}"
           test "${configured_region}" = "${CANONICAL_REGION}"
           case "${actual_arn}" in
-            arn:aws:sts::595710543956:assumed-role/JuncaChainPublicTestnetDeployment/*) ;;
+            arn:aws:sts::595710543956:assumed-role/JuncaChainPublicTestnetObserver/*) ;;
             *) echo "unexpected Public Testnet role identity" >&2; exit 1 ;;
           esac
           jq -n \
@@ -89,9 +95,12 @@ jobs:
         run: |
           grep -q '"deployment_enabled": false' artifacts/aws-canonical-readback.json
           grep -q '"state": "CANONICAL_IDENTITY_VERIFIED_APPLY_BLOCKED"' artifacts/aws-canonical-readback.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: junca-aws-canonical-readback-${{ github.run_id }}
-          path: artifacts/aws-canonical-readback.json
+          path: |
+            artifacts/aws-canonical-readback.json
+            artifacts/oidc-claim-attestation.json
+            artifacts/oidc-claim-attestation.json.sha256
           if-no-files-found: error
           retention-days: 90

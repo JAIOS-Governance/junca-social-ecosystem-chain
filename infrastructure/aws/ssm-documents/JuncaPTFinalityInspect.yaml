@@ -1,0 +1,337 @@
+schemaVersion: '2.2'
+description: >-
+  Read-only JUNCA Public Testnet finality, artifact, service, and localhost
+  health inspection. Repository contract only; deployment requires independent
+  SecurityBootstrap version and digest attestation.
+parameters:
+  ExpectedArtifactSha256:
+    type: String
+    description: Exact lowercase SHA-256 of the immutable validator runtime archive.
+    allowedPattern: '^[0-9a-f]{64}$'
+    interpolationType: ENV_VAR
+  Enabled:
+    type: String
+    description: Exact automatic-finality state to inspect.
+    allowedPattern: '^(true|false)$'
+    interpolationType: ENV_VAR
+  BlockIntervalSeconds:
+    type: String
+    description: Exact fixed Public Testnet block interval.
+    allowedPattern: '^(0|30)$'
+    interpolationType: ENV_VAR
+  SlotEpochSeconds:
+    type: String
+    description: Disabled zero or a positive aligned Public Testnet epoch.
+    allowedPattern: '^(0|[1-9][0-9]{0,10})$'
+    interpolationType: ENV_VAR
+  Mode:
+    type: String
+    description: Select the fixed preflight or exact read-only branch.
+    allowedPattern: '^(preflight|exact)$'
+    interpolationType: ENV_VAR
+  AllowMissingFinalityKeys:
+    type: String
+    description: Allow all three finality keys to be absent only in disabled preflight.
+    allowedPattern: '^(true|false)$'
+    interpolationType: ENV_VAR
+mainSteps:
+  - action: aws:runShellScript
+    name: inspectFinality
+    inputs:
+      runCommand:
+        - |-
+          #!/usr/bin/bash
+          if [ -z "${BASH_VERSION:-}" ]; then
+            exec /usr/bin/bash "$0" "$@"
+          fi
+          set -euo pipefail
+          readonly RUNTIME_ENV=/etc/junca/runtime.env
+          readonly RUNTIME_ARCHIVE=/opt/junca/validator-runtime.tar.gz
+          readonly HEALTH_ENDPOINT=http://127.0.0.1:8545/health
+          readonly VALIDATOR_SERVICE=junca-validator.service
+          readonly MAX_JSON_BYTES=65536
+
+          bounded_json() {
+            local payload="$1"
+            local byte_count
+            byte_count="$(printf '%s' "$payload" | /usr/bin/wc -c)"
+            [[ "$byte_count" =~ ^[0-9]+$ ]]
+            test "$byte_count" -le "$MAX_JSON_BYTES"
+            printf '%s\n' "$payload"
+          }
+
+          certificate_digest_matches() {
+            local certificate="$1"
+            local canonical_body
+            local calculated_hash
+            local claimed_hash
+            canonical_body="$(
+              /usr/bin/jq -cS '{
+                block_hash: .block_hash,
+                chain_id: .chain_id,
+                height: .height,
+                round: .round,
+                signed_power: .signed_power,
+                total_power: .total_power,
+                validator_ids: .validator_ids,
+                vote_hashes: .vote_hashes
+              }' <<<"$certificate"
+            )" || return 1
+            claimed_hash="$(
+              /usr/bin/jq -er '.certificate_hash' <<<"$certificate"
+            )" || return 1
+            calculated_hash="$(
+              {
+                printf 'JUNCA_FINALITY_CERTIFICATE_V1\0'
+                printf '%s' "$canonical_body"
+              } |
+                /usr/bin/sha256sum |
+                /usr/bin/awk '{print $1}'
+            )" || return 1
+            test "$claimed_hash" = "0x${calculated_hash}"
+          }
+
+          env_value() {
+            local key="$1"
+            /usr/bin/awk -F= -v expected_key="$key" '
+              $1 == expected_key {
+                print substr($0, index($0, "=") + 1)
+              }
+            ' "$RUNTIME_ENV"
+          }
+
+          env_count() {
+            local key="$1"
+            /usr/bin/awk -F= -v expected_key="$key" '
+              $1 == expected_key { count++ }
+              END { print count + 0 }
+            ' "$RUNTIME_ENV"
+          }
+
+          expected_artifact="${SSM_ExpectedArtifactSha256}"
+          enabled="${SSM_Enabled}"
+          block_interval="${SSM_BlockIntervalSeconds}"
+          slot_epoch="${SSM_SlotEpochSeconds}"
+          mode="${SSM_Mode}"
+          allow_missing="${SSM_AllowMissingFinalityKeys}"
+
+          [[ "$expected_artifact" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$enabled" =~ ^(true|false)$ ]]
+          [[ "$block_interval" =~ ^(0|30)$ ]]
+          [[ "$slot_epoch" =~ ^(0|[1-9][0-9]{0,10})$ ]]
+          [[ "$mode" =~ ^(preflight|exact)$ ]]
+          [[ "$allow_missing" =~ ^(true|false)$ ]]
+
+          if [[ "$enabled" == true ]]; then
+            test "$block_interval" = 30
+            test "$slot_epoch" -gt 0
+            test "$((slot_epoch % 30))" = 0
+            if [[ "$mode" == preflight ]]; then
+              request_now_epoch="$(/usr/bin/date +%s)"
+              [[ "$request_now_epoch" =~ ^[0-9]{1,11}$ ]]
+              test "$slot_epoch" -gt "$request_now_epoch"
+              test "$slot_epoch" -le "$((request_now_epoch + 60))"
+            fi
+          else
+            test "$block_interval" = 0
+            test "$slot_epoch" = 0
+          fi
+          if [[ "$allow_missing" == true ]]; then
+            test "$mode" = preflight
+            test "$enabled" = false
+            test "$block_interval" = 0
+            test "$slot_epoch" = 0
+          fi
+          if [[ "$mode" == exact ]]; then
+            test "$allow_missing" = false
+          fi
+
+          test -f "$RUNTIME_ENV"
+          test ! -L "$RUNTIME_ENV"
+          test -f "$RUNTIME_ARCHIVE"
+          test ! -L "$RUNTIME_ARCHIVE"
+          test "$(env_count NODE_ARTIFACT_SHA256)" = 1
+          runtime_artifact="$(env_value NODE_ARTIFACT_SHA256)"
+          test "$runtime_artifact" = "$expected_artifact"
+          archive_artifact="$(
+            /usr/bin/sha256sum "$RUNTIME_ARCHIVE" | /usr/bin/awk '{print $1}'
+          )"
+          test "$archive_artifact" = "$expected_artifact"
+
+          enabled_count="$(env_count AUTOMATIC_FINALITY_ENABLED)"
+          interval_count="$(env_count TESTNET_BLOCK_INTERVAL_SECONDS)"
+          epoch_count="$(env_count TESTNET_SLOT_EPOCH_SECONDS)"
+          if [[ "$enabled_count" == 0 &&
+                "$interval_count" == 0 &&
+                "$epoch_count" == 0 ]]; then
+            test "$allow_missing" = true
+            finality_keys_present=false
+          else
+            test "$enabled_count" = 1
+            test "$interval_count" = 1
+            test "$epoch_count" = 1
+            test "$(env_value AUTOMATIC_FINALITY_ENABLED)" = "$enabled"
+            test "$(env_value TESTNET_BLOCK_INTERVAL_SECONDS)" = "$block_interval"
+            test "$(env_value TESTNET_SLOT_EPOCH_SECONDS)" = "$slot_epoch"
+            finality_keys_present=true
+          fi
+
+          /usr/bin/timeout 10 /usr/bin/systemctl is-active \
+            --quiet "$VALIDATOR_SERVICE"
+          health="$(
+            /usr/bin/curl --fail --silent --show-error --noproxy '*' \
+              --proto '=http' --connect-timeout 2 --max-time 5 \
+              --max-filesize "$MAX_JSON_BYTES" "$HEALTH_ENDPOINT"
+          )"
+          test "$(printf '%s' "$health" | /usr/bin/wc -c)" -le "$MAX_JSON_BYTES"
+          health="$(
+            /usr/bin/jq -ce \
+              --argjson expected_enabled "$enabled" \
+              --argjson expected_interval "$block_interval" \
+              --argjson expected_epoch "$slot_epoch" '
+                if (
+                  type == "object" and
+                  .status == "healthy" and
+                  .network == "Public Testnet / No Monetary Value" and
+                  .chain_id == 20260723 and
+                  (.validator_id | type) == "string" and
+                  (.validator_id | test("^validator-0[1-3]$")) and
+                  (.head_height | type) == "number" and
+                  .head_height == (.head_height | floor) and
+                  .head_height >= 1 and
+                  (.head_hash | type) == "string" and
+                  (.head_hash | test("^0x[0-9a-f]{64}$")) and
+                  (.head_timestamp | type) == "number" and
+                  .head_timestamp == (.head_timestamp | floor) and
+                  .head_timestamp > 0 and
+                  (.peer_count | type) == "number" and
+                  .peer_count == (.peer_count | floor) and
+                  .peer_count == 2 and
+                  .automatic_finality_enabled == $expected_enabled and
+                  .block_interval_seconds == $expected_interval and
+                  .slot_epoch_seconds == $expected_epoch and
+                  .automatic_finality_loop_running == $expected_enabled and
+                  (.consensus | type) == "object" and
+                  (.consensus.last_certificate_hash | type) == "string" and
+                  (.consensus.last_certificate_hash |
+                    test("^0x[0-9a-f]{64}$")) and
+                  (.consensus.last_certificate | type) == "object" and
+                  (.consensus.last_certificate | keys | sort) == [
+                    "assets_moved",
+                    "block_hash",
+                    "bridge_activated",
+                    "certificate_hash",
+                    "chain_id",
+                    "finality_status",
+                    "height",
+                    "mainnet_changed",
+                    "round",
+                    "schema_version",
+                    "signed_power",
+                    "total_power",
+                    "validator_ids",
+                    "vote_hashes"
+                  ] and
+                  .consensus.last_certificate.schema_version ==
+                    "junca-finality-certificate/v1" and
+                  .consensus.last_certificate.chain_id == .chain_id and
+                  .consensus.last_certificate.height == .head_height and
+                  (.consensus.last_certificate.round | type) == "number" and
+                  .consensus.last_certificate.round ==
+                    (.consensus.last_certificate.round | floor) and
+                  .consensus.last_certificate.round >= 0 and
+                  .consensus.last_certificate.round <= 2147483647 and
+                  .consensus.last_certificate.block_hash == .head_hash and
+                  .consensus.last_certificate.certificate_hash ==
+                    .consensus.last_certificate_hash and
+                  .consensus.last_certificate.finality_status ==
+                    "FINALIZED" and
+                  .consensus.last_certificate.signed_power == 3 and
+                  .consensus.last_certificate.total_power == 3 and
+                  .consensus.last_certificate.validator_ids == [
+                    "validator-01",
+                    "validator-02",
+                    "validator-03"
+                  ] and
+                  (.consensus.last_certificate.vote_hashes | type) ==
+                    "array" and
+                  (.consensus.last_certificate.vote_hashes | length) == 3 and
+                  (.consensus.last_certificate.vote_hashes |
+                    unique | length) == 3 and
+                  all(.consensus.last_certificate.vote_hashes[];
+                    type == "string" and
+                    test("^0x[0-9a-f]{64}$")) and
+                  .consensus.last_certificate.mainnet_changed == false and
+                  .consensus.last_certificate.assets_moved == false and
+                  .consensus.last_certificate.bridge_activated == false and
+                  .private_key_material_accepted == false and
+                  .mainnet_changed == false and
+                  .assets_moved == false and
+                  .bridge_activated == false
+                ) then {
+                  status: .status,
+                  network: .network,
+                  chain_id: .chain_id,
+                  validator_id: .validator_id,
+                  head_height: .head_height,
+                  head_hash: .head_hash,
+                  head_timestamp: .head_timestamp,
+                  peer_count: .peer_count,
+                  automatic_finality_enabled:
+                    .automatic_finality_enabled,
+                  block_interval_seconds: .block_interval_seconds,
+                  slot_epoch_seconds: .slot_epoch_seconds,
+                  automatic_finality_loop_running:
+                    .automatic_finality_loop_running,
+                  consensus: {
+                    last_certificate_hash:
+                      .consensus.last_certificate_hash,
+                    last_certificate: .consensus.last_certificate
+                  },
+                  private_key_material_accepted: false,
+                  mainnet_changed: false,
+                  assets_moved: false,
+                  bridge_activated: false
+                } else error("health contract rejected") end
+              ' <<<"$health"
+          )"
+          certificate="$(
+            /usr/bin/jq -c '.consensus.last_certificate' <<<"$health"
+          )"
+          certificate_digest_matches "$certificate"
+          runtime_env_sha256="$(
+            /usr/bin/sha256sum "$RUNTIME_ENV" | /usr/bin/awk '{print $1}'
+          )"
+          result="$(
+            /usr/bin/jq -cn \
+              --arg mode "$mode" \
+              --arg artifact_sha256 "$archive_artifact" \
+              --arg runtime_env_sha256 "$runtime_env_sha256" \
+              --argjson finality_keys_present "$finality_keys_present" \
+              --argjson enabled "$enabled" \
+              --argjson block_interval_seconds "$block_interval" \
+              --argjson slot_epoch_seconds "$slot_epoch" \
+              --argjson health "$health" '{
+                schema_version: "junca-pt-finality-inspect/v1",
+                document: "JuncaPTFinalityInspect",
+                access_class: "read-only",
+                mode: $mode,
+                service_active: true,
+                artifact_sha256: $artifact_sha256,
+                runtime_env_sha256: $runtime_env_sha256,
+                finality_keys_present: $finality_keys_present,
+                finality: {
+                  enabled: $enabled,
+                  block_interval_seconds: $block_interval_seconds,
+                  slot_epoch_seconds: $slot_epoch_seconds
+                },
+                validator_id: $health.validator_id,
+                chain_id: $health.chain_id,
+                head_height: $health.head_height,
+                head_hash: $health.head_hash,
+                mainnet_changed: false,
+                assets_moved: false,
+                bridge_activated: false
+              }'
+          )"
+          bounded_json "$result"

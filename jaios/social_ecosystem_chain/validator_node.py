@@ -54,6 +54,7 @@ GENESIS_SCHEMA = "junca-public-testnet-genesis/v1"
 CLIENT_VERSION = "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
 ZERO_HASH = "0x" + ("0" * 64)
 MANUAL_BLOCK_INTERVAL_SECONDS = 30
+PEER_OBSERVATION_WINDOW_SECONDS = 90
 
 
 class ValidatorNodeError(ValueError):
@@ -127,6 +128,7 @@ class PrivateVpcPeerTransport:
         validator_id: str,
         endpoints: Mapping[str, tuple[str, int]],
         receive_vote: Any,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.validator_id = _validator_id(validator_id)
         if set(endpoints) != set(sorted(endpoints)) or len(endpoints) != 3:
@@ -147,11 +149,51 @@ class PrivateVpcPeerTransport:
             normalized[identity] = endpoint
         if self.validator_id not in normalized or not callable(receive_vote):
             raise ValidatorNodeError("local validator and vote receiver are required")
+        if len(set(normalized.values())) != len(normalized):
+            raise ValidatorNodeError("peer endpoints must be unique")
         self.endpoints = normalized
         self.receive_vote = receive_vote
         self._server: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._clock = clock or __import__("time").monotonic
+        self._peer_observations: dict[str, float] = {}
+        self._peer_observations_lock = threading.Lock()
+
+    def observed_peer_count(self) -> int:
+        """Return recently authenticated, non-local protocol peers.
+
+        Configured endpoints and bare TCP handshakes are deliberately not
+        counted. A peer becomes observable only after its source IP and
+        validator identity agree and the canonical vote receiver accepts its
+        signed protocol frame.
+        """
+
+        cutoff = self._clock() - PEER_OBSERVATION_WINDOW_SECONDS
+        with self._peer_observations_lock:
+            expired = [
+                identity
+                for identity, observed_at in self._peer_observations.items()
+                if observed_at < cutoff
+            ]
+            for identity in expired:
+                del self._peer_observations[identity]
+            return len(self._peer_observations)
+
+    def _accept_peer_vote(
+        self,
+        source_validator_id: str,
+        packet: AuthenticatedVote,
+    ) -> None:
+        if (
+            source_validator_id == self.validator_id
+            or source_validator_id not in self.endpoints
+            or packet.validator_id != source_validator_id
+        ):
+            raise ValidatorNodeError("peer vote source identity mismatch")
+        self.receive_vote(packet)
+        with self._peer_observations_lock:
+            self._peer_observations[source_validator_id] = self._clock()
 
     def start(self) -> None:
         if self._server is not None:
@@ -189,15 +231,19 @@ class PrivateVpcPeerTransport:
 
     def _serve(self) -> None:
         assert self._server is not None
-        allowed_hosts = {host for identity, (host, _) in self.endpoints.items()
-                         if identity != self.validator_id}
+        source_by_host = {
+            host: identity
+            for identity, (host, _) in self.endpoints.items()
+            if identity != self.validator_id
+        }
         while not self._stop.is_set():
             try:
                 connection, address = self._server.accept()
             except (socket.timeout, OSError):
                 continue
             with connection:
-                if address[0] not in allowed_hosts:
+                source_validator_id = source_by_host.get(address[0])
+                if source_validator_id is None:
                     continue
                 connection.settimeout(3)
                 try:
@@ -209,7 +255,10 @@ class PrivateVpcPeerTransport:
                     value = json.loads(body)
                     if not isinstance(value, dict):
                         continue
-                    self.receive_vote(_authenticated_vote(value))
+                    self._accept_peer_vote(
+                        source_validator_id,
+                        _authenticated_vote(value),
+                    )
                 except (OSError, json.JSONDecodeError, ValidatorNodeError, ValueError):
                     continue
 
@@ -326,7 +375,8 @@ class PublicTestnetConsensus:
             signature_verifier=self._verify_consensus,
             signing_journal=journal,
         )
-        self._accepted_peer_votes: set[str] = set()
+        self._accepted_peer_votes: dict[str, AuthenticatedVote] = {}
+        self._last_certificate_votes: tuple[AuthenticatedVote, ...] = ()
         self._last_certificate: FinalityCertificate | None = (
             store.latest_finality_certificate()
         )
@@ -364,14 +414,42 @@ class PublicTestnetConsensus:
             signature=packet.signature,
         )
         result = self.runtime.accept_vote(vote)
-        self._accepted_peer_votes.add(packet.validator_id)
+        self._accepted_peer_votes[packet.validator_id] = packet
         if result is not None:
             self._last_certificate = result.certificate
+            if (
+                tuple(sorted(self._accepted_peer_votes))
+                != result.certificate.validator_ids
+            ):
+                raise ValidatorNodeError(
+                    "finalized certificate is missing its exact vote set"
+                )
+            ordered = tuple(
+                self._accepted_peer_votes[validator_id]
+                for validator_id in result.certificate.validator_ids
+            )
+            vote_hashes = tuple(
+                FinalityVote(
+                    chain_id=packet.chain_id,
+                    height=packet.height,
+                    round=packet.round,
+                    block_hash=packet.block_hash,
+                    validator_id=packet.validator_id,
+                    signature=packet.signature,
+                ).vote_hash
+                for packet in ordered
+            )
+            if vote_hashes != result.certificate.vote_hashes:
+                raise ValidatorNodeError(
+                    "accepted votes do not reconstruct the finality certificate"
+                )
+            self._last_certificate_votes = ordered
         return result
 
     def evidence(self) -> dict[str, Any]:
         runtime = self.runtime.evidence()
         last = self._last_certificate
+        certificate_proof = self._certificate_proof(last)
         return {
             "schema_version": "junca-public-testnet-consensus-runtime/v1",
             "chain_id": runtime["chain_id"],
@@ -386,6 +464,7 @@ class PublicTestnetConsensus:
             "last_certificate": (
                 None if last is None else last.as_evidence()
             ),
+            "last_certificate_proof": certificate_proof,
             "signer_bindings": [
                 {
                     "validator_id": validator_id,
@@ -399,6 +478,34 @@ class PublicTestnetConsensus:
             "mainnet_changed": False,
             "assets_moved": False,
             "bridge_activated": False,
+        }
+
+    def _certificate_proof(
+        self,
+        certificate: FinalityCertificate | None,
+    ) -> dict[str, object] | None:
+        votes = self._last_certificate_votes
+        if (
+            certificate is None
+            or len(votes) != 3
+            or tuple(packet.validator_id for packet in votes)
+            != certificate.validator_ids
+        ):
+            return None
+        return {
+            "schema_version": "junca-public-finality-certificate-proof/v1",
+            "certificate": certificate.as_evidence(),
+            "votes": [
+                {
+                    "chain_id": packet.chain_id,
+                    "height": packet.height,
+                    "round": packet.round,
+                    "block_hash": packet.block_hash,
+                    "validator_id": packet.validator_id,
+                    "signature": packet.signature.hex(),
+                }
+                for packet in votes
+            ],
         }
 
     def _verify_consensus(
@@ -658,6 +765,11 @@ class NodeState:
         default_factory=threading.RLock, repr=False
     )
 
+    def observed_peer_count(self) -> int:
+        if self.peer_transport is None:
+            return self.peer_count
+        return self.peer_transport.observed_peer_count()
+
     def broadcast_vote(self, *, block_timestamp: int | None = None) -> dict[str, Any]:
         if self.consensus is None or self.kms is None or self.peer_transport is None:
             raise ValidatorNodeError("network consensus runtime is not configured")
@@ -709,6 +821,7 @@ class NodeState:
         with self.consensus_lock:
             head = self.store.head()
             head_timestamp = self.store.block_timestamp(head.height)
+            observed_peer_count = self.observed_peer_count()
             automatic_finality = {
                 "enabled": self.automatic_finality_enabled,
                 "loop_running": self.automatic_finality_loop_running,
@@ -727,8 +840,66 @@ class NodeState:
                     self.automatic_finality_last_successful_height
                 ),
             }
+            consensus_evidence = (
+                self.consensus.evidence()
+                if self.consensus is not None
+                else None
+            )
+            certificate = (
+                consensus_evidence.get("last_certificate")
+                if isinstance(consensus_evidence, Mapping)
+                else None
+            )
+            finalized_head = (
+                isinstance(certificate, Mapping)
+                and certificate.get("finality_status") == "FINALIZED"
+                and certificate.get("height") == head.height
+                and certificate.get("block_hash") == head.block_hash
+                and certificate.get("signed_power") == 3
+                and certificate.get("total_power") == 3
+                and consensus_evidence.get("head_height") == head.height
+            )
+            now = int(datetime.now(timezone.utc).timestamp())
+            freshness_window = max(120, self.block_interval_seconds * 3)
+            fresh_head = (
+                isinstance(head_timestamp, int)
+                and not isinstance(head_timestamp, bool)
+                and 0 <= now - head_timestamp <= freshness_window
+            )
+            finality_slot_matches_head = (
+                isinstance(self.automatic_finality_last_successful_slot, int)
+                and not isinstance(
+                    self.automatic_finality_last_successful_slot,
+                    bool,
+                )
+                and self.automatic_finality_last_successful_slot > 0
+                and self.slot_epoch_seconds
+                + (
+                    self.automatic_finality_last_successful_slot
+                    * self.block_interval_seconds
+                )
+                == head_timestamp
+                and self.automatic_finality_last_successful_height
+                == head.height
+            )
+            health_gates = {
+                "authenticated_peer_quorum": observed_peer_count == 2,
+                "current_three_of_three_certificate": finalized_head,
+                "fresh_finalized_head": fresh_head,
+                "automatic_finality": (
+                    self.automatic_finality_enabled
+                    and self.automatic_finality_loop_running
+                    and 5 <= self.block_interval_seconds <= 3600
+                    and self.slot_epoch_seconds > 0
+                    and finality_slot_matches_head
+                ),
+            }
             evidence = {
-                "status": "healthy",
+                "status": (
+                    "healthy"
+                    if all(health_gates.values())
+                    else "unhealthy"
+                ),
                 "network": NETWORK_LABEL,
                 "chain_id": self.chain_id,
                 "validator_id": self.validator_id,
@@ -739,6 +910,8 @@ class NodeState:
                 "signer_resource_digest": hashlib.sha256(
                     self.signer_resource.encode()
                 ).hexdigest(),
+                "peer_count": observed_peer_count,
+                "health_gates": health_gates,
                 "private_key_material_accepted": False,
                 "automatic_finality_enabled": self.automatic_finality_enabled,
                 "block_interval_seconds": self.block_interval_seconds,
@@ -757,8 +930,8 @@ class NodeState:
                 "assets_moved": False,
                 "bridge_activated": False,
             }
-            if self.consensus is not None:
-                evidence["consensus"] = self.consensus.evidence()
+            if consensus_evidence is not None:
+                evidence["consensus"] = consensus_evidence
             if self.sync_recovery is not None:
                 evidence["sync_recovery"] = self.sync_recovery.evidence()
                 if (
@@ -778,7 +951,7 @@ class NodeState:
         if method == "eth_blockNumber":
             return hex(head.height)
         if method == "net_peerCount":
-            return hex(self.peer_count)
+            return hex(self.observed_peer_count())
         if method == "web3_clientVersion":
             return CLIENT_VERSION
         if method == "eth_getBlockByNumber":

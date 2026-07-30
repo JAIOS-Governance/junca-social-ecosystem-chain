@@ -9,6 +9,8 @@ from jaios.social_ecosystem_chain.validator_node import (
     AuthenticatedVote,
     AwsKmsSecp256k1Adapter,
     BoundedFinalityLoop,
+    PEER_OBSERVATION_WINDOW_SECONDS,
+    PrivateVpcPeerTransport,
     PublicTestnetConsensus,
     ValidatorNodeError,
     build_genesis,
@@ -97,7 +99,17 @@ class ValidatorNodeTests(unittest.TestCase):
                 self.genesis["genesis_hash"],
             )
             health = state.rpc("junca_health", [])
-            self.assertEqual(health["status"], "healthy")
+            self.assertEqual(health["status"], "unhealthy")
+            self.assertEqual(health["peer_count"], 0)
+            self.assertEqual(
+                health["health_gates"],
+                {
+                    "authenticated_peer_quorum": False,
+                    "automatic_finality": False,
+                    "current_three_of_three_certificate": False,
+                    "fresh_finalized_head": False,
+                },
+            )
             self.assertFalse(health["private_key_material_accepted"])
             self.assertFalse(health["automatic_finality_enabled"])
             self.assertEqual(health["block_interval_seconds"], 0)
@@ -156,6 +168,88 @@ class ValidatorNodeTests(unittest.TestCase):
         self.assertTrue(adapter.verify(arn, b"vote", signature))
         self.assertEqual(fake.verify_args["Signature"], bytes.fromhex("3006020101020102"))
         self.assertFalse(adapter.verify(arn, b"vote", b"short"))
+
+    def test_peer_count_requires_recent_authenticated_protocol_frames(self) -> None:
+        now = [1000.0]
+        accepted: list[AuthenticatedVote] = []
+        endpoints = {
+            "validator-1": ("10.0.0.11", 30303),
+            "validator-2": ("10.0.0.12", 30303),
+            "validator-3": ("10.0.0.13", 30303),
+        }
+        transport = PrivateVpcPeerTransport(
+            validator_id="validator-1",
+            endpoints=endpoints,
+            receive_vote=accepted.append,
+            clock=lambda: now[0],
+        )
+        self.assertEqual(transport.observed_peer_count(), 0)
+
+        packet_two = AuthenticatedVote(
+            chain_id=20260723,
+            height=1,
+            round=0,
+            block_hash="0x" + ("2" * 64),
+            validator_id="validator-2",
+            signature=b"consensus-2",
+            peer_signature=b"peer-2",
+        )
+        packet_three = AuthenticatedVote(
+            chain_id=20260723,
+            height=1,
+            round=0,
+            block_hash="0x" + ("2" * 64),
+            validator_id="validator-3",
+            signature=b"consensus-3",
+            peer_signature=b"peer-3",
+        )
+        transport._accept_peer_vote("validator-2", packet_two)
+        transport._accept_peer_vote("validator-3", packet_three)
+        self.assertEqual(accepted, [packet_two, packet_three])
+        self.assertEqual(transport.observed_peer_count(), 2)
+        with TemporaryDirectory() as directory:
+            state = initialize_state(
+                self.genesis,
+                directory,
+                "validator-1",
+                "arn:aws:kms:us-east-1:595710543956:key/example",
+            )
+            self.addCleanup(state.store.close)
+            state.peer_transport = transport
+            self.assertEqual(state.evidence()["peer_count"], 2)
+            self.assertEqual(state.rpc("net_peerCount", []), "0x2")
+
+        now[0] += PEER_OBSERVATION_WINDOW_SECONDS + 0.001
+        self.assertEqual(transport.observed_peer_count(), 0)
+
+    def test_peer_count_rejects_spoofed_or_failed_authentication(self) -> None:
+        endpoints = {
+            "validator-1": ("10.0.0.11", 30303),
+            "validator-2": ("10.0.0.12", 30303),
+            "validator-3": ("10.0.0.13", 30303),
+        }
+        packet = AuthenticatedVote(
+            chain_id=20260723,
+            height=1,
+            round=0,
+            block_hash="0x" + ("3" * 64),
+            validator_id="validator-3",
+            signature=b"consensus",
+            peer_signature=b"peer",
+        )
+        transport = PrivateVpcPeerTransport(
+            validator_id="validator-1",
+            endpoints=endpoints,
+            receive_vote=lambda _: (_ for _ in ()).throw(
+                ValidatorNodeError("peer vote authentication failed")
+            ),
+        )
+        with self.assertRaisesRegex(ValidatorNodeError, "source identity"):
+            transport._accept_peer_vote("validator-2", packet)
+        self.assertEqual(transport.observed_peer_count(), 0)
+        with self.assertRaisesRegex(ValidatorNodeError, "authentication failed"):
+            transport._accept_peer_vote("validator-3", packet)
+        self.assertEqual(transport.observed_peer_count(), 0)
 
 
 class PublicTestnetConsensusTests(unittest.TestCase):
@@ -274,10 +368,59 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             evidence["last_certificate"]["validator_ids"],
             ["validator-1", "validator-2", "validator-3"],
         )
+        proof = evidence["last_certificate_proof"]
+        self.assertEqual(
+            proof["schema_version"],
+            "junca-public-finality-certificate-proof/v1",
+        )
+        self.assertEqual(
+            proof["certificate"],
+            evidence["last_certificate"],
+        )
+        self.assertEqual(
+            [vote["validator_id"] for vote in proof["votes"]],
+            ["validator-1", "validator-2", "validator-3"],
+        )
+        self.assertTrue(
+            all(len(vote["signature"]) == 128 for vote in proof["votes"])
+        )
         self.assertNotIn("arn:aws:kms:", str(evidence))
         self.assertEqual(
             self.node.rpc("junca_health", [])["consensus"]["head_height"], 2
         )
+
+    def test_health_requires_peer_two_fresh_finality_and_live_loop(self) -> None:
+        self.node.consensus = self.consensus
+        current_timestamp = int(time.time()) // 30 * 30
+        stale_timestamp = current_timestamp - 300
+
+        stale = self.consensus.propose(block_timestamp=stale_timestamp)
+        for validator_id in ("validator-1", "validator-2", "validator-3"):
+            self.consensus.submit(self.packet(validator_id, stale))
+        self.node.peer_count = 2
+        self.node.automatic_finality_enabled = True
+        self.node.automatic_finality_loop_running = True
+        self.node.block_interval_seconds = 30
+        self.node.slot_epoch_seconds = stale_timestamp - 30
+        self.node.automatic_finality_last_successful_slot = 1
+        self.node.automatic_finality_last_successful_height = 1
+        self.assertEqual(self.node.evidence()["status"], "unhealthy")
+        self.assertFalse(
+            self.node.evidence()["health_gates"]["fresh_finalized_head"]
+        )
+
+        fresh = self.consensus.propose(block_timestamp=current_timestamp)
+        for validator_id in ("validator-1", "validator-2", "validator-3"):
+            self.consensus.submit(self.packet(validator_id, fresh))
+        self.node.slot_epoch_seconds = current_timestamp - 30
+        self.node.automatic_finality_last_successful_height = 2
+        for peer_count in (0, 1):
+            self.node.peer_count = peer_count
+            self.assertEqual(self.node.evidence()["status"], "unhealthy")
+        self.node.peer_count = 2
+        health = self.node.evidence()
+        self.assertEqual(health["status"], "healthy")
+        self.assertTrue(all(health["health_gates"].values()))
 
     def test_missing_quorum_never_advances_height(self) -> None:
         proposal = self.consensus.propose()
@@ -313,6 +456,7 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             evidence["last_certificate_hash"],
             expected["certificate_hash"],
         )
+        self.assertIsNone(evidence["last_certificate_proof"])
 
     def test_tampered_persisted_certificate_fails_closed_on_restart(self) -> None:
         proposal = self.consensus.propose()

@@ -26,6 +26,7 @@ def _observation(
     block_hash: str,
     timestamp: int,
     certificate_hash: str,
+    peer_count: int = 2,
 ) -> dict[str, object]:
     return {
         "index": index,
@@ -41,7 +42,7 @@ def _observation(
             "certificate_hash": certificate_hash,
             "signed_power": 3,
             "total_power": 3,
-            "peer_count": 2,
+            "peer_count": peer_count,
         },
     }
 
@@ -124,5 +125,25 @@ class RuntimeAcceptancePacketTests(TestCase):
         self.assertIn("head:not_advancing_each_observation", packet["failures"])
         self.assertIn(
             "certificate:not_advancing_each_observation",
+            packet["failures"],
+        )
+
+    def test_rejects_advancing_heads_without_public_peer_quorum(self):
+        packet = self._build(
+            [
+                _observation(
+                    index,
+                    height=9 + index,
+                    block_hash=f"hash-{index}",
+                    timestamp=70 + index * 30,
+                    certificate_hash=f"certificate-{index}",
+                    peer_count=0,
+                )
+                for index in range(1, 4)
+            ]
+        )
+        self.assertEqual(packet["status"], "FAIL")
+        self.assertIn(
+            "peers:not_exact_public_quorum",
             packet["failures"],
         )

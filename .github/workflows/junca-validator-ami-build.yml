@@ -1,4 +1,5 @@
 name: JUNCA Validator Immutable AMI Build
+run-name: JSEC dispatch ${{ inputs.dispatch_token }}
 
 on:
   workflow_dispatch:
@@ -27,10 +28,53 @@ on:
         description: Expected lowercase SHA-256 of genesis.json
         required: true
         type: string
+      parent_ami_id:
+        description: Exact Amazon Linux 2023 parent AMI ID
+        required: true
+        type: string
+      parent_ami_owner_id:
+        description: Exact 12-digit owner account of the parent AMI
+        required: true
+        type: string
+      parent_ami_name:
+        description: Exact immutable Amazon Linux 2023 parent AMI name
+        required: true
+        type: string
+      component_source_sha256:
+        description: Exact SHA-256 of the Image Builder component source
+        required: true
+        type: string
+      dependency_lock_sha256:
+        description: Exact canonical AMI dependency-lock SHA-256
+        required: true
+        type: string
+      dnf_releasever:
+        description: Exact Amazon Linux 2023 repository release
+        required: true
+        type: string
+      python3_boto3_nevra:
+        description: Exact python3-boto3 package NEVRA
+        required: true
+        type: string
+      python3_botocore_nevra:
+        description: Exact python3-botocore package NEVRA
+        required: true
+        type: string
       request_sha256:
-        description: Optional canonical release-request SHA-256
-        required: false
-        default: ""
+        description: Exact canonical release-request SHA-256
+        required: true
+        type: string
+      dispatch_token:
+        description: Unique canonical-parent dispatch correlation token
+        required: true
+        type: string
+      orchestrator_run_id:
+        description: Canonical immutable-candidate parent run ID
+        required: true
+        type: string
+      orchestrator_run_attempt:
+        description: Canonical immutable-candidate parent run attempt
+        required: true
         type: string
 
 permissions:
@@ -50,7 +94,7 @@ jobs:
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
-      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      AMI_BUILDER_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetAmiBuilder
       NETWORK: Public Testnet
       GOVERNANCE: JAIOS Institutional Governance
       NOTICE: Public Testnet / No Monetary Value
@@ -61,22 +105,97 @@ jobs:
       GENESIS_ARTIFACT_NAME: ${{ inputs.genesis_artifact_name }}
       EXPECTED_NODE_SHA256: ${{ inputs.node_sha256 }}
       EXPECTED_GENESIS_SHA256: ${{ inputs.genesis_sha256 }}
+      PARENT_AMI_ID: ${{ inputs.parent_ami_id }}
+      PARENT_AMI_OWNER_ID: ${{ inputs.parent_ami_owner_id }}
+      PARENT_AMI_NAME: ${{ inputs.parent_ami_name }}
+      EXPECTED_COMPONENT_SOURCE_SHA256: ${{ inputs.component_source_sha256 }}
+      EXPECTED_DEPENDENCY_LOCK_SHA256: ${{ inputs.dependency_lock_sha256 }}
+      DNF_RELEASEVER: ${{ inputs.dnf_releasever }}
+      PYTHON3_BOTO3_NEVRA: ${{ inputs.python3_boto3_nevra }}
+      PYTHON3_BOTOCORE_NEVRA: ${{ inputs.python3_botocore_nevra }}
       PROVIDED_REQUEST_SHA256: ${{ inputs.request_sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Bind trusted main execution before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REPOSITORY" = \
+            "JAIOS-Governance/junca-social-ecosystem-chain"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF_TYPE" = "branch"
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+
+      - name: Verify exact child run binding before AMI side effects
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ inputs.dispatch_token }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ inputs.orchestrator_run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_release_child_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --dispatch-token "$DISPATCH_TOKEN" \
+            --orchestrator-run-id "$ORCHESTRATOR_RUN_ID" \
+            --orchestrator-run-attempt "$ORCHESTRATOR_RUN_ATTEMPT" \
+            --workflow-path \
+              ".github/workflows/junca-validator-ami-build.yml" \
+            --input "source_run_id=$SOURCE_RUN_ID" \
+            --input "source_commit=$SOURCE_COMMIT" \
+            --input "node_artifact_name=$NODE_ARTIFACT_NAME" \
+            --input "genesis_artifact_name=$GENESIS_ARTIFACT_NAME" \
+            --input "node_sha256=$EXPECTED_NODE_SHA256" \
+            --input "genesis_sha256=$EXPECTED_GENESIS_SHA256" \
+            --input "parent_ami_id=$PARENT_AMI_ID" \
+            --input "parent_ami_owner_id=$PARENT_AMI_OWNER_ID" \
+            --input "parent_ami_name=$PARENT_AMI_NAME" \
+            --input \
+              "component_source_sha256=$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --input \
+              "dependency_lock_sha256=$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --input "dnf_releasever=$DNF_RELEASEVER" \
+            --input "python3_boto3_nevra=$PYTHON3_BOTO3_NEVRA" \
+            --input "python3_botocore_nevra=$PYTHON3_BOTOCORE_NEVRA" \
+            --input "request_sha256=$PROVIDED_REQUEST_SHA256"
 
       - name: Canonicalize immutable request digest
         id: request
         run: |
           set -euo pipefail
+          supply_chain_policy_sha256="$(
+            sha256sum config/junca_validator_ami_supply_chain_lock.json |
+              cut -d' ' -f1
+          )"
+          component_source_sha256="$(
+            sha256sum .github/image-builder/validator-component.yml |
+              cut -d' ' -f1
+          )"
+          test "$component_source_sha256" = \
+            "$EXPECTED_COMPONENT_SOURCE_SHA256"
+          echo "SUPPLY_CHAIN_POLICY_SHA256=$supply_chain_policy_sha256" \
+            >> "$GITHUB_ENV"
           jq -n \
             --arg run "$SOURCE_RUN_ID" \
             --arg commit "$SOURCE_COMMIT" \
             --arg node_name "$NODE_ARTIFACT_NAME" \
             --arg genesis_name "$GENESIS_ARTIFACT_NAME" \
             --arg node_sha "$EXPECTED_NODE_SHA256" \
-            --arg genesis_sha "$EXPECTED_GENESIS_SHA256" '{
-              schema_version: "junca-validator-ami-build-request/v1",
+            --arg genesis_sha "$EXPECTED_GENESIS_SHA256" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$component_source_sha256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$supply_chain_policy_sha256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" '{
+              schema_version: "junca-validator-ami-build-request/v2",
               state: "AUTHORIZED",
               network: "Public Testnet",
               environment: "public-testnet",
@@ -87,6 +206,15 @@ jobs:
               genesis_artifact_name: $genesis_name,
               node_sha256: $node_sha,
               genesis_sha256: $genesis_sha,
+              parent_ami_id: $parent_ami_id,
+              parent_ami_owner_id: $parent_ami_owner_id,
+              parent_ami_name: $parent_ami_name,
+              component_source_sha256: $component_sha,
+              dependency_lock_sha256: $dependency_lock_sha,
+              supply_chain_policy_sha256: $supply_chain_policy_sha,
+              dnf_releasever: $dnf_releasever,
+              python3_boto3_nevra: $boto3_nevra,
+              python3_botocore_nevra: $botocore_nevra,
               boundaries: {
                 terraform_state_changed: false,
                 mainnet_changed: false,
@@ -95,14 +223,12 @@ jobs:
               },
               request_sha256: ""
             }' > "$RUNNER_TEMP/junca-validator-ami-build-request.json"
-          python scripts/junca_validator_ami_build_request.py \
+          python3 scripts/junca_validator_ami_build_request.py \
             --request "$RUNNER_TEMP/junca-validator-ami-build-request.json" \
             --seal-missing-digest \
             --github-output "$GITHUB_OUTPUT"
           request_sha256="$(grep '^request_sha256=' "$GITHUB_OUTPUT" | cut -d= -f2)"
-          if [[ -n "$PROVIDED_REQUEST_SHA256" ]]; then
-            test "$PROVIDED_REQUEST_SHA256" = "$request_sha256"
-          fi
+          test "$PROVIDED_REQUEST_SHA256" = "$request_sha256"
           echo "REQUEST_SHA256=$request_sha256" >> "$GITHUB_ENV"
 
       - name: Initialize failure-safe build evidence
@@ -114,30 +240,59 @@ jobs:
             --arg source_commit "$SOURCE_COMMIT" \
             --arg node_artifact_name "$NODE_ARTIFACT_NAME" \
             --arg genesis_artifact_name "$GENESIS_ARTIFACT_NAME" \
-            --arg request_sha256 "$REQUEST_SHA256" '{
-              schema_version: "junca-validator-ami-build/v1",
+            --arg request_sha256 "$REQUEST_SHA256" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" '{
+              schema_version: "junca-validator-ami-build/v2",
               state: "AMI_BUILD_STARTED",
               network: "Public Testnet",
               notice: "Public Testnet / No Monetary Value",
               governance: "JAIOS Institutional Governance",
+              request_schema: "junca-validator-ami-build-request/v2",
+              image_builder_arn: null,
               source_run_id: $source_run_id,
               source_commit: $source_commit,
               node_artifact_name: $node_artifact_name,
               genesis_artifact_name: $genesis_artifact_name,
               request_sha256: $request_sha256,
+              parent_ami_id: $parent_ami_id,
+              parent_ami_owner_id: $parent_ami_owner_id,
+              parent_ami_name: $parent_ami_name,
+              component_source_sha256: $component_sha,
+              dependency_lock_sha256: $dependency_lock_sha,
+              supply_chain_policy_sha256: $supply_chain_policy_sha,
+              dnf_releasever: $dnf_releasever,
+              python3_boto3_nevra: $boto3_nevra,
+              python3_botocore_nevra: $botocore_nevra,
               terraform_state_changed: false,
               mainnet_changed: false,
               assets_moved: false,
               bridge_activated: false
             }' > artifacts/junca-validator-ami-build.json
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_COMMIT }}
 
-      - uses: aws-actions/configure-aws-credentials@v6.1.2
+      - name: Attest exact live GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          python3 scripts/junca_oidc_claim_attestation.py \
+            --workflow-path \
+              ".github/workflows/junca-validator-ami-build.yml" \
+            --role-arn "$AMI_BUILDER_ROLE_ARN" \
+            --output artifacts/oidc-claim-attestation.json
+
+      - uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
-          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.AMI_BUILDER_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: junca-validator-ami-${{ github.run_id }}
 
@@ -152,7 +307,52 @@ jobs:
           [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_NODE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_GENESIS_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PARENT_AMI_ID" =~ ^ami-[0-9a-f]{8,17}$ ]]
+          [[ "$PARENT_AMI_OWNER_ID" =~ ^[0-9]{12}$ ]]
+          [[ "$EXPECTED_COMPONENT_SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_DEPENDENCY_LOCK_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SUPPLY_CHAIN_POLICY_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test -n "$IMAGE_BUILDER_INSTANCE_PROFILE"
+          jq -e \
+            --arg owner "$PARENT_AMI_OWNER_ID" '
+              .schema_version ==
+                "junca-validator-ami-supply-chain-lock/v1" and
+              .state == "EXACT_RELEASE_INPUT_REQUIRED" and
+              .value_source == "release-candidate-workflow-input" and
+              .aws_region == "us-east-1" and
+              .architecture == "x86_64" and
+              .parent_ami.owner_id == $owner and
+              .parent_ami.mutable_aliases_allowed == false and
+              .component.mutable_rendering_allowed == false and
+              .dependency_lock.install_weak_dependencies == false and
+              .boundaries.mainnet_changed == false and
+              .boundaries.assets_moved == false and
+              .boundaries.bridge_activated == false
+            ' config/junca_validator_ami_supply_chain_lock.json
+          test "$(
+            sha256sum .github/image-builder/validator-component.yml |
+              cut -d' ' -f1
+          )" = "$EXPECTED_COMPONENT_SOURCE_SHA256"
+          mkdir -p build
+          aws ec2 describe-images \
+            --owners "$PARENT_AMI_OWNER_ID" \
+            --image-ids "$PARENT_AMI_ID" \
+            --output json > build/parent-image.json
+          jq -e \
+            --arg image_id "$PARENT_AMI_ID" \
+            --arg owner "$PARENT_AMI_OWNER_ID" \
+            --arg name "$PARENT_AMI_NAME" '
+              .Images | length == 1 and
+              .[0].ImageId == $image_id and
+              .[0].OwnerId == $owner and
+              .[0].Name == $name and
+              .[0].State == "available" and
+              .[0].Public == true and
+              .[0].ImageType == "machine" and
+              .[0].Architecture == "x86_64" and
+              .[0].RootDeviceType == "ebs" and
+              .[0].VirtualizationType == "hvm"
+            ' build/parent-image.json
           for attempt in $(seq 1 60); do
             if aws iam get-instance-profile \
               --instance-profile-name "$IMAGE_BUILDER_INSTANCE_PROFILE" \
@@ -224,6 +424,65 @@ jobs:
         id: image
         run: |
           set -euo pipefail
+          verify_image_builder_lineage() {
+            local image_arn="$1"
+            local ami_id="$2"
+            local image_arn_pattern
+            local lineage_name
+            local recipe_arn
+            local component_arn
+            local component_arn_pattern
+            image_arn_pattern="^arn:aws:imagebuilder:${AWS_REGION}:${AWS_ACCOUNT_ID}:image/(junca-validator-[1-9][0-9]*-[1-9][0-9]*)/1\\.0\\.0/[1-9][0-9]*$"
+            if [[ "$image_arn" =~ $image_arn_pattern ]]; then
+              lineage_name="${BASH_REMATCH[1]}"
+            else
+              echo "invalid Image Builder lineage ARN: $image_arn" >&2
+              return 1
+            fi
+            aws imagebuilder get-image \
+              --image-build-version-arn "$image_arn" \
+              --output json > build/image-builder-lineage-image.json
+            recipe_arn="$(
+              jq -er '.image.imageRecipe.arn' \
+                build/image-builder-lineage-image.json
+            )"
+            test "$recipe_arn" = \
+              "arn:aws:imagebuilder:${AWS_REGION}:${AWS_ACCOUNT_ID}:image-recipe/${lineage_name}/1.0.0"
+            aws imagebuilder get-image-recipe \
+              --image-recipe-arn "$recipe_arn" \
+              --output json > build/image-builder-lineage-recipe.json
+            component_arn="$(
+              jq -er '
+                .imageRecipe.components |
+                if length == 1 then .[0].componentArn else error(
+                  "Image Builder recipe must contain one component"
+                ) end
+              ' build/image-builder-lineage-recipe.json
+            )"
+            component_arn_pattern="^arn:aws:imagebuilder:${AWS_REGION}:${AWS_ACCOUNT_ID}:component/${lineage_name}/1\\.0\\.0/[1-9][0-9]*$"
+            [[ "$component_arn" =~ $component_arn_pattern ]]
+            aws imagebuilder get-component \
+              --component-build-version-arn "$component_arn" \
+              --output json > build/image-builder-lineage-component.json
+            python3 scripts/junca_validator_ami_build_request.py \
+              --request \
+                "$RUNNER_TEMP/junca-validator-ami-build-request.json" \
+              --seal-missing-digest \
+              --lineage-image-readback \
+                build/image-builder-lineage-image.json \
+              --lineage-recipe-readback \
+                build/image-builder-lineage-recipe.json \
+              --lineage-component-readback \
+                build/image-builder-lineage-component.json \
+              --lineage-component-source \
+                .github/image-builder/validator-component.yml \
+              --lineage-image-builder-arn "$image_arn" \
+              --lineage-ami-id "$ami_id" \
+              --lineage-aws-account-id "$AWS_ACCOUNT_ID" \
+              --lineage-aws-region "$AWS_REGION" \
+              >/dev/null
+          }
+
           write_verified_evidence() {
             local ami_id="$1"
             local image_arn="$2"
@@ -236,21 +495,40 @@ jobs:
               --arg node_sha256 "$NODE_SHA256" \
               --arg genesis_sha256 "$GENESIS_SHA256" \
               --arg request_sha256 "$REQUEST_SHA256" \
+              --arg parent_ami_id "$PARENT_AMI_ID" \
+              --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+              --arg parent_ami_name "$PARENT_AMI_NAME" \
+              --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+              --arg dependency_lock_sha \
+                "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+              --arg supply_chain_policy_sha \
+                "$SUPPLY_CHAIN_POLICY_SHA256" \
+              --arg dnf_releasever "$DNF_RELEASEVER" \
+              --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+              --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" \
               --argjson reused_existing_ami "$reused_existing_ami" '{
-                schema_version: "junca-validator-ami-build/v1",
+                schema_version: "junca-validator-ami-build/v2",
                 state: "AMI_VERIFIED",
                 network: "Public Testnet",
                 notice: "Public Testnet / No Monetary Value",
                 governance: "JAIOS Institutional Governance",
                 ami_id: $ami_id,
-                image_builder_arn: (
-                  if $image_arn == "" then null else $image_arn end
-                ),
+                request_schema: "junca-validator-ami-build-request/v2",
+                image_builder_arn: $image_arn,
                 source_run_id: $source_run_id,
                 source_commit: $source_commit,
                 node_artifact_sha256: $node_sha256,
                 genesis_sha256: $genesis_sha256,
                 request_sha256: $request_sha256,
+                parent_ami_id: $parent_ami_id,
+                parent_ami_owner_id: $parent_ami_owner_id,
+                parent_ami_name: $parent_ami_name,
+                component_source_sha256: $component_sha,
+                dependency_lock_sha256: $dependency_lock_sha,
+                supply_chain_policy_sha256: $supply_chain_policy_sha,
+                dnf_releasever: $dnf_releasever,
+                python3_boto3_nevra: $boto3_nevra,
+                python3_botocore_nevra: $botocore_nevra,
                 reused_existing_ami: $reused_existing_ami,
                 terraform_state_changed: false,
                 mainnet_changed: false,
@@ -280,24 +558,52 @@ jobs:
               --arg commit "$SOURCE_COMMIT" \
               --arg node "$NODE_SHA256" \
               --arg genesis "$GENESIS_SHA256" \
-              --arg request "$REQUEST_SHA256" '
+              --arg request "$REQUEST_SHA256" \
+              --arg parent_ami_id "$PARENT_AMI_ID" \
+              --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+              --arg parent_ami_name "$PARENT_AMI_NAME" \
+              --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+              --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+              --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" \
+              --arg dnf_releasever "$DNF_RELEASEVER" \
+              --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+              --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" '
               .Images | length == 1 and
               .[0].State == "available" and
               ([.[0].Tags[] | select(.Key == "Network") | .Value] | first) == "Public Testnet" and
               ([.[0].Tags[] | select(.Key == "Governance") | .Value] | first) == "JAIOS Institutional Governance" and
+              ([.[0].Tags[] | select(.Key == "RequestSchema") | .Value] | first) == "junca-validator-ami-build-request/v2" and
               ([.[0].Tags[] | select(.Key == "SourceCommit") | .Value] | first) == $commit and
               ([.[0].Tags[] | select(.Key == "NodeArtifactSHA256") | .Value] | first) == $node and
               ([.[0].Tags[] | select(.Key == "GenesisSHA256") | .Value] | first) == $genesis and
               ([.[0].Tags[] | select(.Key == "RequestDigest") | .Value] | first) == $request and
+              ([.[0].Tags[] | select(.Key == "ParentAMIId") | .Value] | first) == $parent_ami_id and
+              ([.[0].Tags[] | select(.Key == "ParentAMIOwnerId") | .Value] | first) == $parent_ami_owner_id and
+              ([.[0].Tags[] | select(.Key == "ParentAMIName") | .Value] | first) == $parent_ami_name and
+              ([.[0].Tags[] | select(.Key == "ComponentSourceSHA256") | .Value] | first) == $component_sha and
+              ([.[0].Tags[] | select(.Key == "DependencyLockSHA256") | .Value] | first) == $dependency_lock_sha and
+              ([.[0].Tags[] | select(.Key == "SupplyChainPolicySHA256") | .Value] | first) == $supply_chain_policy_sha and
+              ([.[0].Tags[] | select(.Key == "DnfReleasever") | .Value] | first) == $dnf_releasever and
+              ([.[0].Tags[] | select(.Key == "Boto3NEVRA") | .Value] | first) == $boto3_nevra and
+              ([.[0].Tags[] | select(.Key == "BotocoreNEVRA") | .Value] | first) == $botocore_nevra and
               ([.[0].Tags[] | select(.Key == "MainnetChanged") | .Value] | first) == "false" and
               ([.[0].Tags[] | select(.Key == "AssetsMoved") | .Value] | first) == "false" and
               ([.[0].Tags[] | select(.Key == "BridgeActivated") | .Value] | first) == "false"
             ' <<<"$existing_images"
             ami_id="$(jq -r '.Images[0].ImageId' <<<"$existing_images")"
-            image_arn="$(jq -r '
-              [.[0].Tags[] | select(.Key == "ImageBuilderArn") | .Value] |
-              first // ""
-            ' <<<"$(jq '.Images' <<<"$existing_images")")"
+            [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
+            image_arn="$(jq -er '
+              [.Images[0].Tags[] |
+                select(.Key == "ImageBuilderArn") |
+                .Value] |
+              if length == 1 and
+                 (.[0] | type) == "string" and
+                 (.[0] | length) > 0
+              then .[0]
+              else error("one non-empty ImageBuilderArn tag is required")
+              end
+            ' <<<"$existing_images")"
+            verify_image_builder_lineage "$image_arn" "$ami_id"
             write_verified_evidence "$ami_id" "$image_arn" true
             echo "ami_id=$ami_id" >> "$GITHUB_OUTPUT"
             exit 0
@@ -341,12 +647,10 @@ jobs:
           aws s3api put-bucket-policy --bucket "$bucket" \
             --policy file://build/bucket-policy.json
 
-          sed \
-            -e "s|__BUCKET__|${bucket}|g" \
-            -e "s|__NODE_SHA256__|${NODE_SHA256}|g" \
-            -e "s|__GENESIS_SHA256__|${GENESIS_SHA256}|g" \
-            .github/image-builder/validator-component.yml \
-            > build/validator-component.yml
+          test "$(
+            sha256sum .github/image-builder/validator-component.yml |
+              cut -d' ' -f1
+          )" = "$EXPECTED_COMPONENT_SOURCE_SHA256"
           provenance_tags="$(jq -cn \
             --arg network "$NETWORK" \
             --arg governance "$GOVERNANCE" \
@@ -354,31 +658,123 @@ jobs:
             --arg node_sha256 "$NODE_SHA256" \
             --arg genesis_sha256 "$GENESIS_SHA256" \
             --arg request_sha256 "$REQUEST_SHA256" \
+            --arg request_schema "junca-validator-ami-build-request/v2" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" \
             '{
               Network: $network,
               Governance: $governance,
+              RequestSchema: $request_schema,
               SourceCommit: $source_commit,
               NodeArtifactSHA256: $node_sha256,
               GenesisSHA256: $genesis_sha256,
-              RequestDigest: $request_sha256
+              RequestDigest: $request_sha256,
+              ParentAMIId: $parent_ami_id,
+              ParentAMIOwnerId: $parent_ami_owner_id,
+              ParentAMIName: $parent_ami_name,
+              ComponentSourceSHA256: $component_sha,
+              DependencyLockSHA256: $dependency_lock_sha,
+              SupplyChainPolicySHA256: $supply_chain_policy_sha,
+              DnfReleasever: $dnf_releasever,
+              Boto3NEVRA: $boto3_nevra,
+              BotocoreNEVRA: $botocore_nevra
             }')"
           component_arn="$(aws imagebuilder create-component \
             --name "$component_name" --semantic-version 1.0.0 \
-            --platform Linux --data file://build/validator-component.yml \
+            --platform Linux \
+            --data file://.github/image-builder/validator-component.yml \
             --tags "$provenance_tags" \
             --query componentBuildVersionArn --output text)"
+          aws imagebuilder get-component \
+            --component-build-version-arn "$component_arn" \
+            --output json > build/component-readback.json
+          jq -j '.component.data' build/component-readback.json \
+            > build/component-readback.yml
+          cmp .github/image-builder/validator-component.yml \
+            build/component-readback.yml
+          test "$(
+            sha256sum build/component-readback.yml | cut -d' ' -f1
+          )" = "$EXPECTED_COMPONENT_SOURCE_SHA256"
 
-          parent_image="$(aws ssm get-parameter \
-            --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
-            --query Parameter.Value --output text)"
+          components="$(jq -cn \
+            --arg component_arn "$component_arn" \
+            --arg bucket "$bucket" \
+            --arg node_sha "$NODE_SHA256" \
+            --arg genesis_sha "$GENESIS_SHA256" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" \
+            '[{
+              componentArn: $component_arn,
+              parameters: [
+                {name: "ArtifactBucket", value: [$bucket]},
+                {name: "NodeSHA256", value: [$node_sha]},
+                {name: "GenesisSHA256", value: [$genesis_sha]},
+                {name: "ParentAMIId", value: [$parent_ami_id]},
+                {name: "DnfReleasever", value: [$dnf_releasever]},
+                {name: "Boto3Nevra", value: [$boto3_nevra]},
+                {name: "BotocoreNevra", value: [$botocore_nevra]},
+                {name: "ComponentSourceSHA256", value: [$component_sha]},
+                {name: "DependencyLockSHA256", value: [$dependency_lock_sha]},
+                {
+                  name: "SupplyChainPolicySHA256",
+                  value: [$supply_chain_policy_sha]
+                }
+              ]
+            }]')"
           recipe_arn="$(aws imagebuilder create-image-recipe \
             --name "$recipe_name" --semantic-version 1.0.0 \
-            --parent-image "$parent_image" \
-            --components componentArn="$component_arn" \
+            --parent-image "$PARENT_AMI_ID" \
+            --components "$components" \
             --block-device-mappings \
             'deviceName=/dev/xvda,ebs={deleteOnTermination=true,volumeSize=16,volumeType=gp3,encrypted=true}' \
             --tags "$provenance_tags" \
             --query imageRecipeArn --output text)"
+          recipe_readback="$(aws imagebuilder get-image-recipe \
+            --image-recipe-arn "$recipe_arn" --output json)"
+          jq -e \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg component_arn "$component_arn" \
+            --arg bucket "$bucket" \
+            --arg node_sha "$NODE_SHA256" \
+            --arg genesis_sha "$GENESIS_SHA256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" '
+              .imageRecipe.parentImage == $parent_ami_id and
+              (.imageRecipe.components | length) == 1 and
+              .imageRecipe.components[0].componentArn == $component_arn and
+              (
+                .imageRecipe.components[0].parameters |
+                map({key: .name, value: .value}) |
+                from_entries
+              ) == {
+                ArtifactBucket: [$bucket],
+                NodeSHA256: [$node_sha],
+                GenesisSHA256: [$genesis_sha],
+                ParentAMIId: [$parent_ami_id],
+                DnfReleasever: [$dnf_releasever],
+                Boto3Nevra: [$boto3_nevra],
+                BotocoreNevra: [$botocore_nevra],
+                ComponentSourceSHA256: [$component_sha],
+                DependencyLockSHA256: [$dependency_lock_sha],
+                SupplyChainPolicySHA256: [$supply_chain_policy_sha]
+              }
+            ' <<<"$recipe_readback"
           infra_arn="$(aws imagebuilder create-infrastructure-configuration \
             --name "$infra_name" \
             --instance-profile-name "$IMAGE_BUILDER_INSTANCE_PROFILE" \
@@ -395,6 +791,16 @@ jobs:
             --arg node_sha256 "$NODE_SHA256" \
             --arg genesis_sha256 "$GENESIS_SHA256" \
             --arg request_sha256 "$REQUEST_SHA256" \
+            --arg request_schema "junca-validator-ami-build-request/v2" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" \
             '[{
               region: $region,
               amiDistributionConfiguration: {
@@ -403,10 +809,20 @@ jobs:
                 amiTags: {
                   Network: $network,
                   Governance: $governance,
+                  RequestSchema: $request_schema,
                   SourceCommit: $source_commit,
                   NodeArtifactSHA256: $node_sha256,
                   GenesisSHA256: $genesis_sha256,
                   RequestDigest: $request_sha256,
+                  ParentAMIId: $parent_ami_id,
+                  ParentAMIOwnerId: $parent_ami_owner_id,
+                  ParentAMIName: $parent_ami_name,
+                  ComponentSourceSHA256: $component_sha,
+                  DependencyLockSHA256: $dependency_lock_sha,
+                  SupplyChainPolicySHA256: $supply_chain_policy_sha,
+                  DnfReleasever: $dnf_releasever,
+                  Boto3NEVRA: $boto3_nevra,
+                  BotocoreNEVRA: $botocore_nevra,
                   MainnetChanged: "false",
                   AssetsMoved: "false",
                   BridgeActivated: "false"
@@ -450,22 +866,52 @@ jobs:
           ' <<<"$image_json")"
           [[ "$ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
 
+          verify_image_builder_lineage "$image_arn" "$ami_id"
+          aws ec2 create-tags --resources "$ami_id" \
+            --tags Key=ImageBuilderArn,Value="$image_arn"
           readback="$(aws ec2 describe-images --image-ids "$ami_id" --output json)"
           jq -e --arg commit "${SOURCE_COMMIT}" \
             --arg node "${NODE_SHA256}" \
             --arg genesis "${GENESIS_SHA256}" \
-            --arg request "${REQUEST_SHA256}" '
+            --arg request "${REQUEST_SHA256}" \
+            --arg image_builder_arn "$image_arn" \
+            --arg account_id "$AWS_ACCOUNT_ID" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha "$SUPPLY_CHAIN_POLICY_SHA256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" '
             .Images | length == 1 and
             .[0].State == "available" and
+            .[0].OwnerId == $account_id and
+            .[0].Architecture == "x86_64" and
+            .[0].RootDeviceType == "ebs" and
+            .[0].VirtualizationType == "hvm" and
             ([.[0].Tags[] | select(.Key == "Network") | .Value] | first) == "Public Testnet" and
             ([.[0].Tags[] | select(.Key == "Governance") | .Value] | first) == "JAIOS Institutional Governance" and
+            ([.[0].Tags[] | select(.Key == "RequestSchema") | .Value] | first) == "junca-validator-ami-build-request/v2" and
             ([.[0].Tags[] | select(.Key == "SourceCommit") | .Value] | first) == $commit and
             ([.[0].Tags[] | select(.Key == "NodeArtifactSHA256") | .Value] | first) == $node and
             ([.[0].Tags[] | select(.Key == "GenesisSHA256") | .Value] | first) == $genesis and
-            ([.[0].Tags[] | select(.Key == "RequestDigest") | .Value] | first) == $request
+            ([.[0].Tags[] | select(.Key == "RequestDigest") | .Value] | first) == $request and
+            ([.[0].Tags[] | select(.Key == "ParentAMIId") | .Value] | first) == $parent_ami_id and
+            ([.[0].Tags[] | select(.Key == "ParentAMIOwnerId") | .Value] | first) == $parent_ami_owner_id and
+            ([.[0].Tags[] | select(.Key == "ParentAMIName") | .Value] | first) == $parent_ami_name and
+            ([.[0].Tags[] | select(.Key == "ComponentSourceSHA256") | .Value] | first) == $component_sha and
+            ([.[0].Tags[] | select(.Key == "DependencyLockSHA256") | .Value] | first) == $dependency_lock_sha and
+            ([.[0].Tags[] | select(.Key == "SupplyChainPolicySHA256") | .Value] | first) == $supply_chain_policy_sha and
+            ([.[0].Tags[] | select(.Key == "DnfReleasever") | .Value] | first) == $dnf_releasever and
+            ([.[0].Tags[] | select(.Key == "Boto3NEVRA") | .Value] | first) == $boto3_nevra and
+            ([.[0].Tags[] | select(.Key == "BotocoreNEVRA") | .Value] | first) == $botocore_nevra and
+            ([.[0].Tags[] | select(.Key == "ImageBuilderArn") | .Value] | first) == $image_builder_arn and
+            ([.[0].Tags[] | select(.Key == "MainnetChanged") | .Value] | first) == "false" and
+            ([.[0].Tags[] | select(.Key == "AssetsMoved") | .Value] | first) == "false" and
+            ([.[0].Tags[] | select(.Key == "BridgeActivated") | .Value] | first) == "false"
           ' <<<"$readback"
-          aws ec2 create-tags --resources "$ami_id" \
-            --tags Key=ImageBuilderArn,Value="$image_arn"
           write_verified_evidence "$ami_id" "$image_arn" false
           echo "ami_id=$ami_id" >> "$GITHUB_OUTPUT"
 
@@ -478,24 +924,47 @@ jobs:
           mkdir -p artifacts
           node_sha256="${NODE_SHA256:-}"
           genesis_sha256="${GENESIS_SHA256:-}"
+          request_sha256="${REQUEST_SHA256:-${PROVIDED_REQUEST_SHA256:-}}"
+          supply_chain_policy_sha256="${SUPPLY_CHAIN_POLICY_SHA256:-}"
           jq -n \
             --arg status "$WORKFLOW_JOB_STATUS" \
             --arg source_run_id "$SOURCE_RUN_ID" \
             --arg source_commit "$SOURCE_COMMIT" \
             --arg node_sha256 "$node_sha256" \
             --arg genesis_sha256 "$genesis_sha256" \
-            --arg request_sha256 "$REQUEST_SHA256" '{
-              schema_version: "junca-validator-ami-build/v1",
+            --arg request_sha256 "$request_sha256" \
+            --arg parent_ami_id "$PARENT_AMI_ID" \
+            --arg parent_ami_owner_id "$PARENT_AMI_OWNER_ID" \
+            --arg parent_ami_name "$PARENT_AMI_NAME" \
+            --arg component_sha "$EXPECTED_COMPONENT_SOURCE_SHA256" \
+            --arg dependency_lock_sha "$EXPECTED_DEPENDENCY_LOCK_SHA256" \
+            --arg supply_chain_policy_sha \
+              "$supply_chain_policy_sha256" \
+            --arg dnf_releasever "$DNF_RELEASEVER" \
+            --arg boto3_nevra "$PYTHON3_BOTO3_NEVRA" \
+            --arg botocore_nevra "$PYTHON3_BOTOCORE_NEVRA" '{
+              schema_version: "junca-validator-ami-build/v2",
               state: "AMI_BUILD_FAILED",
               workflow_job_status: $status,
               network: "Public Testnet",
               notice: "Public Testnet / No Monetary Value",
               governance: "JAIOS Institutional Governance",
+              request_schema: "junca-validator-ami-build-request/v2",
+              image_builder_arn: null,
               source_run_id: $source_run_id,
               source_commit: $source_commit,
               node_artifact_sha256: (if $node_sha256 == "" then null else $node_sha256 end),
               genesis_sha256: (if $genesis_sha256 == "" then null else $genesis_sha256 end),
               request_sha256: $request_sha256,
+              parent_ami_id: $parent_ami_id,
+              parent_ami_owner_id: $parent_ami_owner_id,
+              parent_ami_name: $parent_ami_name,
+              component_source_sha256: $component_sha,
+              dependency_lock_sha256: $dependency_lock_sha,
+              supply_chain_policy_sha256: $supply_chain_policy_sha,
+              dnf_releasever: $dnf_releasever,
+              python3_boto3_nevra: $boto3_nevra,
+              python3_botocore_nevra: $botocore_nevra,
               terraform_state_changed: false,
               mainnet_changed: false,
               assets_moved: false,
@@ -506,7 +975,7 @@ jobs:
             sha256sum junca-validator-ami-build.json > SHA256SUMS
           )
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: junca-validator-ami-build-${{ github.run_id }}

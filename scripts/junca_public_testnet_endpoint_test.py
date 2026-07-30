@@ -15,7 +15,9 @@ probes whose required result is rejection.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -49,11 +51,22 @@ UNSAFE_RPC_METHODS = (
 )
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
 HEALTH_SCHEMA = "junca-public-gateway-health/v1"
-EXPLORER_SCHEMA = "junca-public-explorer/v3"
+EXPLORER_SCHEMA = "junca-public-explorer/v5"
+CERTIFICATE_SCHEMA = "junca-finality-certificate/v1"
+CERTIFICATE_PROOF_SCHEMA = "junca-public-finality-certificate-proof/v1"
+EXPECTED_VALIDATOR_IDS = (
+    "validator-01",
+    "validator-02",
+    "validator-03",
+)
+HEX_DIGEST = re.compile(r"^0x[0-9a-f]{64}$")
+HEX_SIGNATURE = re.compile(r"^[0-9a-f]{128}$")
+CERTIFICATE_DOMAIN = b"JUNCA_FINALITY_CERTIFICATE_V1\x00"
 MAX_SAMPLE_ATTEMPTS = 10
 MAX_SAMPLE_INTERVAL_SECONDS = 60.0
 DEFAULT_SAMPLE_ATTEMPTS = 5
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 5.0
+MAX_FINALIZED_HEAD_AGE_SECONDS = 120
 
 
 class AcceptanceError(RuntimeError):
@@ -132,8 +145,171 @@ def _rpc_payload(
     }
 
 
+def _verify_certificate_proof(
+    proof: object,
+    *,
+    chain_id: int,
+    height: int,
+    block_hash: str,
+    summary_certificate_hash: str,
+    summary_signed_power: int,
+    summary_total_power: int,
+) -> Mapping[str, Any]:
+    """Reconstruct one certificate without trusting the gateway summary."""
+
+    _require(isinstance(proof, Mapping), "explorer: certificate proof is missing")
+    _require(
+        set(proof) == {"schema_version", "certificate", "votes"}
+        and proof.get("schema_version") == CERTIFICATE_PROOF_SCHEMA,
+        "explorer: certificate proof fields are invalid",
+    )
+    certificate = proof.get("certificate")
+    certificate_fields = {
+        "schema_version",
+        "chain_id",
+        "height",
+        "round",
+        "block_hash",
+        "signed_power",
+        "total_power",
+        "validator_ids",
+        "vote_hashes",
+        "certificate_hash",
+        "finality_status",
+        *BOUNDARY_FIELDS,
+    }
+    _require(
+        isinstance(certificate, Mapping)
+        and set(certificate) == certificate_fields
+        and certificate.get("schema_version") == CERTIFICATE_SCHEMA
+        and certificate.get("finality_status") == "FINALIZED",
+        "explorer: certificate fields are invalid",
+    )
+    _verify_boundaries(certificate, "explorer certificate")
+    round_number = certificate.get("round")
+    _require(
+        certificate.get("chain_id") == chain_id
+        and certificate.get("height") == height
+        and certificate.get("block_hash") == block_hash
+        and isinstance(round_number, int)
+        and not isinstance(round_number, bool)
+        and round_number >= 0,
+        "explorer: certificate identity does not bind the finalized head",
+    )
+    _require(
+        certificate.get("signed_power") == 3
+        and certificate.get("total_power") == 3
+        and summary_signed_power == 3
+        and summary_total_power == 3,
+        "explorer: exact three-of-three certificate power is required",
+    )
+    validator_ids = certificate.get("validator_ids")
+    _require(
+        validator_ids == list(EXPECTED_VALIDATOR_IDS),
+        "explorer: certificate validator identities are not exact",
+    )
+
+    votes = proof.get("votes")
+    _require(
+        isinstance(votes, list) and len(votes) == 3,
+        "explorer: certificate requires exactly three signed votes",
+    )
+    computed_vote_hashes: list[str] = []
+    for expected_validator_id, vote in zip(EXPECTED_VALIDATOR_IDS, votes):
+        _require(
+            isinstance(vote, Mapping)
+            and set(vote)
+            == {
+                "chain_id",
+                "height",
+                "round",
+                "block_hash",
+                "validator_id",
+                "signature",
+            },
+            "explorer: certificate vote fields are invalid",
+        )
+        signature = vote.get("signature")
+        _require(
+            vote.get("chain_id") == chain_id
+            and vote.get("height") == height
+            and vote.get("round") == round_number
+            and vote.get("block_hash") == block_hash
+            and vote.get("validator_id") == expected_validator_id,
+            "explorer: certificate vote does not bind the finalized head",
+        )
+        _require(
+            isinstance(signature, str)
+            and HEX_SIGNATURE.fullmatch(signature) is not None,
+            "explorer: certificate vote signature is invalid",
+        )
+        signing_payload = json.dumps(
+            {
+                "block_hash": block_hash,
+                "chain_id": chain_id,
+                "height": height,
+                "round": round_number,
+                "validator_id": expected_validator_id,
+                "vote_type": "PRECOMMIT",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        computed_vote_hashes.append(
+            "0x"
+            + hashlib.sha256(
+                signing_payload + bytes.fromhex(signature)
+            ).hexdigest()
+        )
+
+    supplied_vote_hashes = certificate.get("vote_hashes")
+    _require(
+        supplied_vote_hashes == computed_vote_hashes
+        and len(set(computed_vote_hashes)) == 3
+        and all(HEX_DIGEST.fullmatch(item) for item in computed_vote_hashes),
+        "explorer: certificate vote hashes do not match signed votes",
+    )
+    certificate_body = {
+        "block_hash": block_hash,
+        "chain_id": chain_id,
+        "height": height,
+        "round": round_number,
+        "signed_power": 3,
+        "total_power": 3,
+        "validator_ids": list(EXPECTED_VALIDATOR_IDS),
+        "vote_hashes": computed_vote_hashes,
+    }
+    computed_certificate_hash = (
+        "0x"
+        + hashlib.sha256(
+            CERTIFICATE_DOMAIN
+            + json.dumps(
+                certificate_body,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    _require(
+        certificate.get("certificate_hash") == computed_certificate_hash
+        and summary_certificate_hash == computed_certificate_hash,
+        "explorer: certificate hash reconstruction failed",
+    )
+    return {
+        "certificate_hash": computed_certificate_hash,
+        "signed_power": 3,
+        "total_power": 3,
+        "validator_ids": list(EXPECTED_VALIDATOR_IDS),
+        "vote_hashes": computed_vote_hashes,
+        "signed_vote_count": 3,
+        "recalculated": True,
+    }
+
+
 def run_acceptance(
     transport: Transport = https_json_transport,
+    *,
+    clock: Callable[[], float] = time.time,
 ) -> Mapping[str, Any]:
     """Run one complete, atomic endpoint-consistency sample."""
 
@@ -157,7 +333,7 @@ def run_acceptance(
     _require(explorer.status == 200, "explorer: expected HTTP 200")
     _require(
         explorer.body.get("schema_version") == EXPLORER_SCHEMA,
-        "explorer: v3 schema is required",
+        "explorer: v5 schema is required",
     )
     _require(
         explorer.body.get("status") == "ready",
@@ -176,9 +352,10 @@ def run_acceptance(
     _require(isinstance(network, Mapping), "explorer: network metadata is missing")
     _require(
         isinstance(network.get("chain_id"), str)
-        and network["chain_id"].startswith("0x")
         and isinstance(network.get("chain_id_decimal"), int)
-        and network["chain_id_decimal"] >= 0,
+        and not isinstance(network["chain_id_decimal"], bool)
+        and network["chain_id_decimal"] > 0
+        and network["chain_id"] == hex(network["chain_id_decimal"]),
         "explorer: invalid chain id",
     )
     _require(
@@ -188,36 +365,62 @@ def run_acceptance(
     )
     _require(
         isinstance(network.get("peer_count"), int)
-        and network["peer_count"] >= 0
+        and not isinstance(network["peer_count"], bool)
+        and network["peer_count"] == 2
         and isinstance(network.get("peer_count_hex"), str)
-        and network["peer_count_hex"].startswith("0x"),
-        "explorer: invalid peer count",
+        and network["peer_count_hex"] == "0x2",
+        "explorer: exact two-peer quorum is required",
     )
     head = explorer.body.get("head")
     _require(isinstance(head, Mapping), "explorer: finalized head is missing")
     _require(
-        isinstance(head.get("height"), int) and head["height"] >= 0,
+        isinstance(head.get("height"), int)
+        and not isinstance(head["height"], bool)
+        and head["height"] >= 1,
         "explorer: invalid finalized height",
     )
     _require(
-        isinstance(head.get("hash"), str) and head["hash"].startswith("0x"),
+        isinstance(head.get("hash"), str)
+        and HEX_DIGEST.fullmatch(head["hash"]) is not None,
         "explorer: invalid finalized hash",
     )
     _require(
         isinstance(head.get("certificate_hash"), str)
-        and head["certificate_hash"].startswith("0x"),
+        and HEX_DIGEST.fullmatch(head["certificate_hash"]) is not None,
         "explorer: finalized certificate is missing",
     )
     _require(
         isinstance(head.get("signed_power"), int)
+        and not isinstance(head["signed_power"], bool)
         and isinstance(head.get("total_power"), int)
-        and 0 < head["signed_power"] <= head["total_power"],
+        and not isinstance(head["total_power"], bool),
         "explorer: invalid finality power",
+    )
+    certificate_check = _verify_certificate_proof(
+        head.get("certificate"),
+        chain_id=network["chain_id_decimal"],
+        height=head["height"],
+        block_hash=head["hash"],
+        summary_certificate_hash=head["certificate_hash"],
+        summary_signed_power=head["signed_power"],
+        summary_total_power=head["total_power"],
     )
     _require(
         isinstance(head.get("timestamp"), str)
         and head["timestamp"].startswith("0x"),
         "explorer: finalized block timestamp is missing",
+    )
+    try:
+        finalized_timestamp = int(head["timestamp"], 16)
+    except (TypeError, ValueError) as exc:
+        raise AcceptanceError(
+            "explorer: finalized block timestamp is invalid"
+        ) from exc
+    observed_epoch = int(clock())
+    _require(
+        0 <= observed_epoch - finalized_timestamp
+        <= MAX_FINALIZED_HEAD_AGE_SECONDS,
+        "explorer: finalized block is stale or future-dated",
     )
     _require(
         isinstance(head.get("state_root"), str)
@@ -233,9 +436,10 @@ def run_acceptance(
         "result": "PASS",
         "finalized_height": head["height"],
         "finalized_hash": head["hash"],
-        "signed_power": head["signed_power"],
-        "total_power": head["total_power"],
-        "certificate_hash": head["certificate_hash"],
+        "signed_power": certificate_check["signed_power"],
+        "total_power": certificate_check["total_power"],
+        "certificate_hash": certificate_check["certificate_hash"],
+        "peer_count": network["peer_count"],
     }
 
     safe_results: dict[str, Any] = {}
@@ -306,7 +510,10 @@ def run_acceptance(
     return {
         "status": "PASS",
         "scope": "Public Testnet Runtime Acceptance / Read-only",
-        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "observed_at": datetime.fromtimestamp(
+            observed_epoch,
+            timezone.utc,
+        ).isoformat(),
         "endpoints": {
             "health": HEALTH_URL,
             "explorer": EXPLORER_URL,

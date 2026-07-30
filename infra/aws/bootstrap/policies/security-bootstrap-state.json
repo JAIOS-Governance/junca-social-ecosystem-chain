@@ -1,0 +1,226 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenySessionWithoutSecurityBootstrapBoundary",
+      "Effect": "Deny",
+      "NotAction": "sts:GetCallerIdentity",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalTag/JuncaChangeBoundary": "SecurityBootstrap"
+        }
+      }
+    },
+    {
+      "Sid": "DenySecurityBootstrapPolicySelfMutation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapCore",
+        "arn:aws:iam::595710543956:policy/JuncaChainSecurityBootstrapState"
+      ]
+    },
+    {
+      "Sid": "DenyWorkloadTrustMutation",
+      "Effect": "Deny",
+      "Action": "iam:UpdateAssumeRolePolicy",
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-1",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-2",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-3"
+      ]
+    },
+    {
+      "Sid": "DenyProtectedRoleBoundaryMutation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:PutRolePermissionsBoundary"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetAmiBuilder",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver",
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-1",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-2",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-3"
+      ]
+    },
+    {
+      "Sid": "DenyWorkloadInstanceProfileMutation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:AddRoleToInstanceProfile",
+        "iam:CreateInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-1",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-2",
+        "arn:aws:iam::595710543956:role/junca-social-ecosystem-chain-testnet-validator-3",
+        "arn:aws:iam::595710543956:instance-profile/JuncaChainPublicTestnetImageBuilder",
+        "arn:aws:iam::595710543956:instance-profile/junca-social-ecosystem-chain-testnet-validator-1",
+        "arn:aws:iam::595710543956:instance-profile/junca-social-ecosystem-chain-testnet-validator-2",
+        "arn:aws:iam::595710543956:instance-profile/junca-social-ecosystem-chain-testnet-validator-3"
+      ]
+    },
+    {
+      "Sid": "DenySigning",
+      "Effect": "Deny",
+      "Action": [
+        "kms:GenerateMac",
+        "kms:Sign"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenySignerGrantCreation",
+      "Effect": "Deny",
+      "Action": "kms:CreateGrant",
+      "Resource": "arn:aws:kms:us-east-1:595710543956:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Purpose": "ValidatorSigner"
+        }
+      }
+    },
+    {
+      "Sid": "ReadTaggedCanonicalKeys",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListGrants",
+        "kms:ListKeyPolicies",
+        "kms:ListResourceTags"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:595710543956:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Network": "Public Testnet",
+          "aws:ResourceTag/Project": "JUNCA Social Ecosystem Chain",
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "CreateOnlyDynamoDbStateGrant",
+      "Effect": "Allow",
+      "Action": "kms:CreateGrant",
+      "Resource": "arn:aws:kms:us-east-1:595710543956:key/*",
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": "alias/junca-social-ecosystem-chain-testnet-state"
+        },
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "kms:CallerAccount": "595710543956",
+          "kms:ViaService": "dynamodb.us-east-1.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ReadCanonicalKmsInventory",
+      "Effect": "Allow",
+      "Action": [
+        "kms:ListAliases",
+        "kms:ListRetirableGrants"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "ReadProtectedIamPrefixInventory",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListInstanceProfiles",
+        "iam:ListRoles"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UseCanonicalStateKeyOnlyThroughS3",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:595710543956:key/*",
+      "Condition": {
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": "alias/junca-social-ecosystem-chain-testnet-state"
+        },
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "kms:ViaService": "s3.us-east-1.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ManageCanonicalStateBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:GetBucket*",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketTagging",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1",
+        "arn:aws:s3:::junca-social-ecosystem-chain-tfstate-595710543956-us-east-1/*"
+      ]
+    },
+    {
+      "Sid": "ManageCanonicalStateLock",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:GetItem",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:PutItem",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:UpdateTable"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:595710543956:table/junca-social-ecosystem-chain-testnet-lock",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    }
+  ]
+}

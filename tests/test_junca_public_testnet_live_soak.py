@@ -113,10 +113,25 @@ class LiveSoakTests(unittest.TestCase):
             workflow,
         )
         self.assertIn('.event == "workflow_run"', workflow)
+        self.assertIn(
+            '.head_branch == "main"',
+            workflow,
+        )
+        self.assertIn(".head_sha == $source_commit", workflow)
+        self.assertIn('.event == "workflow_dispatch"', workflow)
         self.assertEqual(workflow.count("junca-public-testnet-live-soak-segment.yml"), 6)
         self.assertIn("timeout-minutes: 270", segment_workflow)
         self.assertIn("request_sha256:", segment_workflow)
         self.assertIn("$tags.RequestDigest == $request_sha256", workflow)
+        job_prefix = workflow.split("  preflight:", 1)[1].split(
+            "    runs-on:", 1
+        )[0]
+        self.assertNotIn("if:", job_prefix)
+        self.assertIn("Authorize exact soak trigger", workflow)
+        self.assertIn(
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            workflow,
+        )
         self.assertNotIn("terraform apply", workflow.lower())
         self.assertNotIn("aws ec2 run-instances", workflow.lower())
 

@@ -1,0 +1,580 @@
+{
+  "schema_version": "junca-public-testnet-cloud-role-policy/v1",
+  "chain": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "network": "Public Testnet / No Monetary Value",
+  "repository": "JAIOS-Governance/junca-social-ecosystem-chain",
+  "environment": "public-testnet",
+  "aws_account_id": "595710543956",
+  "aws_region": "us-east-1",
+  "oidc_use_immutable_subject": true,
+  "oidc_subject_claim_keys": [
+    "repo",
+    "context",
+    "workflow_ref",
+    "runner_environment"
+  ],
+  "subject_template": "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:{environment}:workflow_ref:{repository}/.github/workflows/{workflow}@refs/heads/main:runner_environment:github-hosted",
+  "external_oidc_readback_state": "BLOCKED_PENDING_EXTERNAL_READBACK",
+  "runtime_recovery_execution_state": "BLOCKED_PENDING_ATTESTED_LAUNCH_AND_SSM_CONTRACT",
+  "repo_global_oidc_cutover_gate": {
+    "preparation_state": "BLOCKED_PENDING_EXTERNAL_FUTURE_TRUST_READBACK",
+    "prepared_state": "PREPARED_ALL_CREDENTIAL_CALLS_EXACTLY_TRUSTED_OR_RETIRED",
+    "activation_state": "BLOCKED_PENDING_COMPLETE_REPOSITORY_CREDENTIAL_MATRIX_ATTESTATION",
+    "ready_state": "READY_AFTER_ALL_CREDENTIAL_CALLS_EXACTLY_ATTESTED",
+    "baseline_credential_call_count": 27,
+    "active_credential_call_count": 7,
+    "canonical_call_count": 7,
+    "migrated_exact_call_count": 0,
+    "blocked_pending_migration_call_count": 0,
+    "retired_call_count": 20,
+    "external_preparation_evidence": {
+      "state": "BLOCKED_PENDING_EXTERNAL_FUTURE_TRUST_READBACK",
+      "accepted_state": "EXACT_FUTURE_TRUST_AND_RETIREMENT_READBACK_VERIFIED",
+      "matrix_sha256": null,
+      "trust_readback_sha256": null,
+      "covered_baseline_call_count": 0
+    },
+    "external_activation_evidence": {
+      "state": "BLOCKED_PENDING_EXTERNAL_EXACT_TOKEN_STS_READBACK",
+      "accepted_state": "EXACT_ACTIVE_TOKENS_ACCEPTED_BY_AWS_STS_OR_RETIRED",
+      "matrix_sha256": null,
+      "sts_readback_sha256": null,
+      "covered_baseline_call_count": 0
+    },
+    "active_credential_calls": [
+      {
+        "workflow": "junca-public-testnet-live-soak.yml",
+        "job": "aggregate",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+        "role_to_assume": "${{ env.OBSERVER_ROLE_ARN }}",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      },
+      {
+        "workflow": "junca-public-testnet-release.yml",
+        "job": "publish-and-verify",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+        "role_to_assume": "${{ env.DEPLOYMENT_ROLE_ARN }}",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      },
+      {
+        "workflow": "junca-runtime-release-evidence-collector-v2.yml",
+        "job": "collect",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+        "role_to_assume": "${{ env.OBSERVER_ROLE_ARN }}",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      },
+      {
+        "workflow": "junca-social-ecosystem-chain-aws-binding-readback.yml",
+        "job": "live-readback",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a",
+        "role_to_assume": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetObserver",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      },
+      {
+        "workflow": "junca-social-ecosystem-chain-aws-readback.yml",
+        "job": "canonical-readback",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+        "role_to_assume": "${{ env.OBSERVER_ROLE_ARN }}",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      },
+      {
+        "workflow": "junca-validator-ami-build.yml",
+        "job": "build",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+        "role_to_assume": "${{ env.AMI_BUILDER_ROLE_ARN }}",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      },
+      {
+        "workflow": "junca-validator-foundation-release.yml",
+        "job": "deploy-and-accept",
+        "call_index": 0,
+        "action": "aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5",
+        "role_to_assume": "${{ env.DEPLOYMENT_ROLE_ARN }}",
+        "disposition": "CANONICAL_EXACT_ROLE_AND_STS_ATTESTATION_REQUIRED",
+        "required_evidence_state": "EXACT_TOKEN_ACCEPTED_BY_AWS_STS"
+      }
+    ],
+    "retired_credential_calls": [
+      {
+        "workflow": "jaios-institutional-apex-publication.yml",
+        "job": "publish",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Unreviewed production OIDC path removed before repository-global immutable-subject cutover."
+      },
+      {
+        "workflow": "jaios-institutional-apex-publication.yml",
+        "job": "publish",
+        "call_index": 1,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Second unreviewed production OIDC session removed with its workflow."
+      },
+      {
+        "workflow": "jaios-voice-domain-production.yml",
+        "job": "publish",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Separate voice production bootstrap trust removed pending an independently reviewed migration."
+      },
+      {
+        "workflow": "jaios-voice-oidc-trust-recovery.yml",
+        "job": "repair",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "OIDC-mediated OIDC trust repair removed; Security Bootstrap remains non-OIDC."
+      },
+      {
+        "workflow": "junca-chain-cloudformation-self-reconcile.yml",
+        "job": "reconcile",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Unreviewed production CloudFormation mutation path removed."
+      },
+      {
+        "workflow": "junca-chain-direct-stack-reconcile.yml",
+        "job": "reconcile",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Direct production stack mutation path removed."
+      },
+      {
+        "workflow": "junca-chain-docs-production.yml",
+        "job": "deploy",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Separate docs-production role path removed pending exact trust migration."
+      },
+      {
+        "workflow": "junca-chain-domain-direct-docs-role.yml",
+        "job": "recover",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Direct docs-role recovery path removed."
+      },
+      {
+        "workflow": "junca-chain-production-role-finalize.yml",
+        "job": "finalize",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Unreviewed production role finalization path removed."
+      },
+      {
+        "workflow": "junca-chain-publication-reliability.yml",
+        "job": "aws-readback",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Unattested docs publication AWS readback path removed."
+      },
+      {
+        "workflow": "junca-chain-route53-single-record-recovery.yml",
+        "job": "recover",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Direct Route53 mutation path removed."
+      },
+      {
+        "workflow": "junca-point-member-direct-production-20260726.yml",
+        "job": "publish",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Dated point-member production mutation path removed."
+      },
+      {
+        "workflow": "junca-point-member-domain-finalize-20260726.yml",
+        "job": "publish-domain",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Dated point-member domain finalization path removed."
+      },
+      {
+        "workflow": "junca-point-member-domain-recovery.yml",
+        "job": "publish-domain",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Point-member domain recovery path removed."
+      },
+      {
+        "workflow": "junca-point-member-migration-key.yml",
+        "job": "provision",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Unreviewed point-member key provisioning path removed."
+      },
+      {
+        "workflow": "junca-point-member-otp-relay-deploy.yml",
+        "job": "deploy",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Separate OTP relay deployment path removed pending exact trust migration."
+      },
+      {
+        "workflow": "junca-point-member-otp-relay-readback.yml",
+        "job": "readback",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Unattested OTP relay readback path removed."
+      },
+      {
+        "workflow": "junca-public-testnet-input-resolution.yml",
+        "job": "resolve",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Legacy public-testnet input resolution mutation path removed."
+      },
+      {
+        "workflow": "junca-scan-publication.yml",
+        "job": "publish",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Explorer publication path removed pending a separately reviewed exact role."
+      },
+      {
+        "workflow": "junca-social-ecosystem-chain-aws-foundation-execution.yml",
+        "job": "permission-readback",
+        "call_index": 0,
+        "disposition": "RETIRED_WORKFLOW_FILE_REMOVED",
+        "retirement_reason": "Legacy Foundation apply and inline-policy reconciliation path removed; canonical Foundation release supersedes it."
+      }
+    ]
+  },
+  "prohibited_legacy_subject": "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet",
+  "roles": {
+    "foundation": {
+      "role_name": "JuncaChainPublicTestnetDeployment",
+      "oidc_enabled": true,
+      "mutation_capable": true,
+      "exact_workflow_allowlist": [
+        "junca-public-testnet-release.yml",
+        "junca-validator-foundation-release.yml"
+      ],
+      "exact_subject_allowlist": [
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-public-testnet-release.yml@refs/heads/main:runner_environment:github-hosted",
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-validator-foundation-release.yml@refs/heads/main:runner_environment:github-hosted"
+      ],
+      "required_action_families": [
+        "acm:certificate-lifecycle",
+        "cloudwatch:alarm-lifecycle",
+        "dynamodb:exact-state-lock",
+        "ec2:tagged-public-testnet-infrastructure",
+        "elasticloadbalancing:tagged-public-testnet-infrastructure",
+        "kms:exact-state-key-use",
+        "logs:exact-public-testnet-log-groups",
+        "route53:exact-public-testnet-records",
+        "s3:exact-public-testnet-state-prefix",
+        "sns:exact-validator-alert-topic",
+        "ssm:blocked-pending-fixed-document-contract",
+        "wafv2:exact-public-testnet-web-acl"
+      ],
+      "blocked_capabilities": [
+        "ec2:validator-host-replacement",
+        "iam:PassRole:validator-instance-role",
+        "ssm:validator-command-execution"
+      ],
+      "prohibited_actions": [
+        "ec2:*",
+        "iam:*",
+        "iam:CreateRole:without-exact-per-validator-boundary",
+        "iam:PutRolePolicy:outside-exact-validator-roles",
+        "iam:UpdateAssumeRolePolicy",
+        "kms:CreateGrant",
+        "kms:CreateKey"
+      ]
+    },
+    "ami_builder": {
+      "role_name": "JuncaChainPublicTestnetAmiBuilder",
+      "oidc_enabled": true,
+      "mutation_capable": true,
+      "exact_workflow_allowlist": [
+        "junca-validator-ami-build.yml"
+      ],
+      "exact_subject_allowlist": [
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-validator-ami-build.yml@refs/heads/main:runner_environment:github-hosted"
+      ],
+      "required_action_families": [
+        "ec2:DescribeImages",
+        "ec2:CreateTags:exact-produced-ami",
+        "iam:GetInstanceProfile:exact-image-builder-profile",
+        "iam:PassRole:exact-image-builder-role",
+        "imagebuilder:exact-candidate-build-lifecycle",
+        "s3:exact-ephemeral-build-bucket-prefix"
+      ],
+      "prohibited_actions": [
+        "ec2:*",
+        "iam:*",
+        "ssm:SendCommand"
+      ]
+    },
+    "observer": {
+      "role_name": "JuncaChainPublicTestnetObserver",
+      "oidc_enabled": true,
+      "mutation_capable": false,
+      "exact_workflow_allowlist": [
+        "junca-public-testnet-live-soak.yml",
+        "junca-runtime-release-evidence-collector-v2.yml",
+        "junca-social-ecosystem-chain-aws-binding-readback.yml",
+        "junca-social-ecosystem-chain-aws-readback.yml"
+      ],
+      "exact_subject_allowlist": [
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-public-testnet-live-soak.yml@refs/heads/main:runner_environment:github-hosted",
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-runtime-release-evidence-collector-v2.yml@refs/heads/main:runner_environment:github-hosted",
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-social-ecosystem-chain-aws-binding-readback.yml@refs/heads/main:runner_environment:github-hosted",
+        "repo:JAIOS-Governance@308604370/junca-social-ecosystem-chain@1310568313:environment:public-testnet:workflow_ref:JAIOS-Governance/junca-social-ecosystem-chain/.github/workflows/junca-social-ecosystem-chain-aws-readback.yml@refs/heads/main:runner_environment:github-hosted"
+      ],
+      "required_action_families": [
+        "ec2:Describe*",
+        "elasticloadbalancing:Describe*",
+        "iam:GetRole:exact-observed-roles",
+        "kms:Decrypt:exact-state-key",
+        "kms:DescribeKey:exact-validator-signers",
+        "route53:Get*",
+        "route53:List*",
+        "s3:GetObject:exact-public-testnet-state-prefix",
+        "s3:ListBucket:exact-state-bucket",
+        "sts:GetCallerIdentity"
+      ],
+      "prohibited_actions": [
+        "*:Create*",
+        "*:Delete*",
+        "*:Put*",
+        "*:Update*",
+        "iam:PassRole",
+        "ssm:SendCommand"
+      ]
+    },
+    "security_bootstrap": {
+      "role_name": "JuncaChainSecurityBootstrap",
+      "oidc_enabled": false,
+      "mutation_capable": true,
+      "exact_workflow_allowlist": [],
+      "exact_subject_allowlist": [],
+      "trust_boundary": "NON_OIDC_MFA_ADMIN_SESSION_ONLY",
+      "required_action_families": [
+        "dynamodb:state-lock-bootstrap",
+        "iam:exact-role-and-instance-profile-bootstrap",
+        "iam:oidc-provider-and-exact-trust-bootstrap",
+        "kms:state-and-validator-key-bootstrap",
+        "s3:state-bucket-bootstrap"
+      ],
+      "prohibited_principals": [
+        "token.actions.githubusercontent.com"
+      ]
+    }
+  },
+  "canonical_release_role_mapping": {
+    "junca-validator-ami-build.yml": "ami_builder",
+    "junca-validator-foundation-release.yml": "foundation",
+    "junca-runtime-release-evidence-collector-v2.yml": "observer",
+    "junca-public-testnet-release.yml": "foundation",
+    "junca-public-testnet-live-soak.yml": "observer"
+  },
+  "temporary_non_oidc_operations": [
+    {
+      "workflow": "junca-validator-state-migration.yml",
+      "purpose": "One-time durable validator state migration",
+      "steady_state_role_allowed": false,
+      "oidc_enabled": false,
+      "execution_state": "BLOCKED_UNTIL_DEDICATED_NON_OIDC_AUTHORIZATION"
+    }
+  ],
+  "blocked_oidc_template_mutators": [
+    {
+      "workflow": "junca-chain-aws-production-recovery.yml",
+      "original_name": "JUNCA Chain AWS Production Recovery",
+      "retired_reason": "Repository-global OIDC subject-template mutation is prohibited and this production recovery is outside the canonical JSEC recovery chain.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-chain-bootstrap-role-recovery.yml",
+      "original_name": "JUNCA Chain Bootstrap Role Recovery",
+      "retired_reason": "Repository-global OIDC subject-template mutation and cloud bootstrap from a workflow are prohibited.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-chain-brand-domain-dns.yml",
+      "original_name": "JUNCA Chain Brand Domain DNS",
+      "retired_reason": "Repository-global OIDC subject-template mutation and IAM repair are outside the canonical JSEC recovery chain.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-chain-brand-domain-recovery-canonical.yml",
+      "original_name": "JUNCA Chain Brand Domain Recovery via Canonical OIDC",
+      "retired_reason": "Repository-global OIDC subject-template mutation is prohibited; domain recovery must use a separately protected production role.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-chain-domain-final-execution.yml",
+      "original_name": "JUNCA Chain Custom Domain Final Execution",
+      "retired_reason": "Repository-global OIDC subject-template mutation is prohibited and domain cutover is outside the canonical JSEC recovery chain.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-jaios-dual-domain-final-cutover.yml",
+      "original_name": "JUNCA and JAIOS Dual Domain Final Cutover",
+      "retired_reason": "Repository-global OIDC subject-template mutation is prohibited and dual-domain cutover is outside the canonical JSEC recovery chain.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-point-member-domain-final-recovery-20260726.yml",
+      "original_name": "JUNCA POINT MEMBER Domain Final Recovery 20260726",
+      "retired_reason": "Repository-global OIDC subject-template mutation is prohibited and this dated domain recovery workflow is retired.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-point-member-domain-iam-recovery-20260726.yml",
+      "original_name": "JUNCA POINT MEMBER Domain IAM Recovery 20260726",
+      "retired_reason": "Repository-global OIDC subject-template mutation and IAM recovery must not execute from GitHub OIDC.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    }
+  ],
+  "blocked_raw_oidc_workflows": [
+    {
+      "workflow": "junca-chain-bootstrap-inline-policy-repair.yml",
+      "original_name": "JUNCA Chain Bootstrap Inline Policy Repair",
+      "retired_reason": "The workflow persisted a raw GitHub OIDC token, tried multiple roles, exported STS credentials, and mutated IAM outside the non-OIDC Security Bootstrap boundary.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-chain-runtime-self-permission-recovery.yml",
+      "original_name": "JUNCA Chain Runtime Self Permission Recovery",
+      "retired_reason": "An OIDC role must not repair its own IAM permissions through raw web-identity STS calls.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    },
+    {
+      "workflow": "junca-point-member-production-recovery.yml",
+      "original_name": "JUNCA POINT MEMBER Production Recovery",
+      "retired_reason": "Direct raw OIDC and STS credential export bypass the repository-wide exact-token attestation and role inventory.",
+      "disposition": "DELETE_WORKFLOW_FILE"
+    }
+  ],
+  "quarantine_mode": "DELETE_WORKFLOW_FILE",
+  "quarantine": [
+    {
+      "workflow": "junca-chain-aws-canonical-inventory.yml",
+      "original_name": "JUNCA Chain AWS Canonical Inventory",
+      "retired_reason": "Broad account inventory is not part of the canonical recovery chain; use scoped Observer readback."
+    },
+    {
+      "workflow": "junca-emergency-finality-restore.yml",
+      "original_name": "JUNCA Emergency Finality Restore",
+      "retired_reason": "Arbitrary SSM runtime mutation is replaced by the serial Foundation recovery workflow."
+    },
+    {
+      "workflow": "junca-emergency-gateway-diagnostic.yml",
+      "original_name": "JUNCA Emergency Gateway Diagnostic",
+      "retired_reason": "SSM-based diagnostics mutate instances and are outside the read-only Observer boundary."
+    },
+    {
+      "workflow": "junca-emergency-gateway-redundancy.yml",
+      "original_name": "JUNCA Emergency Gateway Redundancy",
+      "retired_reason": "Direct SSM and target registration bypass canonical serial Foundation controls."
+    },
+    {
+      "workflow": "junca-emergency-gateway-service-restore.yml",
+      "original_name": "JUNCA Emergency Gateway Service Restore",
+      "retired_reason": "Direct SSM service mutation is superseded by canonical Foundation recovery."
+    },
+    {
+      "workflow": "junca-emergency-manual-quorum-restore.yml",
+      "original_name": "JUNCA Emergency Manual Quorum Restore",
+      "retired_reason": "Manual SSM and target registration bypass provenance-bound serial recovery."
+    },
+    {
+      "workflow": "junca-emergency-p2p-diagnostic.yml",
+      "original_name": "JUNCA Emergency P2P Diagnostic",
+      "retired_reason": "SSM-based diagnostics are mutation-capable and cannot use the Observer role."
+    },
+    {
+      "workflow": "junca-emergency-public-runtime-restore.yml",
+      "original_name": "JUNCA Emergency Public Runtime Restore",
+      "retired_reason": "Direct instance start and SSM mutation bypass canonical Foundation recovery."
+    },
+    {
+      "workflow": "junca-emergency-public-target-failover.yml",
+      "original_name": "JUNCA Emergency Public Target Failover",
+      "retired_reason": "Direct target deregistration is not authorized outside serial Foundation recovery."
+    },
+    {
+      "workflow": "junca-emergency-runtime-activate.yml",
+      "original_name": "JUNCA Emergency Runtime Activate",
+      "retired_reason": "Direct runtime activation through SSM is superseded by canonical Foundation recovery."
+    },
+    {
+      "workflow": "junca-emergency-runtime-archive-restore.yml",
+      "original_name": "JUNCA Emergency Runtime Archive Restore",
+      "retired_reason": "Unbound archive restoration through SSM is not an approved recovery input."
+    },
+    {
+      "workflow": "junca-emergency-runtime-final-restore.yml",
+      "original_name": "JUNCA Emergency Runtime Final Restore",
+      "retired_reason": "Cross-instance SSM restoration bypasses canonical artifact and provenance gates."
+    },
+    {
+      "workflow": "junca-emergency-runtime-parity.yml",
+      "original_name": "JUNCA Emergency Runtime Parity",
+      "retired_reason": "Direct parity mutation through SSM is superseded by immutable Foundation rollout."
+    },
+    {
+      "workflow": "junca-emergency-runtime-unit-restore.yml",
+      "original_name": "JUNCA Emergency Runtime Unit Restore",
+      "retired_reason": "Direct system service mutation through SSM bypasses Foundation acceptance."
+    },
+    {
+      "workflow": "junca-emergency-validator-state-finality-restore.yml",
+      "original_name": "JUNCA Emergency Validator State and Finality Restore",
+      "retired_reason": "Validator state and finality changes require the provenance-bound serial Foundation path."
+    },
+    {
+      "workflow": "junca-emergency-validator01-lsblk-recovery.yml",
+      "original_name": "JUNCA Emergency Validator 01 EBS Recovery",
+      "retired_reason": "Host and EBS recovery through raw SSM is replaced by guarded state migration and Foundation."
+    },
+    {
+      "workflow": "junca-emergency-validator01-node-diagnostic.yml",
+      "original_name": "JUNCA Emergency Validator 01 Node Diagnostic",
+      "retired_reason": "SSM-based node diagnostics are mutation-capable and outside the Observer role."
+    },
+    {
+      "workflow": "junca-emergency-vote-diagnostic.yml",
+      "original_name": "JUNCA Emergency Vote Diagnostic",
+      "retired_reason": "SSM-based vote diagnostics are mutation-capable and outside the Observer role."
+    },
+    {
+      "workflow": "junca-public-testnet-iam-recovery.yml",
+      "original_name": "JUNCA Public Testnet IAM Recovery",
+      "retired_reason": "Cloud IAM recovery must use the non-OIDC Security Bootstrap boundary."
+    },
+    {
+      "workflow": "junca-public-testnet-oidc-trust-recovery.yml",
+      "original_name": "JUNCA Public Testnet OIDC Trust Recovery",
+      "retired_reason": "OIDC trust changes must use non-OIDC Security Bootstrap and exact workflow subjects."
+    },
+    {
+      "workflow": "junca-validator-runtime-diagnostic.yml",
+      "original_name": "JUNCA Validator Runtime Diagnostic",
+      "retired_reason": "SSM-based diagnostics are mutation-capable and cannot use the Observer role."
+    },
+    {
+      "workflow": "junca-validator-runtime-recovery.yml",
+      "original_name": "JUNCA Validator Runtime Recovery",
+      "retired_reason": "Duplicate runtime recovery is replaced by the canonical serial Foundation workflow."
+    }
+  ],
+  "release_boundary": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  }
+}

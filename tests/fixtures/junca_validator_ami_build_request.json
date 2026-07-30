@@ -1,5 +1,5 @@
 {
-  "schema_version": "junca-validator-ami-build-request/v1",
+  "schema_version": "junca-validator-ami-build-request/v2",
   "state": "AUTHORIZED",
   "network": "Public Testnet",
   "environment": "public-testnet",
@@ -10,11 +10,20 @@
   "genesis_artifact_name": "junca-validator-genesis-30273062161",
   "node_sha256": "6441304649985de9a12c8758584785e0e0cc980b793fb735a1c5f0cffba70f14",
   "genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
+  "parent_ami_id": "ami-0123456789abcdef0",
+  "parent_ami_owner_id": "137112412989",
+  "parent_ami_name": "al2023-ami-2023.12.20260724.0-kernel-6.18-x86_64",
+  "component_source_sha256": "5c02b2ada5a2642d8659f4ee992222069c68ca5c3d6124ac27348705ca1d5f18",
+  "dependency_lock_sha256": "5d710b98d6a0da2abb156441b532d94a0ba7942dae1e59ce3c8f334311ed7289",
+  "supply_chain_policy_sha256": "24922d23ed83153c954182d0e18b085d06f65a59757a2d0425e5fc152fc76fba",
+  "dnf_releasever": "2023.12.20260724",
+  "python3_boto3_nevra": "python3-boto3-0:1.40.31-1.amzn2023.0.1.noarch",
+  "python3_botocore_nevra": "python3-botocore-0:1.40.31-1.amzn2023.0.1.noarch",
   "boundaries": {
     "terraform_state_changed": false,
     "mainnet_changed": false,
     "assets_moved": false,
     "bridge_activated": false
   },
-  "request_sha256": "a64b7762bc561ce1ab3fe24bff95a4f1dc756f9e27d8270f4126e54e496815ec"
+  "request_sha256": "d886689fd589c553d8b3540f502821a581e0e01f319b5479d3b1e5b8747a4bb7"
 }

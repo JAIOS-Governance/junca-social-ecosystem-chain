@@ -83,7 +83,14 @@ class ReliableAuthenticatedVoteGossip(PrivateVpcPeerTransport):
 
         self._send_latest_finalization(excluded={self.validator_id})
         if self._mark_seen(packet):
-            self._process_authenticated_vote(packet, announce_finalization=True)
+            try:
+                self._process_authenticated_vote(
+                    packet,
+                    announce_finalization=True,
+                )
+            except Exception:
+                self._forget_seen(packet)
+                raise
         failures = self._send_frame_to_peers(
             _vote_frame(packet), excluded={self.validator_id}
         )
@@ -102,10 +109,21 @@ class ReliableAuthenticatedVoteGossip(PrivateVpcPeerTransport):
         self._send_latest_finalization(
             excluded=set(self.endpoints) - {source_validator_id}
         )
-        if not self._mark_seen(packet):
+        is_new = self._mark_seen(packet)
+        if is_new:
+            try:
+                self._process_authenticated_vote(
+                    packet,
+                    announce_finalization=True,
+                )
+            except Exception:
+                self._forget_seen(packet)
+                raise
+        if packet.validator_id == source_validator_id:
+            self._record_authenticated_peer(source_validator_id)
+        if not is_new:
             return False
 
-        self._process_authenticated_vote(packet, announce_finalization=True)
         self._send_frame_to_peers(
             _vote_frame(packet),
             excluded={self.validator_id, source_validator_id},
@@ -131,12 +149,15 @@ class ReliableAuthenticatedVoteGossip(PrivateVpcPeerTransport):
                 return False
 
         for packet in packets:
-            self._cache_packet(packet)
             if self._mark_seen(packet):
-                self._process_authenticated_vote(
-                    packet,
-                    announce_finalization=False,
-                )
+                try:
+                    self._process_authenticated_vote(
+                        packet,
+                        announce_finalization=False,
+                    )
+                except Exception:
+                    self._forget_seen(packet)
+                    raise
 
         consensus = self._require_consensus()
         certificate = consensus._last_certificate
@@ -238,10 +259,9 @@ class ReliableAuthenticatedVoteGossip(PrivateVpcPeerTransport):
             if consensus is None or consensus._last_certificate is None
             else consensus._last_certificate.certificate_hash
         )
-        self._cache_packet(packet)
-
         # The callback verifies both peer authentication and consensus signature.
         self.receive_vote(packet)
+        self._cache_packet(packet)
 
         if not announce_finalization or consensus is None:
             return
@@ -447,6 +467,17 @@ class ReliableAuthenticatedVoteGossip(PrivateVpcPeerTransport):
             while len(self._seen_votes) > _MAX_SEEN_VOTES:
                 self._seen_votes.popitem(last=False)
         return True
+
+    def _forget_seen(self, packet: AuthenticatedVote) -> None:
+        digest = hashlib.sha256(_vote_frame(packet)[4:]).hexdigest()
+        with self._seen_lock:
+            self._seen_votes.pop(digest, None)
+
+    def _record_authenticated_peer(self, source_validator_id: str) -> None:
+        """Count only a source carrying its own successfully verified vote."""
+
+        with self._peer_observations_lock:
+            self._peer_observations[source_validator_id] = self._clock()
 
     def _remember_finalization(
         self,
