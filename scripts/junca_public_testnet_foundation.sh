@@ -1080,17 +1080,37 @@ validate_validator_service_recovery_evidence() {
   local expected_runtime_version="$5"
   local expected_runtime_env_sha256="$6"
   local expected_state_volume_id="$7"
+  local expected_genesis_sha256="$8"
+  local expected_source_commit="$9"
+  shift 9
+  local expected_recovery_request_sha256="$1"
+  local expected_recovery_command_id="$2"
+  [[ "$expected_genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_source_commit" =~ ^[0-9a-f]{40}$ ]]
+  [[ "$expected_recovery_request_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_recovery_command_id" =~ \
+    ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
   jq -e \
     --arg validator_id "$validator_id" \
     --arg instance_id "$instance_id" \
     --arg expected_ami_id "$expected_ami_id" \
     --arg expected_runtime_version "$expected_runtime_version" \
     --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" \
-    --arg expected_state_volume_id "$expected_state_volume_id" '
-      .schema_version == "junca-validator-service-recovery/v4" and
+    --arg expected_state_volume_id "$expected_state_volume_id" \
+    --arg expected_genesis_sha256 "$expected_genesis_sha256" \
+    --arg expected_source_commit "$expected_source_commit" \
+    --arg expected_recovery_request_sha256 \
+      "$expected_recovery_request_sha256" \
+    --arg expected_recovery_command_id "$expected_recovery_command_id" '
+      .schema_version == "junca-validator-service-recovery/v5" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
+      .genesis_sha256 == $expected_genesis_sha256 and
+      .source_commit == $expected_source_commit and
+      .recovery_request_sha256 == $expected_recovery_request_sha256 and
+      .recovery_command_id == $expected_recovery_command_id and
+      .recovery_dispatch_sequence == 1 and
       (.before_status | type) == "string" and
       (.pre_repair_health_status | type) == "string" and
       (.pre_repair_validator_id | type) == "string" and
@@ -1246,6 +1266,7 @@ ensure_validator_service_available() {
   local recovery_command
   local canonical_runtime_b64
   local canonical_runtime_env_sha256
+  local recovery_request_sha256
   local command_id
   local invocation
   local ami_id
@@ -1274,6 +1295,30 @@ ensure_validator_service_available() {
       sha256sum |
       awk '{print $1}'
   )"
+  recovery_request_sha256="$(
+    jq -cnS \
+      --arg validator_id "$validator_id" \
+      --arg instance_id "$instance_id" \
+      --arg ami_id "$expected_ami_id" \
+      --arg runtime_sha256 "$expected_runtime_version" \
+      --arg runtime_env_sha256 "$canonical_runtime_env_sha256" \
+      --arg genesis_sha256 "$genesis_sha256" \
+      --arg state_volume_id "$expected_state_volume_id" \
+      --arg source_commit "$SOURCE_COMMIT" '{
+        schema_version: "junca-validator-service-recovery-request/v1",
+        validator_id: $validator_id,
+        instance_id: $instance_id,
+        ami_id: $ami_id,
+        runtime_sha256: $runtime_sha256,
+        runtime_env_sha256: $runtime_env_sha256,
+        genesis_sha256: $genesis_sha256,
+        state_volume_id: $state_volume_id,
+        source_commit: $source_commit,
+        recovery_dispatch_sequence: 1
+      }' |
+      sha256sum |
+      awk '{print $1}'
+  )"
   wait_for_ssm_online \
     "$instance_id" \
     "artifacts/ssm-online-service-recovery-${validator_id}-${instance_id}.json"
@@ -1296,6 +1341,11 @@ ensure_validator_service_available() {
     printf 'expected_block_interval_seconds=%q\n' "$block_interval_seconds"
     printf 'expected_slot_epoch_seconds=%q\n' "$slot_epoch_seconds"
     printf 'expected_state_volume_id=%q\n' "$expected_state_volume_id"
+    printf 'expected_genesis_sha256=%q\n' "$genesis_sha256"
+    printf 'expected_source_commit=%q\n' "$SOURCE_COMMIT"
+    printf 'expected_recovery_request_sha256=%q\n' \
+      "$recovery_request_sha256"
+    printf 'recovery_dispatch_sequence=%q\n' 1
     printf 'allow_runtime_env_repair=%q\n' "$allow_runtime_env_repair"
     printf 'canonical_runtime_b64=%q\n' "$canonical_runtime_b64"
     printf 'canonical_runtime_env_sha256=%q\n' \
@@ -2311,7 +2361,11 @@ if [[ "$accepted" != true &&
 fi
 
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v4" \
+  --arg schema_version "junca-validator-service-recovery/v5" \
+  --arg genesis_sha256 "$expected_genesis_sha256" \
+  --arg source_commit "$expected_source_commit" \
+  --arg recovery_request_sha256 "$expected_recovery_request_sha256" \
+  --argjson recovery_dispatch_sequence "$recovery_dispatch_sequence" \
   --arg before_status "$before_status" \
   --arg pre_repair_health_status "$pre_repair_health_status" \
   --arg pre_repair_validator_id "$pre_repair_validator_id" \
@@ -2390,6 +2444,10 @@ jq -n \
   --argjson attempts "$attempts" \
   --argjson accepted "$accepted" '{
     schema_version: $schema_version,
+    genesis_sha256: $genesis_sha256,
+    source_commit: $source_commit,
+    recovery_request_sha256: $recovery_request_sha256,
+    recovery_dispatch_sequence: $recovery_dispatch_sequence,
     before_status: $before_status,
     pre_repair_health_status: $pre_repair_health_status,
     pre_repair_validator_id: $pre_repair_validator_id,
@@ -2492,6 +2550,12 @@ EOF
   )"
   invocation="artifacts/service-recovery-command-${validator_id}-${instance_id}.json"
   wait_for_ssm_command_result "$command_id" "$instance_id" "$invocation"
+  jq -e \
+    --arg command_id "$command_id" \
+    --arg instance_id "$instance_id" '
+      .CommandId == $command_id and
+      .InstanceId == $instance_id
+    ' "$invocation" >/dev/null
   jq -er \
     '.StandardOutputContent |
       select(type == "string" and length > 0)' \
@@ -2500,15 +2564,18 @@ EOF
       --arg validator_id "$validator_id" \
       --arg instance_id "$instance_id" \
       --arg ami_id "$ami_id" \
+      --arg recovery_command_id "$command_id" \
       '. + {
         validator_id: $validator_id,
         instance_id: $instance_id,
-        ami_id: $ami_id
+        ami_id: $ami_id,
+        recovery_command_id: $recovery_command_id
       }' >"$output_path"
   validate_validator_service_recovery_evidence \
     "$output_path" "$validator_id" "$instance_id" "$expected_ami_id" \
     "$expected_runtime_version" "$canonical_runtime_env_sha256" \
-    "$expected_state_volume_id"
+    "$expected_state_volume_id" "$genesis_sha256" "$SOURCE_COMMIT" \
+    "$recovery_request_sha256" "$command_id"
   jq -e '.Status == "Success"' "$invocation" >/dev/null
 }
 

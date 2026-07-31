@@ -99,9 +99,16 @@ healthy service posture while the rollout remains blocked.
 Post-repair acceptance is bound to the same validator identity. Every healthy
 loopback response observed after restart must carry the exact expected
 `validator_id`; a missing or different identity remains blocked even when the
-status string is `healthy`. Recovery evidence schema v4 records that readback
+status string is `healthy`. Recovery evidence schema v5 records that readback
 as `health_validator_id`, and the controller rejects evidence whose recorded
 identity differs from the validator being advanced in the serial rollout.
+
+Schema v5 also binds each recovery result to a canonical request digest over
+the exact validator, instance, AMI, runtime archive, canonical `runtime.env`,
+genesis, retained volume, source commit, and dispatch sequence. The controller
+adds the exact SSM Command ID from the invocation it read and validates both
+values before serial advancement. Evidence from another validator, candidate,
+volume, instance, or earlier SSM dispatch cannot satisfy the current request.
 
 Both repaired and pre-existing `runtime.env` files must be single-link regular
 files owned by `root:junca` with mode `0640`. Recovery pins the admitted

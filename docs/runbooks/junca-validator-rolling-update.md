@@ -134,7 +134,11 @@ stable height alone is never activation evidence.
    loop service restarts, or touch another validator. For successful repair,
    require the post-restart loopback response to report both `healthy` and the
    exact expected validator ID. Persist that readback as `health_validator_id`
-   in service-recovery evidence schema v4; status-only health is not sufficient.
+   in service-recovery evidence schema v5; status-only health is not sufficient.
+   Require the same evidence to match the canonical recovery request SHA-256,
+   exact SSM Command ID and dispatch sequence `1`. The request digest must bind
+   validator, instance, AMI, runtime, canonical runtime environment, genesis,
+   retained volume and source commit. Never reuse an earlier dispatch result.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the

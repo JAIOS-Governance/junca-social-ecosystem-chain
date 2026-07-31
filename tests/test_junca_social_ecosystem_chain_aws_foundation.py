@@ -1594,7 +1594,10 @@ class AwsFoundationTests(unittest.TestCase):
             'health_status="$(jq -r ',
             ".status // empty",
             "health_validator_id",
-            "junca-validator-service-recovery/v4",
+            "recovery_request_sha256",
+            "recovery_command_id",
+            "recovery_dispatch_sequence",
+            "junca-validator-service-recovery/v5",
             "wait_for_ssm_command_result",
             "mainnet_activation_authorized: false",
         ):
@@ -1669,7 +1672,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v4"',
+            '"junca-validator-service-recovery/v5"',
             rollback,
         )
         self.assertLess(rollback, evidence)
@@ -1791,7 +1794,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v4"',
+            '"junca-validator-service-recovery/v5"',
             rollback,
         )
         self.assertIn(
@@ -1949,6 +1952,24 @@ class AwsFoundationTests(unittest.TestCase):
             '"$health_validator_id" == "$expected_validator_id"',
         ):
             self.assertIn(required, acceptance)
+
+    def test_recovery_evidence_binds_exact_request_and_ssm_dispatch(
+        self,
+    ) -> None:
+        definition = self.foundation_script.split(
+            "ensure_validator_service_available() {", 1
+        )[1].split("\n}\n\nwrite_live_rollout_prefix_readback()", 1)[0]
+        for required in (
+            "junca-validator-service-recovery-request/v1",
+            "recovery_request_sha256=",
+            'recovery_dispatch_sequence: 1',
+            '--arg recovery_command_id "$command_id"',
+            'recovery_command_id: $recovery_command_id',
+            '.CommandId == $command_id',
+            '.InstanceId == $instance_id',
+            '"$recovery_request_sha256" "$command_id"',
+        ):
+            self.assertIn(required, definition)
 
     def test_live_prefix_binds_each_current_instance_to_exact_ami_provenance(
         self,
@@ -2392,11 +2413,22 @@ class AwsFoundationTests(unittest.TestCase):
         expected_runtime_version = "a" * 64
         expected_runtime_env_sha256 = "c" * 64
         expected_state_volume_id = "vol-00000000000000001"
+        expected_genesis_sha256 = "d" * 64
+        expected_source_commit = "e" * 40
+        expected_recovery_request_sha256 = "f" * 64
+        expected_recovery_command_id = (
+            "00000000-0000-0000-0000-000000000001"
+        )
         valid = {
-            "schema_version": "junca-validator-service-recovery/v4",
+            "schema_version": "junca-validator-service-recovery/v5",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
+            "genesis_sha256": expected_genesis_sha256,
+            "source_commit": expected_source_commit,
+            "recovery_request_sha256": expected_recovery_request_sha256,
+            "recovery_command_id": expected_recovery_command_id,
+            "recovery_dispatch_sequence": 1,
             "before_status": "inactive",
             "pre_repair_health_status": "",
             "pre_repair_validator_id": "",
@@ -2465,6 +2497,15 @@ class AwsFoundationTests(unittest.TestCase):
             "mainnet_activation_authorized": False,
         }
         invalid_cases = (
+            {"genesis_sha256": "0" * 64},
+            {"source_commit": "0" * 40},
+            {"recovery_request_sha256": "0" * 64},
+            {
+                "recovery_command_id":
+                    "00000000-0000-0000-0000-000000000002"
+            },
+            {"recovery_dispatch_sequence": 0},
+            {"recovery_dispatch_sequence": 2},
             {"restart_attempted": False},
             {"controlled_active_repair": True},
             {"controlled_stop_attempted": True},
@@ -2549,7 +2590,15 @@ class AwsFoundationTests(unittest.TestCase):
                             + f"{expected_runtime_version} "
                             + expected_runtime_env_sha256
                             + " "
-                            + expected_state_volume_id,
+                            + expected_state_volume_id
+                            + " "
+                            + expected_genesis_sha256
+                            + " "
+                            + expected_source_commit
+                            + " "
+                            + expected_recovery_request_sha256
+                            + " "
+                            + expected_recovery_command_id,
                             "service-recovery-negative-test",
                             str(evidence),
                         ],
@@ -2564,11 +2613,22 @@ class AwsFoundationTests(unittest.TestCase):
         expected_runtime_version = "b" * 64
         expected_runtime_env_sha256 = "e" * 64
         expected_state_volume_id = "vol-00000000000000001"
+        expected_genesis_sha256 = "d" * 64
+        expected_source_commit = "e" * 40
+        expected_recovery_request_sha256 = "f" * 64
+        expected_recovery_command_id = (
+            "00000000-0000-0000-0000-000000000001"
+        )
         evidence = {
-            "schema_version": "junca-validator-service-recovery/v4",
+            "schema_version": "junca-validator-service-recovery/v5",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
+            "genesis_sha256": expected_genesis_sha256,
+            "source_commit": expected_source_commit,
+            "recovery_request_sha256": expected_recovery_request_sha256,
+            "recovery_command_id": expected_recovery_command_id,
+            "recovery_dispatch_sequence": 1,
             "before_status": "active",
             "pre_repair_health_status": "healthy",
             "pre_repair_validator_id": "validator-01",
@@ -2653,7 +2713,15 @@ class AwsFoundationTests(unittest.TestCase):
                     + f"{expected_runtime_version} "
                     + expected_runtime_env_sha256
                     + " "
-                    + expected_state_volume_id,
+                    + expected_state_volume_id
+                    + " "
+                    + expected_genesis_sha256
+                    + " "
+                    + expected_source_commit
+                    + " "
+                    + expected_recovery_request_sha256
+                    + " "
+                    + expected_recovery_command_id,
                     "service-recovery-positive-test",
                     str(path),
                 ],
