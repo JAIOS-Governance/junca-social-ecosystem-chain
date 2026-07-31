@@ -3331,9 +3331,11 @@ class AwsFoundationTests(unittest.TestCase):
             "instance-output started",
             "ssm-online started",
             "state-volume started",
+            "service-recovery started",
             "finality-quiesce started",
             "post-apply-validator-${index}-instances.json",
             "post-apply-validator-${index}-volume.json",
+            "post-apply-validator-$((index + 1))-service-recovery.json",
         ):
             self.assertIn(required, self.foundation_script)
         self.assertNotIn(
@@ -3352,6 +3354,31 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn("cli_exit=$?", helper)
         self.assertIn('if [[ "$attempt" -lt 60 ]]', helper)
         self.assertIn("sleep 10", helper)
+
+    def test_post_apply_runtime_recovery_precedes_finality_and_fails_closed(
+        self,
+    ) -> None:
+        post_apply = self.foundation_script.split(
+            '"$index" state-volume succeeded "$new_instance" "$state_volume_id"',
+            1,
+        )[1].split("updated_count=\"$((index + 1))\"", 1)[0]
+        recovery = post_apply.split("service-recovery started", 1)[1].split(
+            "service-recovery succeeded", 1
+        )[0]
+        self.assertLess(
+            post_apply.index("service-recovery started"),
+            post_apply.index("finality-quiesce started"),
+        )
+        self.assertIn("ensure_validator_service_available", recovery)
+        self.assertIn('"$NODE_AMI_ID"', recovery)
+        self.assertIn('"$NODE_ARTIFACT_SHA256"', recovery)
+        self.assertIn('"$GENESIS_SHA256"', recovery)
+        self.assertIn('"$state_volume_id"', recovery)
+        self.assertIn("$post_apply_signer_bindings", recovery)
+        self.assertIn("$post_apply_peer_endpoints", recovery)
+        self.assertIn("service-recovery failed", recovery)
+        self.assertGreaterEqual(recovery.count("exit 1"), 4)
+        self.assertNotIn("terraform apply", recovery)
 
     def test_ssm_online_retry_records_transient_cli_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
