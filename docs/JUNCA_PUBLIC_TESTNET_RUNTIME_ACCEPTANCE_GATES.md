@@ -103,6 +103,18 @@ status string is `healthy`. Recovery evidence schema v6 records that readback
 as `health_validator_id`, and the controller rejects evidence whose recorded
 identity differs from the validator being advanced in the serial rollout.
 
+Every newly replaced validator must pass the same bounded service recovery
+before finality quiesce. Terraform may create the immutable instance without a
+mutable `/etc/junca/runtime.env`; after SSM Online and retained-volume
+attachment readback, Foundation reconstructs the file only from the exact
+candidate artifact, genesis, KMS signer set, peer set and future finality epoch.
+The recovery request remains bound to the current run/attempt, release request,
+manifest decision and candidate head. Missing durable state, an unexpected AMI,
+an unreadable or corrupt state store, a non-canonical destination, failed local
+health, or mismatched validator identity stops the rollout before finality
+mutation and before the next validator. Success is checkpointed separately from
+Terraform apply so a replacement can never be mistaken for runtime acceptance.
+
 Schema v6 also binds each recovery result to a canonical request digest over
 the exact validator, instance, AMI, runtime archive, canonical `runtime.env`,
 genesis, retained volume, source commit, dispatch sequence, current workflow

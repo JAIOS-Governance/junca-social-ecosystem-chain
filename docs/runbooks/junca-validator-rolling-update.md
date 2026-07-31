@@ -175,6 +175,14 @@ stable height alone is never activation evidence.
    immutable release-request digest, manifest-decision digest, candidate head,
    and the exact runtime-environment repair authorization. Never reuse an
    earlier run, attempt, decision, repair mode, or dispatch result.
+   After each Terraform replacement, do not proceed directly from SSM Online
+   to finality quiesce. First require the exact candidate AMI and retained EBS
+   attachment, then run the bounded canonical service recovery against only
+   the newly created instance. It must reconstruct an absent `runtime.env`,
+   prove its SHA-256/owner/mode/inode and service-user readability, restart the
+   validator, and read back the exact healthy validator ID. A failed recovery
+   is a serial circuit breaker: keep later validators untouched and do not
+   mutate finality or mark the replacement accepted.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the

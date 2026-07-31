@@ -4460,6 +4460,73 @@ if [[ "$phase" == "foundation-apply" ]]; then
           "$index" state-volume succeeded "$new_instance" "$state_volume_id"
       fi
 
+      # Terraform replacement is intentionally allowed to boot without a
+      # mutable runtime.env in the immutable image. Reconstruct that file only
+      # after the exact candidate AMI, retained state volume and SSM identity
+      # have been read back. The existing bounded recovery helper binds the
+      # canonical file to this run, attempt, release request, manifest
+      # decision, candidate head, validator signer and peer set. A failed or
+      # ambiguous recovery stops before finality mutation or serial advance.
+      write_post_apply_checkpoint \
+        "$index" service-recovery started "$new_instance" \
+        "${state_volume_id:-}"
+      if [[ "$validator_state_enabled" != "true" ||
+            ! "$state_volume_id" =~ ^vol-[0-9a-f]{8,17}$ ]]; then
+        write_post_apply_checkpoint \
+          "$index" service-recovery failed "$new_instance" \
+          "${state_volume_id:-}"
+        exit 1
+      fi
+      if ! post_apply_signer_arn="$(
+        jq -er \
+          ".[${index}].arn |
+            select(test(\"^arn:aws:kms:us-east-1:[0-9]{12}:key/[0-9a-f-]{36}$\"))" \
+          <<<"$(
+            jq -ce '.validator_signer_readback.value' \
+              artifacts/pre-foundation-outputs.json
+          )"
+      )"; then
+        write_post_apply_checkpoint \
+          "$index" service-recovery failed "$new_instance" "$state_volume_id"
+        exit 1
+      fi
+      if ! post_apply_signer_bindings="$(
+        jq -er '
+          .validator_signer_readback.value
+          | to_entries
+          | select(length == 3)
+          | map("validator-0\(.key + 1)=\(.value.arn)")
+          | join(",")
+        ' artifacts/pre-foundation-outputs.json
+      )"; then
+        write_post_apply_checkpoint \
+          "$index" service-recovery failed "$new_instance" "$state_volume_id"
+        exit 1
+      fi
+      post_apply_peer_endpoints="validator-01=10.67.16.10:30303,validator-02=10.67.32.10:30303,validator-03=10.67.48.10:30303"
+      if ! ensure_validator_service_available \
+        "validator-0$((index + 1))" \
+        "$new_instance" \
+        "$NODE_AMI_ID" \
+        "$NODE_ARTIFACT_SHA256" \
+        "$GENESIS_SHA256" \
+        "$post_apply_signer_arn" \
+        "$post_apply_signer_bindings" \
+        "$post_apply_peer_endpoints" \
+        true \
+        "$validator_block_interval_seconds" \
+        "$validator_slot_epoch_seconds" \
+        "$state_volume_id" \
+        true \
+        "artifacts/post-apply-validator-$((index + 1))-service-recovery.json"
+      then
+        write_post_apply_checkpoint \
+          "$index" service-recovery failed "$new_instance" "$state_volume_id"
+        exit 1
+      fi
+      write_post_apply_checkpoint \
+        "$index" service-recovery succeeded "$new_instance" "$state_volume_id"
+
       # A replacement boots with the Terraform-bound future epoch. Quiesce it
       # immediately after SSM and retained-volume readback; the epoch is still
       # in the future, so no automatic-finality slot can execute during this
