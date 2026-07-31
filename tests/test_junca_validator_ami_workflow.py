@@ -354,6 +354,15 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             self.component,
         )
         self.assertIn(
+            "install -o root -g junca -m 0640 "
+            "/dev/null /etc/junca/validator.toml",
+            self.component,
+        )
+        self.assertNotIn(
+            "chown root:junca /etc/junca/validator.toml",
+            self.component,
+        )
+        self.assertIn(
             "runuser -u junca -- test -r /etc/junca/genesis.json",
             self.component,
         )
