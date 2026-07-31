@@ -32,6 +32,19 @@ read-only SQLite `PRAGMA quick_check=ok`, the current EC2 AMI, immutable runtime
 archive digest, genesis digest, exact validator KMS binding, and exact three-peer
 contract are proven. An already active validator is not restarted.
 
+If the exact encrypted retained EBS volume remains singly attached to the
+Terraform-bound instance but its mount is absent, the same zero-prefix
+recovery may re-run the immutable AMI's canonical durable-state mount unit.
+Admission binds the Terraform volume ID, AWS attachment, NVMe by-id serial,
+resolved block device, approved `ext4`/`xfs` filesystem, empty real mount
+target, canonical helper/unit bytes and validator unit mount dependencies.
+The device must not already be mounted elsewhere. Acceptance then requires the
+exact resolved mount source, `noatime,nosuid,nodev`, enabled active boot
+persistence and read-only SQLite integrity before any `runtime.env` repair.
+There is no format, filesystem repair, relabel, detach, volume replacement or
+snapshot restoration path. A failed prerequisite stops the unhealthy service
+and leaves the rollout blocked, preventing its prior unbounded restart loop.
+
 The pre-replacement Terraform readback treats `enabled: false` as an explicit,
 valid JSON boolean rather than as a failed shell predicate. Both public-service
 and automatic-finality flags are decoded by type and rendered as the literal

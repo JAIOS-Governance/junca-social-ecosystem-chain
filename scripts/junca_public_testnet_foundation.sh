@@ -1079,13 +1079,15 @@ validate_validator_service_recovery_evidence() {
   local expected_ami_id="$4"
   local expected_runtime_version="$5"
   local expected_runtime_env_sha256="$6"
+  local expected_state_volume_id="$7"
   jq -e \
     --arg validator_id "$validator_id" \
     --arg instance_id "$instance_id" \
     --arg expected_ami_id "$expected_ami_id" \
     --arg expected_runtime_version "$expected_runtime_version" \
-    --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" '
-      .schema_version == "junca-validator-service-recovery/v1" and
+    --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" \
+    --arg expected_state_volume_id "$expected_state_volume_id" '
+      .schema_version == "junca-validator-service-recovery/v2" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
@@ -1100,6 +1102,25 @@ validate_validator_service_recovery_evidence() {
         end
       ) and
       .durable_mount_verified == true and
+      .durable_mount_volume_id == $expected_state_volume_id and
+      (.durable_mount_device |
+        test("^/dev/nvme[0-9]+n[0-9]+$")) and
+      .durable_mount_source == .durable_mount_device and
+      (.durable_mount_filesystem == "ext4" or
+        .durable_mount_filesystem == "xfs") and
+      .durable_mount_persistence_verified == true and
+      (.durable_mount_repair_attempted | type) == "boolean" and
+      (.durable_mount_repaired | type) == "boolean" and
+      (.durable_mount_repair_exit | type) == "number" and
+      .durable_mount_repair_exit == 0 and
+      (
+        if .durable_mount_repaired then
+          .before_status != "active" and
+          .durable_mount_repair_attempted == true
+        else
+          .durable_mount_repair_attempted == false
+        end
+      ) and
       .state_store_integrity == true and
       .binary_artifact_verified == true and
       .genesis_verified == true and
@@ -1169,8 +1190,9 @@ ensure_validator_service_available() {
   shift 9
   local block_interval_seconds="$1"
   local slot_epoch_seconds="$2"
-  local allow_runtime_env_repair="$3"
-  local output_path="$4"
+  local expected_state_volume_id="$3"
+  local allow_runtime_env_repair="$4"
+  local output_path="$5"
   local recovery_command
   local canonical_runtime_b64
   local canonical_runtime_env_sha256
@@ -1180,6 +1202,7 @@ ensure_validator_service_available() {
   [[ "$expected_ami_id" =~ ^ami-[0-9a-f]{8,17}$ ]]
   [[ "$expected_runtime_version" =~ ^[0-9a-f]{64}$ ]]
   [[ "$genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_state_volume_id" =~ ^vol-[0-9a-f]{8,17}$ ]]
   case "$allow_runtime_env_repair" in
     true|false) ;;
     *) return 2 ;;
@@ -1222,6 +1245,7 @@ ensure_validator_service_available() {
       "$automatic_finality_enabled"
     printf 'expected_block_interval_seconds=%q\n' "$block_interval_seconds"
     printf 'expected_slot_epoch_seconds=%q\n' "$slot_epoch_seconds"
+    printf 'expected_state_volume_id=%q\n' "$expected_state_volume_id"
     printf 'allow_runtime_env_repair=%q\n' "$allow_runtime_env_repair"
     printf 'canonical_runtime_b64=%q\n' "$canonical_runtime_b64"
     printf 'canonical_runtime_env_sha256=%q\n' \
@@ -1231,6 +1255,14 @@ set -u -o pipefail
 before_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
 restart_attempted=false
 durable_mount_verified=false
+durable_mount_volume_id="$expected_state_volume_id"
+durable_mount_device=""
+durable_mount_source=""
+durable_mount_filesystem=""
+durable_mount_persistence_verified=false
+durable_mount_repair_attempted=false
+durable_mount_repaired=false
+durable_mount_repair_exit=0
 state_store_integrity=false
 binary_artifact_verified=false
 genesis_verified=false
@@ -1344,8 +1376,157 @@ verify_runtime_env_schema() {
     runtime_env_has_exact_assignment "$path" BRIDGE_ACTIVATED false
 }
 
-if mountpoint -q /var/lib/junca; then
+verify_durable_mount_persistence_contract() (
+  set -euo pipefail
+  local helper_path=/usr/local/sbin/junca-mount-validator-state
+  local unit_path=/etc/systemd/system/junca-validator-state.service
+  local validator_unit
+  local expected_helper
+  local expected_unit
+  local expected_state_serial="${expected_state_volume_id//-/}"
+  expected_helper="$(mktemp /tmp/junca-mount-validator-state.XXXXXX)"
+  expected_unit="$(mktemp /tmp/junca-validator-state.service.XXXXXX)"
+  trap 'rm -f "$expected_helper" "$expected_unit"' EXIT
+  cat >"$expected_helper" <<STATE_HELPER_EOF
+#!/usr/bin/env bash
+set -euo pipefail
+volume_id='${expected_state_volume_id}'
+expected_serial='${expected_state_serial}'
+device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_\${expected_serial}"
+for attempt in \$(seq 1 120); do
+  [[ -b "\$device" ]] && break
+  test "\$attempt" -lt 120
+  sleep 5
+done
+[[ -b "\$device" ]]
+resolved_device="\$(readlink -f "\$device")"
+[[ -b "\$resolved_device" ]]
+actual_serial="\$(lsblk -ndo SERIAL "\$device" | tr -d '-')"
+test "\$actual_serial" = "\$expected_serial"
+filesystem="\$(blkid -o value -s TYPE "\$device")"
+case "\$filesystem" in
+  ext4|xfs) ;;
+  *) echo "validator state filesystem is absent or unapproved" >&2; exit 1 ;;
+esac
+if ! mountpoint -q /var/lib/junca; then
+  mount -o noatime,nosuid,nodev "\$device" /var/lib/junca
+fi
+test "\$(findmnt -n -o SOURCE --target /var/lib/junca)" = "\$resolved_device"
+test -f /var/lib/junca/state.sqlite
+test ! -L /var/lib/junca/state.sqlite
+STATE_HELPER_EOF
+  cat >"$expected_unit" <<'STATE_UNIT_EOF'
+[Unit]
+Description=JUNCA Validator Durable State Mount
+Before=junca-validator.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/junca-mount-validator-state
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+STATE_UNIT_EOF
+  [[ -f "$helper_path" && ! -L "$helper_path" ]] &&
+    [[ "$(stat -c '%U:%G' "$helper_path")" == "root:root" ]] &&
+    [[ "$(stat -c '%a' "$helper_path")" == "750" ]] &&
+    [[ "$(stat -c '%h' "$helper_path")" == 1 ]] &&
+    cmp -s "$expected_helper" "$helper_path"
+  [[ -f "$unit_path" && ! -L "$unit_path" ]] &&
+    [[ "$(stat -c '%U:%G' "$unit_path")" == "root:root" ]] &&
+    [[ "$(stat -c '%a' "$unit_path")" == "640" ]] &&
+    [[ "$(stat -c '%h' "$unit_path")" == 1 ]] &&
+    cmp -s "$expected_unit" "$unit_path"
+  systemctl is-enabled --quiet junca-validator-state.service
+  validator_unit="$(systemctl cat junca-validator.service)"
+  grep -Fxq "Requires=junca-validator-state.service" <<<"$validator_unit"
+  grep -Fxq "RequiresMountsFor=/var/lib/junca" <<<"$validator_unit"
+  grep -Fxq "ConditionPathIsMountPoint=/var/lib/junca" <<<"$validator_unit"
+  grep -Fxq "ConditionPathExists=/var/lib/junca/state.sqlite" \
+    <<<"$validator_unit"
+)
+
+verify_durable_state_mount() {
+  local actual_serial
+  local expected_device
+  local expected_serial
+  local filesystem
+  local mount_options
+  local resolved_device
+  local source
+  local source_device
+  expected_serial="${expected_state_volume_id//-/}"
+  expected_device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${expected_serial}"
+  [[ -b "$expected_device" ]] || return 1
+  resolved_device="$(readlink -f "$expected_device")"
+  [[ -b "$resolved_device" ]] || return 1
+  [[ "$(lsblk -nrpo NAME "$resolved_device" | wc -l)" == 1 ]] || return 1
+  actual_serial="$(lsblk -ndo SERIAL "$expected_device" | tr -d '-')"
+  [[ "$actual_serial" == "$expected_serial" ]] || return 1
+  mountpoint -q /var/lib/junca || return 1
+  source="$(findmnt -n -o SOURCE --target /var/lib/junca)"
+  source_device="$(readlink -f "$source")"
+  [[ "$source_device" == "$resolved_device" ]] || return 1
+  filesystem="$(blkid -c /dev/null -o value -s TYPE "$resolved_device")"
+  case "$filesystem" in
+    ext4|xfs) ;;
+    *) return 1 ;;
+  esac
+  mount_options="$(findmnt -n -o OPTIONS --target /var/lib/junca)"
+  grep -Eq '(^|,)noatime(,|$)' <<<"$mount_options" || return 1
+  grep -Eq '(^|,)nosuid(,|$)' <<<"$mount_options" || return 1
+  grep -Eq '(^|,)nodev(,|$)' <<<"$mount_options" || return 1
+  verify_durable_mount_persistence_contract || return 1
+  systemctl is-active --quiet junca-validator-state.service || return 1
+  durable_mount_device="$resolved_device"
+  durable_mount_source="$source_device"
+  durable_mount_filesystem="$filesystem"
+  durable_mount_persistence_verified=true
   durable_mount_verified=true
+}
+
+if ! verify_durable_state_mount &&
+    [[ "$allow_runtime_env_repair" == true &&
+      "$before_status" != "active" &&
+      -d /var/lib/junca &&
+      ! -L /var/lib/junca ]] &&
+    ! mountpoint -q /var/lib/junca &&
+    [[ -z "$(
+      find /var/lib/junca -mindepth 1 -maxdepth 1 -print -quit
+    )" ]]; then
+  durable_mount_repair_attempted=true
+  systemctl stop junca-validator.service || service_stop_exit=$?
+  expected_state_serial="${expected_state_volume_id//-/}"
+  expected_state_device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${expected_state_serial}"
+  if [[ "$service_stop_exit" == 0 ]] &&
+      ! systemctl is-active --quiet junca-validator.service &&
+      [[ -b "$expected_state_device" ]]; then
+    resolved_state_device="$(readlink -f "$expected_state_device")"
+    actual_state_serial="$(
+      lsblk -ndo SERIAL "$expected_state_device" |
+        tr -d '-'
+    )"
+    state_filesystem="$(
+      blkid -c /dev/null -o value -s TYPE "$resolved_state_device" \
+        2>/dev/null || true
+    )"
+    if [[ -b "$resolved_state_device" &&
+          "$(lsblk -nrpo NAME "$resolved_state_device" | wc -l)" == 1 &&
+          "$actual_state_serial" == "$expected_state_serial" &&
+          -z "$(findmnt -rn -S "$resolved_state_device" -o TARGET)" ]] &&
+        [[ "$state_filesystem" == ext4 ||
+          "$state_filesystem" == xfs ]] &&
+        verify_durable_mount_persistence_contract; then
+      systemctl reset-failed junca-validator-state.service || true
+      systemctl restart junca-validator-state.service ||
+        durable_mount_repair_exit=$?
+      if [[ "$durable_mount_repair_exit" == 0 ]] &&
+          verify_durable_state_mount; then
+        durable_mount_repaired=true
+      fi
+    fi
+  fi
 fi
 if [[ "$durable_mount_verified" == true &&
       -f /var/lib/junca/state.sqlite &&
@@ -1543,11 +1724,21 @@ if [[ "$accepted" != true &&
 fi
 
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v1" \
+  --arg schema_version "junca-validator-service-recovery/v2" \
   --arg before_status "$before_status" \
   --argjson restart_attempted "$restart_attempted" \
   --argjson restart_exit "$restart_exit" \
   --argjson durable_mount_verified "$durable_mount_verified" \
+  --arg durable_mount_volume_id "$durable_mount_volume_id" \
+  --arg durable_mount_device "$durable_mount_device" \
+  --arg durable_mount_source "$durable_mount_source" \
+  --arg durable_mount_filesystem "$durable_mount_filesystem" \
+  --argjson durable_mount_persistence_verified \
+    "$durable_mount_persistence_verified" \
+  --argjson durable_mount_repair_attempted \
+    "$durable_mount_repair_attempted" \
+  --argjson durable_mount_repaired "$durable_mount_repaired" \
+  --argjson durable_mount_repair_exit "$durable_mount_repair_exit" \
   --argjson state_store_integrity "$state_store_integrity" \
   --argjson binary_artifact_verified "$binary_artifact_verified" \
   --argjson genesis_verified "$genesis_verified" \
@@ -1585,6 +1776,15 @@ jq -n \
     restart_attempted: $restart_attempted,
     restart_exit: $restart_exit,
     durable_mount_verified: $durable_mount_verified,
+    durable_mount_volume_id: $durable_mount_volume_id,
+    durable_mount_device: $durable_mount_device,
+    durable_mount_source: $durable_mount_source,
+    durable_mount_filesystem: $durable_mount_filesystem,
+    durable_mount_persistence_verified:
+      $durable_mount_persistence_verified,
+    durable_mount_repair_attempted: $durable_mount_repair_attempted,
+    durable_mount_repaired: $durable_mount_repaired,
+    durable_mount_repair_exit: $durable_mount_repair_exit,
     state_store_integrity: $state_store_integrity,
     binary_artifact_verified: $binary_artifact_verified,
     genesis_verified: $genesis_verified,
@@ -1658,7 +1858,8 @@ EOF
       }' >"$output_path"
   validate_validator_service_recovery_evidence \
     "$output_path" "$validator_id" "$instance_id" "$expected_ami_id" \
-    "$expected_runtime_version" "$canonical_runtime_env_sha256"
+    "$expected_runtime_version" "$canonical_runtime_env_sha256" \
+    "$expected_state_volume_id"
   jq -e '.Status == "Success"' "$invocation" >/dev/null
 }
 
@@ -1843,30 +2044,6 @@ write_live_rollout_prefix_readback() {
         .bridge_activated == false and
         .mainnet_activation_authorized == false
       ' "$ami_binding_path" >/dev/null
-    if [[ "$evidence_updated_count" == 0 ]]; then
-      allow_runtime_env_repair=true
-    else
-      allow_runtime_env_repair=false
-    fi
-    observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
-    ensure_validator_service_available \
-      "validator-0$((index + 1))" \
-      "${current_instances[$index]}" \
-      "$expected_ami_id" \
-      "$expected_runtime_version" \
-      "$GENESIS_SHA256" \
-      "${validator_signer_arns[$index]}" \
-      "$signer_bindings" \
-      "$peer_endpoints" \
-      "$baseline_automatic_finality_enabled" \
-      "$baseline_block_interval_seconds" \
-      "$baseline_slot_epoch_seconds" \
-      "$allow_runtime_env_repair" \
-      "artifacts/live-prefix-service-recovery-$((index + 1)).json"
-    capture_validator_observation \
-      "validator-0$((index + 1))" \
-      "${current_instances[$index]}" \
-      "$observation_path"
     state_volume_id="$(
       jq -er \
         ".[$index].volume_id |
@@ -1888,6 +2065,31 @@ write_live_rollout_prefix_readback() {
         .[0].Attachments[0].InstanceId == $instance_id and
         .[0].Attachments[0].State == "attached"
       ' "artifacts/live-prefix-volume-$((index + 1)).json" >/dev/null
+    if [[ "$evidence_updated_count" == 0 ]]; then
+      allow_runtime_env_repair=true
+    else
+      allow_runtime_env_repair=false
+    fi
+    observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
+    ensure_validator_service_available \
+      "validator-0$((index + 1))" \
+      "${current_instances[$index]}" \
+      "$expected_ami_id" \
+      "$expected_runtime_version" \
+      "$GENESIS_SHA256" \
+      "${validator_signer_arns[$index]}" \
+      "$signer_bindings" \
+      "$peer_endpoints" \
+      "$baseline_automatic_finality_enabled" \
+      "$baseline_block_interval_seconds" \
+      "$baseline_slot_epoch_seconds" \
+      "$state_volume_id" \
+      "$allow_runtime_env_repair" \
+      "artifacts/live-prefix-service-recovery-$((index + 1)).json"
+    capture_validator_observation \
+      "validator-0$((index + 1))" \
+      "${current_instances[$index]}" \
+      "$observation_path"
     enriched_observation_path="${observation_path%.json}.enriched.json"
     jq --arg volume_id "$state_volume_id" \
       '. + {volume_id: $volume_id}' \
