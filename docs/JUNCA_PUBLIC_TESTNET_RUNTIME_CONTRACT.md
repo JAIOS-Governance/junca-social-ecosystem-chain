@@ -10,8 +10,11 @@ The immutable validator AMI must provide all of the following before
 - `/etc/junca`, owned by `root:junca` with mode `0750`
 - `/etc/junca/genesis.json`, matching `genesis_sha256`, owned by
   `root:junca` with mode `0640`, and readable by the `junca` service user
-- `/etc/junca/validator.toml`, non-secret runtime configuration, owned by
-  `root:junca` with mode `0640`, and readable by the `junca` service user
+- `/etc/junca/validator.toml`, an explicitly created empty compatibility file,
+  owned by `root:junca` with mode `0640`, and readable by the `junca` service
+  user. The current node accepts `--config` for command-line compatibility but
+  does not consume file content; the AMI must not inherit this path from a
+  prior host or recovery action
 - local `junca` user and group
 - `/var/lib/junca`, owned by `junca:junca`
 - AWS KMS signing support through the EC2 instance role

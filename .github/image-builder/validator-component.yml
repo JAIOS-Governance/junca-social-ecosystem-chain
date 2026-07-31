@@ -21,8 +21,7 @@ phases:
             - install -m 0644 /tmp/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz
             - tar -xzf /opt/junca/validator-runtime.tar.gz -C /
             - install -o root -g junca -m 0640 /tmp/genesis.json /etc/junca/genesis.json
-            - chown root:junca /etc/junca/validator.toml
-            - chmod 0640 /etc/junca/validator.toml
+            - install -o root -g junca -m 0640 /dev/null /etc/junca/validator.toml
             - systemctl enable junca-validator.service junca-public-rpc.service junca-public-explorer.service
             - rm -f /tmp/validator-runtime.tar.gz /tmp/genesis.json
   - name: validate
