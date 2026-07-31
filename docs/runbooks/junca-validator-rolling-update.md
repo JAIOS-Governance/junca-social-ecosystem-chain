@@ -133,6 +133,15 @@ write. A larger delta is stale evidence. A gap, unknown AMI, checksum failure,
 candidate mismatch, changed EBS/snapshot binding or state rewind rejects the
 resume. A 3/3 prefix resumes only the separately gated finality activation.
 
+The parent release must invoke the dispatch helper with an
+`artifacts/.../*.json` evidence path. The helper atomically records the exact
+child run ID, URL, workflow identity, expected head, status and conclusion
+before it returns failure. Its stdout remains the numeric run ID on success
+only; failure details go to stderr. Because the parent uploads `artifacts/`
+under `if: always()`, a failed Foundation run remains directly diagnosable and
+must be inspected before any retry or resume. Missing dispatch evidence is a
+release-observability gate failure, not permission to redispatch blindly.
+
 Any mixed finality state, one unhealthy or unmanaged validator,
 finalized-head/certificate disagreement, unexpected version, partial epoch
 configuration, active fallback, invalid rollback evidence, epoch expiry before

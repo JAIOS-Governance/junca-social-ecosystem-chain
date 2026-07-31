@@ -256,6 +256,7 @@ jobs:
               --workflow-name "JUNCA Validator Foundation Release" \
               --workflow-path ".github/workflows/junca-validator-foundation-release.yml" \
               --expected-head "$SOURCE_COMMIT" \
+              --evidence-path "artifacts/release-v2/foundation-dispatch.json" \
               --attempts 900 \
               --sleep-seconds 15 \
               --input "ami_run_id=${{ steps.ami.outputs.ami_run_id }}" \
