@@ -117,7 +117,7 @@ def runtime_env_schema_functions(script: str) -> str:
     return (
         "runtime_env_has_exact_assignment() {"
         + remote.split("runtime_env_has_exact_assignment() {", 1)[1].split(
-            "\n\nif mountpoint -q", 1
+            "\n\nverify_durable_mount_persistence_contract() (", 1
         )[0]
     )
 
@@ -1497,13 +1497,23 @@ class AwsFoundationTests(unittest.TestCase):
             'test("^[0-9a-f]{64}$")',
             '"$before_status" != "active"',
             '"$durable_mount_verified" == true',
+            "verify_durable_mount_persistence_contract()",
+            "verify_durable_state_mount()",
+            "nvme-Amazon_Elastic_Block_Store_",
+            'actual_serial="$(lsblk -ndo SERIAL',
+            'findmnt -rn -S "$resolved_state_device" -o TARGET',
+            "systemctl restart junca-validator-state.service",
+            "durable_mount_repair_attempted=true",
+            "durable_mount_repaired=true",
+            "durable_mount_persistence_verified=true",
+            "durable_mount_volume_id",
             '"$state_store_integrity" == true',
             '"$runtime_env_verified" == true',
             "systemctl restart junca-validator.service || restart_exit=$?",
             "for attempts in $(seq 1 60)",
             'health_status="$(jq -r ',
             ".status // empty",
-            "junca-validator-service-recovery/v1",
+            "junca-validator-service-recovery/v2",
             "wait_for_ssm_command_result",
             "mainnet_activation_authorized: false",
         ):
@@ -1528,7 +1538,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v1"',
+            '"junca-validator-service-recovery/v2"',
             rollback,
         )
         self.assertLess(rollback, evidence)
@@ -1547,6 +1557,47 @@ class AwsFoundationTests(unittest.TestCase):
             'mv -f "$runtime_env_tmp" /etc/junca/runtime.env',
             self.foundation_script[rollback:evidence],
         )
+        remote_recovery = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        for destructive in (
+            "mkfs",
+            "wipefs",
+            "fsck",
+            "umount",
+            "detach-volume",
+            "delete-volume",
+        ):
+            self.assertNotIn(destructive, remote_recovery)
+
+        live_prefix = self.foundation_script.split(
+            "write_live_rollout_prefix_readback() {", 1
+        )[1].split("\n}\n\nwrite_rolling_compatibility_evidence()", 1)[0]
+        attachment = live_prefix.index(
+            "aws ec2 describe-volumes --volume-ids"
+        )
+        attachment_acceptance = live_prefix.index(
+            '.[0].Attachments[0].State == "attached"',
+            attachment,
+        )
+        recovery_call = live_prefix.index(
+            "ensure_validator_service_available \\",
+            attachment_acceptance,
+        )
+        self.assertLess(attachment, attachment_acceptance)
+        self.assertLess(attachment_acceptance, recovery_call)
+
+    def test_validator_service_recovery_remote_script_is_valid_bash(self) -> None:
+        result = subprocess.run(
+            ["bash", "-n"],
+            input=validator_service_recovery_remote_script(
+                self.foundation_script
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_live_prefix_binds_each_current_instance_to_exact_ami_provenance(
         self,
@@ -1989,8 +2040,9 @@ class AwsFoundationTests(unittest.TestCase):
     ) -> None:
         expected_runtime_version = "a" * 64
         expected_runtime_env_sha256 = "c" * 64
+        expected_state_volume_id = "vol-00000000000000001"
         valid = {
-            "schema_version": "junca-validator-service-recovery/v1",
+            "schema_version": "junca-validator-service-recovery/v2",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -1998,6 +2050,14 @@ class AwsFoundationTests(unittest.TestCase):
             "restart_attempted": True,
             "restart_exit": 0,
             "durable_mount_verified": True,
+            "durable_mount_volume_id": expected_state_volume_id,
+            "durable_mount_device": "/dev/nvme1n1",
+            "durable_mount_source": "/dev/nvme1n1",
+            "durable_mount_filesystem": "ext4",
+            "durable_mount_persistence_verified": True,
+            "durable_mount_repair_attempted": True,
+            "durable_mount_repaired": True,
+            "durable_mount_repair_exit": 0,
             "state_store_integrity": True,
             "binary_artifact_verified": True,
             "genesis_verified": True,
@@ -2034,6 +2094,15 @@ class AwsFoundationTests(unittest.TestCase):
         invalid_cases = (
             {"restart_attempted": False},
             {"restart_exit": 1},
+            {"durable_mount_verified": False},
+            {"durable_mount_volume_id": "vol-00000000000000002"},
+            {"durable_mount_device": "/dev/sdf"},
+            {"durable_mount_source": "/dev/nvme2n1"},
+            {"durable_mount_filesystem": "btrfs"},
+            {"durable_mount_persistence_verified": False},
+            {"durable_mount_repair_attempted": False},
+            {"durable_mount_repaired": False},
+            {"durable_mount_repair_exit": 1},
             {"state_store_integrity": False},
             {"binary_artifact_verified": False},
             {"genesis_verified": False},
@@ -2084,7 +2153,9 @@ class AwsFoundationTests(unittest.TestCase):
                             + '"$1" validator-01 i-00000000000000001 '
                             + "ami-00000000000000001 "
                             + f"{expected_runtime_version} "
-                            + expected_runtime_env_sha256,
+                            + expected_runtime_env_sha256
+                            + " "
+                            + expected_state_volume_id,
                             "service-recovery-negative-test",
                             str(evidence),
                         ],
@@ -2098,8 +2169,9 @@ class AwsFoundationTests(unittest.TestCase):
     def test_service_recovery_evidence_accepts_active_without_restart(self) -> None:
         expected_runtime_version = "b" * 64
         expected_runtime_env_sha256 = "e" * 64
+        expected_state_volume_id = "vol-00000000000000001"
         evidence = {
-            "schema_version": "junca-validator-service-recovery/v1",
+            "schema_version": "junca-validator-service-recovery/v2",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2107,6 +2179,14 @@ class AwsFoundationTests(unittest.TestCase):
             "restart_attempted": False,
             "restart_exit": 0,
             "durable_mount_verified": True,
+            "durable_mount_volume_id": expected_state_volume_id,
+            "durable_mount_device": "/dev/nvme1n1",
+            "durable_mount_source": "/dev/nvme1n1",
+            "durable_mount_filesystem": "xfs",
+            "durable_mount_persistence_verified": True,
+            "durable_mount_repair_attempted": False,
+            "durable_mount_repaired": False,
+            "durable_mount_repair_exit": 0,
             "state_store_integrity": True,
             "binary_artifact_verified": True,
             "genesis_verified": True,
@@ -2155,7 +2235,9 @@ class AwsFoundationTests(unittest.TestCase):
                     + '"$1" validator-01 i-00000000000000001 '
                     + "ami-00000000000000001 "
                     + f"{expected_runtime_version} "
-                    + expected_runtime_env_sha256,
+                    + expected_runtime_env_sha256
+                    + " "
+                    + expected_state_volume_id,
                     "service-recovery-positive-test",
                     str(path),
                 ],
