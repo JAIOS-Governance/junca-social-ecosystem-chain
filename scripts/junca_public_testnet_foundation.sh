@@ -1200,6 +1200,19 @@ validate_validator_service_recovery_evidence() {
       .state_store_integrity == true and
       .binary_artifact_verified == true and
       .genesis_verified == true and
+      .system_identity_verified == true and
+      (.system_identity_repair_attempted | type) == "boolean" and
+      (.system_identity_repaired | type) == "boolean" and
+      .system_identity_uid == 992 and
+      .system_identity_gid == 992 and
+      (
+        if .system_identity_repaired then
+          .system_identity_repair_attempted == true and
+          .runtime_config_repaired == true
+        else
+          true
+        end
+      ) and
       .runtime_config_access_verified == true and
       (.runtime_config_repair_attempted | type) == "boolean" and
       (.runtime_config_repaired | type) == "boolean" and
@@ -1458,6 +1471,11 @@ scan_rollbacks_manifest_sha256=
 state_store_integrity=false
 binary_artifact_verified=false
 genesis_verified=false
+system_identity_verified=false
+system_identity_repair_attempted=false
+system_identity_repaired=false
+system_identity_uid=0
+system_identity_gid=0
 runtime_config_access_verified=false
 runtime_config_repair_attempted=false
 runtime_config_repaired=false
@@ -1654,6 +1672,64 @@ admit_controlled_active_repair() {
     return 0
   fi
   return 1
+}
+
+verify_junca_system_identity() {
+  local passwd_entry=""
+  local group_entry=""
+  local passwd_name=""
+  local passwd_uid=""
+  local passwd_gid=""
+  local passwd_home=""
+  local passwd_shell=""
+  local group_name=""
+  local group_gid=""
+  passwd_entry="$(getent passwd junca 2>/dev/null || true)"
+  group_entry="$(getent group junca 2>/dev/null || true)"
+  [[ -n "$passwd_entry" && -n "$group_entry" ]] || return 1
+  IFS=: read -r passwd_name _ passwd_uid passwd_gid _ passwd_home \
+    passwd_shell <<<"$passwd_entry"
+  IFS=: read -r group_name _ group_gid _ <<<"$group_entry"
+  [[ "$passwd_name" == junca ]] || return 1
+  [[ "$passwd_uid" == 992 ]] || return 1
+  [[ "$passwd_gid" == 992 ]] || return 1
+  [[ "$passwd_home" == /var/lib/junca ]] || return 1
+  [[ "$passwd_shell" == /sbin/nologin ]] || return 1
+  [[ "$group_name" == junca ]] || return 1
+  [[ "$group_gid" == 992 ]] || return 1
+  [[ "$(getent passwd 992 2>/dev/null || true)" == "$passwd_entry" ]] ||
+    return 1
+  [[ "$(getent group 992 2>/dev/null || true)" == "$group_entry" ]] ||
+    return 1
+  system_identity_uid=992
+  system_identity_gid=992
+  system_identity_verified=true
+}
+
+ensure_junca_system_identity() {
+  local passwd_entry=""
+  local group_entry=""
+  local group_name=""
+  local group_gid=""
+  if verify_junca_system_identity; then
+    return 0
+  fi
+  system_identity_repair_attempted=true
+  passwd_entry="$(getent passwd junca 2>/dev/null || true)"
+  group_entry="$(getent group junca 2>/dev/null || true)"
+  [[ -z "$passwd_entry" ]] || return 1
+  if [[ -n "$group_entry" ]]; then
+    IFS=: read -r group_name _ group_gid _ <<<"$group_entry"
+    [[ "$group_name" == junca && "$group_gid" == 992 ]] || return 1
+  else
+    [[ -z "$(getent group 992 2>/dev/null || true)" ]] || return 1
+    groupadd --system --gid 992 junca || return 1
+  fi
+  [[ -z "$(getent passwd 992 2>/dev/null || true)" ]] || return 1
+  useradd --system --uid 992 --gid 992 --home-dir /var/lib/junca \
+    --shell /sbin/nologin --no-create-home junca || return 1
+  verify_junca_system_identity || return 1
+  system_identity_repaired=true
 }
 
 verify_durable_mount_persistence_contract() (
@@ -2182,6 +2258,11 @@ fi
 if [[ "$runtime_config_access_verified" != true ]]; then
   admit_controlled_active_repair || true
 fi
+verify_junca_system_identity || true
+if [[ "$repair_status_admitted" == true &&
+      "$system_identity_verified" != true ]]; then
+  ensure_junca_system_identity || true
+fi
 if [[ "$repair_status_admitted" == true &&
       "$genesis_verified" == true &&
       -d /etc/junca &&
@@ -2195,7 +2276,7 @@ if [[ "$repair_status_admitted" == true &&
       "$(stat -c '%a' /etc/junca/genesis.json)" =~ ^(600|640|644)$ &&
       "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
       "$validator_config_admissible" == true &&
-      "$(getent group junca)" != "" ]] &&
+      "$system_identity_verified" == true ]] &&
     validator_config_matches_admission /etc/junca/validator.toml; then
   runtime_config_repair_attempted=true
   chown root:junca /etc/junca
@@ -2552,6 +2633,12 @@ jq -n \
   --argjson state_store_integrity "$state_store_integrity" \
   --argjson binary_artifact_verified "$binary_artifact_verified" \
   --argjson genesis_verified "$genesis_verified" \
+  --argjson system_identity_verified "$system_identity_verified" \
+  --argjson system_identity_repair_attempted \
+    "$system_identity_repair_attempted" \
+  --argjson system_identity_repaired "$system_identity_repaired" \
+  --argjson system_identity_uid "$system_identity_uid" \
+  --argjson system_identity_gid "$system_identity_gid" \
   --argjson runtime_config_access_verified \
     "$runtime_config_access_verified" \
   --argjson runtime_config_repair_attempted \
@@ -2650,6 +2737,11 @@ jq -n \
     state_store_integrity: $state_store_integrity,
     binary_artifact_verified: $binary_artifact_verified,
     genesis_verified: $genesis_verified,
+    system_identity_verified: $system_identity_verified,
+    system_identity_repair_attempted: $system_identity_repair_attempted,
+    system_identity_repaired: $system_identity_repaired,
+    system_identity_uid: $system_identity_uid,
+    system_identity_gid: $system_identity_gid,
     runtime_config_access_verified: $runtime_config_access_verified,
     runtime_config_repair_attempted: $runtime_config_repair_attempted,
     runtime_config_repaired: $runtime_config_repaired,

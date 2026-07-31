@@ -112,6 +112,13 @@ stable height alone is never activation evidence.
    existing root-owned, single-link regular file, pin device/inode, SHA-256,
    and byte size before the controlled stop. Group and mode may then be
    normalized to `root:junca` `0640`; contents and inode must remain exact.
+   A legacy predecessor may also lack the `junca` service principal. Only
+   after the exact healthy validator has been stopped may recovery create the
+   fixed system identity `junca` UID/GID `992`, home `/var/lib/junca`, shell
+   `/sbin/nologin`, without creating a home directory. Existing names or
+   numeric IDs must match that contract exactly; any conflicting passwd or
+   group record blocks repair. A partially completed exact group creation is
+   resumable, while no non-canonical identity is edited or deleted.
    Every shape and metadata predicate must return immediately on failure,
    including when the admission helper is evaluated inside a shell
    conditional. This keeps a wholly absent path on the explicit create-empty
