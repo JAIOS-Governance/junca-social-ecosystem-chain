@@ -125,6 +125,13 @@ stable height alone is never activation evidence.
    canonical file created by this attempt. Never delete a linked, changed, or
    otherwise unrecognized file; fsync the directory after removal and block the
    rollout for operator inspection unless durable rollback is proven.
+   If the validator was already active and healthy but its configuration access
+   contract failed, admit repair only after exact validator-ID, retained-state,
+   runtime and genesis readback. Stop only that validator once and prove it
+   inactive before mutation. If repair acceptance fails, make at most one
+   containment start and require the same healthy validator ID within 30 polls.
+   Record containment separately and keep acceptance false; do not retry repair,
+   loop service restarts, or touch another validator.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the

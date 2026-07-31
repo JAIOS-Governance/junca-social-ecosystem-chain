@@ -1500,11 +1500,19 @@ class AwsFoundationTests(unittest.TestCase):
             "repair_rollback_attempted=true",
             "repair_rollback_succeeded=true",
             "repair_rollback_persistence_verified=true",
+            "admit_controlled_active_repair()",
+            "controlled_active_repair=true",
+            "controlled_stop_attempted=true",
+            "controlled_stop_verified=true",
+            "pre_repair_health_status",
+            "pre_repair_validator_id",
+            "containment_restart_attempted=true",
+            "containment_recovered=true",
             'systemctl stop junca-validator.service || true',
             "rm -f /etc/junca/runtime.env",
             "sync -f /etc/junca",
             'test("^[0-9a-f]{64}$")',
-            '"$before_status" != "active"',
+            '"$repair_status_admitted" == true',
             '"$durable_mount_verified" == true',
             "verify_durable_mount_persistence_contract()",
             "repair_durable_mount_persistence_contract()",
@@ -1623,14 +1631,18 @@ class AwsFoundationTests(unittest.TestCase):
         start = self.foundation_script.index(
             "if [[ -f /etc/junca/validator.toml &&"
         )
-        end = self.foundation_script.index(
+        initial_readback = self.foundation_script.index(
             "if [[ -d /etc/junca &&", start
+        )
+        end = self.foundation_script.index(
+            "if [[ -d /etc/junca &&", initial_readback + 1
         )
         recovery = self.foundation_script[start:end]
         for required in (
             "! -L /etc/junca/validator.toml",
             "! -e /etc/junca/validator.toml",
-            '"$before_status" != "active"',
+            "admit_controlled_active_repair",
+            '"$repair_status_admitted" == true',
             '"$genesis_verified" == true',
             "mktemp /etc/junca/.validator.toml.XXXXXX",
             'ln "$validator_config_tmp" /etc/junca/validator.toml',
@@ -1830,6 +1842,96 @@ class AwsFoundationTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_controlled_active_repair_requires_exact_healthy_identity(self) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        start = remote.index("admit_controlled_active_repair() {")
+        end = remote.index("\n}\n\nverify_durable_mount_persistence_contract", start)
+        function = remote[start : end + 2]
+        for health, identity, expected_exit, expected_stops in (
+            ("healthy", "validator-02", 0, 1),
+            ("degraded", "validator-02", 1, 0),
+            ("healthy", "validator-01", 1, 0),
+        ):
+            with self.subTest(health=health, identity=identity):
+                script = (
+                    "set -u -o pipefail\n"
+                    + function
+                    + "\nrepair_status_admitted=false\n"
+                    + 'before_status=active\n'
+                    + f"pre_repair_health_status={health}\n"
+                    + f"pre_repair_validator_id={identity}\n"
+                    + 'expected_validator_id=validator-02\n'
+                    + 'durable_mount_verified=true\n'
+                    + 'state_store_integrity=true\n'
+                    + 'binary_artifact_verified=true\n'
+                    + 'genesis_verified=true\n'
+                    + 'controlled_active_repair=false\n'
+                    + 'controlled_stop_attempted=false\n'
+                    + 'controlled_stop_exit=0\n'
+                    + 'controlled_stop_verified=false\n'
+                    + 'stop_count=0\n'
+                    + 'systemctl() {\n'
+                    + '  if [[ "$1" == stop ]]; then stop_count=$((stop_count + 1)); return 0; fi\n'
+                    + '  if [[ "$1" == is-active && "$2" == --quiet ]]; then return 1; fi\n'
+                    + '  return 1\n'
+                    + '}\n'
+                    + 'admit_controlled_active_repair\n'
+                    + f'test "$stop_count" -eq {expected_stops}\n'
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    env={"PATH": "/usr/bin:/bin"},
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, expected_exit, result.stderr)
+
+    def test_failed_active_repair_has_one_bounded_containment_start(self) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        start = remote.index(
+            'if [[ "$accepted" != true &&\n'
+            '      "$controlled_active_repair" == true'
+        )
+        end = remote.index("\n\njq -n \\", start)
+        containment = remote[start:end]
+        self.assertEqual(
+            containment.count("systemctl start junca-validator.service"),
+            1,
+        )
+        for required in (
+            "for containment_attempt in $(seq 1 30)",
+            '"$pre_repair_health_status" == "healthy"',
+            '"$pre_repair_validator_id" == "$expected_validator_id"',
+            '"$containment_validator_id" == "$expected_validator_id"',
+            "containment_recovered=true",
+        ):
+            self.assertIn(required, containment)
+        for forbidden in (
+            "systemctl restart",
+            "systemctl stop",
+            "pkill",
+            "kill -9",
+            "mkfs",
+        ):
+            self.assertNotIn(forbidden, containment)
+
+    def test_success_evidence_rejects_containment_recovery(self) -> None:
+        validation = validator_service_recovery_validation_function(
+            self.foundation_script
+        )
+        for required in (
+            ".containment_restart_attempted == false",
+            ".containment_restart_exit == 0",
+            '.containment_health_status == ""',
+            ".containment_recovered == false",
+        ):
+            self.assertIn(required, validation)
 
     def test_live_prefix_binds_each_current_instance_to_exact_ami_provenance(
         self,
@@ -2279,6 +2381,12 @@ class AwsFoundationTests(unittest.TestCase):
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
             "before_status": "inactive",
+            "pre_repair_health_status": "",
+            "pre_repair_validator_id": "",
+            "controlled_active_repair": False,
+            "controlled_stop_attempted": False,
+            "controlled_stop_exit": 0,
+            "controlled_stop_verified": False,
             "restart_attempted": True,
             "restart_exit": 0,
             "durable_mount_verified": True,
@@ -2322,6 +2430,10 @@ class AwsFoundationTests(unittest.TestCase):
             "repair_rollback_attempted": False,
             "repair_rollback_succeeded": False,
             "repair_rollback_persistence_verified": False,
+            "containment_restart_attempted": False,
+            "containment_restart_exit": 0,
+            "containment_health_status": "",
+            "containment_recovered": False,
             "runtime_env_source": "canonical",
             "runtime_env_sha256": expected_runtime_env_sha256,
             "service_stop_exit": 0,
@@ -2336,6 +2448,10 @@ class AwsFoundationTests(unittest.TestCase):
         }
         invalid_cases = (
             {"restart_attempted": False},
+            {"controlled_active_repair": True},
+            {"controlled_stop_attempted": True},
+            {"controlled_stop_exit": 1},
+            {"controlled_stop_verified": True},
             {"restart_exit": 1},
             {"durable_mount_verified": False},
             {"durable_mount_volume_id": "vol-00000000000000002"},
@@ -2375,6 +2491,10 @@ class AwsFoundationTests(unittest.TestCase):
             {"runtime_env_required_assignment_count": 19},
             {"runtime_env_persistence_verified": False},
             {"runtime_env_post_restart_verified": False},
+            {"containment_restart_attempted": True},
+            {"containment_restart_exit": 1},
+            {"containment_health_status": "healthy"},
+            {"containment_recovered": True},
             {"runtime_env_source": "operator"},
             {"runtime_env_sha256": "d" * 64},
             {"service_stop_exit": 1},
@@ -2430,6 +2550,12 @@ class AwsFoundationTests(unittest.TestCase):
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
             "before_status": "active",
+            "pre_repair_health_status": "healthy",
+            "pre_repair_validator_id": "validator-01",
+            "controlled_active_repair": False,
+            "controlled_stop_attempted": False,
+            "controlled_stop_exit": 0,
+            "controlled_stop_verified": False,
             "restart_attempted": False,
             "restart_exit": 0,
             "durable_mount_verified": True,
@@ -2473,6 +2599,10 @@ class AwsFoundationTests(unittest.TestCase):
             "repair_rollback_attempted": False,
             "repair_rollback_succeeded": False,
             "repair_rollback_persistence_verified": False,
+            "containment_restart_attempted": False,
+            "containment_restart_exit": 0,
+            "containment_health_status": "",
+            "containment_recovered": False,
             "runtime_env_source": "existing",
             "runtime_env_sha256": "d" * 64,
             "service_stop_exit": 0,

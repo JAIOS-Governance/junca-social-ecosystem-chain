@@ -1092,12 +1092,37 @@ validate_validator_service_recovery_evidence() {
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
       (.before_status | type) == "string" and
+      (.pre_repair_health_status | type) == "string" and
+      (.pre_repair_validator_id | type) == "string" and
+      (.controlled_active_repair | type) == "boolean" and
+      (.controlled_stop_attempted | type) == "boolean" and
+      (.controlled_stop_exit | type) == "number" and
+      (.controlled_stop_verified | type) == "boolean" and
       (.restart_attempted | type) == "boolean" and
       .restart_exit == 0 and
       (
-        if .before_status == "active" then
+        if .controlled_active_repair then
+          .before_status == "active" and
+          .pre_repair_health_status == "healthy" and
+          .pre_repair_validator_id == $validator_id and
+          .controlled_stop_attempted == true and
+          .controlled_stop_exit == 0 and
+          .controlled_stop_verified == true and
+          .restart_attempted == true
+        elif .before_status == "active" then
+          .pre_repair_health_status == "healthy" and
+          .pre_repair_validator_id == $validator_id and
+          .controlled_stop_attempted == false and
+          .controlled_stop_exit == 0 and
+          .controlled_stop_verified == false and
           .restart_attempted == false
         else
+          .pre_repair_health_status == "" and
+          .pre_repair_validator_id == "" and
+          .controlled_active_repair == false and
+          .controlled_stop_attempted == false and
+          .controlled_stop_exit == 0 and
+          .controlled_stop_verified == false and
           .restart_attempted == true
         end
       ) and
@@ -1129,7 +1154,8 @@ validate_validator_service_recovery_evidence() {
       (.runtime_config_repaired | type) == "boolean" and
       (
         if .runtime_config_repaired then
-          .before_status != "active" and
+          (.before_status != "active" or
+            .controlled_active_repair == true) and
           .runtime_config_repair_attempted == true
         else
           .runtime_config_repair_attempted == false
@@ -1161,6 +1187,10 @@ validate_validator_service_recovery_evidence() {
       .repair_rollback_attempted == false and
       .repair_rollback_succeeded == false and
       .repair_rollback_persistence_verified == false and
+      .containment_restart_attempted == false and
+      .containment_restart_exit == 0 and
+      .containment_health_status == "" and
+      .containment_recovered == false and
       .service_stop_exit == 0 and
       (
         if .runtime_env_repaired then
@@ -1272,6 +1302,13 @@ ensure_validator_service_available() {
     cat <<'EOF'
 set -u -o pipefail
 before_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
+pre_repair_health_status=""
+pre_repair_validator_id=""
+controlled_active_repair=false
+controlled_stop_attempted=false
+controlled_stop_exit=0
+controlled_stop_verified=false
+repair_status_admitted=false
 restart_attempted=false
 durable_mount_verified=false
 durable_mount_volume_id="$expected_state_volume_id"
@@ -1320,6 +1357,10 @@ runtime_env_post_restart_verified=false
 repair_rollback_attempted=false
 repair_rollback_succeeded=false
 repair_rollback_persistence_verified=false
+containment_restart_attempted=false
+containment_restart_exit=0
+containment_health_status=""
+containment_recovered=false
 runtime_env_source=""
 runtime_env_sha256=""
 service_stop_exit=0
@@ -1328,6 +1369,9 @@ after_status="$before_status"
 health_status=""
 attempts=1
 accepted=false
+if [[ "$before_status" != "active" ]]; then
+  repair_status_admitted=true
+fi
 
 runtime_env_has_exact_assignment() {
   local path="$1"
@@ -1410,6 +1454,29 @@ verify_runtime_env_schema() {
     runtime_env_has_exact_assignment \
       "$path" TESTNET_SLOT_EPOCH_SECONDS "$expected_slot_epoch_seconds" &&
     runtime_env_has_exact_assignment "$path" BRIDGE_ACTIVATED false
+}
+
+admit_controlled_active_repair() {
+  if [[ "$repair_status_admitted" == true ]]; then
+    return 0
+  fi
+  [[ "$before_status" == "active" ]]
+  [[ "$pre_repair_health_status" == "healthy" ]]
+  [[ "$pre_repair_validator_id" == "$expected_validator_id" ]]
+  [[ "$durable_mount_verified" == true ]]
+  [[ "$state_store_integrity" == true ]]
+  [[ "$binary_artifact_verified" == true ]]
+  [[ "$genesis_verified" == true ]]
+  controlled_active_repair=true
+  controlled_stop_attempted=true
+  systemctl stop junca-validator.service || controlled_stop_exit=$?
+  if [[ "$controlled_stop_exit" == 0 ]] &&
+      ! systemctl is-active --quiet junca-validator.service; then
+    controlled_stop_verified=true
+    repair_status_admitted=true
+    return 0
+  fi
+  return 1
 }
 
 verify_durable_mount_persistence_contract() (
@@ -1905,7 +1972,44 @@ if [[ -f /etc/junca/validator.toml &&
       ! -L /etc/junca/validator.toml ]]; then
   validator_config_admissible=true
 fi
-if [[ "$before_status" != "active" &&
+if [[ "$before_status" == "active" &&
+      "$durable_mount_verified" == true &&
+      "$state_store_integrity" == true &&
+      "$binary_artifact_verified" == true &&
+      "$genesis_verified" == true ]] &&
+    pre_repair_health="$(
+      curl -fsS http://127.0.0.1:8545/health 2>/dev/null
+    )"; then
+  pre_repair_health_status="$(
+    jq -r '.status // empty' <<<"$pre_repair_health" 2>/dev/null || true
+  )"
+  pre_repair_validator_id="$(
+    jq -r '.validator_id // empty' <<<"$pre_repair_health" \
+      2>/dev/null || true
+  )"
+fi
+if [[ -d /etc/junca &&
+      ! -L /etc/junca &&
+      "$(stat -c '%U:%G' /etc/junca)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca)" == "750" &&
+      -f /etc/junca/genesis.json &&
+      ! -L /etc/junca/genesis.json &&
+      "$(stat -c '%U:%G' /etc/junca/genesis.json)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/genesis.json)" == "640" &&
+      "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
+      -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%U:%G' /etc/junca/validator.toml)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/validator.toml)" == "640" &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
+    runuser -u junca -- test -r /etc/junca/genesis.json &&
+    runuser -u junca -- test -r /etc/junca/validator.toml; then
+  runtime_config_access_verified=true
+fi
+if [[ "$runtime_config_access_verified" != true ]]; then
+  admit_controlled_active_repair || true
+fi
+if [[ "$repair_status_admitted" == true &&
       "$genesis_verified" == true &&
       -d /etc/junca &&
       ! -L /etc/junca &&
@@ -1999,7 +2103,19 @@ fi
 
 if [[ "$runtime_env_verified" != true &&
       "$allow_runtime_env_repair" == true &&
-      "$before_status" != "active" &&
+      "$repair_status_admitted" != true &&
+      "$durable_mount_verified" == true &&
+      "$state_store_integrity" == true &&
+      "$binary_artifact_verified" == true &&
+      "$genesis_verified" == true &&
+      "$runtime_config_access_verified" == true &&
+      "$runtime_directory_verified" == true ]]; then
+  admit_controlled_active_repair || true
+fi
+
+if [[ "$runtime_env_verified" != true &&
+      "$allow_runtime_env_repair" == true &&
+      "$repair_status_admitted" == true &&
       ! -e /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env &&
       "$durable_mount_verified" == true &&
@@ -2009,7 +2125,9 @@ if [[ "$runtime_env_verified" != true &&
       "$runtime_config_access_verified" == true &&
       "$runtime_directory_verified" == true ]]; then
   runtime_env_repair_attempted=true
-  systemctl stop junca-validator.service || service_stop_exit=$?
+  if systemctl is-active --quiet junca-validator.service; then
+    systemctl stop junca-validator.service || service_stop_exit=$?
+  fi
   if [[ "$service_stop_exit" == 0 ]]; then
     runtime_env_tmp="$(mktemp /etc/junca/.runtime.env.XXXXXX)"
     trap 'rm -f "$runtime_env_tmp"' EXIT
@@ -2060,7 +2178,7 @@ if [[ "$runtime_env_verified" != true &&
   fi
 fi
 
-if [[ "$before_status" != "active" &&
+if [[ "$repair_status_admitted" == true &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
       "$binary_artifact_verified" == true &&
@@ -2151,9 +2269,50 @@ if [[ "$accepted" != true &&
   fi
 fi
 
+if [[ "$accepted" != true &&
+      "$controlled_active_repair" == true &&
+      "$controlled_stop_verified" == true &&
+      "$pre_repair_health_status" == "healthy" &&
+      "$pre_repair_validator_id" == "$expected_validator_id" ]] &&
+    ! systemctl is-active --quiet junca-validator.service; then
+  containment_restart_attempted=true
+  systemctl start junca-validator.service || containment_restart_exit=$?
+  if [[ "$containment_restart_exit" == 0 ]]; then
+    for containment_attempt in $(seq 1 30); do
+      if systemctl is-active --quiet junca-validator.service &&
+          containment_health="$(
+            curl -fsS http://127.0.0.1:8545/health 2>/dev/null
+          )"; then
+        containment_health_status="$(
+          jq -r '.status // empty' <<<"$containment_health" \
+            2>/dev/null || true
+        )"
+        containment_validator_id="$(
+          jq -r '.validator_id // empty' <<<"$containment_health" \
+            2>/dev/null || true
+        )"
+        if [[ "$containment_health_status" == "healthy" &&
+              "$containment_validator_id" == "$expected_validator_id" ]]; then
+          containment_recovered=true
+          break
+        fi
+      fi
+      if [[ "$containment_attempt" -lt 30 ]]; then
+        sleep 2
+      fi
+    done
+  fi
+fi
+
 jq -n \
   --arg schema_version "junca-validator-service-recovery/v3" \
   --arg before_status "$before_status" \
+  --arg pre_repair_health_status "$pre_repair_health_status" \
+  --arg pre_repair_validator_id "$pre_repair_validator_id" \
+  --argjson controlled_active_repair "$controlled_active_repair" \
+  --argjson controlled_stop_attempted "$controlled_stop_attempted" \
+  --argjson controlled_stop_exit "$controlled_stop_exit" \
+  --argjson controlled_stop_verified "$controlled_stop_verified" \
   --argjson restart_attempted "$restart_attempted" \
   --argjson restart_exit "$restart_exit" \
   --argjson durable_mount_verified "$durable_mount_verified" \
@@ -2211,6 +2370,11 @@ jq -n \
   --argjson repair_rollback_succeeded "$repair_rollback_succeeded" \
   --argjson repair_rollback_persistence_verified \
     "$repair_rollback_persistence_verified" \
+  --argjson containment_restart_attempted \
+    "$containment_restart_attempted" \
+  --argjson containment_restart_exit "$containment_restart_exit" \
+  --arg containment_health_status "$containment_health_status" \
+  --argjson containment_recovered "$containment_recovered" \
   --arg runtime_env_source "$runtime_env_source" \
   --arg runtime_env_sha256 "$runtime_env_sha256" \
   --argjson service_stop_exit "$service_stop_exit" \
@@ -2220,6 +2384,12 @@ jq -n \
   --argjson accepted "$accepted" '{
     schema_version: $schema_version,
     before_status: $before_status,
+    pre_repair_health_status: $pre_repair_health_status,
+    pre_repair_validator_id: $pre_repair_validator_id,
+    controlled_active_repair: $controlled_active_repair,
+    controlled_stop_attempted: $controlled_stop_attempted,
+    controlled_stop_exit: $controlled_stop_exit,
+    controlled_stop_verified: $controlled_stop_verified,
     restart_attempted: $restart_attempted,
     restart_exit: $restart_exit,
     durable_mount_verified: $durable_mount_verified,
@@ -2276,6 +2446,10 @@ jq -n \
     repair_rollback_succeeded: $repair_rollback_succeeded,
     repair_rollback_persistence_verified:
       $repair_rollback_persistence_verified,
+    containment_restart_attempted: $containment_restart_attempted,
+    containment_restart_exit: $containment_restart_exit,
+    containment_health_status: $containment_health_status,
+    containment_recovered: $containment_recovered,
     runtime_env_source: $runtime_env_source,
     runtime_env_sha256: $runtime_env_sha256,
     service_stop_exit: $service_stop_exit,
