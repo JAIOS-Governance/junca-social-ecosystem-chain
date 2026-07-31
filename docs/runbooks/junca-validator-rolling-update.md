@@ -56,6 +56,20 @@ stable height alone is never activation evidence.
    validators to one historical AMI by assertion. A resumed rollout must use
    the checksummed per-validator instance, AMI and runtime bindings from its
    exact resume evidence; any live or provenance drift stops before mutation.
+   If the retained volume is still attached to the exact current instance but
+   `/var/lib/junca` is not mounted, the zero-prefix recovery may stop the
+   already-unhealthy validator and re-run only the AMI-installed canonical
+   `junca-validator-state.service`. Before doing so it must prove the
+   Terraform volume ID equals the single encrypted AWS attachment, the NVMe
+   by-id serial equals that volume ID, the device is not mounted elsewhere,
+   the unmounted target is a real empty directory, and the filesystem is
+   `ext4` or `xfs`. The installed mount helper and systemd unit must be exact,
+   single-link root-owned canonical files, and the validator unit must retain
+   its mount requirements. Afterward require the exact resolved device as the
+   mount source, `noatime,nosuid,nodev`, an active enabled persistence unit,
+   and read-only SQLite integrity. Never format, repair, relabel, detach,
+   replace, or restore the volume in this recovery. Any mismatch leaves the
+   validator stopped as a circuit breaker and blocks runtime reconstruction.
    When the exact failure is a missing `/etc/junca/runtime.env`, reconstruction
    is allowed only before any validator replacement (`updated_count=0`) and only
    after exact current AMI, runtime archive, genesis, retained state,
