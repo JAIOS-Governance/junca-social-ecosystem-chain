@@ -41,6 +41,15 @@ target, canonical helper/unit bytes and validator unit mount dependencies.
 The device must not already be mounted elsewhere. Acceptance then requires the
 exact resolved mount source, `noatime,nosuid,nodev`, enabled active boot
 persistence and read-only SQLite integrity before any `runtime.env` repair.
+If the exact persistence helper or mount unit on an admitted stopped legacy
+validator is absent or stale, Foundation may replace only those two root-owned
+regular single-link files using same-directory temporary files, file and
+directory fsync, atomic rename, daemon reload, and exact post-write readback.
+Symlinks, hardlinks, non-root ownership, unexpected target entries, device
+ambiguity, unapproved filesystems, or any post-write mismatch remain
+fail-closed. The recovery evidence records the last completed mount-repair
+stage and the admitted target entry names so a failed precondition is
+diagnosable without repeating a blind rollout.
 There is no format, filesystem repair, relabel, detach, volume replacement or
 snapshot restoration path. A failed prerequisite stops the unhealthy service
 and leaves the rollout blocked, preventing its prior unbounded restart loop.
