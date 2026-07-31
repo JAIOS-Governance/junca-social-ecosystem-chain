@@ -40,7 +40,22 @@ install. After applying `root:junca` ownership and canonical modes, recovery
 syncs both files and the directory and proves zero-length compatibility config
 and readability as the `junca` service user. Symlinks, hard links, existing
 non-empty content during creation, non-root ownership, unexpected modes,
-digest mismatch, destination races, or an active service fail closed.
+digest mismatch or destination races fail closed. An active service is
+repairable only through the serial controlled-active path: exact retained-state,
+runtime, genesis, healthy loopback and validator-ID readback must precede one
+service stop; inactivity must be proven before mutation. A failed repair may
+perform one containment start for that same validator, but containment evidence
+is never accepted as successful repair or rollout evidence. After repair, the
+healthy loopback response must again carry the exact validator ID. Evidence
+schema v6 records this as `health_validator_id`; a missing or different ID
+blocks serial advancement even when the reported status is `healthy`. The same
+schema records a canonical recovery-request SHA-256 and the exact SSM Command
+ID. The request covers validator, instance, AMI, immutable runtime, canonical
+runtime environment, genesis, retained volume, source commit, the single
+dispatch sequence, current workflow run ID and attempt, immutable release and
+manifest-decision digests, candidate head, and the exact repair-authorization
+mode; cross-validator, cross-run, cross-decision, and stale-dispatch evidence
+fail closed.
 
 Immutable boundaries:
 

@@ -85,6 +85,34 @@ expected digest and the same recorded device/inode identity, and syncs
 `/etc/junca`. Failure to prove either install or rollback persistence remains
 blocked for operator inspection.
 
+An active validator with an unreadable runtime configuration may enter the
+same bounded repair only after read-only evidence proves the retained volume,
+SQLite integrity, immutable runtime and genesis, plus a healthy loopback
+response carrying its exact expected validator ID. Recovery then stops only
+that service once, proves it inactive, applies the narrow repair, restarts it,
+and records the pre-repair health and controlled-stop evidence. If acceptance
+still fails, containment may start that same service exactly once and require
+the exact healthy validator ID within 30 bounded polls. Containment never
+converts failed repair evidence into acceptance; it only restores the prior
+healthy service posture while the rollout remains blocked.
+
+Post-repair acceptance is bound to the same validator identity. Every healthy
+loopback response observed after restart must carry the exact expected
+`validator_id`; a missing or different identity remains blocked even when the
+status string is `healthy`. Recovery evidence schema v6 records that readback
+as `health_validator_id`, and the controller rejects evidence whose recorded
+identity differs from the validator being advanced in the serial rollout.
+
+Schema v6 also binds each recovery result to a canonical request digest over
+the exact validator, instance, AMI, runtime archive, canonical `runtime.env`,
+genesis, retained volume, source commit, dispatch sequence, current workflow
+run ID and attempt, immutable release-request digest, manifest-decision digest,
+candidate head, and the exact runtime-environment repair authorization. The
+controller adds the exact SSM Command ID from the invocation it read and
+validates every value before serial advancement. Evidence from another
+validator, candidate, volume, instance, run, attempt, release decision, repair
+mode, or earlier SSM dispatch cannot satisfy the current request.
+
 Both repaired and pre-existing `runtime.env` files must be single-link regular
 files owned by `root:junca` with mode `0640`. Recovery pins the admitted
 device/inode and digest before restart, then revalidates identity, ownership,

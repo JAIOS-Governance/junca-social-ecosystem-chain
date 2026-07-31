@@ -1080,24 +1080,100 @@ validate_validator_service_recovery_evidence() {
   local expected_runtime_version="$5"
   local expected_runtime_env_sha256="$6"
   local expected_state_volume_id="$7"
+  local expected_genesis_sha256="$8"
+  local expected_source_commit="$9"
+  shift 9
+  local expected_recovery_request_sha256="$1"
+  local expected_recovery_command_id="$2"
+  local expected_recovery_run_id="$3"
+  local expected_recovery_run_attempt="$4"
+  local expected_release_request_sha256="$5"
+  local expected_manifest_decision_sha256="$6"
+  local expected_candidate_head_sha="$7"
+  local expected_allow_runtime_env_repair="$8"
+  [[ "$expected_genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_source_commit" =~ ^[0-9a-f]{40}$ ]]
+  [[ "$expected_recovery_request_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_recovery_command_id" =~ \
+    ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+  [[ "$expected_recovery_run_id" =~ ^[1-9][0-9]*$ ]]
+  [[ "$expected_recovery_run_attempt" =~ ^[1-9][0-9]*$ ]]
+  [[ "$expected_release_request_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_manifest_decision_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_candidate_head_sha" =~ ^[0-9a-f]{40}$ ]]
+  case "$expected_allow_runtime_env_repair" in
+    true|false) ;;
+    *) return 2 ;;
+  esac
   jq -e \
     --arg validator_id "$validator_id" \
     --arg instance_id "$instance_id" \
     --arg expected_ami_id "$expected_ami_id" \
     --arg expected_runtime_version "$expected_runtime_version" \
     --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" \
-    --arg expected_state_volume_id "$expected_state_volume_id" '
-      .schema_version == "junca-validator-service-recovery/v3" and
+    --arg expected_state_volume_id "$expected_state_volume_id" \
+    --arg expected_genesis_sha256 "$expected_genesis_sha256" \
+    --arg expected_source_commit "$expected_source_commit" \
+    --arg expected_recovery_request_sha256 \
+      "$expected_recovery_request_sha256" \
+    --arg expected_recovery_command_id "$expected_recovery_command_id" \
+    --argjson expected_recovery_run_id "$expected_recovery_run_id" \
+    --argjson expected_recovery_run_attempt \
+      "$expected_recovery_run_attempt" \
+    --arg expected_release_request_sha256 \
+      "$expected_release_request_sha256" \
+    --arg expected_manifest_decision_sha256 \
+      "$expected_manifest_decision_sha256" \
+    --arg expected_candidate_head_sha "$expected_candidate_head_sha" \
+    --argjson expected_allow_runtime_env_repair \
+      "$expected_allow_runtime_env_repair" '
+      .schema_version == "junca-validator-service-recovery/v6" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
+      .genesis_sha256 == $expected_genesis_sha256 and
+      .source_commit == $expected_source_commit and
+      .recovery_request_sha256 == $expected_recovery_request_sha256 and
+      .recovery_command_id == $expected_recovery_command_id and
+      .recovery_dispatch_sequence == 1 and
+      .recovery_run_id == $expected_recovery_run_id and
+      .recovery_run_attempt == $expected_recovery_run_attempt and
+      .release_request_sha256 == $expected_release_request_sha256 and
+      .manifest_decision_sha256 == $expected_manifest_decision_sha256 and
+      .candidate_head_sha == $expected_candidate_head_sha and
+      .allow_runtime_env_repair == $expected_allow_runtime_env_repair and
       (.before_status | type) == "string" and
+      (.pre_repair_health_status | type) == "string" and
+      (.pre_repair_validator_id | type) == "string" and
+      (.controlled_active_repair | type) == "boolean" and
+      (.controlled_stop_attempted | type) == "boolean" and
+      (.controlled_stop_exit | type) == "number" and
+      (.controlled_stop_verified | type) == "boolean" and
       (.restart_attempted | type) == "boolean" and
       .restart_exit == 0 and
       (
-        if .before_status == "active" then
+        if .controlled_active_repair then
+          .before_status == "active" and
+          .pre_repair_health_status == "healthy" and
+          .pre_repair_validator_id == $validator_id and
+          .controlled_stop_attempted == true and
+          .controlled_stop_exit == 0 and
+          .controlled_stop_verified == true and
+          .restart_attempted == true
+        elif .before_status == "active" then
+          .pre_repair_health_status == "healthy" and
+          .pre_repair_validator_id == $validator_id and
+          .controlled_stop_attempted == false and
+          .controlled_stop_exit == 0 and
+          .controlled_stop_verified == false and
           .restart_attempted == false
         else
+          .pre_repair_health_status == "" and
+          .pre_repair_validator_id == "" and
+          .controlled_active_repair == false and
+          .controlled_stop_attempted == false and
+          .controlled_stop_exit == 0 and
+          .controlled_stop_verified == false and
           .restart_attempted == true
         end
       ) and
@@ -1129,7 +1205,8 @@ validate_validator_service_recovery_evidence() {
       (.runtime_config_repaired | type) == "boolean" and
       (
         if .runtime_config_repaired then
-          .before_status != "active" and
+          (.before_status != "active" or
+            .controlled_active_repair == true) and
           .runtime_config_repair_attempted == true
         else
           .runtime_config_repair_attempted == false
@@ -1161,6 +1238,10 @@ validate_validator_service_recovery_evidence() {
       .repair_rollback_attempted == false and
       .repair_rollback_succeeded == false and
       .repair_rollback_persistence_verified == false and
+      .containment_restart_attempted == false and
+      .containment_restart_exit == 0 and
+      .containment_health_status == "" and
+      .containment_recovered == false and
       .service_stop_exit == 0 and
       (
         if .runtime_env_repaired then
@@ -1185,6 +1266,7 @@ validate_validator_service_recovery_evidence() {
       ) and
       .after_status == "active" and
       .health_status == "healthy" and
+      .health_validator_id == $validator_id and
       (.attempts | type) == "number" and
       .attempts >= 1 and
       .attempts <= 60 and
@@ -1215,6 +1297,7 @@ ensure_validator_service_available() {
   local recovery_command
   local canonical_runtime_b64
   local canonical_runtime_env_sha256
+  local recovery_request_sha256
   local command_id
   local invocation
   local ami_id
@@ -1226,6 +1309,11 @@ ensure_validator_service_available() {
     true|false) ;;
     *) return 2 ;;
   esac
+  [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+  [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$MANIFEST_DECISION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$ROLLING_CANDIDATE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
   canonical_runtime_b64="$(
     render_canonical_validator_runtime_env \
       "$validator_id" "$expected_runtime_version" "$genesis_sha256" \
@@ -1240,6 +1328,42 @@ ensure_validator_service_available() {
       "$signer_arn" "$signer_bindings" "$peer_endpoints" \
       "$automatic_finality_enabled" "$block_interval_seconds" \
       "$slot_epoch_seconds" |
+      sha256sum |
+      awk '{print $1}'
+  )"
+  recovery_request_sha256="$(
+    jq -cnS \
+      --arg validator_id "$validator_id" \
+      --arg instance_id "$instance_id" \
+      --arg ami_id "$expected_ami_id" \
+      --arg runtime_sha256 "$expected_runtime_version" \
+      --arg runtime_env_sha256 "$canonical_runtime_env_sha256" \
+      --arg genesis_sha256 "$genesis_sha256" \
+      --arg state_volume_id "$expected_state_volume_id" \
+      --arg source_commit "$SOURCE_COMMIT" \
+      --argjson recovery_run_id "$GITHUB_RUN_ID" \
+      --argjson recovery_run_attempt "$GITHUB_RUN_ATTEMPT" \
+      --arg release_request_sha256 "$REQUEST_SHA256" \
+      --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" \
+      --arg candidate_head_sha "$ROLLING_CANDIDATE_HEAD_SHA" \
+      --argjson allow_runtime_env_repair "$allow_runtime_env_repair" '{
+        schema_version: "junca-validator-service-recovery-request/v2",
+        validator_id: $validator_id,
+        instance_id: $instance_id,
+        ami_id: $ami_id,
+        runtime_sha256: $runtime_sha256,
+        runtime_env_sha256: $runtime_env_sha256,
+        genesis_sha256: $genesis_sha256,
+        state_volume_id: $state_volume_id,
+        source_commit: $source_commit,
+        recovery_run_id: $recovery_run_id,
+        recovery_run_attempt: $recovery_run_attempt,
+        release_request_sha256: $release_request_sha256,
+        manifest_decision_sha256: $manifest_decision_sha256,
+        candidate_head_sha: $candidate_head_sha,
+        allow_runtime_env_repair: $allow_runtime_env_repair,
+        recovery_dispatch_sequence: 1
+      }' |
       sha256sum |
       awk '{print $1}'
   )"
@@ -1265,6 +1389,16 @@ ensure_validator_service_available() {
     printf 'expected_block_interval_seconds=%q\n' "$block_interval_seconds"
     printf 'expected_slot_epoch_seconds=%q\n' "$slot_epoch_seconds"
     printf 'expected_state_volume_id=%q\n' "$expected_state_volume_id"
+    printf 'expected_genesis_sha256=%q\n' "$genesis_sha256"
+    printf 'expected_source_commit=%q\n' "$SOURCE_COMMIT"
+    printf 'expected_recovery_request_sha256=%q\n' \
+      "$recovery_request_sha256"
+    printf 'recovery_dispatch_sequence=%q\n' 1
+    printf 'recovery_run_id=%q\n' "$GITHUB_RUN_ID"
+    printf 'recovery_run_attempt=%q\n' "$GITHUB_RUN_ATTEMPT"
+    printf 'release_request_sha256=%q\n' "$REQUEST_SHA256"
+    printf 'manifest_decision_sha256=%q\n' "$MANIFEST_DECISION_SHA256"
+    printf 'candidate_head_sha=%q\n' "$ROLLING_CANDIDATE_HEAD_SHA"
     printf 'allow_runtime_env_repair=%q\n' "$allow_runtime_env_repair"
     printf 'canonical_runtime_b64=%q\n' "$canonical_runtime_b64"
     printf 'canonical_runtime_env_sha256=%q\n' \
@@ -1272,6 +1406,13 @@ ensure_validator_service_available() {
     cat <<'EOF'
 set -u -o pipefail
 before_status="$(systemctl is-active junca-validator.service 2>/dev/null || true)"
+pre_repair_health_status=""
+pre_repair_validator_id=""
+controlled_active_repair=false
+controlled_stop_attempted=false
+controlled_stop_exit=0
+controlled_stop_verified=false
+repair_status_admitted=false
 restart_attempted=false
 durable_mount_verified=false
 durable_mount_volume_id="$expected_state_volume_id"
@@ -1320,14 +1461,22 @@ runtime_env_post_restart_verified=false
 repair_rollback_attempted=false
 repair_rollback_succeeded=false
 repair_rollback_persistence_verified=false
+containment_restart_attempted=false
+containment_restart_exit=0
+containment_health_status=""
+containment_recovered=false
 runtime_env_source=""
 runtime_env_sha256=""
 service_stop_exit=0
 restart_exit=0
 after_status="$before_status"
 health_status=""
+health_validator_id=""
 attempts=1
 accepted=false
+if [[ "$before_status" != "active" ]]; then
+  repair_status_admitted=true
+fi
 
 runtime_env_has_exact_assignment() {
   local path="$1"
@@ -1410,6 +1559,29 @@ verify_runtime_env_schema() {
     runtime_env_has_exact_assignment \
       "$path" TESTNET_SLOT_EPOCH_SECONDS "$expected_slot_epoch_seconds" &&
     runtime_env_has_exact_assignment "$path" BRIDGE_ACTIVATED false
+}
+
+admit_controlled_active_repair() {
+  if [[ "$repair_status_admitted" == true ]]; then
+    return 0
+  fi
+  [[ "$before_status" == "active" ]]
+  [[ "$pre_repair_health_status" == "healthy" ]]
+  [[ "$pre_repair_validator_id" == "$expected_validator_id" ]]
+  [[ "$durable_mount_verified" == true ]]
+  [[ "$state_store_integrity" == true ]]
+  [[ "$binary_artifact_verified" == true ]]
+  [[ "$genesis_verified" == true ]]
+  controlled_active_repair=true
+  controlled_stop_attempted=true
+  systemctl stop junca-validator.service || controlled_stop_exit=$?
+  if [[ "$controlled_stop_exit" == 0 ]] &&
+      ! systemctl is-active --quiet junca-validator.service; then
+    controlled_stop_verified=true
+    repair_status_admitted=true
+    return 0
+  fi
+  return 1
 }
 
 verify_durable_mount_persistence_contract() (
@@ -1905,7 +2077,44 @@ if [[ -f /etc/junca/validator.toml &&
       ! -L /etc/junca/validator.toml ]]; then
   validator_config_admissible=true
 fi
-if [[ "$before_status" != "active" &&
+if [[ "$before_status" == "active" &&
+      "$durable_mount_verified" == true &&
+      "$state_store_integrity" == true &&
+      "$binary_artifact_verified" == true &&
+      "$genesis_verified" == true ]] &&
+    pre_repair_health="$(
+      curl -fsS http://127.0.0.1:8545/health 2>/dev/null
+    )"; then
+  pre_repair_health_status="$(
+    jq -r '.status // empty' <<<"$pre_repair_health" 2>/dev/null || true
+  )"
+  pre_repair_validator_id="$(
+    jq -r '.validator_id // empty' <<<"$pre_repair_health" \
+      2>/dev/null || true
+  )"
+fi
+if [[ -d /etc/junca &&
+      ! -L /etc/junca &&
+      "$(stat -c '%U:%G' /etc/junca)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca)" == "750" &&
+      -f /etc/junca/genesis.json &&
+      ! -L /etc/junca/genesis.json &&
+      "$(stat -c '%U:%G' /etc/junca/genesis.json)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/genesis.json)" == "640" &&
+      "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
+      -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%U:%G' /etc/junca/validator.toml)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/validator.toml)" == "640" &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
+    runuser -u junca -- test -r /etc/junca/genesis.json &&
+    runuser -u junca -- test -r /etc/junca/validator.toml; then
+  runtime_config_access_verified=true
+fi
+if [[ "$runtime_config_access_verified" != true ]]; then
+  admit_controlled_active_repair || true
+fi
+if [[ "$repair_status_admitted" == true &&
       "$genesis_verified" == true &&
       -d /etc/junca &&
       ! -L /etc/junca &&
@@ -1999,7 +2208,19 @@ fi
 
 if [[ "$runtime_env_verified" != true &&
       "$allow_runtime_env_repair" == true &&
-      "$before_status" != "active" &&
+      "$repair_status_admitted" != true &&
+      "$durable_mount_verified" == true &&
+      "$state_store_integrity" == true &&
+      "$binary_artifact_verified" == true &&
+      "$genesis_verified" == true &&
+      "$runtime_config_access_verified" == true &&
+      "$runtime_directory_verified" == true ]]; then
+  admit_controlled_active_repair || true
+fi
+
+if [[ "$runtime_env_verified" != true &&
+      "$allow_runtime_env_repair" == true &&
+      "$repair_status_admitted" == true &&
       ! -e /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env &&
       "$durable_mount_verified" == true &&
@@ -2009,7 +2230,9 @@ if [[ "$runtime_env_verified" != true &&
       "$runtime_config_access_verified" == true &&
       "$runtime_directory_verified" == true ]]; then
   runtime_env_repair_attempted=true
-  systemctl stop junca-validator.service || service_stop_exit=$?
+  if systemctl is-active --quiet junca-validator.service; then
+    systemctl stop junca-validator.service || service_stop_exit=$?
+  fi
   if [[ "$service_stop_exit" == 0 ]]; then
     runtime_env_tmp="$(mktemp /etc/junca/.runtime.env.XXXXXX)"
     trap 'rm -f "$runtime_env_tmp"' EXIT
@@ -2060,7 +2283,7 @@ if [[ "$runtime_env_verified" != true &&
   fi
 fi
 
-if [[ "$before_status" != "active" &&
+if [[ "$repair_status_admitted" == true &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
       "$binary_artifact_verified" == true &&
@@ -2088,6 +2311,9 @@ for attempts in $(seq 1 60); do
   if [[ "$after_status" == "active" ]] &&
       health="$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null)"; then
     health_status="$(jq -r '.status // empty' <<<"$health" 2>/dev/null || true)"
+    health_validator_id="$(
+      jq -r '.validator_id // empty' <<<"$health" 2>/dev/null || true
+    )"
     if [[ -f /etc/junca/runtime.env &&
           ! -L /etc/junca/runtime.env &&
           "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
@@ -2100,6 +2326,7 @@ for attempts in $(seq 1 60); do
       runtime_env_post_restart_verified=true
     fi
     if [[ "$health_status" == "healthy" &&
+          "$health_validator_id" == "$expected_validator_id" &&
           "$restart_exit" == 0 &&
           "$durable_mount_verified" == true &&
           "$state_store_integrity" == true &&
@@ -2151,9 +2378,60 @@ if [[ "$accepted" != true &&
   fi
 fi
 
+if [[ "$accepted" != true &&
+      "$controlled_active_repair" == true &&
+      "$controlled_stop_verified" == true &&
+      "$pre_repair_health_status" == "healthy" &&
+      "$pre_repair_validator_id" == "$expected_validator_id" ]] &&
+    ! systemctl is-active --quiet junca-validator.service; then
+  containment_restart_attempted=true
+  systemctl start junca-validator.service || containment_restart_exit=$?
+  if [[ "$containment_restart_exit" == 0 ]]; then
+    for containment_attempt in $(seq 1 30); do
+      if systemctl is-active --quiet junca-validator.service &&
+          containment_health="$(
+            curl -fsS http://127.0.0.1:8545/health 2>/dev/null
+          )"; then
+        containment_health_status="$(
+          jq -r '.status // empty' <<<"$containment_health" \
+            2>/dev/null || true
+        )"
+        containment_validator_id="$(
+          jq -r '.validator_id // empty' <<<"$containment_health" \
+            2>/dev/null || true
+        )"
+        if [[ "$containment_health_status" == "healthy" &&
+              "$containment_validator_id" == "$expected_validator_id" ]]; then
+          containment_recovered=true
+          break
+        fi
+      fi
+      if [[ "$containment_attempt" -lt 30 ]]; then
+        sleep 2
+      fi
+    done
+  fi
+fi
+
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v3" \
+  --arg schema_version "junca-validator-service-recovery/v6" \
+  --arg genesis_sha256 "$expected_genesis_sha256" \
+  --arg source_commit "$expected_source_commit" \
+  --arg recovery_request_sha256 "$expected_recovery_request_sha256" \
+  --argjson recovery_dispatch_sequence "$recovery_dispatch_sequence" \
+  --argjson recovery_run_id "$recovery_run_id" \
+  --argjson recovery_run_attempt "$recovery_run_attempt" \
+  --arg release_request_sha256 "$release_request_sha256" \
+  --arg manifest_decision_sha256 "$manifest_decision_sha256" \
+  --arg candidate_head_sha "$candidate_head_sha" \
+  --argjson allow_runtime_env_repair "$allow_runtime_env_repair" \
   --arg before_status "$before_status" \
+  --arg pre_repair_health_status "$pre_repair_health_status" \
+  --arg pre_repair_validator_id "$pre_repair_validator_id" \
+  --argjson controlled_active_repair "$controlled_active_repair" \
+  --argjson controlled_stop_attempted "$controlled_stop_attempted" \
+  --argjson controlled_stop_exit "$controlled_stop_exit" \
+  --argjson controlled_stop_verified "$controlled_stop_verified" \
   --argjson restart_attempted "$restart_attempted" \
   --argjson restart_exit "$restart_exit" \
   --argjson durable_mount_verified "$durable_mount_verified" \
@@ -2211,15 +2489,37 @@ jq -n \
   --argjson repair_rollback_succeeded "$repair_rollback_succeeded" \
   --argjson repair_rollback_persistence_verified \
     "$repair_rollback_persistence_verified" \
+  --argjson containment_restart_attempted \
+    "$containment_restart_attempted" \
+  --argjson containment_restart_exit "$containment_restart_exit" \
+  --arg containment_health_status "$containment_health_status" \
+  --argjson containment_recovered "$containment_recovered" \
   --arg runtime_env_source "$runtime_env_source" \
   --arg runtime_env_sha256 "$runtime_env_sha256" \
   --argjson service_stop_exit "$service_stop_exit" \
   --arg after_status "$after_status" \
   --arg health_status "$health_status" \
+  --arg health_validator_id "$health_validator_id" \
   --argjson attempts "$attempts" \
   --argjson accepted "$accepted" '{
     schema_version: $schema_version,
+    genesis_sha256: $genesis_sha256,
+    source_commit: $source_commit,
+    recovery_request_sha256: $recovery_request_sha256,
+    recovery_dispatch_sequence: $recovery_dispatch_sequence,
+    recovery_run_id: $recovery_run_id,
+    recovery_run_attempt: $recovery_run_attempt,
+    release_request_sha256: $release_request_sha256,
+    manifest_decision_sha256: $manifest_decision_sha256,
+    candidate_head_sha: $candidate_head_sha,
+    allow_runtime_env_repair: $allow_runtime_env_repair,
     before_status: $before_status,
+    pre_repair_health_status: $pre_repair_health_status,
+    pre_repair_validator_id: $pre_repair_validator_id,
+    controlled_active_repair: $controlled_active_repair,
+    controlled_stop_attempted: $controlled_stop_attempted,
+    controlled_stop_exit: $controlled_stop_exit,
+    controlled_stop_verified: $controlled_stop_verified,
     restart_attempted: $restart_attempted,
     restart_exit: $restart_exit,
     durable_mount_verified: $durable_mount_verified,
@@ -2276,11 +2576,16 @@ jq -n \
     repair_rollback_succeeded: $repair_rollback_succeeded,
     repair_rollback_persistence_verified:
       $repair_rollback_persistence_verified,
+    containment_restart_attempted: $containment_restart_attempted,
+    containment_restart_exit: $containment_restart_exit,
+    containment_health_status: $containment_health_status,
+    containment_recovered: $containment_recovered,
     runtime_env_source: $runtime_env_source,
     runtime_env_sha256: $runtime_env_sha256,
     service_stop_exit: $service_stop_exit,
     after_status: $after_status,
     health_status: $health_status,
+    health_validator_id: $health_validator_id,
     attempts: $attempts,
     accepted: $accepted,
     mainnet_changed: false,
@@ -2310,6 +2615,12 @@ EOF
   )"
   invocation="artifacts/service-recovery-command-${validator_id}-${instance_id}.json"
   wait_for_ssm_command_result "$command_id" "$instance_id" "$invocation"
+  jq -e \
+    --arg command_id "$command_id" \
+    --arg instance_id "$instance_id" '
+      .CommandId == $command_id and
+      .InstanceId == $instance_id
+    ' "$invocation" >/dev/null
   jq -er \
     '.StandardOutputContent |
       select(type == "string" and length > 0)' \
@@ -2318,15 +2629,21 @@ EOF
       --arg validator_id "$validator_id" \
       --arg instance_id "$instance_id" \
       --arg ami_id "$ami_id" \
+      --arg recovery_command_id "$command_id" \
       '. + {
         validator_id: $validator_id,
         instance_id: $instance_id,
-        ami_id: $ami_id
+        ami_id: $ami_id,
+        recovery_command_id: $recovery_command_id
       }' >"$output_path"
   validate_validator_service_recovery_evidence \
     "$output_path" "$validator_id" "$instance_id" "$expected_ami_id" \
     "$expected_runtime_version" "$canonical_runtime_env_sha256" \
-    "$expected_state_volume_id"
+    "$expected_state_volume_id" "$genesis_sha256" "$SOURCE_COMMIT" \
+    "$recovery_request_sha256" "$command_id" "$GITHUB_RUN_ID" \
+    "$GITHUB_RUN_ATTEMPT" "$REQUEST_SHA256" \
+    "$MANIFEST_DECISION_SHA256" "$ROLLING_CANDIDATE_HEAD_SHA" \
+    "$allow_runtime_env_repair"
   jq -e '.Status == "Success"' "$invocation" >/dev/null
 }
 
@@ -3015,7 +3332,8 @@ esac
 if [[ "$rolling_release" == "true" ]]; then
   for name in \
     AMI_RUN_ID MANIFEST_GATE_RUN_ID REQUEST_SHA256 \
-    MANIFEST_DECISION_SHA256 GITHUB_RUN_ID GITHUB_SHA GITHUB_REPOSITORY \
+    MANIFEST_DECISION_SHA256 GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+    GITHUB_REPOSITORY \
     ROLLING_RESUME_RUN_ID ROLLING_CANDIDATE_HEAD_SHA
   do
     [[ -n "${!name:-}" ]] || {
@@ -3028,6 +3346,7 @@ if [[ "$rolling_release" == "true" ]]; then
   [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$MANIFEST_DECISION_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
   [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
   [[ "$ROLLING_CANDIDATE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
   [[ "$ROLLING_RESUME_RUN_ID" =~ ^(0|[1-9][0-9]*)$ ]]
