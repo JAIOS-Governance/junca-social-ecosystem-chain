@@ -18,6 +18,7 @@ from .protocol_kernel import (
     ProtocolTransitionError,
     SignatureVerifier,
     TransactionEnvelope,
+    transaction_intrinsic_gas,
 )
 
 
@@ -163,7 +164,13 @@ class TransactionPool:
             for sender in senders:
                 nonce = next_nonce.get(sender, normalized_accounts.get(sender, AccountState(0)).nonce)
                 transaction = self._transactions.get((sender, nonce))
-                if transaction is not None and transaction.max_fee_per_gas >= current_base_fee:
+                if (
+                    transaction is not None
+                    and transaction.max_fee_per_gas >= current_base_fee
+                    and gas_used
+                    + transaction_intrinsic_gas(self._config, transaction)
+                    <= limit
+                ):
                     executable.append(transaction)
             if not executable:
                 break
@@ -177,7 +184,7 @@ class TransactionPool:
             selected.append(transaction)
             sender = transaction.sender.lower()
             next_nonce[sender] = transaction.nonce + 1
-            gas_used += self._config.intrinsic_gas
+            gas_used += transaction_intrinsic_gas(self._config, transaction)
 
         digest_input = {
             "chain_id": self._config.chain_id,
@@ -287,7 +294,11 @@ def _validate_admission_boundary(
         raise MempoolError("transaction nonce is already consumed")
     if transaction.nonce - account.nonce > policy.max_nonce_gap:
         raise MempoolError("transaction nonce gap exceeds policy")
-    if transaction.gas_limit < config.intrinsic_gas or transaction.gas_limit > config.block_gas_limit:
+    try:
+        required_gas = transaction_intrinsic_gas(config, transaction)
+    except ProtocolTransitionError as error:
+        raise MempoolError(str(error)) from error
+    if transaction.gas_limit < required_gas or transaction.gas_limit > config.block_gas_limit:
         raise MempoolError("transaction gas limit is outside protocol bounds")
     if transaction.max_fee_per_gas < current_base_fee:
         raise MempoolError("transaction fee cap is below current base fee")

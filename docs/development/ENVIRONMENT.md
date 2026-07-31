@@ -26,6 +26,15 @@ loop is therefore:
 
 Use `make dev-test` as the canonical local acceptance command.
 
+The transfer-only protocol kernel charges deterministic intrinsic gas for the
+transaction envelope before signature admission or block selection: `21,000`
+base gas plus `4` for each zero calldata byte and `16` for each non-zero
+calldata byte. The same calculation is used by mempool admission, deterministic
+candidate capacity, execution fee/burn/tip accounting, and receipts. A declared
+gas limit below that amount fails closed; calldata can never consume fixed base
+gas while bypassing block capacity. These are Candidate Mainnet correctness
+controls only and do not authorize Mainnet activation.
+
 ### 2. Runtime and infrastructure — primary
 
 The development container includes Docker, GitHub CLI, AWS CLI and Terraform

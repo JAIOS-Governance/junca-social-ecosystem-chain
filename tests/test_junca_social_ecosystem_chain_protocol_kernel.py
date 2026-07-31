@@ -10,6 +10,7 @@ from jaios.social_ecosystem_chain.protocol_kernel import (
     compute_state_root,
     execute_block,
     next_base_fee,
+    transaction_intrinsic_gas,
 )
 
 
@@ -118,6 +119,43 @@ class ProtocolKernelTests(unittest.TestCase):
         first = compute_state_root({ALICE: AccountState(1), BOB: AccountState(2)})
         second = compute_state_root({BOB: AccountState(2), ALICE: AccountState(1)})
         self.assertEqual(first, second)
+
+    def test_calldata_intrinsic_gas_is_charged_and_reported(self) -> None:
+        payload = b"\x00\x01\x00\xff"
+        required = 21_000 + 2 * 4 + 2 * 16
+        item = transaction(data=payload, gas_limit=required)
+
+        self.assertEqual(transaction_intrinsic_gas(self.config, item), required)
+        result = self.execute(item)
+        self.assertEqual(result.gas_used, required)
+        self.assertEqual(result.receipts[0].gas_used, required)
+        self.assertEqual(result.total_base_fee_burned, required * 1_000)
+        self.assertEqual(result.total_validator_tips, required * 100)
+
+    def test_calldata_cannot_bypass_intrinsic_or_block_gas_limits(self) -> None:
+        payload = b"nonzero-calldata"
+        required = 21_000 + len(payload) * 16
+        with self.assertRaisesRegex(ProtocolTransitionError, "below intrinsic"):
+            self.execute(transaction(data=payload, gas_limit=required - 1))
+
+        first = transaction(data=payload, gas_limit=required)
+        second = transaction(
+            nonce=1,
+            data=payload,
+            gas_limit=required,
+            signature=b"verified-by-execution-client-2",
+        )
+        with self.assertRaisesRegex(ProtocolTransitionError, "block gas limit"):
+            execute_block(
+                self.config,
+                parent_base_fee=1_000,
+                parent_gas_used=21_000,
+                accounts=self.accounts,
+                transactions=(first, second),
+                signature_verifier=lambda tx: tx.signature.startswith(
+                    b"verified-by-execution-client"
+                ),
+            )
 
 
 if __name__ == "__main__":
