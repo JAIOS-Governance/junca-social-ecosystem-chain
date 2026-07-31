@@ -115,8 +115,25 @@ CEO identity records final approval. Authorization windows are limited to 15
 minutes; final approval may be at most 24 hours old and reviews at most 72 hours
 old.
 
+Reviewer names are not authority. A separately supplied immutable approval policy
+registers each permitted identity, organizational role and authenticated key
+fingerprint, sets the threshold, and names every required review role. Its
+domain-separated digest is part of the release binding. The gate rejects an
+unregistered reviewer, role substitution, shared key, shared role, threshold
+reduction, approver/reviewer overlap, or any policy whose separation-of-duties
+flags are weaker than the canonical contract.
+
+Each review has its own provenance-bound attestation digest. The complete review
+set is normalized into an order-independent approval-set digest, and final CEO
+approval is bound to that exact set. The authorization envelope then binds all
+three digest layers inside the fixed replay domain
+`junca-mainnet-controlled-activation/v1`. A matching request, manifest,
+authorization or approval set from another replay domain is rejected rather than
+silently treated as unrelated evidence.
+
 An append-only consumed-evidence ledger rejects reuse of the authorization ID,
-authorization digest, request digest, or release-manifest digest. Any mismatch,
+authorization digest, request digest, release-manifest digest, or approval-set
+digest. Any mismatch,
 duplicate reviewer, stale or future window, altered digest, or unsafe boundary
 fails closed. Evidence cannot set `Mainnet Changed`, `Assets Moved`, `Bridge
 Activated`, or `Mainnet Activation Authorized` to true. This gate performs no
