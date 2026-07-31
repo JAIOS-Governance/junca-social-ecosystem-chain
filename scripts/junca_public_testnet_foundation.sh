@@ -1600,15 +1600,15 @@ pin_existing_validator_config() {
   local identity=""
   local digest=""
   local size=""
-  [[ -f "$path" && ! -L "$path" ]]
-  [[ "$(stat -c '%U' "$path")" == "root" ]]
-  [[ "$(stat -c '%h' "$path")" == 1 ]]
-  identity="$(stat -Lc '%d:%i' "$path")"
-  digest="$(sha256sum "$path" | awk '{print $1}')"
-  size="$(stat -c '%s' "$path")"
-  [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]]
-  [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-  [[ "$size" =~ ^[0-9]+$ ]]
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  [[ "$(stat -c '%U' "$path")" == "root" ]] || return 1
+  [[ "$(stat -c '%h' "$path")" == 1 ]] || return 1
+  identity="$(stat -Lc '%d:%i' "$path")" || return 1
+  digest="$(sha256sum "$path" | awk '{print $1}')" || return 1
+  size="$(stat -c '%s' "$path")" || return 1
+  [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ "$size" =~ ^[0-9]+$ ]] || return 1
   validator_config_preexisting=true
   validator_config_pre_identity="$identity"
   validator_config_pre_sha256="$digest"
@@ -1618,16 +1618,18 @@ pin_existing_validator_config() {
 validator_config_matches_admission() {
   local path="$1"
   if [[ "$validator_config_preexisting" == true ]]; then
-    [[ -f "$path" && ! -L "$path" ]]
-    [[ "$(stat -c '%U' "$path")" == "root" ]]
-    [[ "$(stat -c '%h' "$path")" == 1 ]]
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    [[ "$(stat -c '%U' "$path")" == "root" ]] || return 1
+    [[ "$(stat -c '%h' "$path")" == 1 ]] || return 1
     [[ "$(stat -Lc '%d:%i' "$path")" == \
-      "$validator_config_pre_identity" ]]
+      "$validator_config_pre_identity" ]] || return 1
     [[ "$(sha256sum "$path" | awk '{print $1}')" == \
-      "$validator_config_pre_sha256" ]]
-    [[ "$(stat -c '%s' "$path")" == "$validator_config_pre_size" ]]
+      "$validator_config_pre_sha256" ]] || return 1
+    [[ "$(stat -c '%s' "$path")" == "$validator_config_pre_size" ]] ||
+      return 1
+    return 0
   else
-    [[ ! -e "$path" && ! -L "$path" ]]
+    [[ ! -e "$path" && ! -L "$path" ]] || return 1
   fi
 }
 

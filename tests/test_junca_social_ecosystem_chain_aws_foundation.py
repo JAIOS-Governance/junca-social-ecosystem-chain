@@ -1773,6 +1773,54 @@ class AwsFoundationTests(unittest.TestCase):
         os.geteuid() == 0,
         "root-owned validator configuration admission contract",
     )
+    def test_absent_validator_config_is_not_misclassified_in_condition(
+        self,
+    ) -> None:
+        functions = validator_config_admission_functions(
+            self.foundation_script
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config = pathlib.Path(directory) / "validator.toml"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -u -o pipefail\n"
+                    + functions
+                    + '\nvalidator_config_preexisting=false\n'
+                    + 'validator_config_pre_identity=""\n'
+                    + 'validator_config_pre_sha256=""\n'
+                    + 'validator_config_pre_size=0\n'
+                    + 'if pin_existing_validator_config "$1"; then\n'
+                    + '  exit 91\n'
+                    + 'fi\n'
+                    + 'test "$validator_config_preexisting" = false\n'
+                    + 'test -z "$validator_config_pre_identity"\n'
+                    + 'test -z "$validator_config_pre_sha256"\n'
+                    + 'test "$validator_config_pre_size" = 0\n'
+                    + 'validator_config_matches_admission "$1"\n',
+                    "validator-config-absent-condition-test",
+                    str(config),
+                ],
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            '[[ -f "$path" && ! -L "$path" ]] || return 1',
+            functions,
+        )
+        self.assertIn(
+            '[[ ! -e "$path" && ! -L "$path" ]] || return 1',
+            functions,
+        )
+
+    @unittest.skipUnless(
+        os.geteuid() == 0,
+        "root-owned validator configuration admission contract",
+    )
     def test_validator_config_admission_rejects_unsafe_shape_and_drift(
         self,
     ) -> None:
