@@ -19,7 +19,18 @@ volume_id='$${validator_state_volume_id}'
 expected_serial='$${validator_state_serial}'
 device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$${expected_serial}"
 for attempt in \$(seq 1 120); do
-  [[ -b "\$device" ]] && break
+  if [[ -b "\$device" ]]; then
+    break
+  fi
+  mapfile -t candidates < <(
+    lsblk -dnpo NAME,SERIAL,TYPE |
+      awk -v expected="\$expected_serial" \
+        '{ serial=\$2; gsub(/-/, "", serial); if (\$3 == "disk" && serial == expected) print \$1 }'
+  )
+  if [[ "$${#candidates[@]}" == 1 && -b "$${candidates[0]}" ]]; then
+    device="$${candidates[0]}"
+    break
+  fi
   test "\$attempt" -lt 120
   sleep 5
 done
