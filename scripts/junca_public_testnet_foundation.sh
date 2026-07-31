@@ -1637,13 +1637,13 @@ admit_controlled_active_repair() {
   if [[ "$repair_status_admitted" == true ]]; then
     return 0
   fi
-  [[ "$before_status" == "active" ]]
-  [[ "$pre_repair_health_status" == "healthy" ]]
-  [[ "$pre_repair_validator_id" == "$expected_validator_id" ]]
-  [[ "$durable_mount_verified" == true ]]
-  [[ "$state_store_integrity" == true ]]
-  [[ "$binary_artifact_verified" == true ]]
-  [[ "$genesis_verified" == true ]]
+  [[ "$before_status" == "active" ]] || return 1
+  [[ "$pre_repair_health_status" == "healthy" ]] || return 1
+  [[ "$pre_repair_validator_id" == "$expected_validator_id" ]] || return 1
+  [[ "$durable_mount_verified" == true ]] || return 1
+  [[ "$state_store_integrity" == true ]] || return 1
+  [[ "$binary_artifact_verified" == true ]] || return 1
+  [[ "$genesis_verified" == true ]] || return 1
   controlled_active_repair=true
   controlled_stop_attempted=true
   systemctl stop junca-validator.service || controlled_stop_exit=$?
@@ -2187,12 +2187,12 @@ if [[ "$repair_status_admitted" == true &&
       -d /etc/junca &&
       ! -L /etc/junca &&
       "$(stat -c '%U' /etc/junca)" == "root" &&
-      "$(stat -c '%a' /etc/junca)" =~ ^(750|755)$ &&
+      "$(stat -c '%a' /etc/junca)" =~ ^(700|710|750|755)$ &&
       -f /etc/junca/genesis.json &&
       ! -L /etc/junca/genesis.json &&
       "$(stat -c '%U' /etc/junca/genesis.json)" == "root" &&
       "$(stat -c '%G' /etc/junca/genesis.json)" =~ ^(root|junca)$ &&
-      "$(stat -c '%a' /etc/junca/genesis.json)" =~ ^(640|644)$ &&
+      "$(stat -c '%a' /etc/junca/genesis.json)" =~ ^(600|640|644)$ &&
       "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
       "$validator_config_admissible" == true &&
       "$(getent group junca)" != "" ]] &&

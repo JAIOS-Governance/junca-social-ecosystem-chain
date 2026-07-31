@@ -117,6 +117,12 @@ stable height alone is never activation evidence.
    conditional. This keeps a wholly absent path on the explicit create-empty
    route instead of misclassifying it as a pre-existing file with empty
    readback values.
+   The same condition-safe rule applies to every controlled-stop predicate:
+   a failed health, identity, durable-state, binary, or genesis check must
+   return before `systemctl stop` is reachable. Legacy private metadata may be
+   normalized from runtime-directory modes `0700`, `0710`, `0750`, or `0755`
+   and digest-pinned genesis modes `0600`, `0640`, or `0644`; group- or
+   world-writable modes remain outside admission.
    Re-read identity, digest, size, ownership, mode, and link count before
    restart and after the validator reports healthy. A path replacement,
    content drift, size drift, permission drift, or hard-link race blocks
