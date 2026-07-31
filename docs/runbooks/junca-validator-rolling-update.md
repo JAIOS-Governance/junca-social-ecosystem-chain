@@ -47,6 +47,15 @@ stable height alone is never activation evidence.
    the same strict readback; it never treats the restart itself as acceptance.
    A failed prerequisite or failed health readback stops before Terraform
    mutation and preserves service diagnostics for the next repair.
+   A fresh rollout may encounter an ordered, heterogeneous legacy baseline.
+   Before service recovery, bind each current instance separately to its exact
+   EC2 AMI ID and the AMI's unique `NodeArtifactSHA256`, `GenesisSHA256`,
+   `SourceCommit`, `Network`, and `Governance` tags. Require the exact AWS
+   account, region, instance state, private self-owned AMI, architecture,
+   virtualization and EBS root-device readback. Never normalize three current
+   validators to one historical AMI by assertion. A resumed rollout must use
+   the checksummed per-validator instance, AMI and runtime bindings from its
+   exact resume evidence; any live or provenance drift stops before mutation.
    When the exact failure is a missing `/etc/junca/runtime.env`, reconstruction
    is allowed only before any validator replacement (`updated_count=0`) and only
    after exact current AMI, runtime archive, genesis, retained state,
