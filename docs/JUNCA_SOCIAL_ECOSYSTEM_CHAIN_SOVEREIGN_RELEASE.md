@@ -99,6 +99,30 @@ JAIOS Institutional Governance manages issuance, release control, treasury custo
 
 No public relaunch is classified as complete until runtime evidence, independent readback, and rollback evidence all pass.
 
+## Mainnet controlled-activation authorization evidence
+
+`scripts/junca_mainnet_release_authorization_gate.py` validates a short-lived,
+domain-separated authorization envelope before any Mainnet activation controller
+may become eligible to run. Validation is intentionally separate from execution:
+a successful result records `authorization_evidence_valid=true` and
+`activation_executed=false`.
+
+The envelope must bind the exact repository, source commit and tree, release
+manifest, immutable artifact, SBOM, genesis, release request, Creative
+Constitution revision and Constitution digest. Two unique independent approvals
+must review that same commit and tree before the verified Founder / Chairman /
+CEO identity records final approval. Authorization windows are limited to 15
+minutes; final approval may be at most 24 hours old and reviews at most 72 hours
+old.
+
+An append-only consumed-evidence ledger rejects reuse of the authorization ID,
+authorization digest, request digest, or release-manifest digest. Any mismatch,
+duplicate reviewer, stale or future window, altered digest, or unsafe boundary
+fails closed. Evidence cannot set `Mainnet Changed`, `Assets Moved`, `Bridge
+Activated`, or `Mainnet Activation Authorized` to true. This gate performs no
+merge, workflow dispatch, deployment, AWS mutation, asset movement, bridge
+activation, or Mainnet activation.
+
 ## Scalable architecture baseline / 拡張基準
 
 | Area | Initial baseline |
