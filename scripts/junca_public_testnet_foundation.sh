@@ -1265,6 +1265,9 @@ durable_mount_repaired=false
 durable_mount_repair_exit=0
 durable_mount_repair_stage=not_attempted
 unmounted_state_target_entries=
+scan_rollbacks_quarantined=false
+scan_rollbacks_quarantine_path=
+scan_rollbacks_manifest_sha256=
 state_store_integrity=false
 binary_artifact_verified=false
 genesis_verified=false
@@ -1595,6 +1598,7 @@ verify_unmounted_state_target_admission() {
   local entry
   local entry_name
   local entry_count=0
+  local sqlite_entry_count=0
   local sqlite_quick_check
   [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
   ! mountpoint -q /var/lib/junca || return 1
@@ -1606,16 +1610,26 @@ verify_unmounted_state_target_admission() {
   while IFS= read -r -d '' entry; do
     entry_name="${entry##*/}"
     case "$entry_name" in
-      state.sqlite|state.sqlite-shm|state.sqlite-wal) ;;
+      state.sqlite|state.sqlite-shm|state.sqlite-wal)
+        [[ -f "$entry" && ! -L "$entry" ]] || return 1
+        [[ "$(stat -c '%h' "$entry")" == 1 ]] || return 1
+        sqlite_entry_count=$((sqlite_entry_count + 1))
+        ;;
+      scan-rollbacks)
+        [[ -d "$entry" && ! -L "$entry" ]] || return 1
+        ;;
       *) return 1 ;;
     esac
-    [[ -f "$entry" && ! -L "$entry" ]] || return 1
-    [[ "$(stat -c '%h' "$entry")" == 1 ]] || return 1
     entry_count=$((entry_count + 1))
   done < <(
     find /var/lib/junca -mindepth 1 -maxdepth 1 -print0
   )
-  if [[ "$entry_count" -gt 0 ]]; then
+  if [[ -d /var/lib/junca/scan-rollbacks ]]; then
+    quarantine_scan_rollbacks_for_mount \
+      /var/lib/junca/scan-rollbacks \
+      /var/lib/junca-unmounted-recovery || return 1
+  fi
+  if [[ "$sqlite_entry_count" -gt 0 ]]; then
     [[ -f /var/lib/junca/state.sqlite &&
       ! -L /var/lib/junca/state.sqlite ]] || return 1
     sqlite_quick_check="$(
@@ -1625,6 +1639,102 @@ verify_unmounted_state_target_admission() {
     )"
     [[ "$sqlite_quick_check" == "ok" ]] || return 1
   fi
+}
+
+quarantine_scan_rollbacks_for_mount() {
+  local source_path="$1"
+  local quarantine_root="$2"
+  local destination_path
+  local manifest_readback
+  local manifest_sha256
+  local owner
+  [[ "${source_path##*/}" == scan-rollbacks ]] || return 1
+  [[ -d "$source_path" && ! -L "$source_path" ]] || return 1
+  ! mountpoint -q "$source_path" || return 1
+  owner="$(stat -c '%U:%G' "$source_path")"
+  [[ "$owner" == root:root || "$owner" == junca:junca ]] || return 1
+  manifest_readback="$(
+    python3 - "$source_path" <<'PY'
+import hashlib
+import os
+import pwd
+import stat
+import sys
+
+root = os.path.abspath(sys.argv[1])
+root_stat = os.lstat(root)
+allowed_uids = {0}
+allowed_gids = {0}
+try:
+    account = pwd.getpwnam("junca")
+except KeyError:
+    pass
+else:
+    allowed_uids.add(account.pw_uid)
+    allowed_gids.add(account.pw_gid)
+records = []
+entry_count = 0
+total_bytes = 0
+for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+    for name in sorted(directories + files):
+        path = os.path.join(current, name)
+        metadata = os.lstat(path)
+        if metadata.st_dev != root_stat.st_dev:
+            raise SystemExit("cross-device scan-rollbacks entry")
+        if stat.S_ISLNK(metadata.st_mode):
+            raise SystemExit("scan-rollbacks symlink rejected")
+        if metadata.st_uid not in allowed_uids or metadata.st_gid not in allowed_gids:
+            raise SystemExit("scan-rollbacks owner rejected")
+        if stat.S_ISREG(metadata.st_mode):
+            if metadata.st_nlink != 1:
+                raise SystemExit("scan-rollbacks hard link rejected")
+            kind = "f"
+            total_bytes += metadata.st_size
+        elif stat.S_ISDIR(metadata.st_mode):
+            kind = "d"
+        else:
+            raise SystemExit("scan-rollbacks special entry rejected")
+        entry_count += 1
+        if entry_count > 1000 or total_bytes > 1073741824:
+            raise SystemExit("scan-rollbacks bound exceeded")
+        relative = os.path.relpath(path, root)
+        records.append(
+            "\0".join(
+                (
+                    relative,
+                    kind,
+                    str(metadata.st_size),
+                    str(metadata.st_uid),
+                    str(metadata.st_gid),
+                    oct(stat.S_IMODE(metadata.st_mode)),
+                )
+            ).encode("utf-8", "surrogateescape")
+        )
+digest = hashlib.sha256(b"\0".join(sorted(records))).hexdigest()
+print(f"{entry_count}\t{total_bytes}\t{digest}")
+PY
+  )" || return 1
+  [[ "$manifest_readback" =~ ^[0-9]+$'\t'[0-9]+$'\t'[0-9a-f]{64}$ ]] ||
+    return 1
+  manifest_sha256="${manifest_readback##*$'\t'}"
+  [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  if [[ ! -e "$quarantine_root" && ! -L "$quarantine_root" ]]; then
+    install -d -m 0700 -o root -g root "$quarantine_root"
+  fi
+  [[ -d "$quarantine_root" && ! -L "$quarantine_root" ]] || return 1
+  [[ "$(stat -c '%U:%G' "$quarantine_root")" == root:root ]] || return 1
+  [[ "$(stat -c '%a' "$quarantine_root")" == 700 ]] || return 1
+  [[ "$(stat -c '%d' "$source_path")" == \
+    "$(stat -c '%d' "$quarantine_root")" ]] || return 1
+  destination_path="$quarantine_root/scan-rollbacks-$manifest_sha256"
+  [[ ! -e "$destination_path" && ! -L "$destination_path" ]] || return 1
+  mv -T "$source_path" "$destination_path"
+  sync -f "${source_path%/*}"
+  sync -f "$quarantine_root"
+  [[ -d "$destination_path" && ! -L "$destination_path" ]] || return 1
+  scan_rollbacks_quarantined=true
+  scan_rollbacks_quarantine_path="$destination_path"
+  scan_rollbacks_manifest_sha256="$manifest_sha256"
 }
 
 if ! verify_durable_state_mount &&
@@ -1911,6 +2021,9 @@ jq -n \
   --arg durable_mount_repair_stage "$durable_mount_repair_stage" \
   --arg unmounted_state_target_entries \
     "$unmounted_state_target_entries" \
+  --argjson scan_rollbacks_quarantined "$scan_rollbacks_quarantined" \
+  --arg scan_rollbacks_quarantine_path "$scan_rollbacks_quarantine_path" \
+  --arg scan_rollbacks_manifest_sha256 "$scan_rollbacks_manifest_sha256" \
   --argjson state_store_integrity "$state_store_integrity" \
   --argjson binary_artifact_verified "$binary_artifact_verified" \
   --argjson genesis_verified "$genesis_verified" \
@@ -1959,6 +2072,13 @@ jq -n \
     durable_mount_repair_exit: $durable_mount_repair_exit,
     durable_mount_repair_stage: $durable_mount_repair_stage,
     unmounted_state_target_entries: $unmounted_state_target_entries,
+    scan_rollbacks_quarantined: $scan_rollbacks_quarantined,
+    scan_rollbacks_quarantine_path:
+      (if $scan_rollbacks_quarantine_path == "" then null
+       else $scan_rollbacks_quarantine_path end),
+    scan_rollbacks_manifest_sha256:
+      (if $scan_rollbacks_manifest_sha256 == "" then null
+       else $scan_rollbacks_manifest_sha256 end),
     state_store_integrity: $state_store_integrity,
     binary_artifact_verified: $binary_artifact_verified,
     genesis_verified: $genesis_verified,
