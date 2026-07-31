@@ -4,6 +4,7 @@ set -euo pipefail
 workflow_name=""
 workflow_path=""
 expected_head=""
+evidence_path=""
 attempts=240
 sleep_seconds=15
 declare -a inputs=()
@@ -13,6 +14,7 @@ while (($#)); do
     --workflow-name) workflow_name="$2"; shift 2 ;;
     --workflow-path) workflow_path="$2"; shift 2 ;;
     --expected-head) expected_head="$2"; shift 2 ;;
+    --evidence-path) evidence_path="$2"; shift 2 ;;
     --attempts) attempts="$2"; shift 2 ;;
     --sleep-seconds) sleep_seconds="$2"; shift 2 ;;
     --input) inputs+=("$2"); shift 2 ;;
@@ -25,6 +27,11 @@ done
 [[ "$workflow_name" != "" ]]
 [[ "$workflow_path" =~ ^\.github/workflows/[a-zA-Z0-9._-]+\.ya?ml$ ]]
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]]
+if [[ "$evidence_path" != "" ]]; then
+  [[ "$evidence_path" =~ ^artifacts/[a-zA-Z0-9._/-]+\.json$ ]]
+  [[ "$evidence_path" != *".."* ]]
+  [[ "$evidence_path" != *"//"* ]]
+fi
 [[ "$attempts" =~ ^[1-9][0-9]*$ ]]
 [[ "$sleep_seconds" =~ ^[1-9][0-9]*$ ]]
 
@@ -100,7 +107,67 @@ for attempt in $(seq 1 "$attempts"); do
   sleep "$sleep_seconds"
 done
 
-jq -e \
+identity_valid="$(
+  jq -r \
+    --arg repository "$GITHUB_REPOSITORY" \
+    --arg head "$expected_head" \
+    --arg name "$workflow_name" \
+    --arg path "$workflow_path" '
+      (
+        .name == $name and
+        .path == $path and
+        .event == "workflow_dispatch" and
+        .head_branch == "main" and
+        .head_sha == $head and
+        .repository.full_name == $repository and
+        .head_repository.full_name == $repository
+      )
+    ' <<<"$run"
+)"
+
+if [[ "$evidence_path" != "" ]]; then
+  evidence_directory="$(dirname "$evidence_path")"
+  mkdir -p "$evidence_directory"
+  evidence_tmp="${evidence_path}.tmp.$$"
+  umask 077
+  jq -n \
+    --arg repository "$GITHUB_REPOSITORY" \
+    --arg workflow_name "$workflow_name" \
+    --arg workflow_path "$workflow_path" \
+    --arg workflow_id "$workflow_id" \
+    --arg expected_head "$expected_head" \
+    --arg dispatched_at "$dispatched_at" \
+    --arg run_id "$run_id" \
+    --arg run_url "$(jq -er .html_url <<<"$run")" \
+    --arg status "$(jq -er .status <<<"$run")" \
+    --arg conclusion "$(jq -r '.conclusion // ""' <<<"$run")" \
+    --argjson identity_valid "$identity_valid" '{
+      schema_version: "junca-workflow-dispatch-evidence/v1",
+      repository: $repository,
+      workflow: {
+        name: $workflow_name,
+        path: $workflow_path,
+        id: ($workflow_id | tonumber)
+      },
+      expected_head: $expected_head,
+      dispatched_at: $dispatched_at,
+      run: {
+        id: ($run_id | tonumber),
+        url: $run_url,
+        status: $status,
+        conclusion: $conclusion
+      },
+      identity_valid: $identity_valid,
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false,
+      mainnet_activation_authorized: false
+    }' >"$evidence_tmp"
+  chmod 0600 "$evidence_tmp"
+  mv "$evidence_tmp" "$evidence_path"
+fi
+
+if ! jq -e \
   --arg repository "$GITHUB_REPOSITORY" \
   --arg head "$expected_head" \
   --arg name "$workflow_name" \
@@ -114,6 +181,14 @@ jq -e \
     .head_sha == $head and
     .repository.full_name == $repository and
     .head_repository.full_name == $repository
-  ' <<<"$run" >/dev/null
+  ' <<<"$run" >/dev/null; then
+  printf 'workflow dispatch failed: run_id=%s url=%s status=%s conclusion=%s identity_valid=%s\n' \
+    "$run_id" \
+    "$(jq -er .html_url <<<"$run")" \
+    "$(jq -er .status <<<"$run")" \
+    "$(jq -r '.conclusion // ""' <<<"$run")" \
+    "$identity_valid" >&2
+  exit 1
+fi
 
 printf '%s\n' "$run_id"
