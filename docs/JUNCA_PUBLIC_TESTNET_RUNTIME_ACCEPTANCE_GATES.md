@@ -122,6 +122,18 @@ deleted by rollback. Recovery evidence records the exact admitted identity,
 owner, mode, and link count rather than reducing those properties to an
 unverifiable success claim.
 
+A predecessor AMI may contain a stale `runtime.env` that is a root-owned,
+single-link regular file but is not the current validator-canonical contract.
+Recovery may replace it only after the exact healthy validator is stopped and
+only when the file has mode `0600`, `0640`, or `0644`, is at most 8192 bytes,
+and contains exactly the 18 allowlisted runtime assignments with no foreign
+keys. Admission pins its device/inode, SHA-256, size, owner, and mode. Recovery
+first creates and verifies a same-directory hard-link rollback copy, then
+atomically replaces the live name with the exact canonical digest. A failed
+restart restores the pinned original inode before containment restart; a
+symlink, foreign key, oversized file, identity drift, digest drift, or rollback
+collision remains blocked.
+
 Before a stopped validator is restarted, recovery must also prove the service
 user can traverse `/etc/junca` and read both `genesis.json` and
 `validator.toml`. The canonical contract is `root:junca`/`0750` for the

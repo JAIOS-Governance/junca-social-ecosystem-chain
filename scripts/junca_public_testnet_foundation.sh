@@ -1510,6 +1510,17 @@ runtime_env_required_assignment_count=0
 runtime_env_repaired=false
 runtime_env_persistence_verified=false
 runtime_env_post_restart_verified=false
+runtime_env_repair_admissible=false
+runtime_env_target_admitted=false
+runtime_env_preexisting=false
+runtime_env_pre_identity=""
+runtime_env_pre_sha256=""
+runtime_env_pre_size=0
+runtime_env_pre_owner=""
+runtime_env_pre_mode=""
+runtime_env_backup_created=false
+runtime_env_backup_path=""
+runtime_env_replaced=false
 repair_rollback_attempted=false
 repair_rollback_succeeded=false
 repair_rollback_persistence_verified=false
@@ -1611,6 +1622,36 @@ verify_runtime_env_schema() {
     runtime_env_has_exact_assignment \
       "$path" TESTNET_SLOT_EPOCH_SECONDS "$expected_slot_epoch_seconds" &&
     runtime_env_has_exact_assignment "$path" BRIDGE_ACTIVATED false
+}
+
+pin_repairable_runtime_env() {
+  local path="$1"
+  local identity=""
+  local digest=""
+  local size=""
+  local owner=""
+  local mode=""
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  [[ "$(stat -c '%U' "$path")" == root ]] || return 1
+  [[ "$(stat -c '%G' "$path")" =~ ^(root|junca)$ ]] || return 1
+  [[ "$(stat -c '%a' "$path")" =~ ^(600|640|644)$ ]] || return 1
+  [[ "$(stat -c '%h' "$path")" == 1 ]] || return 1
+  runtime_env_has_only_canonical_assignments "$path" || return 1
+  identity="$(stat -Lc '%d:%i' "$path")" || return 1
+  digest="$(sha256sum "$path" | awk '{print $1}')" || return 1
+  size="$(stat -c '%s' "$path")" || return 1
+  owner="$(stat -c '%U:%G' "$path")" || return 1
+  mode="$(stat -c '%a' "$path")" || return 1
+  [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ "$size" =~ ^[0-9]+$ && "$size" -le 8192 ]] || return 1
+  runtime_env_repair_admissible=true
+  runtime_env_preexisting=true
+  runtime_env_pre_identity="$identity"
+  runtime_env_pre_sha256="$digest"
+  runtime_env_pre_size="$size"
+  runtime_env_pre_owner="$owner"
+  runtime_env_pre_mode="$mode"
 }
 
 pin_existing_validator_config() {
@@ -2383,6 +2424,23 @@ if [[ -f /etc/junca/runtime.env &&
   runtime_env_mode="$(stat -c '%a' /etc/junca/runtime.env)"
   runtime_env_link_count="$(stat -c '%h' /etc/junca/runtime.env)"
 fi
+if [[ "$runtime_env_verified" != true ]] &&
+    pin_repairable_runtime_env /etc/junca/runtime.env; then
+  runtime_env_repair_admissible=true
+fi
+if [[ ! -e /etc/junca/runtime.env &&
+      ! -L /etc/junca/runtime.env ]]; then
+  runtime_env_target_admitted=true
+elif [[ "$runtime_env_repair_admissible" == true &&
+        "$runtime_env_preexisting" == true &&
+        "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
+          "$runtime_env_pre_identity" &&
+        "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
+          "$runtime_env_pre_sha256" &&
+        "$(stat -c '%s' /etc/junca/runtime.env)" == \
+          "$runtime_env_pre_size" ]]; then
+  runtime_env_target_admitted=true
+fi
 
 if [[ "$runtime_env_verified" != true &&
       "$allow_runtime_env_repair" == true &&
@@ -2399,8 +2457,7 @@ fi
 if [[ "$runtime_env_verified" != true &&
       "$allow_runtime_env_repair" == true &&
       "$repair_status_admitted" == true &&
-      ! -e /etc/junca/runtime.env &&
-      ! -L /etc/junca/runtime.env &&
+      "$runtime_env_target_admitted" == true &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
       "$binary_artifact_verified" == true &&
@@ -2412,6 +2469,32 @@ if [[ "$runtime_env_verified" != true &&
     systemctl stop junca-validator.service || service_stop_exit=$?
   fi
   if [[ "$service_stop_exit" == 0 ]]; then
+    if [[ "$runtime_env_preexisting" == true ]]; then
+      runtime_env_backup_path="/etc/junca/.runtime.env.rollback-${runtime_env_pre_sha256}"
+      if [[ ! -e "$runtime_env_backup_path" &&
+            ! -L "$runtime_env_backup_path" ]] &&
+          ln /etc/junca/runtime.env "$runtime_env_backup_path" &&
+          [[ "$(stat -Lc '%d:%i' "$runtime_env_backup_path")" == \
+             "$runtime_env_pre_identity" ]] &&
+          [[ "$(sha256sum "$runtime_env_backup_path" | awk '{print $1}')" == \
+             "$runtime_env_pre_sha256" ]] &&
+          [[ "$(stat -c '%s' "$runtime_env_backup_path")" == \
+             "$runtime_env_pre_size" ]] &&
+          [[ "$(stat -c '%U:%G' "$runtime_env_backup_path")" == \
+             "$runtime_env_pre_owner" ]] &&
+          [[ "$(stat -c '%a' "$runtime_env_backup_path")" == \
+             "$runtime_env_pre_mode" ]]; then
+        runtime_env_backup_created=true
+      else
+        if [[ -f "$runtime_env_backup_path" &&
+              ! -L "$runtime_env_backup_path" &&
+              "$(stat -Lc '%d:%i' "$runtime_env_backup_path")" == \
+                "$runtime_env_pre_identity" ]]; then
+          rm -f "$runtime_env_backup_path"
+        fi
+        runtime_env_backup_path=""
+      fi
+    fi
     runtime_env_tmp="$(mktemp /etc/junca/.runtime.env.XXXXXX)"
     trap 'rm -f "$runtime_env_tmp"' EXIT
     printf '%s' "$canonical_runtime_b64" |
@@ -2423,15 +2506,20 @@ if [[ "$runtime_env_verified" != true &&
     if [[ "$runtime_env_sha256" == "$canonical_runtime_env_sha256" ]]; then
       chown root:junca "$runtime_env_tmp"
       chmod 0640 "$runtime_env_tmp"
-      if sync -f "$runtime_env_tmp" &&
+      if [[ "$runtime_env_preexisting" == true &&
+            "$runtime_env_backup_created" == true ]] &&
+          sync -f "$runtime_env_tmp" &&
+          mv -fT "$runtime_env_tmp" /etc/junca/runtime.env; then
+        runtime_env_created=true
+        runtime_env_replaced=true
+        runtime_env_created_identity="$(stat -Lc '%d:%i' /etc/junca/runtime.env)"
+        trap - EXIT
+      elif [[ "$runtime_env_preexisting" == false ]] &&
+          sync -f "$runtime_env_tmp" &&
           ln "$runtime_env_tmp" /etc/junca/runtime.env; then
         runtime_env_created=true
-        runtime_env_created_identity="$(
-          stat -Lc '%d:%i' /etc/junca/runtime.env
-        )"
-        if rm -f "$runtime_env_tmp"; then
-          trap - EXIT
-        fi
+        runtime_env_created_identity="$(stat -Lc '%d:%i' /etc/junca/runtime.env)"
+        if rm -f "$runtime_env_tmp"; then trap - EXIT; fi
       fi
       if [[ "$runtime_env_created" == true &&
             ! -e "$runtime_env_tmp" &&
@@ -2544,11 +2632,32 @@ if [[ "$accepted" != true &&
           "$canonical_runtime_env_sha256" ]]; then
     rm -f /etc/junca/runtime.env
   fi
-  if [[ ! -e /etc/junca/runtime.env &&
+  if [[ "$runtime_env_preexisting" == true &&
+        "$runtime_env_backup_created" == true &&
+        -f "$runtime_env_backup_path" &&
+        ! -L "$runtime_env_backup_path" &&
+        "$(stat -Lc '%d:%i' "$runtime_env_backup_path")" == \
+          "$runtime_env_pre_identity" &&
+        "$(sha256sum "$runtime_env_backup_path" | awk '{print $1}')" == \
+          "$runtime_env_pre_sha256" &&
+        ! -e /etc/junca/runtime.env &&
         ! -L /etc/junca/runtime.env ]] &&
+      mv -T "$runtime_env_backup_path" /etc/junca/runtime.env &&
+      [[ "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
+         "$runtime_env_pre_identity" ]] &&
+      [[ "$(sha256sum /etc/junca/runtime.env | awk '{print $1}')" == \
+         "$runtime_env_pre_sha256" ]] &&
       sync -f /etc/junca; then
     repair_rollback_succeeded=true
     repair_rollback_persistence_verified=true
+  elif [[ "$runtime_env_preexisting" == false &&
+          ! -e /etc/junca/runtime.env &&
+          ! -L /etc/junca/runtime.env ]] &&
+      sync -f /etc/junca; then
+    repair_rollback_succeeded=true
+    repair_rollback_persistence_verified=true
+  fi
+  if [[ "$repair_rollback_succeeded" == true ]]; then
     runtime_env_verified=false
     runtime_env_post_restart_verified=false
     runtime_env_source=""
@@ -2677,6 +2786,17 @@ jq -n \
     "$runtime_env_persistence_verified" \
   --argjson runtime_env_post_restart_verified \
     "$runtime_env_post_restart_verified" \
+  --argjson runtime_env_repair_admissible \
+    "$runtime_env_repair_admissible" \
+  --argjson runtime_env_preexisting "$runtime_env_preexisting" \
+  --arg runtime_env_pre_identity "$runtime_env_pre_identity" \
+  --arg runtime_env_pre_sha256 "$runtime_env_pre_sha256" \
+  --argjson runtime_env_pre_size "$runtime_env_pre_size" \
+  --arg runtime_env_pre_owner "$runtime_env_pre_owner" \
+  --arg runtime_env_pre_mode "$runtime_env_pre_mode" \
+  --argjson runtime_env_backup_created "$runtime_env_backup_created" \
+  --arg runtime_env_backup_path "$runtime_env_backup_path" \
+  --argjson runtime_env_replaced "$runtime_env_replaced" \
   --argjson repair_rollback_attempted "$repair_rollback_attempted" \
   --argjson repair_rollback_succeeded "$repair_rollback_succeeded" \
   --argjson repair_rollback_persistence_verified \
@@ -2776,6 +2896,16 @@ jq -n \
     runtime_env_persistence_verified: $runtime_env_persistence_verified,
     runtime_env_post_restart_verified:
       $runtime_env_post_restart_verified,
+    runtime_env_repair_admissible: $runtime_env_repair_admissible,
+    runtime_env_preexisting: $runtime_env_preexisting,
+    runtime_env_pre_identity: $runtime_env_pre_identity,
+    runtime_env_pre_sha256: $runtime_env_pre_sha256,
+    runtime_env_pre_size: $runtime_env_pre_size,
+    runtime_env_pre_owner: $runtime_env_pre_owner,
+    runtime_env_pre_mode: $runtime_env_pre_mode,
+    runtime_env_backup_created: $runtime_env_backup_created,
+    runtime_env_backup_path: $runtime_env_backup_path,
+    runtime_env_replaced: $runtime_env_replaced,
     repair_rollback_attempted: $repair_rollback_attempted,
     repair_rollback_succeeded: $repair_rollback_succeeded,
     repair_rollback_persistence_verified:
