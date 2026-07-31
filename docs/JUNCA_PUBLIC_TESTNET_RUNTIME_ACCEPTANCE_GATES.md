@@ -28,12 +28,52 @@ sample; it is never treated as transient parity.
 Before the immutable serial replacement reads its strict live prefix, it may
 recover an existing stopped validator service in place. That bounded recovery
 is permitted only after SSM Online, the retained `/var/lib/junca` mount,
-read-only SQLite `PRAGMA quick_check=ok`, and exactly one 64-character runtime
-artifact digest are proven. An already active validator is not restarted.
-Recovery must emit exact before/after service and health evidence, preserve all
-four safety boundaries as false, and then pass the unchanged strict live-prefix
-readback. Missing durable state, corrupt SQLite, ambiguous runtime provenance,
-or failed local health remains fail-closed and prevents Terraform mutation.
+read-only SQLite `PRAGMA quick_check=ok`, the current EC2 AMI, immutable runtime
+archive digest, genesis digest, exact validator KMS binding, and exact three-peer
+contract are proven. An already active validator is not restarted.
+
+If `/etc/junca/runtime.env` is absent on an otherwise exact stopped baseline,
+the prefix length must still be zero. Only then may the workflow stop the
+service and atomically reconstruct that file from Terraform-canonical values.
+It cannot copy operator input or another host's file. The reconstructed file
+must have the exact calculated SHA-256, owner `root:junca`, and mode `0640`
+before the service is restarted. Installation uses an atomic no-overwrite
+hard-link from a same-directory temporary file, so a file appearing after
+preflight cannot be replaced. The temporary file is synced before linking and
+the `/etc/junca` directory is synced after linking; recovery evidence must prove
+that persistence boundary and the created device/inode identity before restart.
+A symlink, an existing but contradictory
+environment, an AMI/runtime/genesis mismatch, or any resumed mixed prefix
+rejects reconstruction. Recovery must emit exact before/after service, repair
+source/hash, and health evidence, preserve all four safety boundaries as false,
+and then pass the unchanged strict live-prefix readback. Missing durable state,
+corrupt SQLite, ambiguous provenance, or failed local health remains
+fail-closed and prevents Terraform mutation.
+
+If health never becomes accepted after this attempt created the file, rollback
+stops the service, removes only a single-link canonical file with the exact
+expected digest and the same recorded device/inode identity, and syncs
+`/etc/junca`. Failure to prove either install or rollback persistence remains
+blocked for operator inspection.
+
+Both repaired and pre-existing `runtime.env` files must be single-link regular
+files owned by `root:junca` with mode `0640`. Recovery pins the admitted
+device/inode and digest before restart, then revalidates identity, ownership,
+mode, link count, and digest after the validator reports healthy. Any
+replacement or hard-link race blocks activation; a changed path is never
+deleted by rollback. Recovery evidence records the exact admitted identity,
+owner, mode, and link count rather than reducing those properties to an
+unverifiable success claim.
+
+Before either an existing or reconstructed file is admitted, all 18 canonical
+runtime assignments must appear exactly once with exact values. Duplicate,
+whitespace-disguised, missing, or contradictory assignments for chain,
+validator, genesis, artifact, signer, peer, region, public-RPC, finality, or
+bridge controls fail closed before restart. This prevents systemd
+`EnvironmentFile` last-assignment behavior from selecting a different value
+than the recovery evidence inspected. Non-comment content is restricted to
+those 18 assignments; unknown variables and non-canonical assignment syntax
+are rejected so an unreviewed environment toggle cannot enter the validator.
 
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a

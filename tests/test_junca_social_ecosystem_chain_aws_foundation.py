@@ -85,6 +85,31 @@ def validator_service_recovery_validation_function(script: str) -> str:
     )
 
 
+def canonical_validator_runtime_env_function(script: str) -> str:
+    return script.split(
+        "render_canonical_validator_runtime_env() {", 1
+    )[1].split(
+        "\n}\n\nvalidate_validator_service_recovery_evidence()", 1
+    )[0].join(("render_canonical_validator_runtime_env() {", "\n}"))
+
+
+def validator_service_recovery_remote_script(script: str) -> str:
+    definition = script.split(
+        "ensure_validator_service_available() {", 1
+    )[1].split("\n}\n\nwrite_live_rollout_prefix_readback()", 1)[0]
+    return definition.split("cat <<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+
+
+def runtime_env_schema_functions(script: str) -> str:
+    remote = validator_service_recovery_remote_script(script)
+    return (
+        "runtime_env_has_exact_assignment() {"
+        + remote.split("runtime_env_has_exact_assignment() {", 1)[1].split(
+            "\n\nif mountpoint -q", 1
+        )[0]
+    )
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -1368,6 +1393,31 @@ class AwsFoundationTests(unittest.TestCase):
             'junca-validator.service 2>/dev/null || true)"',
             "mountpoint -q /var/lib/junca",
             "PRAGMA quick_check",
+            "render_canonical_validator_runtime_env",
+            "validator-runtime.tar.gz",
+            "canonical_runtime_env_sha256",
+            "! -e /etc/junca/runtime.env",
+            "mktemp /etc/junca/.runtime.env.XXXXXX",
+            "systemctl stop junca-validator.service",
+            'sync -f "$runtime_env_tmp"',
+            'ln "$runtime_env_tmp" /etc/junca/runtime.env',
+            "runtime_env_created=true",
+            "runtime_env_created_identity",
+            "runtime_env_admission_identity",
+            'runtime_env_owner="$(stat -c',
+            'runtime_env_mode="$(stat -c',
+            'runtime_env_link_count="$(stat -c',
+            "runtime_env_schema_verified=true",
+            "runtime_env_required_assignment_count=18",
+            "runtime_env_persistence_verified=true",
+            "runtime_env_post_restart_verified=true",
+            "runtime_env_repaired=true",
+            "repair_rollback_attempted=true",
+            "repair_rollback_succeeded=true",
+            "repair_rollback_persistence_verified=true",
+            'systemctl stop junca-validator.service || true',
+            "rm -f /etc/junca/runtime.env",
+            "sync -f /etc/junca",
             'test("^[0-9a-f]{64}$")',
             '"$before_status" != "active"',
             '"$durable_mount_verified" == true',
@@ -1397,20 +1447,312 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(recovery, strict_readback)
         self.assertLess(strict_readback, first_mutation)
 
+        rollback = self.foundation_script.index(
+            'if [[ "$accepted" != true &&',
+        )
+        evidence = self.foundation_script.index(
+            "jq -n \\\n  --arg schema_version "
+            '"junca-validator-service-recovery/v1"',
+            rollback,
+        )
+        self.assertLess(rollback, evidence)
+        self.assertLess(evidence, definition)
+        self.assertIn(
+            '"$(sha256sum /etc/junca/runtime.env | awk '
+            "'{print $1}')\" == \\\n"
+            '          "$canonical_runtime_env_sha256"',
+            self.foundation_script[rollback:evidence],
+        )
+        self.assertIn(
+            ".repair_rollback_attempted == false",
+            self.foundation_script,
+        )
+        self.assertNotIn(
+            'mv -f "$runtime_env_tmp" /etc/junca/runtime.env',
+            self.foundation_script[rollback:evidence],
+        )
+
+    def test_service_recovery_remote_command_is_valid_bash(self) -> None:
+        remote_script = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        self.assertNotIn("'\"'\"'", remote_script)
+        result = subprocess.run(
+            ["bash", "-n"],
+            input=remote_script,
+            env={"PATH": "/usr/bin:/bin"},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_runtime_env_schema_rejects_ambiguous_security_assignments(
+        self,
+    ) -> None:
+        runtime_version = "a" * 64
+        genesis_sha256 = "b" * 64
+        signer = (
+            "arn:aws:kms:us-east-1:595710543956:key/"
+            "72960fd3-1860-41b7-bd2f-4f5b682805d1"
+        )
+        signer_bindings = (
+            f"validator-01={signer},"
+            "validator-02=arn:aws:kms:us-east-1:595710543956:key/"
+            "f7c2e12c-43d0-45dc-a3ff-487253939a21,"
+            "validator-03=arn:aws:kms:us-east-1:595710543956:key/"
+            "96dfadf9-21ca-4169-9f2d-61120d173b13"
+        )
+        peers = (
+            "validator-01=10.67.16.10:30303,"
+            "validator-02=10.67.32.10:30303,"
+            "validator-03=10.67.48.10:30303"
+        )
+        canonical = "\n".join(
+            (
+                "CHAIN_NAME=JUNCA Social Ecosystem Chain",
+                "GOVERNANCE=JAIOS Institutional Governance",
+                "NETWORK_NOTICE=Public Testnet / No Monetary Value",
+                "VALIDATOR_ID=validator-01",
+                "CHAIN_ID=20260723",
+                f"GENESIS_SHA256={genesis_sha256}",
+                f"NODE_ARTIFACT_SHA256={runtime_version}",
+                f"SIGNER_RESOURCE_ARN={signer}",
+                "AWS_REGION=us-east-1",
+                "AWS_DEFAULT_REGION=us-east-1",
+                "PUBLIC_RPC=false",
+                "P2P_PORT=30303",
+                f"VALIDATOR_SIGNER_BINDINGS={signer_bindings}",
+                f"VALIDATOR_PEER_ENDPOINTS={peers}",
+                "AUTOMATIC_FINALITY_ENABLED=false",
+                "TESTNET_BLOCK_INTERVAL_SECONDS=0",
+                "TESTNET_SLOT_EPOCH_SECONDS=0",
+                "BRIDGE_ACTIVATED=false",
+                "",
+            )
+        )
+        variables = "\n".join(
+            (
+                "expected_validator_id=validator-01",
+                f"expected_genesis_sha256={genesis_sha256}",
+                f"expected_runtime_version={runtime_version}",
+                f"expected_signer_arn={signer}",
+                f"expected_signer_bindings={signer_bindings}",
+                f"expected_peer_endpoints={peers}",
+                "expected_automatic_finality_enabled=false",
+                "expected_block_interval_seconds=0",
+                "expected_slot_epoch_seconds=0",
+            )
+        )
+        command = (
+            "set -euo pipefail\n"
+            + variables
+            + "\n"
+            + runtime_env_schema_functions(self.foundation_script)
+            + '\nverify_runtime_env_schema "$1"'
+        )
+        invalid_contents = (
+            canonical + "VALIDATOR_ID=validator-02\n",
+            canonical + "  CHAIN_ID =20260723\n",
+            canonical.replace("PUBLIC_RPC=false", "PUBLIC_RPC=true"),
+            canonical.replace("BRIDGE_ACTIVATED=false\n", ""),
+            canonical + "AUTOMATIC_FINALITY_ENABLED=true\n",
+            canonical + "JUNCA_DEBUG=true\n",
+            canonical + "export CHAIN_ID=20260723\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "runtime.env"
+            path.write_text(canonical, encoding="utf-8")
+            accepted = subprocess.run(
+                ["bash", "-c", command, "runtime-schema-positive", str(path)],
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            for content in invalid_contents:
+                with self.subTest(content=content[-80:]):
+                    path.write_text(content, encoding="utf-8")
+                    rejected = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            command,
+                            "runtime-schema-negative",
+                            str(path),
+                        ],
+                        env={"PATH": "/usr/bin:/bin"},
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(rejected.returncode, 0)
+
+    def test_canonical_runtime_env_renderer_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        runtime_version = "a" * 64
+        genesis_sha256 = "b" * 64
+        signers = [
+            "arn:aws:kms:us-east-1:595710543956:key/"
+            "72960fd3-1860-41b7-bd2f-4f5b682805d1",
+            "arn:aws:kms:us-east-1:595710543956:key/"
+            "f7c2e12c-43d0-45dc-a3ff-487253939a21",
+            "arn:aws:kms:us-east-1:595710543956:key/"
+            "96dfadf9-21ca-4169-9f2d-61120d173b13",
+        ]
+        signer_bindings = ",".join(
+            f"validator-0{index}={arn}"
+            for index, arn in enumerate(signers, start=1)
+        )
+        peers = (
+            "validator-01=10.67.16.10:30303,"
+            "validator-02=10.67.32.10:30303,"
+            "validator-03=10.67.48.10:30303"
+        )
+        function = canonical_validator_runtime_env_function(
+            self.foundation_script
+        )
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -euo pipefail\n"
+                + function
+                + '\nrender_canonical_validator_runtime_env "$@"',
+                "canonical-runtime-positive",
+                "validator-01",
+                runtime_version,
+                genesis_sha256,
+                signers[0],
+                signer_bindings,
+                peers,
+                "false",
+                "0",
+                "0",
+            ],
+            env={"PATH": "/usr/bin:/bin"},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("VALIDATOR_ID=validator-01\n", result.stdout)
+        self.assertIn(
+            f"NODE_ARTIFACT_SHA256={runtime_version}\n", result.stdout
+        )
+        self.assertIn(
+            f"VALIDATOR_SIGNER_BINDINGS={signer_bindings}\n", result.stdout
+        )
+        self.assertIn(f"VALIDATOR_PEER_ENDPOINTS={peers}\n", result.stdout)
+        self.assertTrue(result.stdout.endswith("BRIDGE_ACTIVATED=false\n"))
+        for invalid in (
+            (
+                "validator-04",
+                "false",
+                "0",
+                "0",
+                signer_bindings,
+                peers,
+            ),
+            (
+                "validator-01",
+                "false",
+                "30",
+                "0",
+                signer_bindings,
+                peers,
+            ),
+            (
+                "validator-01",
+                "false",
+                "0",
+                "0",
+                signer_bindings,
+                peers.replace("10.67.48.10", "10.67.48.11"),
+            ),
+            (
+                "validator-01",
+                "false",
+                "0",
+                "0",
+                signer_bindings.replace(signers[0], signers[1], 1),
+                peers,
+            ),
+        ):
+            with self.subTest(invalid=invalid):
+                (
+                    validator_id,
+                    enabled,
+                    interval,
+                    epoch,
+                    invalid_bindings,
+                    invalid_peers,
+                ) = invalid
+                rejected = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        "set -euo pipefail\n"
+                        + function
+                        + '\nrender_canonical_validator_runtime_env "$@"',
+                        "canonical-runtime-negative",
+                        validator_id,
+                        runtime_version,
+                        genesis_sha256,
+                        signers[0],
+                        invalid_bindings,
+                        invalid_peers,
+                        enabled,
+                        interval,
+                        epoch,
+                    ],
+                    env={"PATH": "/usr/bin:/bin"},
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+
     def test_service_recovery_evidence_rejects_unsafe_or_false_acceptance(
         self,
     ) -> None:
+        expected_runtime_version = "a" * 64
+        expected_runtime_env_sha256 = "c" * 64
         valid = {
             "schema_version": "junca-validator-service-recovery/v1",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
+            "ami_id": "ami-00000000000000001",
             "before_status": "inactive",
             "restart_attempted": True,
             "restart_exit": 0,
             "durable_mount_verified": True,
             "state_store_integrity": True,
+            "binary_artifact_verified": True,
+            "genesis_verified": True,
+            "runtime_directory_verified": True,
             "runtime_env_verified": True,
-            "runtime_version": "a" * 64,
+            "runtime_version": expected_runtime_version,
+            "runtime_env_repair_attempted": True,
+            "runtime_env_created": True,
+            "runtime_env_created_identity": "2049:3100",
+            "runtime_env_admission_identity": "2049:3100",
+            "runtime_env_owner": "root:junca",
+            "runtime_env_mode": "640",
+            "runtime_env_link_count": 1,
+            "runtime_env_schema_verified": True,
+            "runtime_env_required_assignment_count": 18,
+            "runtime_env_repaired": True,
+            "runtime_env_persistence_verified": True,
+            "runtime_env_post_restart_verified": True,
+            "repair_rollback_attempted": False,
+            "repair_rollback_succeeded": False,
+            "repair_rollback_persistence_verified": False,
+            "runtime_env_source": "canonical",
+            "runtime_env_sha256": expected_runtime_env_sha256,
+            "service_stop_exit": 0,
             "after_status": "active",
             "health_status": "healthy",
             "attempts": 2,
@@ -1424,6 +1766,26 @@ class AwsFoundationTests(unittest.TestCase):
             {"restart_attempted": False},
             {"restart_exit": 1},
             {"state_store_integrity": False},
+            {"binary_artifact_verified": False},
+            {"genesis_verified": False},
+            {"runtime_directory_verified": False},
+            {"runtime_env_repair_attempted": False},
+            {"runtime_env_created": False},
+            {"runtime_env_created_identity": ""},
+            {"runtime_env_created_identity": "not-an-inode"},
+            {"runtime_env_admission_identity": ""},
+            {"runtime_env_admission_identity": "2049:3101"},
+            {"runtime_env_owner": "root:root"},
+            {"runtime_env_mode": "644"},
+            {"runtime_env_link_count": 2},
+            {"runtime_env_schema_verified": False},
+            {"runtime_env_required_assignment_count": 17},
+            {"runtime_env_required_assignment_count": 19},
+            {"runtime_env_persistence_verified": False},
+            {"runtime_env_post_restart_verified": False},
+            {"runtime_env_source": "operator"},
+            {"runtime_env_sha256": "d" * 64},
+            {"service_stop_exit": 1},
             {"runtime_version": "local-only"},
             {"after_status": "failed"},
             {"health_status": "degraded"},
@@ -1450,7 +1812,10 @@ class AwsFoundationTests(unittest.TestCase):
                                 self.foundation_script
                             )
                             + "\nvalidate_validator_service_recovery_evidence "
-                            + '"$1" validator-01 i-00000000000000001',
+                            + '"$1" validator-01 i-00000000000000001 '
+                            + "ami-00000000000000001 "
+                            + f"{expected_runtime_version} "
+                            + expected_runtime_env_sha256,
                             "service-recovery-negative-test",
                             str(evidence),
                         ],
@@ -1462,17 +1827,41 @@ class AwsFoundationTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
 
     def test_service_recovery_evidence_accepts_active_without_restart(self) -> None:
+        expected_runtime_version = "b" * 64
+        expected_runtime_env_sha256 = "e" * 64
         evidence = {
             "schema_version": "junca-validator-service-recovery/v1",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
+            "ami_id": "ami-00000000000000001",
             "before_status": "active",
             "restart_attempted": False,
             "restart_exit": 0,
             "durable_mount_verified": True,
             "state_store_integrity": True,
+            "binary_artifact_verified": True,
+            "genesis_verified": True,
+            "runtime_directory_verified": True,
             "runtime_env_verified": True,
-            "runtime_version": "b" * 64,
+            "runtime_version": expected_runtime_version,
+            "runtime_env_repair_attempted": False,
+            "runtime_env_created": False,
+            "runtime_env_created_identity": "",
+            "runtime_env_admission_identity": "2049:3100",
+            "runtime_env_owner": "root:junca",
+            "runtime_env_mode": "640",
+            "runtime_env_link_count": 1,
+            "runtime_env_schema_verified": True,
+            "runtime_env_required_assignment_count": 18,
+            "runtime_env_repaired": False,
+            "runtime_env_persistence_verified": False,
+            "runtime_env_post_restart_verified": True,
+            "repair_rollback_attempted": False,
+            "repair_rollback_succeeded": False,
+            "repair_rollback_persistence_verified": False,
+            "runtime_env_source": "existing",
+            "runtime_env_sha256": "d" * 64,
+            "service_stop_exit": 0,
             "after_status": "active",
             "health_status": "healthy",
             "attempts": 1,
@@ -1494,7 +1883,10 @@ class AwsFoundationTests(unittest.TestCase):
                         self.foundation_script
                     )
                     + "\nvalidate_validator_service_recovery_evidence "
-                    + '"$1" validator-01 i-00000000000000001',
+                    + '"$1" validator-01 i-00000000000000001 '
+                    + "ami-00000000000000001 "
+                    + f"{expected_runtime_version} "
+                    + expected_runtime_env_sha256,
                     "service-recovery-positive-test",
                     str(path),
                 ],

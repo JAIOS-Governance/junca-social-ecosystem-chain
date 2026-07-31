@@ -47,6 +47,33 @@ stable height alone is never activation evidence.
    the same strict readback; it never treats the restart itself as acceptance.
    A failed prerequisite or failed health readback stops before Terraform
    mutation and preserves service diagnostics for the next repair.
+   When the exact failure is a missing `/etc/junca/runtime.env`, reconstruction
+   is allowed only before any validator replacement (`updated_count=0`) and only
+   after exact current AMI, runtime archive, genesis, retained state,
+   `PRAGMA quick_check`, KMS signer binding and peer binding readback. Generate
+   the file from those Terraform-canonical values, write it atomically as
+   `root:junca` mode `0640`, and require its calculated SHA-256 before restart.
+   Use a same-directory temporary file plus an atomic no-overwrite hard-link;
+   fsync the temporary file before linking and `/etc/junca` after linking.
+   Record the installed device/inode identity. Treat a concurrent destination,
+   unresolved multi-link result, or failed persistence sync as a blocked
+   recovery, never as a reason to overwrite.
+   Before restart, admit only a single-link `root:junca` `0640` regular file
+   and pin its device/inode and SHA-256. Re-read all of those properties after
+   the validator reports healthy. A path replacement, permission drift, or
+   hard-link race blocks activation even when the health endpoint is healthy.
+   Parse all 18 canonical runtime assignments and require every key exactly
+   once with its exact expected value. Reject duplicates even when whitespace
+   hides the second assignment; never rely on `grep` finding one good line when
+   systemd may consume a later contradictory line. Reject unknown assignments
+   and non-canonical syntax rather than allowing an unreviewed runtime toggle.
+   Never repair a symlink, overwrite an existing contradictory file, accept an
+   operator-supplied value, or reconstruct during a mixed/resumed prefix.
+   If the reconstructed runtime does not reach an active, healthy state within
+   the bounded recovery window, stop the service and remove only the exact
+   canonical file created by this attempt. Never delete a linked, changed, or
+   otherwise unrecognized file; fsync the directory after removal and block the
+   rollout for operator inspection unless durable rollback is proven.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the
