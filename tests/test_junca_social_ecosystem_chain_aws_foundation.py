@@ -1593,7 +1593,8 @@ class AwsFoundationTests(unittest.TestCase):
             "for attempts in $(seq 1 60)",
             'health_status="$(jq -r ',
             ".status // empty",
-            "junca-validator-service-recovery/v3",
+            "health_validator_id",
+            "junca-validator-service-recovery/v4",
             "wait_for_ssm_command_result",
             "mainnet_activation_authorized: false",
         ):
@@ -1668,7 +1669,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v3"',
+            '"junca-validator-service-recovery/v4"',
             rollback,
         )
         self.assertLess(rollback, evidence)
@@ -1790,7 +1791,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v3"',
+            '"junca-validator-service-recovery/v4"',
             rollback,
         )
         self.assertIn(
@@ -1932,6 +1933,22 @@ class AwsFoundationTests(unittest.TestCase):
             ".containment_recovered == false",
         ):
             self.assertIn(required, validation)
+
+    def test_post_repair_acceptance_requires_exact_validator_identity(self) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        acceptance_start = remote.index("for attempts in $(seq 1 60)")
+        acceptance_end = remote.index(
+            '\n\nif [[ "$accepted" != true &&', acceptance_start
+        )
+        acceptance = remote[acceptance_start:acceptance_end]
+        for required in (
+            "health_validator_id=",
+            ".validator_id // empty",
+            '"$health_validator_id" == "$expected_validator_id"',
+        ):
+            self.assertIn(required, acceptance)
 
     def test_live_prefix_binds_each_current_instance_to_exact_ami_provenance(
         self,
@@ -2376,7 +2393,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_runtime_env_sha256 = "c" * 64
         expected_state_volume_id = "vol-00000000000000001"
         valid = {
-            "schema_version": "junca-validator-service-recovery/v3",
+            "schema_version": "junca-validator-service-recovery/v4",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2439,6 +2456,7 @@ class AwsFoundationTests(unittest.TestCase):
             "service_stop_exit": 0,
             "after_status": "active",
             "health_status": "healthy",
+            "health_validator_id": "validator-01",
             "attempts": 2,
             "accepted": True,
             "mainnet_changed": False,
@@ -2501,6 +2519,8 @@ class AwsFoundationTests(unittest.TestCase):
             {"runtime_version": "local-only"},
             {"after_status": "failed"},
             {"health_status": "degraded"},
+            {"health_validator_id": "validator-02"},
+            {"health_validator_id": ""},
             {"accepted": False},
             {"mainnet_changed": True},
             {"assets_moved": True},
@@ -2545,7 +2565,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_runtime_env_sha256 = "e" * 64
         expected_state_volume_id = "vol-00000000000000001"
         evidence = {
-            "schema_version": "junca-validator-service-recovery/v3",
+            "schema_version": "junca-validator-service-recovery/v4",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2608,6 +2628,7 @@ class AwsFoundationTests(unittest.TestCase):
             "service_stop_exit": 0,
             "after_status": "active",
             "health_status": "healthy",
+            "health_validator_id": "validator-01",
             "attempts": 1,
             "accepted": True,
             "mainnet_changed": False,

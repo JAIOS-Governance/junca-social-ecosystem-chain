@@ -1087,7 +1087,7 @@ validate_validator_service_recovery_evidence() {
     --arg expected_runtime_version "$expected_runtime_version" \
     --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" \
     --arg expected_state_volume_id "$expected_state_volume_id" '
-      .schema_version == "junca-validator-service-recovery/v3" and
+      .schema_version == "junca-validator-service-recovery/v4" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
@@ -1215,6 +1215,7 @@ validate_validator_service_recovery_evidence() {
       ) and
       .after_status == "active" and
       .health_status == "healthy" and
+      .health_validator_id == $validator_id and
       (.attempts | type) == "number" and
       .attempts >= 1 and
       .attempts <= 60 and
@@ -1367,6 +1368,7 @@ service_stop_exit=0
 restart_exit=0
 after_status="$before_status"
 health_status=""
+health_validator_id=""
 attempts=1
 accepted=false
 if [[ "$before_status" != "active" ]]; then
@@ -2206,6 +2208,9 @@ for attempts in $(seq 1 60); do
   if [[ "$after_status" == "active" ]] &&
       health="$(curl -fsS http://127.0.0.1:8545/health 2>/dev/null)"; then
     health_status="$(jq -r '.status // empty' <<<"$health" 2>/dev/null || true)"
+    health_validator_id="$(
+      jq -r '.validator_id // empty' <<<"$health" 2>/dev/null || true
+    )"
     if [[ -f /etc/junca/runtime.env &&
           ! -L /etc/junca/runtime.env &&
           "$(stat -Lc '%d:%i' /etc/junca/runtime.env)" == \
@@ -2218,6 +2223,7 @@ for attempts in $(seq 1 60); do
       runtime_env_post_restart_verified=true
     fi
     if [[ "$health_status" == "healthy" &&
+          "$health_validator_id" == "$expected_validator_id" &&
           "$restart_exit" == 0 &&
           "$durable_mount_verified" == true &&
           "$state_store_integrity" == true &&
@@ -2305,7 +2311,7 @@ if [[ "$accepted" != true &&
 fi
 
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v3" \
+  --arg schema_version "junca-validator-service-recovery/v4" \
   --arg before_status "$before_status" \
   --arg pre_repair_health_status "$pre_repair_health_status" \
   --arg pre_repair_validator_id "$pre_repair_validator_id" \
@@ -2380,6 +2386,7 @@ jq -n \
   --argjson service_stop_exit "$service_stop_exit" \
   --arg after_status "$after_status" \
   --arg health_status "$health_status" \
+  --arg health_validator_id "$health_validator_id" \
   --argjson attempts "$attempts" \
   --argjson accepted "$accepted" '{
     schema_version: $schema_version,
@@ -2455,6 +2462,7 @@ jq -n \
     service_stop_exit: $service_stop_exit,
     after_status: $after_status,
     health_status: $health_status,
+    health_validator_id: $health_validator_id,
     attempts: $attempts,
     accepted: $accepted,
     mainnet_changed: false,

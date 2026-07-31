@@ -131,7 +131,10 @@ stable height alone is never activation evidence.
    inactive before mutation. If repair acceptance fails, make at most one
    containment start and require the same healthy validator ID within 30 polls.
    Record containment separately and keep acceptance false; do not retry repair,
-   loop service restarts, or touch another validator.
+   loop service restarts, or touch another validator. For successful repair,
+   require the post-restart loopback response to report both `healthy` and the
+   exact expected validator ID. Persist that readback as `health_validator_id`
+   in service-recovery evidence schema v4; status-only health is not sufficient.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the

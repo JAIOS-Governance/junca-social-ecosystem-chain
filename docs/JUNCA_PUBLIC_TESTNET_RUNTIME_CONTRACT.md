@@ -45,7 +45,10 @@ repairable only through the serial controlled-active path: exact retained-state,
 runtime, genesis, healthy loopback and validator-ID readback must precede one
 service stop; inactivity must be proven before mutation. A failed repair may
 perform one containment start for that same validator, but containment evidence
-is never accepted as successful repair or rollout evidence.
+is never accepted as successful repair or rollout evidence. After repair, the
+healthy loopback response must again carry the exact validator ID. Evidence
+schema v4 records this as `health_validator_id`; a missing or different ID
+blocks serial advancement even when the reported status is `healthy`.
 
 Immutable boundaries:
 

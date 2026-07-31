@@ -96,6 +96,13 @@ the exact healthy validator ID within 30 bounded polls. Containment never
 converts failed repair evidence into acceptance; it only restores the prior
 healthy service posture while the rollout remains blocked.
 
+Post-repair acceptance is bound to the same validator identity. Every healthy
+loopback response observed after restart must carry the exact expected
+`validator_id`; a missing or different identity remains blocked even when the
+status string is `healthy`. Recovery evidence schema v4 records that readback
+as `health_validator_id`, and the controller rejects evidence whose recorded
+identity differs from the validator being advanced in the serial rollout.
+
 Both repaired and pre-existing `runtime.env` files must be single-link regular
 files owned by `root:junca` with mode `0640`. Recovery pins the admitted
 device/inode and digest before restart, then revalidates identity, ownership,
