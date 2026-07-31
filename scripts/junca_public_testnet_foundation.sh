@@ -1087,7 +1087,7 @@ validate_validator_service_recovery_evidence() {
     --arg expected_runtime_version "$expected_runtime_version" \
     --arg expected_runtime_env_sha256 "$expected_runtime_env_sha256" \
     --arg expected_state_volume_id "$expected_state_volume_id" '
-      .schema_version == "junca-validator-service-recovery/v2" and
+      .schema_version == "junca-validator-service-recovery/v3" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
@@ -1124,6 +1124,25 @@ validate_validator_service_recovery_evidence() {
       .state_store_integrity == true and
       .binary_artifact_verified == true and
       .genesis_verified == true and
+      .runtime_config_access_verified == true and
+      (.runtime_config_repair_attempted | type) == "boolean" and
+      (.runtime_config_repaired | type) == "boolean" and
+      (
+        if .runtime_config_repaired then
+          .before_status != "active" and
+          .runtime_config_repair_attempted == true
+        else
+          .runtime_config_repair_attempted == false
+        end
+      ) and
+      .runtime_directory_owner == "root:junca" and
+      .runtime_directory_mode == "750" and
+      .genesis_owner == "root:junca" and
+      .genesis_mode == "640" and
+      .genesis_link_count == 1 and
+      .validator_config_owner == "root:junca" and
+      .validator_config_mode == "640" and
+      .validator_config_link_count == 1 and
       .runtime_directory_verified == true and
       .runtime_env_verified == true and
       .runtime_version == $expected_runtime_version and
@@ -1271,6 +1290,17 @@ scan_rollbacks_manifest_sha256=
 state_store_integrity=false
 binary_artifact_verified=false
 genesis_verified=false
+runtime_config_access_verified=false
+runtime_config_repair_attempted=false
+runtime_config_repaired=false
+runtime_directory_owner=""
+runtime_directory_mode=""
+genesis_owner=""
+genesis_mode=""
+genesis_link_count=0
+validator_config_owner=""
+validator_config_mode=""
+validator_config_link_count=0
 runtime_directory_verified=false
 runtime_env_verified=false
 runtime_version=""
@@ -1851,10 +1881,6 @@ if [[ "$durable_mount_verified" == true &&
     state_store_integrity=true
   fi
 fi
-if [[ -d /etc/junca && ! -L /etc/junca ]] &&
-    getent group junca >/dev/null; then
-  runtime_directory_verified=true
-fi
 if [[ -f /opt/junca/validator-runtime.tar.gz &&
       ! -L /opt/junca/validator-runtime.tar.gz ]] &&
     printf '%s  %s\n' "$expected_runtime_version" \
@@ -1863,9 +1889,67 @@ if [[ -f /opt/junca/validator-runtime.tar.gz &&
   binary_artifact_verified=true
 fi
 if [[ -f /etc/junca/genesis.json && ! -L /etc/junca/genesis.json ]] &&
+    [[ "$(stat -c '%h' /etc/junca/genesis.json)" == 1 ]] &&
     printf '%s  %s\n' "$expected_genesis_sha256" /etc/junca/genesis.json |
       sha256sum --check --strict >/dev/null 2>&1; then
   genesis_verified=true
+fi
+if [[ "$before_status" != "active" &&
+      "$genesis_verified" == true &&
+      -d /etc/junca &&
+      ! -L /etc/junca &&
+      "$(stat -c '%U' /etc/junca)" == "root" &&
+      "$(stat -c '%a' /etc/junca)" =~ ^(750|755)$ &&
+      -f /etc/junca/genesis.json &&
+      ! -L /etc/junca/genesis.json &&
+      "$(stat -c '%U' /etc/junca/genesis.json)" == "root" &&
+      "$(stat -c '%G' /etc/junca/genesis.json)" =~ ^(root|junca)$ &&
+      "$(stat -c '%a' /etc/junca/genesis.json)" =~ ^(640|644)$ &&
+      "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
+      -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%U' /etc/junca/validator.toml)" == "root" &&
+      "$(stat -c '%G' /etc/junca/validator.toml)" =~ ^(root|junca)$ &&
+      "$(stat -c '%a' /etc/junca/validator.toml)" =~ ^(640|644)$ &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 &&
+      "$(getent group junca)" != "" ]]; then
+  runtime_config_repair_attempted=true
+  chown root:junca /etc/junca
+  chmod 0750 /etc/junca
+  chown root:junca /etc/junca/genesis.json /etc/junca/validator.toml
+  chmod 0640 /etc/junca/genesis.json /etc/junca/validator.toml
+  if sync -f /etc/junca/genesis.json &&
+      sync -f /etc/junca/validator.toml &&
+      sync -f /etc/junca; then
+    runtime_config_repaired=true
+  fi
+fi
+if [[ -d /etc/junca &&
+      ! -L /etc/junca &&
+      "$(stat -c '%U:%G' /etc/junca)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca)" == "750" &&
+      -f /etc/junca/genesis.json &&
+      ! -L /etc/junca/genesis.json &&
+      "$(stat -c '%U:%G' /etc/junca/genesis.json)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/genesis.json)" == "640" &&
+      "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
+      -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%U:%G' /etc/junca/validator.toml)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/validator.toml)" == "640" &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
+    runuser -u junca -- test -r /etc/junca/genesis.json &&
+    runuser -u junca -- test -r /etc/junca/validator.toml; then
+  runtime_directory_verified=true
+  runtime_config_access_verified=true
+  runtime_directory_owner="$(stat -c '%U:%G' /etc/junca)"
+  runtime_directory_mode="$(stat -c '%a' /etc/junca)"
+  genesis_owner="$(stat -c '%U:%G' /etc/junca/genesis.json)"
+  genesis_mode="$(stat -c '%a' /etc/junca/genesis.json)"
+  genesis_link_count="$(stat -c '%h' /etc/junca/genesis.json)"
+  validator_config_owner="$(stat -c '%U:%G' /etc/junca/validator.toml)"
+  validator_config_mode="$(stat -c '%a' /etc/junca/validator.toml)"
+  validator_config_link_count="$(stat -c '%h' /etc/junca/validator.toml)"
 fi
 if [[ -f /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env &&
@@ -1896,6 +1980,7 @@ if [[ "$runtime_env_verified" != true &&
       "$state_store_integrity" == true &&
       "$binary_artifact_verified" == true &&
       "$genesis_verified" == true &&
+      "$runtime_config_access_verified" == true &&
       "$runtime_directory_verified" == true ]]; then
   runtime_env_repair_attempted=true
   systemctl stop junca-validator.service || service_stop_exit=$?
@@ -1954,6 +2039,7 @@ if [[ "$before_status" != "active" &&
       "$state_store_integrity" == true &&
       "$binary_artifact_verified" == true &&
       "$genesis_verified" == true &&
+      "$runtime_config_access_verified" == true &&
       "$runtime_directory_verified" == true &&
       "$runtime_env_verified" == true &&
       "$runtime_env_schema_verified" == true &&
@@ -1993,6 +2079,7 @@ for attempts in $(seq 1 60); do
           "$state_store_integrity" == true &&
           "$binary_artifact_verified" == true &&
           "$genesis_verified" == true &&
+          "$runtime_config_access_verified" == true &&
           "$runtime_directory_verified" == true &&
           "$runtime_env_verified" == true &&
           "$runtime_env_schema_verified" == true &&
@@ -2039,7 +2126,7 @@ if [[ "$accepted" != true &&
 fi
 
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v2" \
+  --arg schema_version "junca-validator-service-recovery/v3" \
   --arg before_status "$before_status" \
   --argjson restart_attempted "$restart_attempted" \
   --argjson restart_exit "$restart_exit" \
@@ -2063,6 +2150,19 @@ jq -n \
   --argjson state_store_integrity "$state_store_integrity" \
   --argjson binary_artifact_verified "$binary_artifact_verified" \
   --argjson genesis_verified "$genesis_verified" \
+  --argjson runtime_config_access_verified \
+    "$runtime_config_access_verified" \
+  --argjson runtime_config_repair_attempted \
+    "$runtime_config_repair_attempted" \
+  --argjson runtime_config_repaired "$runtime_config_repaired" \
+  --arg runtime_directory_owner "$runtime_directory_owner" \
+  --arg runtime_directory_mode "$runtime_directory_mode" \
+  --arg genesis_owner "$genesis_owner" \
+  --arg genesis_mode "$genesis_mode" \
+  --argjson genesis_link_count "$genesis_link_count" \
+  --arg validator_config_owner "$validator_config_owner" \
+  --arg validator_config_mode "$validator_config_mode" \
+  --argjson validator_config_link_count "$validator_config_link_count" \
   --argjson runtime_directory_verified "$runtime_directory_verified" \
   --argjson runtime_env_verified "$runtime_env_verified" \
   --arg runtime_version "$runtime_version" \
@@ -2118,6 +2218,17 @@ jq -n \
     state_store_integrity: $state_store_integrity,
     binary_artifact_verified: $binary_artifact_verified,
     genesis_verified: $genesis_verified,
+    runtime_config_access_verified: $runtime_config_access_verified,
+    runtime_config_repair_attempted: $runtime_config_repair_attempted,
+    runtime_config_repaired: $runtime_config_repaired,
+    runtime_directory_owner: $runtime_directory_owner,
+    runtime_directory_mode: $runtime_directory_mode,
+    genesis_owner: $genesis_owner,
+    genesis_mode: $genesis_mode,
+    genesis_link_count: $genesis_link_count,
+    validator_config_owner: $validator_config_owner,
+    validator_config_mode: $validator_config_mode,
+    validator_config_link_count: $validator_config_link_count,
     runtime_directory_verified: $runtime_directory_verified,
     runtime_env_verified: $runtime_env_verified,
     runtime_version: $runtime_version,
