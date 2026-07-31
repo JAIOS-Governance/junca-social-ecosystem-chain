@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/junca-hardened-immutable-candidate-release.yml"
+V2_WORKFLOW = ROOT / ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
 RUNTIME_WORKFLOW = ROOT / ".github/workflows/junca-validator-runtime-artifacts.yml"
 OBSERVER_WORKFLOW = ROOT / ".github/workflows/junca-public-testnet-release-observer.yml"
 DISPATCH = ROOT / "scripts/junca_dispatch_workflow_and_wait.sh"
@@ -17,6 +18,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.v2_workflow = V2_WORKFLOW.read_text(encoding="utf-8")
         cls.runtime_workflow = RUNTIME_WORKFLOW.read_text(encoding="utf-8")
         cls.observer_workflow = OBSERVER_WORKFLOW.read_text(encoding="utf-8")
         cls.dispatch = DISPATCH.read_text(encoding="utf-8")
@@ -60,6 +62,21 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('.head_sha == $head', self.dispatch)
         self.assertIn('.repository.full_name == $repository', self.dispatch)
         self.assertIn('test "$count" -le 1', self.dispatch)
+
+    def test_failed_child_dispatch_preserves_exact_run_evidence(self) -> None:
+        for value in (
+            "--evidence-path",
+            "junca-workflow-dispatch-evidence/v1",
+            "identity_valid",
+            "workflow dispatch failed: run_id=%s url=%s",
+            "mainnet_activation_authorized: false",
+        ):
+            self.assertIn(value, self.dispatch)
+        self.assertIn(
+            '--evidence-path "artifacts/release-v2/foundation-dispatch.json"',
+            self.v2_workflow,
+        )
+        self.assertIn("if: always()", self.v2_workflow)
 
     def test_runtime_artifact_contract_triggers_new_release_chain(self) -> None:
         for workflow_path in (
