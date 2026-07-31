@@ -2318,15 +2318,14 @@ if [[ "$repair_status_admitted" == true &&
     if [[ "$validator_config_identity" =~ ^[0-9]+:[0-9]+$ &&
           "$validator_config_sha256" =~ ^[0-9a-f]{64}$ &&
           "$validator_config_size" =~ ^[0-9]+$ ]] &&
-        ((
-          "$validator_config_preexisting" == true &&
-          "$validator_config_identity" == "$validator_config_pre_identity" &&
-          "$validator_config_sha256" == "$validator_config_pre_sha256" &&
-          "$validator_config_size" == "$validator_config_pre_size"
-        ) || (
-          "$validator_config_preexisting" == false &&
-          "$validator_config_size" == 0
-        )); then
+        { [[ "$validator_config_preexisting" == true &&
+             "$validator_config_identity" == \
+               "$validator_config_pre_identity" &&
+             "$validator_config_sha256" == \
+               "$validator_config_pre_sha256" &&
+             "$validator_config_size" == "$validator_config_pre_size" ]] ||
+          [[ "$validator_config_preexisting" == false &&
+             "$validator_config_size" == 0 ]]; }; then
       runtime_config_repaired=true
     fi
   fi

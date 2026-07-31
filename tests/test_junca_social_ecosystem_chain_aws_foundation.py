@@ -2246,6 +2246,79 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(admission, repair)
         self.assertLess(repair, config_repair)
 
+    def test_validator_config_identity_comparison_is_lexical(self) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        start = remote.index(
+            'if [[ "$validator_config_identity" =~ ^[0-9]+:[0-9]+$'
+        )
+        end = remote.index("\n    fi", start) + len("\n    fi")
+        comparison = remote[start:end]
+        self.assertNotIn("((", comparison)
+        self.assertIn(
+            '[[ "$validator_config_preexisting" == false &&', comparison
+        )
+        cases = (
+            (False, "66305:527892", "a" * 64, 0, "", "", 0, True),
+            (
+                True,
+                "66305:16828546",
+                "e3b0" + "c" * 60,
+                0,
+                "66305:16828546",
+                "e3b0" + "c" * 60,
+                0,
+                True,
+            ),
+            (False, "66305:527892", "a" * 64, 1, "", "", 0, False),
+            (
+                True,
+                "66305:16828547",
+                "b" * 64,
+                4,
+                "66305:16828546",
+                "b" * 64,
+                4,
+                False,
+            ),
+        )
+        for (
+            preexisting,
+            identity,
+            digest,
+            size,
+            pre_identity,
+            pre_digest,
+            pre_size,
+            expected,
+        ) in cases:
+            with self.subTest(preexisting=preexisting, identity=identity):
+                script = (
+                    "set -u -o pipefail\n"
+                    + f"validator_config_preexisting={'true' if preexisting else 'false'}\n"
+                    + f"validator_config_identity={identity}\n"
+                    + f"validator_config_sha256={digest}\n"
+                    + f"validator_config_size={size}\n"
+                    + f"validator_config_pre_identity={pre_identity}\n"
+                    + f"validator_config_pre_sha256={pre_digest}\n"
+                    + f"validator_config_pre_size={pre_size}\n"
+                    + "runtime_config_repaired=false\n"
+                    + comparison
+                    + "\n"
+                    + "test \"$runtime_config_repaired\" = "
+                    + ("true" if expected else "false")
+                    + "\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    env={"PATH": "/usr/bin:/bin"},
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_failed_active_repair_has_one_bounded_containment_start(self) -> None:
         remote = validator_service_recovery_remote_script(
             self.foundation_script
