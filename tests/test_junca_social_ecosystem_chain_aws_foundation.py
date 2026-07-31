@@ -2036,7 +2036,18 @@ class AwsFoundationTests(unittest.TestCase):
         start = remote.index("admit_controlled_active_repair() {")
         end = remote.index("\n}\n\nverify_durable_mount_persistence_contract", start)
         function = remote[start : end + 2]
-        for health, identity, expected_exit, expected_stops in (
+        for predicate in (
+            '[[ "$before_status" == "active" ]] || return 1',
+            '[[ "$pre_repair_health_status" == "healthy" ]] || return 1',
+            '[[ "$pre_repair_validator_id" == "$expected_validator_id" ]] '
+            "|| return 1",
+            '[[ "$durable_mount_verified" == true ]] || return 1',
+            '[[ "$state_store_integrity" == true ]] || return 1',
+            '[[ "$binary_artifact_verified" == true ]] || return 1',
+            '[[ "$genesis_verified" == true ]] || return 1',
+        ):
+            self.assertIn(predicate, function)
+        for health, identity, expected_result, expected_stops in (
             ("healthy", "validator-02", 0, 1),
             ("degraded", "validator-02", 1, 0),
             ("healthy", "validator-01", 1, 0),
@@ -2064,7 +2075,13 @@ class AwsFoundationTests(unittest.TestCase):
                     + '  if [[ "$1" == is-active && "$2" == --quiet ]]; then return 1; fi\n'
                     + '  return 1\n'
                     + '}\n'
-                    + 'admit_controlled_active_repair\n'
+                    + 'repair_result=0\n'
+                    + 'if admit_controlled_active_repair; then\n'
+                    + '  repair_result=0\n'
+                    + 'else\n'
+                    + '  repair_result=$?\n'
+                    + 'fi\n'
+                    + f'test "$repair_result" -eq {expected_result}\n'
                     + f'test "$stop_count" -eq {expected_stops}\n'
                 )
                 result = subprocess.run(
@@ -2074,7 +2091,31 @@ class AwsFoundationTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                 )
-                self.assertEqual(result.returncode, expected_exit, result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_runtime_config_repair_admits_only_private_legacy_modes(
+        self,
+    ) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        start = remote.index(
+            'if [[ "$repair_status_admitted" == true &&\n'
+            '      "$genesis_verified" == true &&'
+        )
+        end = remote.index("\nfi\nif [[ -d /etc/junca &&", start)
+        recovery = remote[start:end]
+        self.assertIn(
+            '"$(stat -c \'%a\' /etc/junca)" =~ ^(700|710|750|755)$',
+            recovery,
+        )
+        self.assertIn(
+            '"$(stat -c \'%a\' /etc/junca/genesis.json)" =~ '
+            "^(600|640|644)$",
+            recovery,
+        )
+        self.assertNotIn("777", recovery)
+        self.assertNotIn("666", recovery)
 
     def test_failed_active_repair_has_one_bounded_containment_start(self) -> None:
         remote = validator_service_recovery_remote_script(
