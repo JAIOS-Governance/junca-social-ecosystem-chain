@@ -1263,6 +1263,8 @@ durable_mount_persistence_verified=false
 durable_mount_repair_attempted=false
 durable_mount_repaired=false
 durable_mount_repair_exit=0
+durable_mount_repair_stage=not_attempted
+unmounted_state_target_entries=
 state_store_integrity=false
 binary_artifact_verified=false
 genesis_verified=false
@@ -1394,7 +1396,18 @@ volume_id='${expected_state_volume_id}'
 expected_serial='${expected_state_serial}'
 device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_\${expected_serial}"
 for attempt in \$(seq 1 120); do
-  [[ -b "\$device" ]] && break
+  if [[ -b "\$device" ]]; then
+    break
+  fi
+  mapfile -t candidates < <(
+    lsblk -dnpo NAME,SERIAL,TYPE |
+      awk -v expected="\$expected_serial" \
+        '{ serial=\$2; gsub(/-/, "", serial); if (\$3 == "disk" && serial == expected) print \$1 }'
+  )
+  if [[ "\${#candidates[@]}" == 1 && -b "\${candidates[0]}" ]]; then
+    device="\${candidates[0]}"
+    break
+  fi
   test "\$attempt" -lt 120
   sleep 5
 done
@@ -1447,6 +1460,89 @@ STATE_UNIT_EOF
     <<<"$validator_unit"
 )
 
+repair_durable_mount_persistence_contract() (
+  set -euo pipefail
+  local helper_path=/usr/local/sbin/junca-mount-validator-state
+  local unit_path=/etc/systemd/system/junca-validator-state.service
+  local helper_tmp
+  local unit_tmp
+  local expected_state_serial="${expected_state_volume_id//-/}"
+  for path in "$helper_path" "$unit_path"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      [[ -f "$path" && ! -L "$path" ]] || return 1
+      [[ "$(stat -c '%U:%G' "$path")" == root:root ]] || return 1
+      [[ "$(stat -c '%h' "$path")" == 1 ]] || return 1
+    fi
+  done
+  helper_tmp="$(mktemp /usr/local/sbin/.junca-mount-validator-state.XXXXXX)"
+  unit_tmp="$(mktemp /etc/systemd/system/.junca-validator-state.service.XXXXXX)"
+  trap 'rm -f "$helper_tmp" "$unit_tmp"' EXIT
+  cat >"$helper_tmp" <<STATE_HELPER_EOF
+#!/usr/bin/env bash
+set -euo pipefail
+volume_id='${expected_state_volume_id}'
+expected_serial='${expected_state_serial}'
+device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_\${expected_serial}"
+for attempt in \$(seq 1 120); do
+  if [[ -b "\$device" ]]; then
+    break
+  fi
+  mapfile -t candidates < <(
+    lsblk -dnpo NAME,SERIAL,TYPE |
+      awk -v expected="\$expected_serial" \
+        '{ serial=\$2; gsub(/-/, "", serial); if (\$3 == "disk" && serial == expected) print \$1 }'
+  )
+  if [[ "\${#candidates[@]}" == 1 && -b "\${candidates[0]}" ]]; then
+    device="\${candidates[0]}"
+    break
+  fi
+  test "\$attempt" -lt 120
+  sleep 5
+done
+[[ -b "\$device" ]]
+resolved_device="\$(readlink -f "\$device")"
+[[ -b "\$resolved_device" ]]
+actual_serial="\$(lsblk -ndo SERIAL "\$device" | tr -d '-')"
+test "\$actual_serial" = "\$expected_serial"
+filesystem="\$(blkid -o value -s TYPE "\$device")"
+case "\$filesystem" in
+  ext4|xfs) ;;
+  *) echo "validator state filesystem is absent or unapproved" >&2; exit 1 ;;
+esac
+if ! mountpoint -q /var/lib/junca; then
+  mount -o noatime,nosuid,nodev "\$device" /var/lib/junca
+fi
+test "\$(findmnt -n -o SOURCE --target /var/lib/junca)" = "\$resolved_device"
+test -f /var/lib/junca/state.sqlite
+test ! -L /var/lib/junca/state.sqlite
+STATE_HELPER_EOF
+  cat >"$unit_tmp" <<'STATE_UNIT_EOF'
+[Unit]
+Description=JUNCA Validator Durable State Mount
+Before=junca-validator.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/junca-mount-validator-state
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+STATE_UNIT_EOF
+  chown root:root "$helper_tmp" "$unit_tmp"
+  chmod 0750 "$helper_tmp"
+  chmod 0640 "$unit_tmp"
+  sync -f "$helper_tmp"
+  sync -f "$unit_tmp"
+  mv -fT "$helper_tmp" "$helper_path"
+  mv -fT "$unit_tmp" "$unit_path"
+  trap - EXIT
+  sync -f /usr/local/sbin
+  sync -f /etc/systemd/system
+  systemctl daemon-reload
+  systemctl enable junca-validator-state.service
+)
+
 verify_durable_state_mount() {
   local actual_serial
   local expected_device
@@ -1458,6 +1554,15 @@ verify_durable_state_mount() {
   local source_device
   expected_serial="${expected_state_volume_id//-/}"
   expected_device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${expected_serial}"
+  if [[ ! -b "$expected_device" ]]; then
+    mapfile -t state_device_candidates < <(
+      lsblk -dnpo NAME,SERIAL,TYPE |
+        awk -v expected="$expected_serial" \
+          '{ serial=$2; gsub(/-/, "", serial); if ($3 == "disk" && serial == expected) print $1 }'
+    )
+    [[ "${#state_device_candidates[@]}" == 1 ]] || return 1
+    expected_device="${state_device_candidates[0]}"
+  fi
   [[ -b "$expected_device" ]] || return 1
   resolved_device="$(readlink -f "$expected_device")"
   [[ -b "$resolved_device" ]] || return 1
@@ -1493,6 +1598,11 @@ verify_unmounted_state_target_admission() {
   local sqlite_quick_check
   [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
   ! mountpoint -q /var/lib/junca || return 1
+  unmounted_state_target_entries="$(
+    find /var/lib/junca -mindepth 1 -maxdepth 1 -printf '%f\n' |
+      LC_ALL=C sort |
+      paste -sd, -
+  )"
   while IFS= read -r -d '' entry; do
     entry_name="${entry##*/}"
     case "$entry_name" in
@@ -1524,13 +1634,31 @@ if ! verify_durable_state_mount &&
       ! -L /var/lib/junca ]] &&
     ! mountpoint -q /var/lib/junca; then
   durable_mount_repair_attempted=true
+  durable_mount_repair_stage=service_stop
   systemctl stop junca-validator.service || service_stop_exit=$?
   expected_state_serial="${expected_state_volume_id//-/}"
   expected_state_device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${expected_state_serial}"
   if [[ "$service_stop_exit" == 0 ]] &&
-      ! systemctl is-active --quiet junca-validator.service &&
-      verify_unmounted_state_target_admission &&
-      [[ -b "$expected_state_device" ]]; then
+      ! systemctl is-active --quiet junca-validator.service; then
+    durable_mount_repair_stage=target_admission
+  fi
+  if [[ "$durable_mount_repair_stage" == target_admission ]] &&
+      verify_unmounted_state_target_admission; then
+    durable_mount_repair_stage=device_identity
+  fi
+  if [[ "$durable_mount_repair_stage" == device_identity &&
+        ! -b "$expected_state_device" ]]; then
+    mapfile -t state_device_candidates < <(
+      lsblk -dnpo NAME,SERIAL,TYPE |
+        awk -v expected="$expected_state_serial" \
+          '{ serial=$2; gsub(/-/, "", serial); if ($3 == "disk" && serial == expected) print $1 }'
+    )
+    if [[ "${#state_device_candidates[@]}" == 1 ]]; then
+      expected_state_device="${state_device_candidates[0]}"
+    fi
+  fi
+  if [[ "$durable_mount_repair_stage" == device_identity &&
+        -b "$expected_state_device" ]]; then
     resolved_state_device="$(readlink -f "$expected_state_device")"
     actual_state_serial="$(
       lsblk -ndo SERIAL "$expected_state_device" |
@@ -1540,19 +1668,31 @@ if ! verify_durable_state_mount &&
       blkid -c /dev/null -o value -s TYPE "$resolved_state_device" \
         2>/dev/null || true
     )"
+    durable_mount_repair_stage=device_contract
     if [[ -b "$resolved_state_device" &&
           "$(lsblk -nrpo NAME "$resolved_state_device" | wc -l)" == 1 &&
           "$actual_state_serial" == "$expected_state_serial" &&
           -z "$(findmnt -rn -S "$resolved_state_device" -o TARGET)" ]] &&
         [[ "$state_filesystem" == ext4 ||
-          "$state_filesystem" == xfs ]] &&
+          "$state_filesystem" == xfs ]]; then
+      durable_mount_repair_stage=persistence_contract
+    fi
+    if [[ "$durable_mount_repair_stage" == persistence_contract ]] &&
+        ! verify_durable_mount_persistence_contract; then
+      durable_mount_repair_stage=persistence_repair
+      repair_durable_mount_persistence_contract || true
+    fi
+    if [[ "$durable_mount_repair_stage" == persistence_contract ||
+          "$durable_mount_repair_stage" == persistence_repair ]] &&
         verify_durable_mount_persistence_contract; then
+      durable_mount_repair_stage=mount_restart
       systemctl reset-failed junca-validator-state.service || true
       systemctl restart junca-validator-state.service ||
         durable_mount_repair_exit=$?
       if [[ "$durable_mount_repair_exit" == 0 ]] &&
           verify_durable_state_mount; then
         durable_mount_repaired=true
+        durable_mount_repair_stage=verified
       fi
     fi
   fi
@@ -1768,6 +1908,9 @@ jq -n \
     "$durable_mount_repair_attempted" \
   --argjson durable_mount_repaired "$durable_mount_repaired" \
   --argjson durable_mount_repair_exit "$durable_mount_repair_exit" \
+  --arg durable_mount_repair_stage "$durable_mount_repair_stage" \
+  --arg unmounted_state_target_entries \
+    "$unmounted_state_target_entries" \
   --argjson state_store_integrity "$state_store_integrity" \
   --argjson binary_artifact_verified "$binary_artifact_verified" \
   --argjson genesis_verified "$genesis_verified" \
@@ -1814,6 +1957,8 @@ jq -n \
     durable_mount_repair_attempted: $durable_mount_repair_attempted,
     durable_mount_repaired: $durable_mount_repaired,
     durable_mount_repair_exit: $durable_mount_repair_exit,
+    durable_mount_repair_stage: $durable_mount_repair_stage,
+    unmounted_state_target_entries: $unmounted_state_target_entries,
     state_store_integrity: $state_store_integrity,
     binary_artifact_verified: $binary_artifact_verified,
     genesis_verified: $genesis_verified,
