@@ -123,6 +123,16 @@ def runtime_env_schema_functions(script: str) -> str:
     )
 
 
+def validator_config_admission_functions(script: str) -> str:
+    remote = validator_service_recovery_remote_script(script)
+    return (
+        "pin_existing_validator_config() {"
+        + remote.split("pin_existing_validator_config() {", 1)[1].split(
+            "\nadmit_controlled_active_repair() {", 1
+        )[0]
+    )
+
+
 def scan_rollbacks_quarantine_function(script: str) -> str:
     return script.split("quarantine_scan_rollbacks_for_mount() {", 1)[
         1
@@ -1588,6 +1598,13 @@ class AwsFoundationTests(unittest.TestCase):
             "validator_config_owner",
             "validator_config_mode",
             "validator_config_link_count",
+            "validator_config_preexisting",
+            "validator_config_pre_identity",
+            "validator_config_pre_sha256",
+            "validator_config_pre_size",
+            "validator_config_identity",
+            "validator_config_sha256",
+            "validator_config_size",
             '"$runtime_env_verified" == true',
             "systemctl restart junca-validator.service || restart_exit=$?",
             "for attempts in $(seq 1 60)",
@@ -1597,7 +1614,7 @@ class AwsFoundationTests(unittest.TestCase):
             "recovery_request_sha256",
             "recovery_command_id",
             "recovery_dispatch_sequence",
-            "junca-validator-service-recovery/v6",
+            "junca-validator-service-recovery/v7",
             "wait_for_ssm_command_result",
             "mainnet_activation_authorized: false",
         ):
@@ -1633,7 +1650,7 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_live_recovery_creates_only_absent_empty_validator_config(self) -> None:
         start = self.foundation_script.index(
-            "if [[ -f /etc/junca/validator.toml &&"
+            "if pin_existing_validator_config /etc/junca/validator.toml; then"
         )
         initial_readback = self.foundation_script.index(
             "if [[ -d /etc/junca &&", start
@@ -1672,7 +1689,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v6"',
+            '"junca-validator-service-recovery/v7"',
             rollback,
         )
         self.assertLess(rollback, evidence)
@@ -1697,6 +1714,123 @@ class AwsFoundationTests(unittest.TestCase):
             "'{print $1}')\" == \\\n"
             '          "$canonical_runtime_env_sha256"',
             self.foundation_script[rollback:evidence],
+        )
+
+    @unittest.skipUnless(
+        os.geteuid() == 0,
+        "root-owned validator configuration admission contract",
+    )
+    def test_validator_config_metadata_repair_preserves_content_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = pathlib.Path(directory) / "validator.toml"
+            content = b"validator_id = \"validator-02\"\nlegacy = true\n"
+            config.write_bytes(content)
+            config.chmod(0o600)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + validator_config_admission_functions(
+                        self.foundation_script
+                    )
+                    + '\nvalidator_config_preexisting=false\n'
+                    + 'validator_config_pre_identity=""\n'
+                    + 'validator_config_pre_sha256=""\n'
+                    + 'validator_config_pre_size=0\n'
+                    + 'pin_existing_validator_config "$1"\n'
+                    + 'test "$validator_config_preexisting" = true\n'
+                    + 'test "$(stat -c %a "$1")" = 600\n'
+                    + 'chmod 0640 "$1"\n'
+                    + 'validator_config_matches_admission "$1"\n'
+                    + 'test "$(sha256sum "$1" | awk \'{print $1}\')" = '
+                    + '"$validator_config_pre_sha256"\n'
+                    + 'test "$(stat -c %s "$1")" = '
+                    + '"$validator_config_pre_size"\n',
+                    "validator-config-admission-test",
+                    str(config),
+                ],
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(config.read_bytes(), content)
+
+        admission = validator_config_admission_functions(
+            self.foundation_script
+        )
+        self.assertNotIn("stat -c '%G'", admission)
+        self.assertNotIn("stat -c '%a'", admission)
+        self.assertIn("stat -Lc '%d:%i'", admission)
+        self.assertIn("sha256sum", admission)
+        self.assertIn("stat -c '%s'", admission)
+
+    @unittest.skipUnless(
+        os.geteuid() == 0,
+        "root-owned validator configuration admission contract",
+    )
+    def test_validator_config_admission_rejects_unsafe_shape_and_drift(
+        self,
+    ) -> None:
+        functions = validator_config_admission_functions(
+            self.foundation_script
+        )
+        for unsafe_kind in (
+            "symlink",
+            "hardlink",
+            "content-drift",
+            "identity-drift",
+        ):
+            with self.subTest(unsafe_kind=unsafe_kind):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = pathlib.Path(directory)
+                    config = root / "validator.toml"
+                    config.write_text("validator_id = 2\n", encoding="utf-8")
+                    command = 'pin_existing_validator_config "$1"\n'
+                    if unsafe_kind == "symlink":
+                        target = root / "target.toml"
+                        config.rename(target)
+                        config.symlink_to(target)
+                    elif unsafe_kind == "hardlink":
+                        (root / "second-link.toml").hardlink_to(config)
+                    elif unsafe_kind == "content-drift":
+                        command += (
+                            'printf "drift" >>"$1"\n'
+                            'validator_config_matches_admission "$1"\n'
+                        )
+                    else:
+                        command += (
+                            'mv "$1" "$1.admitted"\n'
+                            'printf "replacement" >"$1"\n'
+                            'validator_config_matches_admission "$1"\n'
+                        )
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            "set -euo pipefail\n"
+                            + functions
+                            + '\nvalidator_config_preexisting=false\n'
+                            + 'validator_config_pre_identity=""\n'
+                            + 'validator_config_pre_sha256=""\n'
+                            + 'validator_config_pre_size=0\n'
+                            + command,
+                            "validator-config-admission-negative-test",
+                            str(config),
+                        ],
+                        env={"PATH": "/usr/bin:/bin"},
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            '[[ "$(stat -c \'%U\' "$path")" == "root" ]]',
+            functions,
         )
 
     @unittest.skipUnless(
@@ -1794,7 +1928,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v6"',
+            '"junca-validator-service-recovery/v7"',
             rollback,
         )
         self.assertIn(
@@ -2431,7 +2565,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_manifest_decision_sha256 = "2" * 64
         expected_candidate_head_sha = "3" * 40
         valid = {
-            "schema_version": "junca-validator-service-recovery/v6",
+            "schema_version": "junca-validator-service-recovery/v7",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2478,6 +2612,13 @@ class AwsFoundationTests(unittest.TestCase):
             "validator_config_owner": "root:junca",
             "validator_config_mode": "640",
             "validator_config_link_count": 1,
+            "validator_config_preexisting": True,
+            "validator_config_pre_identity": "2049:3200",
+            "validator_config_pre_sha256": "4" * 64,
+            "validator_config_pre_size": 137,
+            "validator_config_identity": "2049:3200",
+            "validator_config_sha256": "4" * 64,
+            "validator_config_size": 137,
             "runtime_directory_verified": True,
             "runtime_env_verified": True,
             "runtime_version": expected_runtime_version,
@@ -2563,6 +2704,13 @@ class AwsFoundationTests(unittest.TestCase):
             {"validator_config_owner": "root:root"},
             {"validator_config_mode": "644"},
             {"validator_config_link_count": 2},
+            {"validator_config_preexisting": "true"},
+            {"validator_config_pre_identity": "2049:3201"},
+            {"validator_config_pre_sha256": "5" * 64},
+            {"validator_config_pre_size": 138},
+            {"validator_config_identity": "2049:3201"},
+            {"validator_config_sha256": "5" * 64},
+            {"validator_config_size": 138},
             {"runtime_directory_verified": False},
             {"runtime_env_repair_attempted": False},
             {"runtime_env_created": False},
@@ -2661,7 +2809,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_manifest_decision_sha256 = "2" * 64
         expected_candidate_head_sha = "3" * 40
         evidence = {
-            "schema_version": "junca-validator-service-recovery/v6",
+            "schema_version": "junca-validator-service-recovery/v7",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2708,6 +2856,13 @@ class AwsFoundationTests(unittest.TestCase):
             "validator_config_owner": "root:junca",
             "validator_config_mode": "640",
             "validator_config_link_count": 1,
+            "validator_config_preexisting": True,
+            "validator_config_pre_identity": "2049:3200",
+            "validator_config_pre_sha256": "4" * 64,
+            "validator_config_pre_size": 137,
+            "validator_config_identity": "2049:3200",
+            "validator_config_sha256": "4" * 64,
+            "validator_config_size": 137,
             "runtime_directory_verified": True,
             "runtime_env_verified": True,
             "runtime_version": expected_runtime_version,

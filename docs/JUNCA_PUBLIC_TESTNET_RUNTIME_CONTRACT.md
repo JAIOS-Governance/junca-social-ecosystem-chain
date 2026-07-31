@@ -33,14 +33,18 @@ The live-prefix recovery may repair only this narrow contract on an inactive
 validator. It requires a real root-owned directory, a real single-link
 root-owned genesis, an exact genesis digest, and pre-repair modes limited to
 `0750`/`0755` and `0640`/`0644`. An existing validator configuration must be a
-root-owned single-link regular file within those modes. A legacy predecessor
-with no validator configuration may receive only the canonical zero-length
-compatibility file through a synced same-directory, no-overwrite hard-link
-install. After applying `root:junca` ownership and canonical modes, recovery
-syncs both files and the directory and proves zero-length compatibility config
-and readability as the `junca` service user. Symlinks, hard links, existing
-non-empty content during creation, non-root ownership, unexpected modes,
-digest mismatch or destination races fail closed. An active service is
+root-owned single-link regular file. Its device/inode, SHA-256, and byte size
+are pinned before the controlled stop, so recovery may normalize only its
+group and mode to `root:junca`/`0640` without changing its content or identity.
+A legacy predecessor with no validator configuration may receive only the
+canonical zero-length compatibility file through a synced same-directory,
+no-overwrite hard-link install. After applying `root:junca` ownership and
+canonical modes, recovery
+syncs both files and the directory and proves either the exact pinned existing
+config or a zero-length compatibility config, plus readability as the `junca`
+service user. Symlinks, hard links, existing non-empty content during creation,
+non-root ownership, identity/digest/size drift, or destination races fail
+closed. An active service is
 repairable only through the serial controlled-active path: exact retained-state,
 runtime, genesis, healthy loopback and validator-ID readback must precede one
 service stop; inactivity must be proven before mutation. A failed repair may
