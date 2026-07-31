@@ -1301,6 +1301,7 @@ genesis_link_count=0
 validator_config_owner=""
 validator_config_mode=""
 validator_config_link_count=0
+validator_config_admissible=false
 runtime_directory_verified=false
 runtime_env_verified=false
 runtime_version=""
@@ -1894,6 +1895,16 @@ if [[ -f /etc/junca/genesis.json && ! -L /etc/junca/genesis.json ]] &&
       sha256sum --check --strict >/dev/null 2>&1; then
   genesis_verified=true
 fi
+if [[ -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%U' /etc/junca/validator.toml)" == "root" &&
+      "$(stat -c '%G' /etc/junca/validator.toml)" =~ ^(root|junca)$ &&
+      "$(stat -c '%a' /etc/junca/validator.toml)" =~ ^(640|644)$ &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] ||
+    [[ ! -e /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml ]]; then
+  validator_config_admissible=true
+fi
 if [[ "$before_status" != "active" &&
       "$genesis_verified" == true &&
       -d /etc/junca &&
@@ -1906,19 +1917,34 @@ if [[ "$before_status" != "active" &&
       "$(stat -c '%G' /etc/junca/genesis.json)" =~ ^(root|junca)$ &&
       "$(stat -c '%a' /etc/junca/genesis.json)" =~ ^(640|644)$ &&
       "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
-      -f /etc/junca/validator.toml &&
-      ! -L /etc/junca/validator.toml &&
-      "$(stat -c '%U' /etc/junca/validator.toml)" == "root" &&
-      "$(stat -c '%G' /etc/junca/validator.toml)" =~ ^(root|junca)$ &&
-      "$(stat -c '%a' /etc/junca/validator.toml)" =~ ^(640|644)$ &&
-      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 &&
+      "$validator_config_admissible" == true &&
       "$(getent group junca)" != "" ]]; then
   runtime_config_repair_attempted=true
   chown root:junca /etc/junca
   chmod 0750 /etc/junca
-  chown root:junca /etc/junca/genesis.json /etc/junca/validator.toml
-  chmod 0640 /etc/junca/genesis.json /etc/junca/validator.toml
-  if sync -f /etc/junca/genesis.json &&
+  if [[ ! -e /etc/junca/validator.toml &&
+        ! -L /etc/junca/validator.toml ]]; then
+    validator_config_tmp="$(mktemp /etc/junca/.validator.toml.XXXXXX)"
+    trap 'rm -f "$validator_config_tmp"' EXIT
+    chown root:junca "$validator_config_tmp"
+    chmod 0640 "$validator_config_tmp"
+    if sync -f "$validator_config_tmp" &&
+        ln "$validator_config_tmp" /etc/junca/validator.toml &&
+        rm -f "$validator_config_tmp"; then
+      sync -f /etc/junca
+    fi
+  fi
+  if [[ -f /etc/junca/validator.toml &&
+        ! -L /etc/junca/validator.toml &&
+        "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]]; then
+    chown root:junca /etc/junca/genesis.json /etc/junca/validator.toml
+    chmod 0640 /etc/junca/genesis.json /etc/junca/validator.toml
+  fi
+  if [[ -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%s' /etc/junca/validator.toml)" == 0 &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
+      sync -f /etc/junca/genesis.json &&
       sync -f /etc/junca/validator.toml &&
       sync -f /etc/junca; then
     runtime_config_repaired=true

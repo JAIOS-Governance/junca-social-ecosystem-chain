@@ -1555,6 +1555,11 @@ class AwsFoundationTests(unittest.TestCase):
             '"$runtime_config_access_verified" == true',
             "runtime_config_repair_attempted=true",
             "runtime_config_repaired=true",
+            "validator_config_admissible=true",
+            '[[ ! -e /etc/junca/validator.toml &&',
+            "mktemp /etc/junca/.validator.toml.XXXXXX",
+            'ln "$validator_config_tmp" /etc/junca/validator.toml',
+            '"$(stat -c \'%s\' /etc/junca/validator.toml)" == 0',
             "chown root:junca /etc/junca",
             "chmod 0750 /etc/junca",
             (
@@ -1600,8 +1605,54 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(recovery, strict_readback)
         self.assertLess(strict_readback, first_mutation)
 
+        validator_creation = self.foundation_script.index(
+            'ln "$validator_config_tmp" /etc/junca/validator.toml'
+        )
+        validator_readback = self.foundation_script.index(
+            '"$(stat -c \'%s\' /etc/junca/validator.toml)" == 0',
+            validator_creation,
+        )
+        runtime_env_creation = self.foundation_script.index(
+            'ln "$runtime_env_tmp" /etc/junca/runtime.env',
+            validator_readback,
+        )
+        self.assertLess(validator_creation, validator_readback)
+        self.assertLess(validator_readback, runtime_env_creation)
+
+    def test_live_recovery_creates_only_absent_empty_validator_config(self) -> None:
+        start = self.foundation_script.index(
+            "if [[ -f /etc/junca/validator.toml &&"
+        )
+        end = self.foundation_script.index(
+            "if [[ -d /etc/junca &&", start
+        )
+        recovery = self.foundation_script[start:end]
+        for required in (
+            "! -L /etc/junca/validator.toml",
+            "! -e /etc/junca/validator.toml",
+            '"$before_status" != "active"',
+            '"$genesis_verified" == true',
+            "mktemp /etc/junca/.validator.toml.XXXXXX",
+            'ln "$validator_config_tmp" /etc/junca/validator.toml',
+            '"$(stat -c \'%s\' /etc/junca/validator.toml)" == 0',
+            '"$(stat -c \'%h\' /etc/junca/validator.toml)" == 1',
+            "sync -f /etc/junca/validator.toml",
+            "sync -f /etc/junca",
+        ):
+            self.assertIn(required, recovery)
+        for forbidden in (
+            "mv -fT",
+            "rm -f /etc/junca/validator.toml",
+            "cp /dev/null /etc/junca/validator.toml",
+            "mkfs",
+        ):
+            self.assertNotIn(forbidden, recovery)
+
         rollback = self.foundation_script.index(
             'if [[ "$accepted" != true &&',
+        )
+        definition = self.foundation_script.index(
+            "write_live_rollout_prefix_readback() {"
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
