@@ -71,6 +71,12 @@ def ssm_online_function(script: str) -> str:
     )[0].join(("wait_for_ssm_online() {", "\n}"))
 
 
+def required_json_boolean_function(script: str) -> str:
+    return script.split("read_required_json_boolean() {", 1)[1].split(
+        "\n}\n\nwait_for_ssm_online()", 1
+    )[0].join(("read_required_json_boolean() {", "\n}"))
+
+
 def rollback_snapshot_function(script: str) -> str:
     return script.split("verify_rollback_snapshots() {", 1)[1].split(
         "\n}\n\nwait_for_ssm_command()", 1
@@ -444,7 +450,8 @@ class AwsFoundationTests(unittest.TestCase):
             "foundation.tfplan",
             'select(index("delete"))',
             "enable_public_services: $enable_public_services",
-            "public_services_acceptance_readback.value.enabled",
+            '["public_services_acceptance_readback","value","enabled"]',
+            "read_required_json_boolean",
             "public-services stage while rotating validator",
             "quorum_verified: false",
             "public_services_enabled: $public_services_enabled",
@@ -1384,6 +1391,69 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(volume_readback, first_mutation)
         self.assertLess(snapshot_readback, first_mutation)
         self.assertLess(rollback_floor, first_mutation)
+
+    def test_required_boolean_readback_accepts_false_and_rejects_invalid_types(
+        self,
+    ) -> None:
+        helper = required_json_boolean_function(self.foundation_script)
+        json_path = '["automatic_finality_readback","value","enabled"]'
+        cases = (
+            (
+                {"automatic_finality_readback": {"value": {"enabled": False}}},
+                0,
+                "false",
+            ),
+            (
+                {"automatic_finality_readback": {"value": {"enabled": True}}},
+                0,
+                "true",
+            ),
+            (
+                {"automatic_finality_readback": {"value": {"enabled": "false"}}},
+                5,
+                "",
+            ),
+            (
+                {"automatic_finality_readback": {"value": {"enabled": None}}},
+                5,
+                "",
+            ),
+            ({"automatic_finality_readback": {"value": {}}}, 5, ""),
+        )
+        for payload, expected_exit, expected_stdout in cases:
+            with self.subTest(payload=payload):
+                with tempfile.TemporaryDirectory() as directory:
+                    source = pathlib.Path(directory) / "source.json"
+                    source.write_text(json.dumps(payload), encoding="utf-8")
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            "set -euo pipefail\n"
+                            + helper
+                            + '\nread_required_json_boolean "$JSON_PATH" "$SOURCE_PATH"\n',
+                        ],
+                        env={
+                            "PATH": "/usr/bin:/bin",
+                            "JSON_PATH": json_path,
+                            "SOURCE_PATH": str(source),
+                        },
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                self.assertEqual(result.returncode, expected_exit, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected_stdout)
+
+        self.assertIn(
+            "read_required_json_boolean \\\n"
+            "      '[\"automatic_finality_readback\",\"value\",\"enabled\"]'",
+            self.foundation_script,
+        )
+        self.assertNotIn(
+            "jq -er '.automatic_finality_readback.value.enabled'",
+            self.foundation_script,
+        )
 
     def test_live_prefix_repairs_only_a_safely_readable_stopped_service(self) -> None:
         for required in (

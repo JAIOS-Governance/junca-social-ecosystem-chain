@@ -29,6 +29,20 @@ jq -e 'type == "array" and length == 3 and (unique | length) == 3 and all(starts
 
 mkdir -p artifacts
 
+read_required_json_boolean() {
+  local path_json="$1"
+  local source_path="$2"
+  jq -r \
+    --argjson path "$path_json" '
+      getpath($path)
+      | if type == "boolean" then
+          tostring
+        else
+          error("required JSON boolean is missing or invalid")
+        end
+    ' "$source_path"
+}
+
 wait_for_ssm_online() {
   local instance_id="$1"
   local output_path="$2"
@@ -1578,7 +1592,8 @@ write_live_rollout_prefix_readback() {
   )"
   peer_endpoints="validator-01=10.67.16.10:30303,validator-02=10.67.32.10:30303,validator-03=10.67.48.10:30303"
   baseline_automatic_finality_enabled="$(
-    jq -er '.automatic_finality_readback.value.enabled' \
+    read_required_json_boolean \
+      '["automatic_finality_readback","value","enabled"]' \
       artifacts/live-prefix-foundation-outputs.json
   )"
   baseline_block_interval_seconds="$(
@@ -2007,7 +2022,8 @@ terraform -chdir=infra/aws/public-testnet init -input=false -reconfigure \
 terraform -chdir=infra/aws/public-testnet output -json \
   > artifacts/pre-foundation-outputs.json
 public_services_enabled="$(
-  jq -er '.public_services_acceptance_readback.value.enabled // false' \
+  read_required_json_boolean \
+    '["public_services_acceptance_readback","value","enabled"]' \
     artifacts/pre-foundation-outputs.json
 )"
 if [[ "$public_services_enabled" == "true" ]]; then

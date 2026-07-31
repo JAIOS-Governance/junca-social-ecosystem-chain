@@ -32,6 +32,13 @@ read-only SQLite `PRAGMA quick_check=ok`, the current EC2 AMI, immutable runtime
 archive digest, genesis digest, exact validator KMS binding, and exact three-peer
 contract are proven. An already active validator is not restarted.
 
+The pre-replacement Terraform readback treats `enabled: false` as an explicit,
+valid JSON boolean rather than as a failed shell predicate. Both public-service
+and automatic-finality flags are decoded by type and rendered as the literal
+`true` or `false`; a missing value, `null`, number, or string such as `"false"`
+still fails closed before any AWS mutation. This distinction is required when
+the existing rollback baseline correctly has automatic finality disabled.
+
 If `/etc/junca/runtime.env` is absent on an otherwise exact stopped baseline,
 the prefix length must still be zero. Only then may the workflow stop the
 service and atomically reconstruct that file from Terraform-canonical values.
