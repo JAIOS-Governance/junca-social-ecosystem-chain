@@ -83,6 +83,12 @@ def rollback_snapshot_function(script: str) -> str:
     )[0].join(("verify_rollback_snapshots() {", "\n}"))
 
 
+def instance_ami_binding_function(script: str) -> str:
+    return script.split("read_instance_ami_binding() {", 1)[1].split(
+        "\n}\n\ncapture_validator_observation()", 1
+    )[0].join(("read_instance_ami_binding() {", "\n}"))
+
+
 def validator_service_recovery_validation_function(script: str) -> str:
     return script.split(
         "validate_validator_service_recovery_evidence() {", 1
@@ -1541,6 +1547,199 @@ class AwsFoundationTests(unittest.TestCase):
             'mv -f "$runtime_env_tmp" /etc/junca/runtime.env',
             self.foundation_script[rollback:evidence],
         )
+
+    def test_live_prefix_binds_each_current_instance_to_exact_ami_provenance(
+        self,
+    ) -> None:
+        definition = self.foundation_script.split(
+            "write_live_rollout_prefix_readback() {", 1
+        )[1].split("\n}\n\nwrite_rolling_readback()", 1)[0]
+        for required in (
+            "read_instance_ami_binding() {",
+            "aws ec2 describe-instances",
+            '--owners self',
+            '"NodeArtifactSHA256"',
+            '"GenesisSHA256"',
+            '"SourceCommit"',
+            '"Network"',
+            '"Governance"',
+            'ami_binding_path="artifacts/live-prefix-ami-binding-',
+            'expected_ami_id="$binding_ami_id"',
+            'expected_runtime_version="$binding_runtime_version"',
+            'expected_ami_id="$evidence_ami_id"',
+            'expected_runtime_version="$evidence_runtime_version"',
+            'test "$evidence_instance_id" = "${current_instances[$index]}"',
+        ):
+            self.assertIn(required, self.foundation_script)
+        self.assertNotIn(
+            'expected_ami_id="$previous_ami_id"',
+            definition,
+        )
+        self.assertNotIn(
+            'expected_runtime_version="$previous_artifact_sha256"',
+            definition,
+        )
+
+        account_id = "595710543956"
+        region = "us-east-1"
+        instance_id = "i-00000000000000001"
+        ami_id = "ami-00000000000000001"
+        runtime_version = "a" * 64
+        genesis_sha256 = "b" * 64
+        source_commit = "c" * 40
+        instance = {
+            "Reservations": [
+                {
+                    "OwnerId": account_id,
+                    "Instances": [
+                        {
+                            "InstanceId": instance_id,
+                            "ImageId": ami_id,
+                            "State": {"Name": "running"},
+                            "Placement": {
+                                "AvailabilityZone": "us-east-1a"
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        image = {
+            "Images": [
+                {
+                    "ImageId": ami_id,
+                    "OwnerId": account_id,
+                    "State": "available",
+                    "ImageType": "machine",
+                    "Architecture": "x86_64",
+                    "VirtualizationType": "hvm",
+                    "RootDeviceType": "ebs",
+                    "Public": False,
+                    "Tags": [
+                        {
+                            "Key": "NodeArtifactSHA256",
+                            "Value": runtime_version,
+                        },
+                        {"Key": "GenesisSHA256", "Value": genesis_sha256},
+                        {"Key": "SourceCommit", "Value": source_commit},
+                        {"Key": "Network", "Value": "Public Testnet"},
+                        {
+                            "Key": "Governance",
+                            "Value": "JAIOS Institutional Governance",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        def execute(
+            instance_payload: dict, image_payload: dict
+        ) -> tuple[subprocess.CompletedProcess, dict | None]:
+            with tempfile.TemporaryDirectory() as directory:
+                temp = pathlib.Path(directory)
+                fake_aws = temp / "aws"
+                fake_aws.write_text(
+                    textwrap.dedent(
+                        """\
+                        #!/usr/bin/env bash
+                        set -euo pipefail
+                        if [[ "$1 $2" == "ec2 describe-instances" ]]; then
+                          printf '%s\\n' "$INSTANCE_RESPONSE"
+                        elif [[ "$1 $2" == "ec2 describe-images" ]]; then
+                          printf '%s\\n' "$IMAGE_RESPONSE"
+                        else
+                          exit 64
+                        fi
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+                fake_aws.chmod(0o755)
+                output = temp / "binding.json"
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        "set -euo pipefail\n"
+                        + instance_ami_binding_function(
+                            self.foundation_script
+                        )
+                        + '\nread_instance_ami_binding "$1" "$2"',
+                        "instance-ami-binding-test",
+                        instance_id,
+                        str(output),
+                    ],
+                    env={
+                        "PATH": f"{temp}:/usr/bin:/bin",
+                        "AWS_ACCOUNT_ID": account_id,
+                        "AWS_REGION": region,
+                        "GENESIS_SHA256": genesis_sha256,
+                        "INSTANCE_RESPONSE": json.dumps(instance_payload),
+                        "IMAGE_RESPONSE": json.dumps(image_payload),
+                    },
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                evidence = (
+                    json.loads(output.read_text(encoding="utf-8"))
+                    if output.exists()
+                    else None
+                )
+                return result, evidence
+
+        accepted, evidence = execute(instance, image)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence["instance_id"], instance_id)
+        self.assertEqual(evidence["ami_id"], ami_id)
+        self.assertEqual(evidence["runtime_version"], runtime_version)
+        self.assertEqual(evidence["source_commit"], source_commit)
+        self.assertTrue(evidence["accepted"])
+
+        invalid_payloads: list[tuple[dict, dict]] = []
+        for field, value in (
+            ("OwnerId", "000000000000"),
+            ("State", "pending"),
+            ("Architecture", "arm64"),
+            ("VirtualizationType", "paravirtual"),
+            ("RootDeviceType", "instance-store"),
+            ("Public", True),
+        ):
+            changed_image = json.loads(json.dumps(image))
+            changed_image["Images"][0][field] = value
+            invalid_payloads.append((instance, changed_image))
+        for key, value in (
+            ("NodeArtifactSHA256", "not-a-digest"),
+            ("GenesisSHA256", "d" * 64),
+            ("SourceCommit", "not-a-commit"),
+            ("Network", "Mainnet"),
+            ("Governance", "untrusted"),
+        ):
+            changed_image = json.loads(json.dumps(image))
+            for tag in changed_image["Images"][0]["Tags"]:
+                if tag["Key"] == key:
+                    tag["Value"] = value
+            invalid_payloads.append((instance, changed_image))
+        changed_instance = json.loads(json.dumps(instance))
+        changed_instance["Reservations"][0]["Instances"][0]["State"][
+            "Name"
+        ] = "stopped"
+        invalid_payloads.append((changed_instance, image))
+        changed_instance = json.loads(json.dumps(instance))
+        changed_instance["Reservations"][0]["OwnerId"] = "000000000000"
+        invalid_payloads.append((changed_instance, image))
+
+        for instance_payload, image_payload in invalid_payloads:
+            with self.subTest(
+                instance=instance_payload, image=image_payload
+            ):
+                rejected, rejected_evidence = execute(
+                    instance_payload, image_payload
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIsNone(rejected_evidence)
 
     def test_service_recovery_remote_command_is_valid_bash(self) -> None:
         remote_script = validator_service_recovery_remote_script(
