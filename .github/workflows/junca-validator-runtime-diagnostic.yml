@@ -2,7 +2,9 @@ name: JUNCA Validator Runtime Diagnostic
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - agent/diagnose-validator-config-shape-v1
     paths:
       - .github/workflows/junca-validator-runtime-diagnostic.yml
   workflow_dispatch:
@@ -37,12 +39,17 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           instances=(
-            i-0e3f7685f1870496c
-            i-07d1554cdc9b4fca0
-            i-0ac5d3f43f3c512f1
+            i-083280924b5536f17
+            i-055763640261c47df
+            i-054811d49cce9017b
           )
           jq -n '{commands: [
             "set +e",
+            "printf runtime_directory=; stat -c %F,%U:%G,%a,%h /etc/junca",
+            "printf genesis=; stat -c %F,%U:%G,%a,%h,%s /etc/junca/genesis.json",
+            "printf validator_lexical=; if test -L /etc/junca/validator.toml; then printf symlink,; readlink /etc/junca/validator.toml; elif test -e /etc/junca/validator.toml; then stat -c %F,%U:%G,%a,%h,%s /etc/junca/validator.toml; else echo absent; fi",
+            "printf validator_resolved=; stat -Lc %F,%U:%G,%a,%h,%s,%d:%i /etc/junca/validator.toml 2>&1",
+            "printf junca_identity=; getent passwd junca; getent group junca",
             "systemctl status junca-validator.service --no-pager -l",
             "journalctl -u junca-validator.service --no-pager -n 200",
             "curl -sS --max-time 5 http://127.0.0.1:8545/health",
