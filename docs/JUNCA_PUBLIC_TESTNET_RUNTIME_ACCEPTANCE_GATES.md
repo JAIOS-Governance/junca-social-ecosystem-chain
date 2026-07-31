@@ -127,8 +127,13 @@ user can traverse `/etc/junca` and read both `genesis.json` and
 `validator.toml`. The canonical contract is `root:junca`/`0750` for the
 directory and `root:junca`/`0640`/single-link for both files. A bounded
 metadata-only repair is allowed only for exact root-owned regular inputs and
-an exact genesis digest; it must be synced and read back as `junca`. Any other
-shape blocks the rollout before Terraform apply.
+an exact genesis digest. For a pre-existing `validator.toml`, admission pins
+the single-link file's device/inode, SHA-256, and size before the controlled
+stop; recovery may normalize only group and mode to `root:junca`/`0640`, then
+must prove the pinned identity, digest, and size are unchanged and read the
+file back as `junca`. Symlinks, hard links, non-root ownership, content or
+identity drift, and post-repair unreadability block the rollout before
+Terraform apply.
 
 For a stopped legacy validator whose immutable predecessor AMI did not contain
 `validator.toml`, recovery may create only the canonical empty compatibility
@@ -136,7 +141,9 @@ file. The destination must be absent (including no dangling symlink); recovery
 writes a same-directory single-link temporary inode, syncs it, links it without
 overwrite, removes the temporary name, and then requires exact zero length,
 `root:junca`/`0640`/single-link metadata and service-user readability. Existing
-content, links, or non-canonical metadata are never overwritten.
+content is never replaced or truncated. Existing group or mode may be
+normalized only through the pinned metadata-only path above; other
+non-canonical shape is never overwritten.
 
 Before either an existing or reconstructed file is admitted, all 18 canonical
 runtime assignments must appear exactly once with exact values. Duplicate,

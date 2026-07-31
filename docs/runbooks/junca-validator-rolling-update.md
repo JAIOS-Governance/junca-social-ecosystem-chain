@@ -108,11 +108,14 @@ stable height alone is never activation evidence.
    case only when the destination is wholly absent, create a zero-length
    `root:junca` `0640` single-link inode with the same no-overwrite hard-link
    pattern, sync the file and directory, and prove service-user readability.
-   Never replace an existing validator configuration.
-   Before restart, admit only a single-link `root:junca` `0640` regular file
-   and pin its device/inode and SHA-256. Re-read all of those properties after
-   the validator reports healthy. A path replacement, permission drift, or
-   hard-link race blocks activation even when the health endpoint is healthy.
+   Never replace or truncate an existing validator configuration. For an
+   existing root-owned, single-link regular file, pin device/inode, SHA-256,
+   and byte size before the controlled stop. Group and mode may then be
+   normalized to `root:junca` `0640`; contents and inode must remain exact.
+   Re-read identity, digest, size, ownership, mode, and link count before
+   restart and after the validator reports healthy. A path replacement,
+   content drift, size drift, permission drift, or hard-link race blocks
+   activation even when the health endpoint is healthy.
    Parse all 18 canonical runtime assignments and require every key exactly
    once with its exact expected value. Reject duplicates even when whitespace
    hides the second assignment; never rely on `grep` finding one good line when

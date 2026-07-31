@@ -1127,7 +1127,7 @@ validate_validator_service_recovery_evidence() {
     --arg expected_candidate_head_sha "$expected_candidate_head_sha" \
     --argjson expected_allow_runtime_env_repair \
       "$expected_allow_runtime_env_repair" '
-      .schema_version == "junca-validator-service-recovery/v6" and
+      .schema_version == "junca-validator-service-recovery/v7" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
@@ -1220,6 +1220,33 @@ validate_validator_service_recovery_evidence() {
       .validator_config_owner == "root:junca" and
       .validator_config_mode == "640" and
       .validator_config_link_count == 1 and
+      (.validator_config_preexisting | type) == "boolean" and
+      (.validator_config_pre_identity | type) == "string" and
+      (.validator_config_pre_sha256 | type) == "string" and
+      (.validator_config_pre_size | type) == "number" and
+      (.validator_config_identity |
+        test("^[0-9]+:[0-9]+$")) and
+      (.validator_config_sha256 |
+        test("^[0-9a-f]{64}$")) and
+      (.validator_config_size | type) == "number" and
+      .validator_config_size >= 0 and
+      (
+        if .validator_config_preexisting then
+          (.validator_config_pre_identity |
+            test("^[0-9]+:[0-9]+$")) and
+          (.validator_config_pre_sha256 |
+            test("^[0-9a-f]{64}$")) and
+          .validator_config_pre_size >= 0 and
+          .validator_config_identity == .validator_config_pre_identity and
+          .validator_config_sha256 == .validator_config_pre_sha256 and
+          .validator_config_size == .validator_config_pre_size
+        else
+          .validator_config_pre_identity == "" and
+          .validator_config_pre_sha256 == "" and
+          .validator_config_pre_size == 0 and
+          .validator_config_size == 0
+        end
+      ) and
       .runtime_directory_verified == true and
       .runtime_env_verified == true and
       .runtime_version == $expected_runtime_version and
@@ -1443,6 +1470,13 @@ validator_config_owner=""
 validator_config_mode=""
 validator_config_link_count=0
 validator_config_admissible=false
+validator_config_preexisting=false
+validator_config_pre_identity=""
+validator_config_pre_sha256=""
+validator_config_pre_size=0
+validator_config_identity=""
+validator_config_sha256=""
+validator_config_size=0
 runtime_directory_verified=false
 runtime_env_verified=false
 runtime_version=""
@@ -1559,6 +1593,42 @@ verify_runtime_env_schema() {
     runtime_env_has_exact_assignment \
       "$path" TESTNET_SLOT_EPOCH_SECONDS "$expected_slot_epoch_seconds" &&
     runtime_env_has_exact_assignment "$path" BRIDGE_ACTIVATED false
+}
+
+pin_existing_validator_config() {
+  local path="$1"
+  local identity=""
+  local digest=""
+  local size=""
+  [[ -f "$path" && ! -L "$path" ]]
+  [[ "$(stat -c '%U' "$path")" == "root" ]]
+  [[ "$(stat -c '%h' "$path")" == 1 ]]
+  identity="$(stat -Lc '%d:%i' "$path")"
+  digest="$(sha256sum "$path" | awk '{print $1}')"
+  size="$(stat -c '%s' "$path")"
+  [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]]
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$size" =~ ^[0-9]+$ ]]
+  validator_config_preexisting=true
+  validator_config_pre_identity="$identity"
+  validator_config_pre_sha256="$digest"
+  validator_config_pre_size="$size"
+}
+
+validator_config_matches_admission() {
+  local path="$1"
+  if [[ "$validator_config_preexisting" == true ]]; then
+    [[ -f "$path" && ! -L "$path" ]]
+    [[ "$(stat -c '%U' "$path")" == "root" ]]
+    [[ "$(stat -c '%h' "$path")" == 1 ]]
+    [[ "$(stat -Lc '%d:%i' "$path")" == \
+      "$validator_config_pre_identity" ]]
+    [[ "$(sha256sum "$path" | awk '{print $1}')" == \
+      "$validator_config_pre_sha256" ]]
+    [[ "$(stat -c '%s' "$path")" == "$validator_config_pre_size" ]]
+  else
+    [[ ! -e "$path" && ! -L "$path" ]]
+  fi
 }
 
 admit_controlled_active_repair() {
@@ -2067,14 +2137,10 @@ if [[ -f /etc/junca/genesis.json && ! -L /etc/junca/genesis.json ]] &&
       sha256sum --check --strict >/dev/null 2>&1; then
   genesis_verified=true
 fi
-if [[ -f /etc/junca/validator.toml &&
-      ! -L /etc/junca/validator.toml &&
-      "$(stat -c '%U' /etc/junca/validator.toml)" == "root" &&
-      "$(stat -c '%G' /etc/junca/validator.toml)" =~ ^(root|junca)$ &&
-      "$(stat -c '%a' /etc/junca/validator.toml)" =~ ^(640|644)$ &&
-      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] ||
-    [[ ! -e /etc/junca/validator.toml &&
-      ! -L /etc/junca/validator.toml ]]; then
+if pin_existing_validator_config /etc/junca/validator.toml; then
+  validator_config_admissible=true
+elif [[ ! -e /etc/junca/validator.toml &&
+        ! -L /etc/junca/validator.toml ]]; then
   validator_config_admissible=true
 fi
 if [[ "$before_status" == "active" &&
@@ -2127,7 +2193,8 @@ if [[ "$repair_status_admitted" == true &&
       "$(stat -c '%a' /etc/junca/genesis.json)" =~ ^(640|644)$ &&
       "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
       "$validator_config_admissible" == true &&
-      "$(getent group junca)" != "" ]]; then
+      "$(getent group junca)" != "" ]] &&
+    validator_config_matches_admission /etc/junca/validator.toml; then
   runtime_config_repair_attempted=true
   chown root:junca /etc/junca
   chmod 0750 /etc/junca
@@ -2145,18 +2212,40 @@ if [[ "$repair_status_admitted" == true &&
   fi
   if [[ -f /etc/junca/validator.toml &&
         ! -L /etc/junca/validator.toml &&
-        "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]]; then
+        "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
+      { [[ "$validator_config_preexisting" == false &&
+           "$(stat -c '%s' /etc/junca/validator.toml)" == 0 ]] ||
+        validator_config_matches_admission /etc/junca/validator.toml; }; then
     chown root:junca /etc/junca/genesis.json /etc/junca/validator.toml
     chmod 0640 /etc/junca/genesis.json /etc/junca/validator.toml
   fi
   if [[ -f /etc/junca/validator.toml &&
       ! -L /etc/junca/validator.toml &&
-      "$(stat -c '%s' /etc/junca/validator.toml)" == 0 &&
       "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
       sync -f /etc/junca/genesis.json &&
       sync -f /etc/junca/validator.toml &&
       sync -f /etc/junca; then
-    runtime_config_repaired=true
+    validator_config_identity="$(
+      stat -Lc '%d:%i' /etc/junca/validator.toml
+    )"
+    validator_config_sha256="$(
+      sha256sum /etc/junca/validator.toml | awk '{print $1}'
+    )"
+    validator_config_size="$(stat -c '%s' /etc/junca/validator.toml)"
+    if [[ "$validator_config_identity" =~ ^[0-9]+:[0-9]+$ &&
+          "$validator_config_sha256" =~ ^[0-9a-f]{64}$ &&
+          "$validator_config_size" =~ ^[0-9]+$ ]] &&
+        ((
+          "$validator_config_preexisting" == true &&
+          "$validator_config_identity" == "$validator_config_pre_identity" &&
+          "$validator_config_sha256" == "$validator_config_pre_sha256" &&
+          "$validator_config_size" == "$validator_config_pre_size"
+        ) || (
+          "$validator_config_preexisting" == false &&
+          "$validator_config_size" == 0
+        )); then
+      runtime_config_repaired=true
+    fi
   fi
 fi
 if [[ -d /etc/junca &&
@@ -2185,6 +2274,13 @@ if [[ -d /etc/junca &&
   validator_config_owner="$(stat -c '%U:%G' /etc/junca/validator.toml)"
   validator_config_mode="$(stat -c '%a' /etc/junca/validator.toml)"
   validator_config_link_count="$(stat -c '%h' /etc/junca/validator.toml)"
+  validator_config_identity="$(
+    stat -Lc '%d:%i' /etc/junca/validator.toml
+  )"
+  validator_config_sha256="$(
+    sha256sum /etc/junca/validator.toml | awk '{print $1}'
+  )"
+  validator_config_size="$(stat -c '%s' /etc/junca/validator.toml)"
 fi
 if [[ -f /etc/junca/runtime.env &&
       ! -L /etc/junca/runtime.env &&
@@ -2414,7 +2510,7 @@ if [[ "$accepted" != true &&
 fi
 
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v6" \
+  --arg schema_version "junca-validator-service-recovery/v7" \
   --arg genesis_sha256 "$expected_genesis_sha256" \
   --arg source_commit "$expected_source_commit" \
   --arg recovery_request_sha256 "$expected_recovery_request_sha256" \
@@ -2467,6 +2563,14 @@ jq -n \
   --arg validator_config_owner "$validator_config_owner" \
   --arg validator_config_mode "$validator_config_mode" \
   --argjson validator_config_link_count "$validator_config_link_count" \
+  --argjson validator_config_preexisting \
+    "$validator_config_preexisting" \
+  --arg validator_config_pre_identity "$validator_config_pre_identity" \
+  --arg validator_config_pre_sha256 "$validator_config_pre_sha256" \
+  --argjson validator_config_pre_size "$validator_config_pre_size" \
+  --arg validator_config_identity "$validator_config_identity" \
+  --arg validator_config_sha256 "$validator_config_sha256" \
+  --argjson validator_config_size "$validator_config_size" \
   --argjson runtime_directory_verified "$runtime_directory_verified" \
   --argjson runtime_env_verified "$runtime_env_verified" \
   --arg runtime_version "$runtime_version" \
@@ -2555,6 +2659,13 @@ jq -n \
     validator_config_owner: $validator_config_owner,
     validator_config_mode: $validator_config_mode,
     validator_config_link_count: $validator_config_link_count,
+    validator_config_preexisting: $validator_config_preexisting,
+    validator_config_pre_identity: $validator_config_pre_identity,
+    validator_config_pre_sha256: $validator_config_pre_sha256,
+    validator_config_pre_size: $validator_config_pre_size,
+    validator_config_identity: $validator_config_identity,
+    validator_config_sha256: $validator_config_sha256,
+    validator_config_size: $validator_config_size,
     runtime_directory_verified: $runtime_directory_verified,
     runtime_env_verified: $runtime_env_verified,
     runtime_version: $runtime_version,
