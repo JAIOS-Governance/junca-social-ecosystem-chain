@@ -134,6 +134,10 @@ stable height alone is never activation evidence.
    restart and after the validator reports healthy. A path replacement,
    content drift, size drift, permission drift, or hard-link race blocks
    activation even when the health endpoint is healthy.
+   Evaluate inode identities and SHA-256 strings only with lexical shell tests;
+   never route colon-bearing device/inode identities or hexadecimal digests
+   through arithmetic evaluation. Both the pinned-existing and canonical-empty
+   branches must be independently executable and fail closed on drift.
    Parse all 18 canonical runtime assignments and require every key exactly
    once with its exact expected value. Reject duplicates even when whitespace
    hides the second assignment; never rely on `grep` finding one good line when

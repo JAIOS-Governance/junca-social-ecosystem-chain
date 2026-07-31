@@ -151,6 +151,10 @@ single-validator stop is proven. It must use `/var/lib/junca` and
 `/sbin/nologin`, must not create a home directory, and must read back both the
 name and numeric identity. A conflicting name, UID, or GID fails closed before
 configuration ownership is changed; existing identities are never rewritten.
+Device/inode and digest comparison is lexical. Recovery must not parse a
+colon-bearing inode identity or hexadecimal SHA-256 as shell arithmetic; the
+exact-existing and new-empty branches are evaluated independently and any
+identity, digest, or size drift blocks restart.
 
 Before either an existing or reconstructed file is admitted, all 18 canonical
 runtime assignments must appear exactly once with exact values. Duplicate,
