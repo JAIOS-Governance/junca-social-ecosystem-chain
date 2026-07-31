@@ -708,6 +708,129 @@ set_runtime_finality() {
   fi
 }
 
+read_instance_ami_binding() {
+  local instance_id="$1"
+  local output_path="$2"
+  local instance_readback_path="${output_path%.json}.instance.json"
+  local image_readback_path="${output_path%.json}.image.json"
+  local ami_id
+  local runtime_version
+  local source_commit
+  [[ "$instance_id" =~ ^i-[0-9a-f]{8,17}$ ]]
+  aws ec2 describe-instances \
+    --region "$AWS_REGION" \
+    --instance-ids "$instance_id" \
+    --output json >"$instance_readback_path"
+  jq -e \
+    --arg account_id "$AWS_ACCOUNT_ID" \
+    --arg region "$AWS_REGION" \
+    --arg instance_id "$instance_id" '
+      .Reservations as $reservations
+      | $reservations[0].Instances[0] as $instance
+      | ($reservations | length) == 1 and
+        $reservations[0].OwnerId == $account_id and
+        ($reservations[0].Instances | length) == 1 and
+        $instance.InstanceId == $instance_id and
+        $instance.State.Name == "running" and
+        ($instance.ImageId | type) == "string" and
+        ($instance.ImageId | test("^ami-[0-9a-f]{8,17}$")) and
+        ($instance.Placement.AvailabilityZone | type) == "string" and
+        ($instance.Placement.AvailabilityZone | startswith($region))
+    ' "$instance_readback_path" >/dev/null
+  ami_id="$(
+    jq -er '.Reservations[0].Instances[0].ImageId' \
+      "$instance_readback_path"
+  )"
+  aws ec2 describe-images \
+    --region "$AWS_REGION" \
+    --image-ids "$ami_id" \
+    --owners self \
+    --output json >"$image_readback_path"
+  jq -e \
+    --arg account_id "$AWS_ACCOUNT_ID" \
+    --arg ami_id "$ami_id" \
+    --arg genesis_sha256 "$GENESIS_SHA256" '
+      .Images as $images
+      | $images[0] as $image
+      | ([$image.Tags[]? |
+          select(.Key == "NodeArtifactSHA256") | .Value]) as $node
+      | ([$image.Tags[]? |
+          select(.Key == "GenesisSHA256") | .Value]) as $genesis
+      | ([$image.Tags[]? |
+          select(.Key == "SourceCommit") | .Value]) as $source
+      | ([$image.Tags[]? |
+          select(.Key == "Network") | .Value]) as $network
+      | ([$image.Tags[]? |
+          select(.Key == "Governance") | .Value]) as $governance
+      | ($images | length) == 1 and
+        $image.ImageId == $ami_id and
+        $image.OwnerId == $account_id and
+        $image.State == "available" and
+        $image.ImageType == "machine" and
+        $image.Architecture == "x86_64" and
+        $image.VirtualizationType == "hvm" and
+        $image.RootDeviceType == "ebs" and
+        $image.Public == false and
+        ($node | length) == 1 and
+        ($node[0] | type) == "string" and
+        ($node[0] | test("^[0-9a-f]{64}$")) and
+        ($genesis | length) == 1 and
+        $genesis[0] == $genesis_sha256 and
+        ($source | length) == 1 and
+        ($source[0] | type) == "string" and
+        ($source[0] | test("^[0-9a-f]{40}$")) and
+        ($network | length) == 1 and
+        $network[0] == "Public Testnet" and
+        ($governance | length) == 1 and
+        $governance[0] == "JAIOS Institutional Governance"
+    ' "$image_readback_path" >/dev/null
+  runtime_version="$(
+    jq -er '
+      [ .Images[0].Tags[]? |
+        select(.Key == "NodeArtifactSHA256") | .Value ]
+      | select(length == 1) | .[0]
+    ' "$image_readback_path"
+  )"
+  source_commit="$(
+    jq -er '
+      [ .Images[0].Tags[]? |
+        select(.Key == "SourceCommit") | .Value ]
+      | select(length == 1) | .[0]
+    ' "$image_readback_path"
+  )"
+  jq -n \
+    --arg account_id "$AWS_ACCOUNT_ID" \
+    --arg region "$AWS_REGION" \
+    --arg instance_id "$instance_id" \
+    --arg ami_id "$ami_id" \
+    --arg runtime_version "$runtime_version" \
+    --arg source_commit "$source_commit" \
+    --arg genesis_sha256 "$GENESIS_SHA256" \
+    --slurpfile instance "$instance_readback_path" \
+    --slurpfile image "$image_readback_path" '{
+      schema_version: "junca-validator-instance-ami-binding/v1",
+      account_id: $account_id,
+      region: $region,
+      instance_id: $instance_id,
+      instance_state: $instance[0].Reservations[0].Instances[0].State.Name,
+      availability_zone:
+        $instance[0].Reservations[0].Instances[0].Placement.AvailabilityZone,
+      ami_id: $ami_id,
+      ami_owner_id: $image[0].Images[0].OwnerId,
+      ami_state: $image[0].Images[0].State,
+      runtime_version: $runtime_version,
+      source_commit: $source_commit,
+      genesis_sha256: $genesis_sha256,
+      network: "Public Testnet",
+      governance: "JAIOS Institutional Governance",
+      accepted: true,
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false,
+      mainnet_activation_authorized: false
+    }' >"$output_path"
+}
+
 capture_validator_observation() {
   local validator_id="$1"
   local instance_id="$2"
@@ -1551,9 +1674,15 @@ write_live_rollout_prefix_readback() {
   local baseline_automatic_finality_enabled
   local baseline_block_interval_seconds
   local baseline_slot_epoch_seconds
+  local binding_ami_id
+  local binding_runtime_version
+  local evidence_ami_id
+  local evidence_instance_id
+  local evidence_runtime_version
   local expected_ami_id
   local expected_runtime_version
   local index
+  local ami_binding_path
   local peer_endpoints
   local signer_bindings
   local state_volume_id
@@ -1641,13 +1770,79 @@ write_live_rollout_prefix_readback() {
     "$validator_state_rollback" \
     artifacts/live-prefix-rollback-snapshots.json
   for index in 0 1 2; do
+    ami_binding_path="artifacts/live-prefix-ami-binding-$((index + 1)).json"
+    read_instance_ami_binding \
+      "${current_instances[$index]}" \
+      "$ami_binding_path"
+    binding_ami_id="$(
+      jq -er '.ami_id | select(test("^ami-[0-9a-f]{8,17}$"))' \
+        "$ami_binding_path"
+    )"
+    binding_runtime_version="$(
+      jq -er '.runtime_version | select(test("^[0-9a-f]{64}$"))' \
+        "$ami_binding_path"
+    )"
+    evidence_ami_id=""
+    evidence_instance_id=""
+    evidence_runtime_version=""
+    if [[ -n "$evidence_validators_path" ]]; then
+      evidence_ami_id="$(
+        jq -er \
+          --argjson index "$index" \
+          --arg validator_id "validator-0$((index + 1))" '
+            .[$index]
+            | select(.validator_id == $validator_id)
+            | .ami_id
+            | select(type == "string" and
+                test("^ami-[0-9a-f]{8,17}$"))
+          ' "$evidence_validators_path"
+      )"
+      evidence_runtime_version="$(
+        jq -er \
+          --argjson index "$index" '
+            .[$index].runtime_version
+            | select(type == "string" and test("^[0-9a-f]{64}$"))
+          ' "$evidence_validators_path"
+      )"
+      evidence_instance_id="$(
+        jq -er \
+          --argjson index "$index" '
+            .[$index].instance_id
+            | select(type == "string" and
+                test("^i-[0-9a-f]{8,17}$"))
+          ' "$evidence_validators_path"
+      )"
+      test "$evidence_instance_id" = "${current_instances[$index]}"
+    fi
     if [[ "$index" -lt "$evidence_updated_count" ]]; then
       expected_ami_id="$NODE_AMI_ID"
       expected_runtime_version="$NODE_ARTIFACT_SHA256"
+      if [[ -n "$evidence_validators_path" ]]; then
+        test "$evidence_ami_id" = "$expected_ami_id"
+        test "$evidence_runtime_version" = "$expected_runtime_version"
+      fi
+    elif [[ -n "$evidence_validators_path" ]]; then
+      expected_ami_id="$evidence_ami_id"
+      expected_runtime_version="$evidence_runtime_version"
     else
-      expected_ami_id="$previous_ami_id"
-      expected_runtime_version="$previous_artifact_sha256"
+      expected_ami_id="$binding_ami_id"
+      expected_runtime_version="$binding_runtime_version"
     fi
+    jq -e \
+      --arg instance_id "${current_instances[$index]}" \
+      --arg expected_ami_id "$expected_ami_id" \
+      --arg expected_runtime_version "$expected_runtime_version" '
+        .schema_version == "junca-validator-instance-ami-binding/v1" and
+        .instance_id == $instance_id and
+        .instance_state == "running" and
+        .ami_id == $expected_ami_id and
+        .runtime_version == $expected_runtime_version and
+        .accepted == true and
+        .mainnet_changed == false and
+        .assets_moved == false and
+        .bridge_activated == false and
+        .mainnet_activation_authorized == false
+      ' "$ami_binding_path" >/dev/null
     if [[ "$evidence_updated_count" == 0 ]]; then
       allow_runtime_env_repair=true
     else
