@@ -66,10 +66,19 @@ stable height alone is never activation evidence.
    `xfs`. An empty target is accepted. A non-empty target is accepted only
    after the stopped service leaves an exact allowlist of single-link regular
    `state.sqlite`, `state.sqlite-wal`, and `state.sqlite-shm` files, with the
-   database passing read-only `PRAGMA quick_check=ok`. The retained EBS mount
-   masks those local legacy files without deleting or moving them, so an
-   unmount is a non-destructive rollback. Any other name, symlink, directory,
-   hard link, or invalid database blocks recovery. The installed mount helper
+   database passing read-only `PRAGMA quick_check=ok`. The exact diagnostic
+   directory `scan-rollbacks` may also be admitted only when its complete
+   same-filesystem tree is bounded to 1,000 entries and 1 GiB, contains only
+   root/JUNCA-owned directories and single-link regular files, and contains no
+   symlink, mount, device, socket, FIFO, or hard link. Before the retained EBS
+   is mounted, atomically rename that directory into root-only
+   `/var/lib/junca-unmounted-recovery` using a content-manifest SHA-256 name,
+   fsync both parent directories, and record the exact destination and digest.
+   This preserves the failed-run evidence outside the mount shadow without
+   deleting or overwriting it. The retained EBS mount masks any admitted local
+   SQLite legacy files, so an unmount remains a non-destructive rollback. Any
+   other name, unsafe entry, oversized tree, destination collision, cross-
+   filesystem rename, or invalid database blocks recovery. The installed mount helper
    and systemd unit must be exact,
    single-link root-owned canonical files, and the validator unit must retain
    its mount requirements. Afterward require the exact resolved device as the

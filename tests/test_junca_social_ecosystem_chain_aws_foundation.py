@@ -1,6 +1,7 @@
 import pathlib
 import json
 import hashlib
+import os
 import re
 import subprocess
 import tempfile
@@ -120,6 +121,14 @@ def runtime_env_schema_functions(script: str) -> str:
             "\n\nverify_durable_mount_persistence_contract() (", 1
         )[0]
     )
+
+
+def scan_rollbacks_quarantine_function(script: str) -> str:
+    return script.split("quarantine_scan_rollbacks_for_mount() {", 1)[
+        1
+    ].split(
+        "\n}\n\nif ! verify_durable_state_mount", 1
+    )[0].join(("quarantine_scan_rollbacks_for_mount() {", "\n}"))
 
 
 # Public services remain disabled until validator quorum evidence is accepted.
@@ -1507,6 +1516,15 @@ class AwsFoundationTests(unittest.TestCase):
             "systemctl enable junca-validator-state.service",
             "durable_mount_repair_stage",
             "unmounted_state_target_entries",
+            "scan_rollbacks_quarantined",
+            "scan_rollbacks_quarantine_path",
+            "scan_rollbacks_manifest_sha256",
+            "quarantine_scan_rollbacks_for_mount",
+            'python3 - "$source_path"',
+            "if entry_count > 1000 or total_bytes > 1073741824:",
+            'raise SystemExit("scan-rollbacks hard link rejected")',
+            'raise SystemExit("scan-rollbacks special entry rejected")',
+            'mv -T "$source_path" "$destination_path"',
             "verify_durable_state_mount()",
             "verify_unmounted_state_target_admission()",
             "state.sqlite|state.sqlite-shm|state.sqlite-wal",
@@ -1561,6 +1579,105 @@ class AwsFoundationTests(unittest.TestCase):
             "'{print $1}')\" == \\\n"
             '          "$canonical_runtime_env_sha256"',
             self.foundation_script[rollback:evidence],
+        )
+
+    @unittest.skipUnless(
+        os.geteuid() == 0,
+        "root-owned production quarantine contract",
+    )
+    def test_scan_rollbacks_is_preserved_by_bounded_atomic_quarantine(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "scan-rollbacks"
+            nested = source / "run-30609608822"
+            nested.mkdir(parents=True)
+            evidence = nested / "foundation.json"
+            evidence.write_text('{"accepted":false}\n', encoding="utf-8")
+            quarantine = root / "quarantine"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + scan_rollbacks_quarantine_function(
+                        self.foundation_script
+                    )
+                    + '\nscan_rollbacks_quarantined=false\n'
+                    + 'scan_rollbacks_quarantine_path=""\n'
+                    + 'scan_rollbacks_manifest_sha256=""\n'
+                    + 'mountpoint() { return 1; }\n'
+                    + 'quarantine_scan_rollbacks_for_mount "$1" "$2"\n'
+                    + 'test "$scan_rollbacks_quarantined" = true\n'
+                    + 'test -d "$scan_rollbacks_quarantine_path"\n'
+                    + 'test -f "$scan_rollbacks_quarantine_path/'
+                    + 'run-30609608822/foundation.json"\n'
+                    + 'test ! -e "$1"\n'
+                    + 'test "${#scan_rollbacks_manifest_sha256}" = 64\n',
+                    "scan-rollbacks-quarantine-test",
+                    str(source),
+                    str(quarantine),
+                ],
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(
+        os.geteuid() == 0,
+        "root-owned production quarantine contract",
+    )
+    def test_scan_rollbacks_quarantine_rejects_special_and_linked_entries(
+        self,
+    ) -> None:
+        for unsafe_kind in ("symlink", "hardlink", "fifo"):
+            with self.subTest(unsafe_kind=unsafe_kind):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = pathlib.Path(directory)
+                    source = root / "scan-rollbacks"
+                    source.mkdir()
+                    regular = source / "evidence.json"
+                    regular.write_text("{}\n", encoding="utf-8")
+                    if unsafe_kind == "symlink":
+                        (source / "unsafe").symlink_to(regular)
+                    elif unsafe_kind == "hardlink":
+                        (source / "unsafe").hardlink_to(regular)
+                    else:
+                        subprocess.run(
+                            ["mkfifo", str(source / "unsafe")],
+                            check=True,
+                        )
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            "set -euo pipefail\n"
+                            + scan_rollbacks_quarantine_function(
+                                self.foundation_script
+                            )
+                            + "\nmountpoint() { return 1; }\n"
+                            + 'quarantine_scan_rollbacks_for_mount "$1" "$2"\n',
+                            "scan-rollbacks-quarantine-negative-test",
+                            str(source),
+                            str(root / "quarantine"),
+                        ],
+                        env={"PATH": "/usr/bin:/bin"},
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertTrue(source.is_dir())
+        rollback = self.foundation_script.index(
+            'if [[ "$accepted" != true &&',
+        )
+        evidence = self.foundation_script.index(
+            "jq -n \\\n  --arg schema_version "
+            '"junca-validator-service-recovery/v2"',
+            rollback,
         )
         self.assertIn(
             ".repair_rollback_attempted == false",
