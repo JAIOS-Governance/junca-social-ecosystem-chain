@@ -62,8 +62,15 @@ stable height alone is never activation evidence.
    `junca-validator-state.service`. Before doing so it must prove the
    Terraform volume ID equals the single encrypted AWS attachment, the NVMe
    by-id serial equals that volume ID, the device is not mounted elsewhere,
-   the unmounted target is a real empty directory, and the filesystem is
-   `ext4` or `xfs`. The installed mount helper and systemd unit must be exact,
+   the unmounted target is a real directory, and the filesystem is `ext4` or
+   `xfs`. An empty target is accepted. A non-empty target is accepted only
+   after the stopped service leaves an exact allowlist of single-link regular
+   `state.sqlite`, `state.sqlite-wal`, and `state.sqlite-shm` files, with the
+   database passing read-only `PRAGMA quick_check=ok`. The retained EBS mount
+   masks those local legacy files without deleting or moving them, so an
+   unmount is a non-destructive rollback. Any other name, symlink, directory,
+   hard link, or invalid database blocks recovery. The installed mount helper
+   and systemd unit must be exact,
    single-link root-owned canonical files, and the validator unit must retain
    its mount requirements. Afterward require the exact resolved device as the
    mount source, `noatime,nosuid,nodev`, an active enabled persistence unit,

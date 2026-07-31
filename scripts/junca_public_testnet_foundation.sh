@@ -1486,21 +1486,50 @@ verify_durable_state_mount() {
   durable_mount_verified=true
 }
 
+verify_unmounted_state_target_admission() {
+  local entry
+  local entry_name
+  local entry_count=0
+  local sqlite_quick_check
+  [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
+  ! mountpoint -q /var/lib/junca || return 1
+  while IFS= read -r -d '' entry; do
+    entry_name="${entry##*/}"
+    case "$entry_name" in
+      state.sqlite|state.sqlite-shm|state.sqlite-wal) ;;
+      *) return 1 ;;
+    esac
+    [[ -f "$entry" && ! -L "$entry" ]] || return 1
+    [[ "$(stat -c '%h' "$entry")" == 1 ]] || return 1
+    entry_count=$((entry_count + 1))
+  done < <(
+    find /var/lib/junca -mindepth 1 -maxdepth 1 -print0
+  )
+  if [[ "$entry_count" -gt 0 ]]; then
+    [[ -f /var/lib/junca/state.sqlite &&
+      ! -L /var/lib/junca/state.sqlite ]] || return 1
+    sqlite_quick_check="$(
+      python3 -c \
+        'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=ro", uri=True); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()' \
+        2>/dev/null || true
+    )"
+    [[ "$sqlite_quick_check" == "ok" ]] || return 1
+  fi
+}
+
 if ! verify_durable_state_mount &&
     [[ "$allow_runtime_env_repair" == true &&
       "$before_status" != "active" &&
       -d /var/lib/junca &&
       ! -L /var/lib/junca ]] &&
-    ! mountpoint -q /var/lib/junca &&
-    [[ -z "$(
-      find /var/lib/junca -mindepth 1 -maxdepth 1 -print -quit
-    )" ]]; then
+    ! mountpoint -q /var/lib/junca; then
   durable_mount_repair_attempted=true
   systemctl stop junca-validator.service || service_stop_exit=$?
   expected_state_serial="${expected_state_volume_id//-/}"
   expected_state_device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${expected_state_serial}"
   if [[ "$service_stop_exit" == 0 ]] &&
       ! systemctl is-active --quiet junca-validator.service &&
+      verify_unmounted_state_target_admission &&
       [[ -b "$expected_state_device" ]]; then
     resolved_state_device="$(readlink -f "$expected_state_device")"
     actual_state_serial="$(
