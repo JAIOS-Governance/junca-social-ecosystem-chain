@@ -145,6 +145,13 @@ content is never replaced or truncated. Existing group or mode may be
 normalized only through the pinned metadata-only path above; other
 non-canonical shape is never overwritten.
 
+If that same predecessor lacks the `junca` service account and group, recovery
+may create only the fixed system identity UID/GID `992` after the controlled
+single-validator stop is proven. It must use `/var/lib/junca` and
+`/sbin/nologin`, must not create a home directory, and must read back both the
+name and numeric identity. A conflicting name, UID, or GID fails closed before
+configuration ownership is changed; existing identities are never rewritten.
+
 Before either an existing or reconstructed file is admitted, all 18 canonical
 runtime assignments must appear exactly once with exact values. Duplicate,
 whitespace-disguised, missing, or contradictory assignments for chain,
