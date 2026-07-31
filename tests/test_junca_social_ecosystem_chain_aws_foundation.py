@@ -1552,12 +1552,35 @@ class AwsFoundationTests(unittest.TestCase):
             "durable_mount_persistence_verified=true",
             "durable_mount_volume_id",
             '"$state_store_integrity" == true',
+            '"$runtime_config_access_verified" == true',
+            "runtime_config_repair_attempted=true",
+            "runtime_config_repaired=true",
+            "chown root:junca /etc/junca",
+            "chmod 0750 /etc/junca",
+            (
+                "chown root:junca /etc/junca/genesis.json "
+                "/etc/junca/validator.toml"
+            ),
+            (
+                "chmod 0640 /etc/junca/genesis.json "
+                "/etc/junca/validator.toml"
+            ),
+            "runuser -u junca -- test -r /etc/junca/genesis.json",
+            "runuser -u junca -- test -r /etc/junca/validator.toml",
+            "runtime_directory_owner",
+            "runtime_directory_mode",
+            "genesis_owner",
+            "genesis_mode",
+            "genesis_link_count",
+            "validator_config_owner",
+            "validator_config_mode",
+            "validator_config_link_count",
             '"$runtime_env_verified" == true',
             "systemctl restart junca-validator.service || restart_exit=$?",
             "for attempts in $(seq 1 60)",
             'health_status="$(jq -r ',
             ".status // empty",
-            "junca-validator-service-recovery/v2",
+            "junca-validator-service-recovery/v3",
             "wait_for_ssm_command_result",
             "mainnet_activation_authorized: false",
         ):
@@ -1582,7 +1605,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v2"',
+            '"junca-validator-service-recovery/v3"',
             rollback,
         )
         self.assertLess(rollback, evidence)
@@ -1704,7 +1727,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v2"',
+            '"junca-validator-service-recovery/v3"',
             rollback,
         )
         self.assertIn(
@@ -2200,7 +2223,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_runtime_env_sha256 = "c" * 64
         expected_state_volume_id = "vol-00000000000000001"
         valid = {
-            "schema_version": "junca-validator-service-recovery/v2",
+            "schema_version": "junca-validator-service-recovery/v3",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2219,6 +2242,17 @@ class AwsFoundationTests(unittest.TestCase):
             "state_store_integrity": True,
             "binary_artifact_verified": True,
             "genesis_verified": True,
+            "runtime_config_access_verified": True,
+            "runtime_config_repair_attempted": True,
+            "runtime_config_repaired": True,
+            "runtime_directory_owner": "root:junca",
+            "runtime_directory_mode": "750",
+            "genesis_owner": "root:junca",
+            "genesis_mode": "640",
+            "genesis_link_count": 1,
+            "validator_config_owner": "root:junca",
+            "validator_config_mode": "640",
+            "validator_config_link_count": 1,
             "runtime_directory_verified": True,
             "runtime_env_verified": True,
             "runtime_version": expected_runtime_version,
@@ -2264,6 +2298,17 @@ class AwsFoundationTests(unittest.TestCase):
             {"state_store_integrity": False},
             {"binary_artifact_verified": False},
             {"genesis_verified": False},
+            {"runtime_config_access_verified": False},
+            {"runtime_config_repair_attempted": False},
+            {"runtime_config_repaired": False},
+            {"runtime_directory_owner": "root:root"},
+            {"runtime_directory_mode": "755"},
+            {"genesis_owner": "root:root"},
+            {"genesis_mode": "644"},
+            {"genesis_link_count": 2},
+            {"validator_config_owner": "root:root"},
+            {"validator_config_mode": "644"},
+            {"validator_config_link_count": 2},
             {"runtime_directory_verified": False},
             {"runtime_env_repair_attempted": False},
             {"runtime_env_created": False},
@@ -2329,7 +2374,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_runtime_env_sha256 = "e" * 64
         expected_state_volume_id = "vol-00000000000000001"
         evidence = {
-            "schema_version": "junca-validator-service-recovery/v2",
+            "schema_version": "junca-validator-service-recovery/v3",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -2348,6 +2393,17 @@ class AwsFoundationTests(unittest.TestCase):
             "state_store_integrity": True,
             "binary_artifact_verified": True,
             "genesis_verified": True,
+            "runtime_config_access_verified": True,
+            "runtime_config_repair_attempted": False,
+            "runtime_config_repaired": False,
+            "runtime_directory_owner": "root:junca",
+            "runtime_directory_mode": "750",
+            "genesis_owner": "root:junca",
+            "genesis_mode": "640",
+            "genesis_link_count": 1,
+            "validator_config_owner": "root:junca",
+            "validator_config_mode": "640",
+            "validator_config_link_count": 1,
             "runtime_directory_verified": True,
             "runtime_env_verified": True,
             "runtime_version": expected_runtime_version,

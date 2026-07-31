@@ -9,9 +9,10 @@ phases:
         inputs:
           commands:
             - set -euo pipefail
-            - install -d -m 0755 /opt/junca /etc/junca /var/log/junca
             - getent group junca >/dev/null || groupadd --system junca
             - id -u junca >/dev/null 2>&1 || useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
+            - install -d -m 0755 /opt/junca /var/log/junca
+            - install -d -o root -g junca -m 0750 /etc/junca
             - dnf install -y python3-boto3
             - aws s3 cp s3://__BUCKET__/validator-runtime.tar.gz /tmp/validator-runtime.tar.gz
             - aws s3 cp s3://__BUCKET__/genesis.json /tmp/genesis.json
@@ -19,7 +20,9 @@ phases:
             - echo "__GENESIS_SHA256__  /tmp/genesis.json" | sha256sum --check
             - install -m 0644 /tmp/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz
             - tar -xzf /opt/junca/validator-runtime.tar.gz -C /
-            - install -m 0644 /tmp/genesis.json /etc/junca/genesis.json
+            - install -o root -g junca -m 0640 /tmp/genesis.json /etc/junca/genesis.json
+            - chown root:junca /etc/junca/validator.toml
+            - chmod 0640 /etc/junca/validator.toml
             - systemctl enable junca-validator.service junca-public-rpc.service junca-public-explorer.service
             - rm -f /tmp/validator-runtime.tar.gz /tmp/genesis.json
   - name: validate
@@ -34,6 +37,11 @@ phases:
             - test -s /etc/junca/genesis.json
             - id -u junca
             - getent group junca
+            - test "$(stat -c '%U:%G:%a' /etc/junca)" = "root:junca:750"
+            - test "$(stat -c '%U:%G:%a:%h' /etc/junca/genesis.json)" = "root:junca:640:1"
+            - test "$(stat -c '%U:%G:%a:%h' /etc/junca/validator.toml)" = "root:junca:640:1"
+            - runuser -u junca -- test -r /etc/junca/genesis.json
+            - runuser -u junca -- test -r /etc/junca/validator.toml
             - test "$(stat -c '%U:%G' /var/log/junca)" = "root:root"
             - systemd-analyze verify /etc/systemd/system/junca-validator.service /etc/systemd/system/junca-public-rpc.service /etc/systemd/system/junca-public-explorer.service
             - test "$(systemctl is-enabled junca-validator.service)" = enabled

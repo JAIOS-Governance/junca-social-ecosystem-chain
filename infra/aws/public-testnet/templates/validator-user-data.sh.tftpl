@@ -2,10 +2,15 @@
 set -euo pipefail
 umask 027
 
-install -d -m 0750 /etc/junca /var/lib/junca /var/log/junca
 getent group junca >/dev/null || groupadd --system junca
 id -u junca >/dev/null 2>&1 || \
   useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
+install -d -o root -g junca -m 0750 /etc/junca
+install -d -m 0750 /var/lib/junca /var/log/junca
+chown root:junca /etc/junca/genesis.json /etc/junca/validator.toml
+chmod 0640 /etc/junca/genesis.json /etc/junca/validator.toml
+runuser -u junca -- test -r /etc/junca/genesis.json
+runuser -u junca -- test -r /etc/junca/validator.toml
 
 %{ if validator_state_required ~}
 validator_state_volume_id='${validator_state_volume_id}'

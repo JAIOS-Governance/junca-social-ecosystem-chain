@@ -94,6 +94,14 @@ deleted by rollback. Recovery evidence records the exact admitted identity,
 owner, mode, and link count rather than reducing those properties to an
 unverifiable success claim.
 
+Before a stopped validator is restarted, recovery must also prove the service
+user can traverse `/etc/junca` and read both `genesis.json` and
+`validator.toml`. The canonical contract is `root:junca`/`0750` for the
+directory and `root:junca`/`0640`/single-link for both files. A bounded
+metadata-only repair is allowed only for exact root-owned regular inputs and
+an exact genesis digest; it must be synced and read back as `junca`. Any other
+shape blocks the rollout before Terraform apply.
+
 Before either an existing or reconstructed file is admitted, all 18 canonical
 runtime assignments must appear exactly once with exact values. Duplicate,
 whitespace-disguised, missing, or contradictory assignments for chain,

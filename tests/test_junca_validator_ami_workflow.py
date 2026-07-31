@@ -344,6 +344,23 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertIn("/opt/junca/validator-runtime.tar.gz", self.component)
         self.assertIn("tar -xzf", self.component)
         self.assertIn('"public-testnet"', self.component)
+        self.assertIn(
+            "install -d -o root -g junca -m 0750 /etc/junca",
+            self.component,
+        )
+        self.assertIn(
+            "install -o root -g junca -m 0640 "
+            "/tmp/genesis.json /etc/junca/genesis.json",
+            self.component,
+        )
+        self.assertIn(
+            "runuser -u junca -- test -r /etc/junca/genesis.json",
+            self.component,
+        )
+        self.assertIn(
+            "runuser -u junca -- test -r /etc/junca/validator.toml",
+            self.component,
+        )
 
 
 if __name__ == "__main__":
