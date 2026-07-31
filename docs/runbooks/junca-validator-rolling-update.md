@@ -112,6 +112,11 @@ stable height alone is never activation evidence.
    existing root-owned, single-link regular file, pin device/inode, SHA-256,
    and byte size before the controlled stop. Group and mode may then be
    normalized to `root:junca` `0640`; contents and inode must remain exact.
+   Every shape and metadata predicate must return immediately on failure,
+   including when the admission helper is evaluated inside a shell
+   conditional. This keeps a wholly absent path on the explicit create-empty
+   route instead of misclassifying it as a pre-existing file with empty
+   readback values.
    Re-read identity, digest, size, ownership, mode, and link count before
    restart and after the validator reports healthy. A path replacement,
    content drift, size drift, permission drift, or hard-link race blocks
