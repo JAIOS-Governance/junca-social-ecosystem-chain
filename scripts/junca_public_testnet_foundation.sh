@@ -1384,14 +1384,17 @@ verify_runtime_env_schema() {
 verify_durable_mount_persistence_contract() (
   set -euo pipefail
   local helper_path=/usr/local/sbin/junca-mount-validator-state
+  local override_dir=/etc/systemd/system/junca-validator.service.d
+  local override_path="$override_dir/validator-state.conf"
   local unit_path=/etc/systemd/system/junca-validator-state.service
-  local validator_unit
   local expected_helper
+  local expected_override
   local expected_unit
   local expected_state_serial="${expected_state_volume_id//-/}"
   expected_helper="$(mktemp /tmp/junca-mount-validator-state.XXXXXX)"
+  expected_override="$(mktemp /tmp/junca-validator-state-override.XXXXXX)"
   expected_unit="$(mktemp /tmp/junca-validator-state.service.XXXXXX)"
-  trap 'rm -f "$expected_helper" "$expected_unit"' EXIT
+  trap 'rm -f "$expected_helper" "$expected_override" "$expected_unit"' EXIT
   cat >"$expected_helper" <<STATE_HELPER_EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1444,6 +1447,14 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 STATE_UNIT_EOF
+  cat >"$expected_override" <<'STATE_OVERRIDE_EOF'
+[Unit]
+Requires=junca-validator-state.service
+After=junca-validator-state.service
+RequiresMountsFor=/var/lib/junca
+ConditionPathIsMountPoint=/var/lib/junca
+ConditionPathExists=/var/lib/junca/state.sqlite
+STATE_OVERRIDE_EOF
   [[ -f "$helper_path" && ! -L "$helper_path" ]] &&
     [[ "$(stat -c '%U:%G' "$helper_path")" == "root:root" ]] &&
     [[ "$(stat -c '%a' "$helper_path")" == "750" ]] &&
@@ -1454,32 +1465,45 @@ STATE_UNIT_EOF
     [[ "$(stat -c '%a' "$unit_path")" == "640" ]] &&
     [[ "$(stat -c '%h' "$unit_path")" == 1 ]] &&
     cmp -s "$expected_unit" "$unit_path"
+  [[ -d "$override_dir" && ! -L "$override_dir" ]] &&
+    [[ "$(stat -c '%U:%G' "$override_dir")" == "root:root" ]] &&
+    [[ "$(stat -c '%a' "$override_dir")" == "755" ]]
+  [[ -f "$override_path" && ! -L "$override_path" ]] &&
+    [[ "$(stat -c '%U:%G' "$override_path")" == "root:root" ]] &&
+    [[ "$(stat -c '%a' "$override_path")" == "640" ]] &&
+    [[ "$(stat -c '%h' "$override_path")" == 1 ]] &&
+    cmp -s "$expected_override" "$override_path"
   systemctl is-enabled --quiet junca-validator-state.service
-  validator_unit="$(systemctl cat junca-validator.service)"
-  grep -Fxq "Requires=junca-validator-state.service" <<<"$validator_unit"
-  grep -Fxq "RequiresMountsFor=/var/lib/junca" <<<"$validator_unit"
-  grep -Fxq "ConditionPathIsMountPoint=/var/lib/junca" <<<"$validator_unit"
-  grep -Fxq "ConditionPathExists=/var/lib/junca/state.sqlite" \
-    <<<"$validator_unit"
 )
 
 repair_durable_mount_persistence_contract() (
   set -euo pipefail
   local helper_path=/usr/local/sbin/junca-mount-validator-state
+  local override_dir=/etc/systemd/system/junca-validator.service.d
+  local override_path="$override_dir/validator-state.conf"
   local unit_path=/etc/systemd/system/junca-validator-state.service
   local helper_tmp
+  local override_tmp
   local unit_tmp
   local expected_state_serial="${expected_state_volume_id//-/}"
-  for path in "$helper_path" "$unit_path"; do
+  for path in "$helper_path" "$unit_path" "$override_path"; do
     if [[ -e "$path" || -L "$path" ]]; then
       [[ -f "$path" && ! -L "$path" ]] || return 1
       [[ "$(stat -c '%U:%G' "$path")" == root:root ]] || return 1
       [[ "$(stat -c '%h' "$path")" == 1 ]] || return 1
     fi
   done
+  if [[ -e "$override_dir" || -L "$override_dir" ]]; then
+    [[ -d "$override_dir" && ! -L "$override_dir" ]] || return 1
+    [[ "$(stat -c '%U:%G' "$override_dir")" == root:root ]] || return 1
+  else
+    install -d -m 0755 -o root -g root "$override_dir"
+  fi
+  chmod 0755 "$override_dir"
   helper_tmp="$(mktemp /usr/local/sbin/.junca-mount-validator-state.XXXXXX)"
+  override_tmp="$(mktemp "$override_dir/.validator-state.conf.XXXXXX")"
   unit_tmp="$(mktemp /etc/systemd/system/.junca-validator-state.service.XXXXXX)"
-  trap 'rm -f "$helper_tmp" "$unit_tmp"' EXIT
+  trap 'rm -f "$helper_tmp" "$override_tmp" "$unit_tmp"' EXIT
   cat >"$helper_tmp" <<STATE_HELPER_EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1532,15 +1556,27 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 STATE_UNIT_EOF
-  chown root:root "$helper_tmp" "$unit_tmp"
+  cat >"$override_tmp" <<'STATE_OVERRIDE_EOF'
+[Unit]
+Requires=junca-validator-state.service
+After=junca-validator-state.service
+RequiresMountsFor=/var/lib/junca
+ConditionPathIsMountPoint=/var/lib/junca
+ConditionPathExists=/var/lib/junca/state.sqlite
+STATE_OVERRIDE_EOF
+  chown root:root "$helper_tmp" "$override_tmp" "$unit_tmp"
   chmod 0750 "$helper_tmp"
+  chmod 0640 "$override_tmp"
   chmod 0640 "$unit_tmp"
   sync -f "$helper_tmp"
+  sync -f "$override_tmp"
   sync -f "$unit_tmp"
   mv -fT "$helper_tmp" "$helper_path"
+  mv -fT "$override_tmp" "$override_path"
   mv -fT "$unit_tmp" "$unit_path"
   trap - EXIT
   sync -f /usr/local/sbin
+  sync -f "$override_dir"
   sync -f /etc/systemd/system
   systemctl daemon-reload
   systemctl enable junca-validator-state.service

@@ -78,10 +78,16 @@ stable height alone is never activation evidence.
    deleting or overwriting it. The retained EBS mount masks any admitted local
    SQLite legacy files, so an unmount remains a non-destructive rollback. Any
    other name, unsafe entry, oversized tree, destination collision, cross-
-   filesystem rename, or invalid database blocks recovery. The installed mount helper
-   and systemd unit must be exact,
-   single-link root-owned canonical files, and the validator unit must retain
-   its mount requirements. Afterward require the exact resolved device as the
+   filesystem rename, or invalid database blocks recovery. The installed mount
+   helper and systemd unit must be exact, single-link root-owned canonical
+   files. Persistence repair must also atomically install the exact
+   `junca-validator.service.d/validator-state.conf` dependency drop-in before
+   `daemon-reload`; its parent must be a real root-owned `0755` directory and
+   the drop-in a real single-link root-owned `0640` file with byte-exact
+   `Requires`, `After`, `RequiresMountsFor`, and state path conditions.
+   Symlinks, non-root ownership, link-count drift, content drift, or a
+   same-path collision block recovery. Do not overwrite the vendor validator
+   unit or use an interactive systemd editor. Afterward require the exact resolved device as the
    mount source, `noatime,nosuid,nodev`, an active enabled persistence unit,
    and read-only SQLite integrity. Never format, repair, relabel, detach,
    replace, or restore the volume in this recovery. Any mismatch leaves the
