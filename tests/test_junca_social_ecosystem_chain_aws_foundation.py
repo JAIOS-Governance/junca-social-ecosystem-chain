@@ -1510,8 +1510,21 @@ class AwsFoundationTests(unittest.TestCase):
             "repair_durable_mount_persistence_contract()",
             "mktemp /usr/local/sbin/.junca-mount-validator-state.XXXXXX",
             "mktemp /etc/systemd/system/.junca-validator-state.service.XXXXXX",
+            "/etc/systemd/system/junca-validator.service.d",
+            "validator-state.conf",
+            'mktemp "$override_dir/.validator-state.conf.XXXXXX"',
+            '[[ -d "$override_dir" && ! -L "$override_dir" ]]',
+            '[[ "$(stat -c \'%U:%G\' "$override_dir")" == "root:root" ]]',
+            '[[ "$(stat -c \'%a\' "$override_dir")" == "755" ]]',
+            "Requires=junca-validator-state.service",
+            "After=junca-validator-state.service",
+            "RequiresMountsFor=/var/lib/junca",
+            "ConditionPathIsMountPoint=/var/lib/junca",
+            "ConditionPathExists=/var/lib/junca/state.sqlite",
             'mv -fT "$helper_tmp" "$helper_path"',
+            'mv -fT "$override_tmp" "$override_path"',
             'mv -fT "$unit_tmp" "$unit_path"',
+            'sync -f "$override_dir"',
             "systemctl daemon-reload",
             "systemctl enable junca-validator-state.service",
             "durable_mount_repair_stage",
@@ -1574,6 +1587,21 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertLess(rollback, evidence)
         self.assertLess(evidence, definition)
+        persistence_repair = self.foundation_script.index(
+            "repair_durable_mount_persistence_contract() ("
+        )
+        persistence_repair_end = self.foundation_script.index(
+            "\n}\n", persistence_repair
+        )
+        persistence_body = self.foundation_script[
+            persistence_repair:persistence_repair_end
+        ]
+        self.assertNotIn("ln -s", persistence_body)
+        self.assertNotIn("systemctl edit", persistence_body)
+        self.assertLess(
+            persistence_body.index('mv -fT "$override_tmp" "$override_path"'),
+            persistence_body.index("systemctl daemon-reload"),
+        )
         self.assertIn(
             '"$(sha256sum /etc/junca/runtime.env | awk '
             "'{print $1}')\" == \\\n"
