@@ -1085,11 +1085,26 @@ validate_validator_service_recovery_evidence() {
   shift 9
   local expected_recovery_request_sha256="$1"
   local expected_recovery_command_id="$2"
+  local expected_recovery_run_id="$3"
+  local expected_recovery_run_attempt="$4"
+  local expected_release_request_sha256="$5"
+  local expected_manifest_decision_sha256="$6"
+  local expected_candidate_head_sha="$7"
+  local expected_allow_runtime_env_repair="$8"
   [[ "$expected_genesis_sha256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$expected_source_commit" =~ ^[0-9a-f]{40}$ ]]
   [[ "$expected_recovery_request_sha256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$expected_recovery_command_id" =~ \
     ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+  [[ "$expected_recovery_run_id" =~ ^[1-9][0-9]*$ ]]
+  [[ "$expected_recovery_run_attempt" =~ ^[1-9][0-9]*$ ]]
+  [[ "$expected_release_request_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_manifest_decision_sha256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$expected_candidate_head_sha" =~ ^[0-9a-f]{40}$ ]]
+  case "$expected_allow_runtime_env_repair" in
+    true|false) ;;
+    *) return 2 ;;
+  esac
   jq -e \
     --arg validator_id "$validator_id" \
     --arg instance_id "$instance_id" \
@@ -1101,8 +1116,18 @@ validate_validator_service_recovery_evidence() {
     --arg expected_source_commit "$expected_source_commit" \
     --arg expected_recovery_request_sha256 \
       "$expected_recovery_request_sha256" \
-    --arg expected_recovery_command_id "$expected_recovery_command_id" '
-      .schema_version == "junca-validator-service-recovery/v5" and
+    --arg expected_recovery_command_id "$expected_recovery_command_id" \
+    --argjson expected_recovery_run_id "$expected_recovery_run_id" \
+    --argjson expected_recovery_run_attempt \
+      "$expected_recovery_run_attempt" \
+    --arg expected_release_request_sha256 \
+      "$expected_release_request_sha256" \
+    --arg expected_manifest_decision_sha256 \
+      "$expected_manifest_decision_sha256" \
+    --arg expected_candidate_head_sha "$expected_candidate_head_sha" \
+    --argjson expected_allow_runtime_env_repair \
+      "$expected_allow_runtime_env_repair" '
+      .schema_version == "junca-validator-service-recovery/v6" and
       .validator_id == $validator_id and
       .instance_id == $instance_id and
       .ami_id == $expected_ami_id and
@@ -1111,6 +1136,12 @@ validate_validator_service_recovery_evidence() {
       .recovery_request_sha256 == $expected_recovery_request_sha256 and
       .recovery_command_id == $expected_recovery_command_id and
       .recovery_dispatch_sequence == 1 and
+      .recovery_run_id == $expected_recovery_run_id and
+      .recovery_run_attempt == $expected_recovery_run_attempt and
+      .release_request_sha256 == $expected_release_request_sha256 and
+      .manifest_decision_sha256 == $expected_manifest_decision_sha256 and
+      .candidate_head_sha == $expected_candidate_head_sha and
+      .allow_runtime_env_repair == $expected_allow_runtime_env_repair and
       (.before_status | type) == "string" and
       (.pre_repair_health_status | type) == "string" and
       (.pre_repair_validator_id | type) == "string" and
@@ -1278,6 +1309,11 @@ ensure_validator_service_available() {
     true|false) ;;
     *) return 2 ;;
   esac
+  [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+  [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$MANIFEST_DECISION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+  [[ "$ROLLING_CANDIDATE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
   canonical_runtime_b64="$(
     render_canonical_validator_runtime_env \
       "$validator_id" "$expected_runtime_version" "$genesis_sha256" \
@@ -1304,8 +1340,14 @@ ensure_validator_service_available() {
       --arg runtime_env_sha256 "$canonical_runtime_env_sha256" \
       --arg genesis_sha256 "$genesis_sha256" \
       --arg state_volume_id "$expected_state_volume_id" \
-      --arg source_commit "$SOURCE_COMMIT" '{
-        schema_version: "junca-validator-service-recovery-request/v1",
+      --arg source_commit "$SOURCE_COMMIT" \
+      --argjson recovery_run_id "$GITHUB_RUN_ID" \
+      --argjson recovery_run_attempt "$GITHUB_RUN_ATTEMPT" \
+      --arg release_request_sha256 "$REQUEST_SHA256" \
+      --arg manifest_decision_sha256 "$MANIFEST_DECISION_SHA256" \
+      --arg candidate_head_sha "$ROLLING_CANDIDATE_HEAD_SHA" \
+      --argjson allow_runtime_env_repair "$allow_runtime_env_repair" '{
+        schema_version: "junca-validator-service-recovery-request/v2",
         validator_id: $validator_id,
         instance_id: $instance_id,
         ami_id: $ami_id,
@@ -1314,6 +1356,12 @@ ensure_validator_service_available() {
         genesis_sha256: $genesis_sha256,
         state_volume_id: $state_volume_id,
         source_commit: $source_commit,
+        recovery_run_id: $recovery_run_id,
+        recovery_run_attempt: $recovery_run_attempt,
+        release_request_sha256: $release_request_sha256,
+        manifest_decision_sha256: $manifest_decision_sha256,
+        candidate_head_sha: $candidate_head_sha,
+        allow_runtime_env_repair: $allow_runtime_env_repair,
         recovery_dispatch_sequence: 1
       }' |
       sha256sum |
@@ -1346,6 +1394,11 @@ ensure_validator_service_available() {
     printf 'expected_recovery_request_sha256=%q\n' \
       "$recovery_request_sha256"
     printf 'recovery_dispatch_sequence=%q\n' 1
+    printf 'recovery_run_id=%q\n' "$GITHUB_RUN_ID"
+    printf 'recovery_run_attempt=%q\n' "$GITHUB_RUN_ATTEMPT"
+    printf 'release_request_sha256=%q\n' "$REQUEST_SHA256"
+    printf 'manifest_decision_sha256=%q\n' "$MANIFEST_DECISION_SHA256"
+    printf 'candidate_head_sha=%q\n' "$ROLLING_CANDIDATE_HEAD_SHA"
     printf 'allow_runtime_env_repair=%q\n' "$allow_runtime_env_repair"
     printf 'canonical_runtime_b64=%q\n' "$canonical_runtime_b64"
     printf 'canonical_runtime_env_sha256=%q\n' \
@@ -2361,11 +2414,17 @@ if [[ "$accepted" != true &&
 fi
 
 jq -n \
-  --arg schema_version "junca-validator-service-recovery/v5" \
+  --arg schema_version "junca-validator-service-recovery/v6" \
   --arg genesis_sha256 "$expected_genesis_sha256" \
   --arg source_commit "$expected_source_commit" \
   --arg recovery_request_sha256 "$expected_recovery_request_sha256" \
   --argjson recovery_dispatch_sequence "$recovery_dispatch_sequence" \
+  --argjson recovery_run_id "$recovery_run_id" \
+  --argjson recovery_run_attempt "$recovery_run_attempt" \
+  --arg release_request_sha256 "$release_request_sha256" \
+  --arg manifest_decision_sha256 "$manifest_decision_sha256" \
+  --arg candidate_head_sha "$candidate_head_sha" \
+  --argjson allow_runtime_env_repair "$allow_runtime_env_repair" \
   --arg before_status "$before_status" \
   --arg pre_repair_health_status "$pre_repair_health_status" \
   --arg pre_repair_validator_id "$pre_repair_validator_id" \
@@ -2448,6 +2507,12 @@ jq -n \
     source_commit: $source_commit,
     recovery_request_sha256: $recovery_request_sha256,
     recovery_dispatch_sequence: $recovery_dispatch_sequence,
+    recovery_run_id: $recovery_run_id,
+    recovery_run_attempt: $recovery_run_attempt,
+    release_request_sha256: $release_request_sha256,
+    manifest_decision_sha256: $manifest_decision_sha256,
+    candidate_head_sha: $candidate_head_sha,
+    allow_runtime_env_repair: $allow_runtime_env_repair,
     before_status: $before_status,
     pre_repair_health_status: $pre_repair_health_status,
     pre_repair_validator_id: $pre_repair_validator_id,
@@ -2575,7 +2640,10 @@ EOF
     "$output_path" "$validator_id" "$instance_id" "$expected_ami_id" \
     "$expected_runtime_version" "$canonical_runtime_env_sha256" \
     "$expected_state_volume_id" "$genesis_sha256" "$SOURCE_COMMIT" \
-    "$recovery_request_sha256" "$command_id"
+    "$recovery_request_sha256" "$command_id" "$GITHUB_RUN_ID" \
+    "$GITHUB_RUN_ATTEMPT" "$REQUEST_SHA256" \
+    "$MANIFEST_DECISION_SHA256" "$ROLLING_CANDIDATE_HEAD_SHA" \
+    "$allow_runtime_env_repair"
   jq -e '.Status == "Success"' "$invocation" >/dev/null
 }
 
@@ -3264,7 +3332,8 @@ esac
 if [[ "$rolling_release" == "true" ]]; then
   for name in \
     AMI_RUN_ID MANIFEST_GATE_RUN_ID REQUEST_SHA256 \
-    MANIFEST_DECISION_SHA256 GITHUB_RUN_ID GITHUB_SHA GITHUB_REPOSITORY \
+    MANIFEST_DECISION_SHA256 GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+    GITHUB_REPOSITORY \
     ROLLING_RESUME_RUN_ID ROLLING_CANDIDATE_HEAD_SHA
   do
     [[ -n "${!name:-}" ]] || {
@@ -3277,6 +3346,7 @@ if [[ "$rolling_release" == "true" ]]; then
   [[ "$REQUEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$MANIFEST_DECISION_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+  [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
   [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
   [[ "$ROLLING_CANDIDATE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
   [[ "$ROLLING_RESUME_RUN_ID" =~ ^(0|[1-9][0-9]*)$ ]]
