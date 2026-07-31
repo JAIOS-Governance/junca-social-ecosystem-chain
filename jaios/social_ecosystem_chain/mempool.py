@@ -18,6 +18,7 @@ from .protocol_kernel import (
     ProtocolTransitionError,
     SignatureVerifier,
     TransactionEnvelope,
+    transaction_encoded_size,
     transaction_intrinsic_gas,
 )
 
@@ -58,6 +59,7 @@ class BlockCandidate:
     transactions: tuple[TransactionEnvelope, ...]
     gas_limit: int
     gas_used: int
+    encoded_bytes: int
     candidate_digest: str
 
     def as_evidence(self) -> dict[str, object]:
@@ -67,6 +69,7 @@ class BlockCandidate:
             "transaction_hashes": [tx.transaction_hash for tx in self.transactions],
             "gas_limit": self.gas_limit,
             "gas_used": self.gas_used,
+            "encoded_bytes": self.encoded_bytes,
             "candidate_digest": self.candidate_digest,
             "selection_status": "DETERMINISTIC",
             "mainnet_changed": False,
@@ -157,6 +160,7 @@ class TransactionPool:
         next_nonce = {key: account.nonce for key, account in normalized_accounts.items()}
         selected: list[TransactionEnvelope] = []
         gas_used = 0
+        encoded_bytes = 0
 
         while gas_used + self._config.intrinsic_gas <= limit:
             executable: list[TransactionEnvelope] = []
@@ -170,6 +174,9 @@ class TransactionPool:
                     and gas_used
                     + transaction_intrinsic_gas(self._config, transaction)
                     <= limit
+                    and encoded_bytes
+                    + transaction_encoded_size(self._config, transaction)
+                    <= self._config.max_block_encoded_bytes
                 ):
                     executable.append(transaction)
             if not executable:
@@ -185,17 +192,19 @@ class TransactionPool:
             sender = transaction.sender.lower()
             next_nonce[sender] = transaction.nonce + 1
             gas_used += transaction_intrinsic_gas(self._config, transaction)
+            encoded_bytes += transaction_encoded_size(self._config, transaction)
 
         digest_input = {
             "chain_id": self._config.chain_id,
             "gas_limit": limit,
             "gas_used": gas_used,
+            "encoded_bytes": encoded_bytes,
             "transactions": [tx.transaction_hash for tx in selected],
         }
         digest = "0x" + hashlib.sha256(
             json.dumps(digest_input, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        return BlockCandidate(tuple(selected), limit, gas_used, digest)
+        return BlockCandidate(tuple(selected), limit, gas_used, encoded_bytes, digest)
 
     def export_snapshot(self) -> dict[str, object]:
         """Export a deterministic, chain-bound restart snapshot."""
@@ -288,6 +297,10 @@ def _validate_admission_boundary(
         raise MempoolError("mempool accepts only TransactionEnvelope values")
     if transaction.chain_id != config.chain_id:
         raise MempoolError("transaction chain_id mismatch")
+    try:
+        transaction_encoded_size(config, transaction)
+    except ProtocolTransitionError as error:
+        raise MempoolError(str(error)) from error
     if not callable(signature_verifier) or not signature_verifier(transaction):
         raise MempoolError("transaction signature verification failed")
     if transaction.nonce < account.nonce:
@@ -307,8 +320,6 @@ def _validate_admission_boundary(
     worst_case_debit = transaction.value + transaction.gas_limit * transaction.max_fee_per_gas
     if account.balance < worst_case_debit:
         raise MempoolError("sender cannot cover worst-case transaction debit")
-    if not transaction.signature:
-        raise MempoolError("transaction signature is required")
 
 
 def _validate_replacement(

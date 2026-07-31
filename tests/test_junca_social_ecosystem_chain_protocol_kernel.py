@@ -10,6 +10,7 @@ from jaios.social_ecosystem_chain.protocol_kernel import (
     compute_state_root,
     execute_block,
     next_base_fee,
+    transaction_encoded_size,
     transaction_intrinsic_gas,
 )
 
@@ -156,6 +157,35 @@ class ProtocolKernelTests(unittest.TestCase):
                     b"verified-by-execution-client"
                 ),
             )
+
+    def test_canonical_transaction_and_block_byte_caps_fail_closed(self) -> None:
+        first = transaction(signature=b"a" * 1_024)
+        second = transaction(nonce=1, signature=b"b" * 1_024)
+        first_size = transaction_encoded_size(self.config, first)
+        second_size = transaction_encoded_size(self.config, second)
+        bounded = ProtocolConfig(
+            chain_id=CHAIN_ID,
+            block_gas_limit=42_000,
+            target_gas=21_000,
+            initial_base_fee=1_000,
+            max_signature_bytes=1_024,
+            max_transaction_encoded_bytes=max(first_size, second_size),
+            max_block_encoded_bytes=first_size + second_size - 1,
+        )
+        with self.assertRaisesRegex(ProtocolTransitionError, "block encoded byte"):
+            execute_block(
+                bounded,
+                parent_base_fee=1_000,
+                parent_gas_used=21_000,
+                accounts=self.accounts,
+                transactions=(first, second),
+                signature_verifier=lambda tx: bool(tx.signature),
+            )
+
+    def test_oversized_signature_is_rejected_before_execution(self) -> None:
+        oversized = transaction(signature=b"x" * (self.config.max_signature_bytes + 1))
+        with self.assertRaisesRegex(ProtocolTransitionError, "signature exceeds"):
+            self.execute(oversized)
 
 
 if __name__ == "__main__":

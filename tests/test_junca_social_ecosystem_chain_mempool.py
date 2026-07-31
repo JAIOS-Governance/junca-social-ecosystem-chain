@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import unittest
 
 from jaios.social_ecosystem_chain.mempool import MempoolError, MempoolPolicy, TransactionPool
@@ -8,6 +9,7 @@ from jaios.social_ecosystem_chain.protocol_kernel import (
     AccountState,
     ProtocolConfig,
     TransactionEnvelope,
+    transaction_encoded_size,
 )
 
 
@@ -151,6 +153,34 @@ class TransactionPoolTests(unittest.TestCase):
     def test_admission_rejects_underfunded_calldata_gas(self) -> None:
         with self.assertRaisesRegex(MempoolError, "gas limit"):
             self.admit(tx(data=b"payload", gas_limit=21_000))
+
+    def test_candidate_enforces_encoded_block_byte_cap(self) -> None:
+        first = tx(ALICE, 0, 500, signature=b"a" * 1_024)
+        second = tx(CAROL, 0, 100, signature=b"b" * 1_024)
+        first_size = transaction_encoded_size(self.config, first)
+        second_size = transaction_encoded_size(self.config, second)
+        bounded_config = replace(
+            self.config,
+            max_signature_bytes=1_024,
+            max_transaction_encoded_bytes=max(first_size, second_size),
+            max_block_encoded_bytes=first_size + second_size - 1,
+        )
+        bounded = TransactionPool(bounded_config, self.pool._policy)
+        for item in (first, second):
+            bounded.admit(
+                item,
+                account=self.accounts[item.sender],
+                current_base_fee=1_000,
+                signature_verifier=self.verify,
+            )
+
+        candidate = bounded.build_candidate(self.accounts, current_base_fee=1_000)
+        self.assertEqual(candidate.transactions, (first,))
+        self.assertEqual(candidate.encoded_bytes, first_size)
+
+    def test_admission_rejects_oversized_signature(self) -> None:
+        with self.assertRaisesRegex(MempoolError, "signature exceeds"):
+            self.admit(tx(signature=b"x" * (self.config.max_signature_bytes + 1)))
 
     def test_prune_and_remove_included_are_deterministic(self) -> None:
         old = tx(ALICE, nonce=0)

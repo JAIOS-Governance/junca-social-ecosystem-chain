@@ -35,6 +35,14 @@ gas limit below that amount fails closed; calldata can never consume fixed base
 gas while bypassing block capacity. These are Candidate Mainnet correctness
 controls only and do not authorize Mainnet activation.
 
+Canonical envelope sizing is a second, independent admission boundary. It
+counts the canonical signing payload, signature, and two fixed length prefixes;
+the default limits are `4,096` signature bytes, `384 KiB` per transaction, and
+`2 MiB` per block. Mempool selection and protocol execution use the identical
+size function, include the selected byte count in deterministic candidate and
+transition evidence, and fail closed when either boundary is exceeded. Gas
+capacity cannot be used to smuggle an oversized signature or encoded block.
+
 ### 2. Runtime and infrastructure — primary
 
 The development container includes Docker, GitHub CLI, AWS CLI and Terraform
