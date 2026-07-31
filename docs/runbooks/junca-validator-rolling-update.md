@@ -103,6 +103,14 @@ stable height alone is never activation evidence.
    Record the installed device/inode identity. Treat a concurrent destination,
    unresolved multi-link result, or failed persistence sync as a blocked
    recovery, never as a reason to overwrite.
+   A stale predecessor `runtime.env` may be canonically replaced only after
+   the same controlled stop. Require a root-owned, single-link regular file,
+   mode `0600`/`0640`/`0644`, at most 8192 bytes, and exactly the 18 allowlisted
+   assignments with no foreign keys. Pin inode, SHA-256, size, owner, and mode;
+   create and verify a same-directory hard-link rollback copy; then atomically
+   install the exact canonical file. If restart acceptance fails, restore the
+   pinned original inode before containment restart. Never repair symlinks,
+   foreign assignments, identity/digest drift, or a rollback-path collision.
    A stopped legacy validator may also lack the empty compatibility
    `/etc/junca/validator.toml` supplied by the current immutable AMI. Admit that
    case only when the destination is wholly absent, create a zero-length

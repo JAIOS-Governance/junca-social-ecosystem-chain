@@ -1507,6 +1507,12 @@ class AwsFoundationTests(unittest.TestCase):
             "runtime_env_persistence_verified=true",
             "runtime_env_post_restart_verified=true",
             "runtime_env_repaired=true",
+            "pin_repairable_runtime_env()",
+            "runtime_env_repair_admissible=true",
+            "runtime_env_backup_created=true",
+            "runtime_env_replaced=true",
+            'mv -fT "$runtime_env_tmp" /etc/junca/runtime.env',
+            'mv -T "$runtime_env_backup_path" /etc/junca/runtime.env',
             "repair_rollback_attempted=true",
             "repair_rollback_succeeded=true",
             "repair_rollback_persistence_verified=true",
@@ -1647,6 +1653,72 @@ class AwsFoundationTests(unittest.TestCase):
         )
         self.assertLess(validator_creation, validator_readback)
         self.assertLess(validator_readback, runtime_env_creation)
+
+    @unittest.skipUnless(
+        os.geteuid() == 0,
+        "root-owned runtime environment admission contract",
+    )
+    def test_legacy_runtime_env_repair_admission_is_bounded(self) -> None:
+        canonical_keys = (
+            "CHAIN_NAME GOVERNANCE NETWORK_NOTICE VALIDATOR_ID CHAIN_ID "
+            "GENESIS_SHA256 NODE_ARTIFACT_SHA256 SIGNER_RESOURCE_ARN "
+            "AWS_REGION AWS_DEFAULT_REGION PUBLIC_RPC P2P_PORT "
+            "VALIDATOR_SIGNER_BINDINGS VALIDATOR_PEER_ENDPOINTS "
+            "AUTOMATIC_FINALITY_ENABLED TESTNET_BLOCK_INTERVAL_SECONDS "
+            "TESTNET_SLOT_EPOCH_SECONDS BRIDGE_ACTIVATED"
+        ).split()
+        content = "".join(f"{key}=stale\n" for key in canonical_keys)
+        functions = runtime_env_schema_functions(self.foundation_script)
+
+        def admitted(path: pathlib.Path) -> bool:
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + functions
+                    + "\nruntime_env_repair_admissible=false\n"
+                    + "runtime_env_preexisting=false\n"
+                    + 'runtime_env_pre_identity=""\n'
+                    + 'runtime_env_pre_sha256=""\n'
+                    + "runtime_env_pre_size=0\n"
+                    + 'runtime_env_pre_owner=""\n'
+                    + 'runtime_env_pre_mode=""\n'
+                    + 'pin_repairable_runtime_env "$1"\n'
+                    + 'test "$runtime_env_repair_admissible" = true\n',
+                    "admission",
+                    str(path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            runtime_env = root / "runtime.env"
+            runtime_env.write_text(content, encoding="utf-8")
+            runtime_env.chmod(0o640)
+            self.assertTrue(admitted(runtime_env))
+
+            runtime_env.write_text(content + "FOREIGN_SECRET=blocked\n", encoding="utf-8")
+            self.assertFalse(admitted(runtime_env))
+
+            runtime_env.write_text(content + "#" + "x" * 9000 + "\n", encoding="utf-8")
+            self.assertFalse(admitted(runtime_env))
+
+            runtime_env.write_text(content, encoding="utf-8")
+            second_link = root / "runtime.env.link"
+            os.link(runtime_env, second_link)
+            self.assertFalse(admitted(runtime_env))
+            second_link.unlink()
+
+            runtime_env.unlink()
+            target = root / "target.env"
+            target.write_text(content, encoding="utf-8")
+            runtime_env.symlink_to(target)
+            self.assertFalse(admitted(runtime_env))
 
     def test_live_recovery_creates_only_absent_empty_validator_config(self) -> None:
         start = self.foundation_script.index(
