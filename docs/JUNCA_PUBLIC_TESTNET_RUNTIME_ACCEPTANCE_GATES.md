@@ -102,6 +102,14 @@ metadata-only repair is allowed only for exact root-owned regular inputs and
 an exact genesis digest; it must be synced and read back as `junca`. Any other
 shape blocks the rollout before Terraform apply.
 
+For a stopped legacy validator whose immutable predecessor AMI did not contain
+`validator.toml`, recovery may create only the canonical empty compatibility
+file. The destination must be absent (including no dangling symlink); recovery
+writes a same-directory single-link temporary inode, syncs it, links it without
+overwrite, removes the temporary name, and then requires exact zero length,
+`root:junca`/`0640`/single-link metadata and service-user readability. Existing
+content, links, or non-canonical metadata are never overwritten.
+
 Before either an existing or reconstructed file is admitted, all 18 canonical
 runtime assignments must appear exactly once with exact values. Duplicate,
 whitespace-disguised, missing, or contradictory assignments for chain,

@@ -103,6 +103,12 @@ stable height alone is never activation evidence.
    Record the installed device/inode identity. Treat a concurrent destination,
    unresolved multi-link result, or failed persistence sync as a blocked
    recovery, never as a reason to overwrite.
+   A stopped legacy validator may also lack the empty compatibility
+   `/etc/junca/validator.toml` supplied by the current immutable AMI. Admit that
+   case only when the destination is wholly absent, create a zero-length
+   `root:junca` `0640` single-link inode with the same no-overwrite hard-link
+   pattern, sync the file and directory, and prove service-user readability.
+   Never replace an existing validator configuration.
    Before restart, admit only a single-link `root:junca` `0640` regular file
    and pin its device/inode and SHA-256. Re-read all of those properties after
    the validator reports healthy. A path replacement, permission drift, or

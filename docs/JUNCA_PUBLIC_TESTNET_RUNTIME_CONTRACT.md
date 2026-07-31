@@ -29,14 +29,18 @@ causes bootstrap to fail closed. Terraform remains disabled until the AMI,
 three independent KMS signers, three private failure domains, state backend,
 RPC and explorer image digests, and rollback target have canonical readback.
 
-The live-prefix recovery may repair only this narrow metadata contract on an
-inactive validator. It requires a real root-owned directory, real single-link
-root-owned genesis and validator configuration files, an exact genesis digest,
-and pre-repair modes limited to `0750`/`0755` and `0640`/`0644`. It changes no
-file content. After applying `root:junca` ownership and the canonical modes, it
-syncs both files and the directory, then proves readability as the `junca`
-service user. Symlinks, hard links, non-root ownership, unexpected modes,
-digest mismatch, or an active service fail closed before metadata mutation.
+The live-prefix recovery may repair only this narrow contract on an inactive
+validator. It requires a real root-owned directory, a real single-link
+root-owned genesis, an exact genesis digest, and pre-repair modes limited to
+`0750`/`0755` and `0640`/`0644`. An existing validator configuration must be a
+root-owned single-link regular file within those modes. A legacy predecessor
+with no validator configuration may receive only the canonical zero-length
+compatibility file through a synced same-directory, no-overwrite hard-link
+install. After applying `root:junca` ownership and canonical modes, recovery
+syncs both files and the directory and proves zero-length compatibility config
+and readability as the `junca` service user. Symlinks, hard links, existing
+non-empty content during creation, non-root ownership, unexpected modes,
+digest mismatch, destination races, or an active service fail closed.
 
 Immutable boundaries:
 
