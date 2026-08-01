@@ -227,8 +227,21 @@ ensure_validator_service_available \
 
 jq -e '
   .accepted == true and
-  .runtime_env_repaired == true and
-  .runtime_env_source == "canonical" and
+  .runtime_env_verified == true and
+  .runtime_env_schema_verified == true and
+  .runtime_env_required_assignment_count == 18 and
+  .runtime_env_post_restart_verified == true and
+  (
+    (
+      .runtime_env_source == "canonical" and
+      .runtime_env_repaired == true and
+      .runtime_env_persistence_verified == true
+    ) or
+    (
+      .runtime_env_source == "existing" and
+      .runtime_env_repaired == false
+    )
+  ) and
   .after_status == "active" and
   .health_status == "healthy" and
   .health_validator_id == "validator-01" and
