@@ -36,19 +36,20 @@ jobs:
           mkdir -p artifacts
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           instances=()
+          : > artifacts/current-validator-instance-ids.txt
           for validator in 01 02 03; do
             mapfile -t matches < <(
               aws ec2 describe-instances \
                 --filters \
-                  "Name=tag:Name,Values=junca-testnet-validator-${validator}" \
+                  "Name=tag:Name,Values=junca-social-ecosystem-chain-testnet-validator-${validator}" \
                   Name=instance-state-name,Values=running \
                 --query 'Reservations[].Instances[].InstanceId' \
                 --output text | tr '\t' '\n' | sed '/^$/d'
             )
             test "${#matches[@]}" = 1
             instances+=("${matches[0]}")
+            printf '%s\n' "${matches[0]}" >> artifacts/current-validator-instance-ids.txt
           done
-          printf '%s\n' "${instances[@]}" > artifacts/current-validator-instance-ids.txt
           for attempt in $(seq 1 60); do
             online="$(
               aws ssm describe-instance-information \

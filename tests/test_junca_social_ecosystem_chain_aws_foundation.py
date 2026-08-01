@@ -230,7 +230,7 @@ class AwsFoundationTests(unittest.TestCase):
     ) -> None:
         workflow = self.current_public_gateway_readiness
         for required in (
-            "junca-testnet-validator-${validator}",
+            "junca-social-ecosystem-chain-testnet-validator-${validator}",
             'test "${#matches[@]}" = 1',
             "PingStatus==`Online`",
             "systemctl is-active --quiet junca-validator.service",
@@ -245,6 +245,10 @@ class AwsFoundationTests(unittest.TestCase):
             "mainnet_activation_authorized: false",
         ):
             self.assertIn(required, workflow)
+        self.assertNotIn(
+            'Name=tag:Name,Values=junca-testnet-validator-${validator}',
+            workflow,
+        )
         for prohibited in (
             "terraform apply",
             "register-targets",
