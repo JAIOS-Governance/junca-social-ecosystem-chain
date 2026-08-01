@@ -172,8 +172,14 @@ stable height alone is never activation evidence.
    hides the second assignment; never rely on `grep` finding one good line when
    systemd may consume a later contradictory line. Reject unknown assignments
    and non-canonical syntax rather than allowing an unreviewed runtime toggle.
-   Never repair a symlink, overwrite an existing contradictory file, accept an
-   operator-supplied value, or reconstruct during a mixed/resumed prefix.
+   Never repair a symlink, overwrite an existing contradictory file, or accept
+   an operator-supplied value. During a mixed/resumed prefix with automatic
+   finality configured, a canonical-key-only `runtime.env` may carry the
+   previously accepted slot epoch while Terraform is already bound to the
+   renewed shared epoch. Reconcile only that pinned file through the same
+   exact-identity, one-validator controlled-stop path; atomically replace it
+   with the rendered canonical environment and require strict post-restart
+   validator-ID, health, owner, mode, inode, digest, and persistence readback.
    If the reconstructed runtime does not reach an active, healthy state within
    the bounded recovery window, stop the service and remove only the exact
    canonical file created by this attempt. Never delete a linked, changed, or
