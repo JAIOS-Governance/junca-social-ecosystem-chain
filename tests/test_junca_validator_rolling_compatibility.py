@@ -180,12 +180,15 @@ class RollingCompatibilityTests(unittest.TestCase):
 
         recovery_files = [
             ".github/workflows/junca-validator-foundation-release.yml",
+            "docs/JUNCA_PUBLIC_TESTNET_RUNTIME_ACCEPTANCE_GATES.md",
             "docs/runbooks/junca-validator-rolling-update.md",
             "infra/aws/public-testnet/main.tf",
             "infra/aws/public-testnet/outputs.tf",
             "infra/aws/public-testnet/variables.tf",
             "jaios/social_ecosystem_chain/rolling_compatibility.py",
+            "scripts/junca_live_rollout_prefix_gate.py",
             "scripts/junca_public_testnet_foundation.sh",
+            "tests/test_junca_live_rollout_prefix_gate.py",
             "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
             "tests/test_junca_validator_rolling_compatibility.py",
         ]
