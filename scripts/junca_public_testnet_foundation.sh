@@ -3446,7 +3446,8 @@ write_live_rollout_prefix_readback() {
         .[0].Attachments[0].InstanceId == $instance_id and
         .[0].Attachments[0].State == "attached"
       ' "artifacts/live-prefix-volume-$((index + 1)).json" >/dev/null
-    if [[ "$evidence_updated_count" == 0 ]]; then
+    if [[ "$evidence_updated_count" == 0 ||
+          "$recovered_uncommitted_target_replacement" == true ]]; then
       allow_runtime_env_repair=true
     else
       allow_runtime_env_repair=false

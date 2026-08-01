@@ -2665,6 +2665,8 @@ class AwsFoundationTests(unittest.TestCase):
             '"$binding_runtime_version" == "$NODE_ARTIFACT_SHA256"',
             "recovered_uncommitted_target_replacement=true",
             'elif [[ "$recovered_uncommitted_target_replacement" == true ]]; then',
+            'if [[ "$evidence_updated_count" == 0 ||\n'
+            '          "$recovered_uncommitted_target_replacement" == true ]]; then',
         ):
             self.assertIn(required, self.foundation_script)
         self.assertNotIn(
