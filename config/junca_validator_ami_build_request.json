@@ -9,8 +9,8 @@
   "manifest_gate_run_id": "30683678492",
   "resume_run_id": "30683689710",
   "target_workflow": ".github/workflows/junca-validator-foundation-release.yml",
-  "one_shot_nonce": "foundation-resume-30683689710-20260801-safe-active-modes-v9",
-  "request_sha256": "0d276dd66c79a3715e4dadd55e0afd9ea8eb48ca3a171926a3bbdd35e40fd33a",
+  "one_shot_nonce": "foundation-resume-30683689710-20260801-controlled-state-admission-v10",
+  "request_sha256": "69f2c379c944c431a33e9d636363ecfe18726fff5b0ba3f45cce4c096dbe4ca0",
   "boundaries": {
     "rebuild_ami": false,
     "rebuild_manifest": false,
