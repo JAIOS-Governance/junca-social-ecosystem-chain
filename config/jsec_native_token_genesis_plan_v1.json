@@ -18,6 +18,14 @@
     "post_genesis_issuance": null,
     "fee_model": null
   },
+  "economics_approval": {
+    "authority": "JUNCA Holdings Founder / Chairman / CEO",
+    "status": "approval_required",
+    "decision_record_id": null,
+    "approved_definition_sha256": null,
+    "decision_record_sha256": null,
+    "approved_at": null
+  },
   "allocations": {
     "locked": false,
     "accounts": []

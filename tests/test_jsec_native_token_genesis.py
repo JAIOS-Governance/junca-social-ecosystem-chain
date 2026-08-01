@@ -7,10 +7,12 @@ from pathlib import Path
 import unittest
 
 from jaios.social_ecosystem_chain.native_token_genesis import (
+    ECONOMICS_AUTHORITY,
     NativeTokenGenesisError,
     TARGET_GENESIS_DATE,
     evaluate_native_token_genesis_plan,
     load_native_token_genesis_plan,
+    native_economics_definition_digest,
 )
 
 
@@ -32,6 +34,16 @@ def ready_plan() -> dict[str, object]:
         "supply_model": "fixed",
         "post_genesis_issuance": "disabled",
         "fee_model": "burn-and-reward",
+    }
+    value["economics_approval"] = {
+        "authority": ECONOMICS_AUTHORITY,
+        "status": "approved",
+        "decision_record_id": "CEO-JSEC-ECONOMICS-2026-001",
+        "approved_definition_sha256": native_economics_definition_digest(
+            value["definition"]
+        ),
+        "decision_record_sha256": "b" * 64,
+        "approved_at": "2026-08-06T00:00:00Z",
     }
     value["allocations"] = {
         "locked": True,
@@ -88,6 +100,24 @@ class NativeTokenGenesisTests(unittest.TestCase):
         self.assertFalse(evidence["assets_moved"])
         self.assertFalse(evidence["bridge_activated"])
         self.assertFalse(evidence["mainnet_activation_authorized"])
+        packet = plan.economics_decision_packet()
+        self.assertEqual(packet["status"], "approval_required")
+        self.assertEqual(packet["authority_required"], ECONOMICS_AUTHORITY)
+        self.assertEqual(
+            packet["missing_decisions"],
+            [
+                "name",
+                "symbol",
+                "decimals",
+                "total_supply_base_units",
+                "supply_model",
+                "post_genesis_issuance",
+                "fee_model",
+            ],
+        )
+        self.assertFalse(packet["constraints"]["mainnet_changed"])
+        self.assertFalse(packet["constraints"]["assets_moved"])
+        self.assertFalse(packet["constraints"]["bridge_activated"])
 
     def test_overdue_milestone_fails_schedule_gate_without_date_shift(self) -> None:
         plan = load_native_token_genesis_plan(CONFIG)
@@ -140,6 +170,42 @@ class NativeTokenGenesisTests(unittest.TestCase):
         self.assertFalse(evidence["mainnet_activation_authorized"])
         self.assertFalse(evidence["genesis_applied"])
         self.assertFalse(evidence["assets_moved"])
+        self.assertEqual(evidence["native_economics"]["status"], "approved")
+
+    def test_economics_approval_is_bound_to_exact_definition(self) -> None:
+        value = ready_plan()
+        value["definition"]["decimals"] = 8
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError,
+            "definition digest does not match",
+        ):
+            evaluate_native_token_genesis_plan(value)
+
+    def test_rejects_shadow_economics_fields(self) -> None:
+        value = canonical()
+        value["definition"]["hidden_mint_policy"] = "enabled"
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError,
+            "definition field set mismatch",
+        ):
+            evaluate_native_token_genesis_plan(value)
+
+        value = canonical()
+        value["economics_approval"]["alternate_authority"] = "unapproved"
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError,
+            "approval field set mismatch",
+        ):
+            evaluate_native_token_genesis_plan(value)
+
+    def test_rejects_locked_economics_without_ceo_approval(self) -> None:
+        value = canonical()
+        value["definition"] = ready_plan()["definition"]
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError,
+            "requires approved economics",
+        ):
+            evaluate_native_token_genesis_plan(value)
 
     def test_supply_and_allocations_must_match_exactly(self) -> None:
         value = ready_plan()

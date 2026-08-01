@@ -12,12 +12,33 @@ from typing import Any, Mapping
 
 
 SCHEMA_VERSION = "jsec-native-token-genesis-plan/v1"
+ECONOMICS_DEFINITION_SCHEMA_VERSION = "jsec-native-economics-definition/v1"
 OFFICIAL_NAME = "JUNCA Social Ecosystem Chain"
 GOVERNANCE = "JAIOS Institutional Governance"
+ECONOMICS_AUTHORITY = "JUNCA Holdings Founder / Chairman / CEO"
 TARGET_GENESIS_DATE = date(2026, 10, 1)
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+ECONOMICS_DEFINITION_FIELDS = (
+    "name",
+    "symbol",
+    "decimals",
+    "total_supply_base_units",
+    "supply_model",
+    "post_genesis_issuance",
+    "fee_model",
+)
+
+ECONOMICS_APPROVAL_FIELDS = (
+    "authority",
+    "status",
+    "decision_record_id",
+    "approved_definition_sha256",
+    "decision_record_sha256",
+    "approved_at",
+)
 
 LOCKED_MILESTONES = (
     ("native_economics_constitution", date(2026, 8, 7)),
@@ -80,6 +101,7 @@ class GenesisMilestone:
 @dataclass(frozen=True)
 class NativeTokenGenesisPlan:
     definition: Mapping[str, Any]
+    economics_approval: Mapping[str, Any]
     allocations_locked: bool
     allocations: tuple[GenesisAllocation, ...]
     custody: Mapping[str, Any]
@@ -100,6 +122,8 @@ class NativeTokenGenesisPlan:
         blockers: list[str] = []
         if self.definition.get("locked") is not True:
             blockers.append("native-token-definition")
+        if self.economics_approval.get("status") != "approved":
+            blockers.append("native-economics-approval")
         if not self.allocations_locked:
             blockers.append("genesis-allocations")
         if self.custody.get("locked") is not True:
@@ -141,6 +165,45 @@ class NativeTokenGenesisPlan:
                 "native Genesis ceremony blocked by: " + ", ".join(self.blockers)
             )
 
+    def economics_decision_packet(self) -> dict[str, Any]:
+        definition = {
+            key: self.definition[key]
+            for key in ECONOMICS_DEFINITION_FIELDS
+        }
+        missing = [key for key, value in definition.items() if value is None]
+        return {
+            "schema_version": "jsec-native-economics-decision-packet/v1",
+            "official_name": OFFICIAL_NAME,
+            "governance": GOVERNANCE,
+            "authority_required": ECONOMICS_AUTHORITY,
+            "target_genesis_date": TARGET_GENESIS_DATE.isoformat(),
+            "status": self.economics_approval["status"],
+            "definition": definition,
+            "missing_decisions": missing,
+            "candidate_definition_sha256": native_economics_definition_digest(
+                self.definition
+            ),
+            "approved_definition_sha256": self.economics_approval[
+                "approved_definition_sha256"
+            ],
+            "decision_record_id": self.economics_approval["decision_record_id"],
+            "decision_record_sha256": self.economics_approval[
+                "decision_record_sha256"
+            ],
+            "approved_at": self.economics_approval["approved_at"],
+            "constraints": {
+                "asset_class": "native-token",
+                "issuance_event": "mainnet-genesis",
+                "contract_token_dependency": False,
+                "contract_address": None,
+                "mainnet_changed": False,
+                "genesis_applied": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+                "mainnet_activation_authorized": False,
+            },
+        }
+
     def as_evidence(self, as_of: date) -> dict[str, Any]:
         _require_date(as_of, "as_of")
         next_milestone = next(
@@ -169,6 +232,19 @@ class NativeTokenGenesisPlan:
             "overdue_milestones": list(self.overdue_milestones(as_of)),
             "blockers": list(self.blockers),
             "specification_digest": self.specification_digest,
+            "native_economics": {
+                "status": self.economics_approval["status"],
+                "authority": self.economics_approval["authority"],
+                "candidate_definition_sha256": (
+                    native_economics_definition_digest(self.definition)
+                ),
+                "approved_definition_sha256": self.economics_approval[
+                    "approved_definition_sha256"
+                ],
+                "decision_record_sha256": self.economics_approval[
+                    "decision_record_sha256"
+                ],
+            },
             "contract_token_dependency": False,
             "mainnet_changed": False,
             "genesis_applied": False,
@@ -207,6 +283,10 @@ def evaluate_native_token_genesis_plan(
     _require(raw, "contract_address", None)
 
     definition = _definition(_mapping(raw.get("definition"), "definition"))
+    economics_approval = _economics_approval(
+        _mapping(raw.get("economics_approval"), "economics_approval"),
+        definition,
+    )
     allocations_section = _mapping(raw.get("allocations"), "allocations")
     allocations_locked = _boolean(
         allocations_section.get("locked"), "allocations.locked"
@@ -225,6 +305,7 @@ def evaluate_native_token_genesis_plan(
     gate_map = dict(gates)
     _validate_gate_dependencies(
         definition,
+        economics_approval,
         allocations_locked,
         custody,
         gate_map,
@@ -236,6 +317,7 @@ def evaluate_native_token_genesis_plan(
     canonical = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return NativeTokenGenesisPlan(
         definition=definition,
+        economics_approval=economics_approval,
         allocations_locked=allocations_locked,
         allocations=allocations,
         custody=custody,
@@ -245,7 +327,27 @@ def evaluate_native_token_genesis_plan(
     )
 
 
+def native_economics_definition_digest(definition: Mapping[str, Any]) -> str:
+    """Bind an economics approval record to the exact normalized definition."""
+
+    normalized = _definition(_mapping(definition, "definition"))
+    payload = {
+        "schema_version": ECONOMICS_DEFINITION_SCHEMA_VERSION,
+        "official_name": OFFICIAL_NAME,
+        "definition": {
+            key: normalized[key]
+            for key in ECONOMICS_DEFINITION_FIELDS
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _definition(value: Mapping[str, Any]) -> dict[str, Any]:
+    if set(value) != {"locked", *ECONOMICS_DEFINITION_FIELDS}:
+        raise NativeTokenGenesisError("native-token definition field set mismatch")
     locked = _boolean(value.get("locked"), "definition.locked")
     name = _optional_text(value.get("name"), "definition.name", 64)
     symbol = _optional_text(value.get("symbol"), "definition.symbol", 10)
@@ -308,6 +410,70 @@ def _allocations(value: Any) -> tuple[GenesisAllocation, ...]:
     return tuple(result)
 
 
+def _economics_approval(
+    value: Mapping[str, Any],
+    definition: Mapping[str, Any],
+) -> dict[str, Any]:
+    if set(value) != set(ECONOMICS_APPROVAL_FIELDS):
+        raise NativeTokenGenesisError("economics approval field set mismatch")
+    _require(value, "authority", ECONOMICS_AUTHORITY)
+    status = value.get("status")
+    if status not in {"approval_required", "approved"}:
+        raise NativeTokenGenesisError("economics_approval.status is unsupported")
+    decision_record_id = _optional_text(
+        value.get("decision_record_id"),
+        "economics_approval.decision_record_id",
+        200,
+    )
+    approved_definition_sha256 = _optional_sha256(
+        value.get("approved_definition_sha256"),
+        "economics_approval.approved_definition_sha256",
+    )
+    decision_record_sha256 = _optional_sha256(
+        value.get("decision_record_sha256"),
+        "economics_approval.decision_record_sha256",
+    )
+    approved_at = _optional_text(
+        value.get("approved_at"),
+        "economics_approval.approved_at",
+        40,
+    )
+    approval_values = (
+        decision_record_id,
+        approved_definition_sha256,
+        decision_record_sha256,
+        approved_at,
+    )
+    if status == "approval_required" and any(item is not None for item in approval_values):
+        raise NativeTokenGenesisError(
+            "unapproved economics must not contain approval evidence"
+        )
+    if status == "approved":
+        if definition.get("locked") is not True:
+            raise NativeTokenGenesisError(
+                "approved economics requires a locked native-token definition"
+            )
+        if any(item is None for item in approval_values):
+            raise NativeTokenGenesisError("approved economics evidence is incomplete")
+        expected = native_economics_definition_digest(definition)
+        if approved_definition_sha256 != expected:
+            raise NativeTokenGenesisError(
+                "approved economics definition digest does not match"
+            )
+    elif definition.get("locked") is True:
+        raise NativeTokenGenesisError(
+            "locked native-token definition requires approved economics"
+        )
+    return {
+        "authority": ECONOMICS_AUTHORITY,
+        "status": status,
+        "decision_record_id": decision_record_id,
+        "approved_definition_sha256": approved_definition_sha256,
+        "decision_record_sha256": decision_record_sha256,
+        "approved_at": approved_at,
+    }
+
+
 def _validate_allocation_supply(
     definition: Mapping[str, Any],
     allocations_locked: bool,
@@ -365,12 +531,19 @@ def _custody(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _validate_gate_dependencies(
     definition: Mapping[str, Any],
+    economics_approval: Mapping[str, Any],
     allocations_locked: bool,
     custody: Mapping[str, Any],
     gates: Mapping[str, bool],
 ) -> None:
-    if gates["native_economics_locked"] and definition.get("locked") is not True:
-        raise NativeTokenGenesisError("native_economics_locked lacks definition evidence")
+    economics_locked = (
+        definition.get("locked") is True
+        and economics_approval.get("status") == "approved"
+    )
+    if gates["native_economics_locked"] != economics_locked:
+        raise NativeTokenGenesisError(
+            "native_economics_locked does not match approved definition evidence"
+        )
     if gates["deterministic_genesis_allocations"] and not allocations_locked:
         raise NativeTokenGenesisError(
             "deterministic_genesis_allocations lacks allocation evidence"
@@ -437,6 +610,14 @@ def _optional_text(value: Any, field: str, maximum: int) -> str | None:
     if value is None:
         return None
     return _text(value, field, maximum)
+
+
+def _optional_sha256(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not SHA256.fullmatch(value):
+        raise NativeTokenGenesisError(f"{field} must be a SHA-256 digest")
+    return value
 
 
 def _boolean(value: Any, field: str) -> bool:
