@@ -11,8 +11,8 @@
   "renew_expired_epoch": "NONE",
   "renewal_preserve_prefix_count": "0",
   "target_workflow": ".github/workflows/junca-validator-foundation-release.yml",
-  "one_shot_nonce": "foundation-resume-30688476089-20260801-reuse-epoch-v22",
-  "request_sha256": "2a604c4bcc9c096c613540233e7e65b8fa59fece1b0df5880f67aae31d8bbe52",
+  "one_shot_nonce": "foundation-resume-30688476089-20260801-next-canonical-slot-v23",
+  "request_sha256": "d00abaa9974edba99fccf4ca2795c12821b393e22f7c7d566d3b38a206e4df23",
   "boundaries": {
     "rebuild_ami": false,
     "rebuild_manifest": false,
