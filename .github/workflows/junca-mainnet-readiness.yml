@@ -9,6 +9,7 @@ on:
       - "jaios/social_ecosystem_chain/mainnet_readiness.py"
       - "jaios/social_ecosystem_chain/native_token_genesis.py"
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
+      - "scripts/jsec_native_economics_decision_packet.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
   push:
@@ -19,6 +20,7 @@ on:
       - "jaios/social_ecosystem_chain/mainnet_readiness.py"
       - "jaios/social_ecosystem_chain/native_token_genesis.py"
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
+      - "scripts/jsec_native_economics_decision_packet.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
   schedule:
@@ -49,6 +51,8 @@ jobs:
           python scripts/jsec_native_token_genesis_schedule_gate.py \
             --as-of "$(date -u +%F)" \
             --output artifacts/jsec-native-token-genesis-schedule.json
+          python scripts/jsec_native_economics_decision_packet.py \
+            --output artifacts/jsec-native-economics-decision-packet.json
           python - <<'PY'
           import json
           import os
@@ -86,6 +90,8 @@ jobs:
             > artifacts/mainnet-readiness.json.sha256
           sha256sum artifacts/jsec-native-token-genesis-schedule.json \
             > artifacts/jsec-native-token-genesis-schedule.json.sha256
+          sha256sum artifacts/jsec-native-economics-decision-packet.json \
+            > artifacts/jsec-native-economics-decision-packet.json.sha256
 
       - uses: actions/upload-artifact@v4
         with:
