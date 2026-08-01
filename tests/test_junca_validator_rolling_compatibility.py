@@ -461,6 +461,63 @@ class RollingCompatibilityTests(unittest.TestCase):
             )
         self.assertEqual(evaluate_rolling_compatibility(value)["state"], "ACCEPTED")
 
+    def test_near_term_activation_window_requires_exact_3_of_3_contract(self):
+        value = evidence()
+        value["requested_slot_epoch_seconds"] = 2_000_000_000
+        value["observed_unix_time"] = 1_999_999_850
+        for validator in value["validators"]:
+            validator["runtime_version"] = "v2"
+            validator["ami_id"] = "ami-22222222222222222"
+            validator["slot_epoch_seconds"] = 2_000_000_000
+            validator["finality_readback"]["runtime_env"][
+                "slot_epoch_seconds"
+            ] = 2_000_000_000
+            validator["finality_readback"]["health"][
+                "slot_epoch_seconds"
+            ] = 2_000_000_000
+
+        with self.assertRaisesRegex(
+            RollingCompatibilityError, "bounded safety window"
+        ):
+            evaluate_rolling_compatibility(value)
+
+        value["finality_activation_contract"] = True
+        self.assertEqual(
+            evaluate_rolling_compatibility(value)["state"],
+            "READY_FOR_FINALITY_ENABLE",
+        )
+
+        for remaining in (29, 211):
+            with self.subTest(remaining=remaining):
+                bounded = copy.deepcopy(value)
+                bounded["observed_unix_time"] = (
+                    bounded["requested_slot_epoch_seconds"] - remaining
+                )
+                with self.assertRaisesRegex(
+                    RollingCompatibilityError, "bounded safety window"
+                ):
+                    evaluate_rolling_compatibility(bounded)
+
+        partial = copy.deepcopy(value)
+        partial["validators"][2]["runtime_version"] = "v1"
+        partial["validators"][2]["ami_id"] = "ami-11111111111111111"
+        partial["validators"][2]["slot_epoch_seconds"] = 0
+        partial["validators"][2]["finality_readback"]["runtime_env"][
+            "slot_epoch_seconds"
+        ] = 0
+        partial["validators"][2]["finality_readback"]["health"][
+            "slot_epoch_seconds"
+        ] = 0
+        with self.assertRaisesRegex(
+            RollingCompatibilityError, "exact 3/3 target runtime"
+        ):
+            evaluate_rolling_compatibility(partial)
+
+        malformed = copy.deepcopy(value)
+        malformed["finality_activation_contract"] = "true"
+        with self.assertRaisesRegex(RollingCompatibilityError, "boolean"):
+            evaluate_rolling_compatibility(malformed)
+
     def test_quorum_and_head_disagreement_fail_closed(self):
         value = evidence()
         value["validators"][1]["service_active"] = False

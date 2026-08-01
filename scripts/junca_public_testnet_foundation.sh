@@ -3737,6 +3737,7 @@ write_live_rollout_prefix_readback() {
 write_rolling_compatibility_evidence() {
   local expected_state="$1"
   local expected_next="${2:-}"
+  local finality_activation_contract="${3:-false}"
   local -a current_instances
   local index
   local validator_id
@@ -3744,6 +3745,10 @@ write_rolling_compatibility_evidence() {
   local rollback_volume_id
   local observation_path
   local enriched_observation_path
+  case "$finality_activation_contract" in
+    true|false) ;;
+    *) return 2 ;;
+  esac
   terraform -chdir=infra/aws/public-testnet output -json \
     > artifacts/rolling-foundation-outputs.json
   mapfile -t current_instances < <(
@@ -3793,6 +3798,8 @@ write_rolling_compatibility_evidence() {
     --argjson requested_slot_epoch_seconds \
       "$validator_slot_epoch_seconds" \
     --argjson observed_unix_time "$(date +%s)" \
+    --argjson finality_activation_contract \
+      "$finality_activation_contract" \
     --slurpfile validators artifacts/rolling-validators.json \
     --slurpfile evidence_validators \
       artifacts/evidence-bound-rollout-baseline.json \
@@ -3807,6 +3814,7 @@ write_rolling_compatibility_evidence() {
       evidence_validators: $evidence_validators[0],
       requested_slot_epoch_seconds: $requested_slot_epoch_seconds,
       observed_unix_time: $observed_unix_time,
+      finality_activation_contract: $finality_activation_contract,
       fallback_active: false,
       rollback: $rollback[0],
       mainnet_changed: false,
@@ -5207,7 +5215,8 @@ if [[ "$phase" == "foundation-apply" ]]; then
       }' > artifacts/finality-activation.json
     set_runtime_finality \
       0 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
-    write_rolling_compatibility_evidence READY_FOR_FINALITY_ENABLE
+    write_rolling_compatibility_evidence \
+      READY_FOR_FINALITY_ENABLE "" true
     test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
     set_runtime_finality \
       30 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
@@ -5220,7 +5229,7 @@ if [[ "$phase" == "foundation-apply" ]]; then
       .accepted_at = $accepted_at
     ' artifacts/finality-activation.json >"$activation_evidence_tmp"
     mv -f "$activation_evidence_tmp" artifacts/finality-activation.json
-    write_rolling_compatibility_evidence ACCEPTED
+    write_rolling_compatibility_evidence ACCEPTED "" true
   fi
 
   apply_executed=true

@@ -22,6 +22,8 @@ CHAIN_ID = 20260723
 NETWORK_LABEL = "Public Testnet / No Monetary Value"
 MINIMUM_SLOT_EPOCH_REMAINING_SECONDS = 900
 MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS = 7230
+MINIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS = 30
+MAXIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS = 210
 RECOVERY_FILE_ALLOWLIST = frozenset(
     {
         ".github/workflows/junca-validator-foundation-release.yml",
@@ -388,6 +390,17 @@ def evaluate_rolling_compatibility(evidence: Mapping[str, Any]) -> Mapping[str, 
             by_id[validator_id], target_runtime=is_updated
         )
 
+    updated_count = sum(updated)
+    activation_contract = evidence.get("finality_activation_contract", False)
+    if activation_contract not in (True, False):
+        raise RollingCompatibilityError(
+            "finality activation contract must be boolean"
+        )
+    if activation_contract is True and updated_count != 3:
+        raise RollingCompatibilityError(
+            "finality activation contract requires the exact 3/3 target runtime"
+        )
+
     requested_epoch = evidence.get("requested_slot_epoch_seconds")
     now = evidence.get("observed_unix_time")
     if (
@@ -399,16 +412,22 @@ def evaluate_rolling_compatibility(evidence: Mapping[str, Any]) -> Mapping[str, 
     ):
         raise RollingCompatibilityError("future canonical slot epoch is required")
     remaining = requested_epoch - now
-    if (
-        remaining < MINIMUM_SLOT_EPOCH_REMAINING_SECONDS
-        or remaining > MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS
-    ):
+    minimum_remaining = (
+        MINIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS
+        if activation_contract
+        else MINIMUM_SLOT_EPOCH_REMAINING_SECONDS
+    )
+    maximum_remaining = (
+        MAXIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS
+        if activation_contract
+        else MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS
+    )
+    if remaining < minimum_remaining or remaining > maximum_remaining:
         raise RollingCompatibilityError(
             "canonical slot epoch is outside the bounded safety window"
         )
 
     configured = [item.get("slot_epoch_seconds") for item in validators]
-    updated_count = sum(updated)
     if updated_count < 3:
         if any(enabled) or any(value not in (None, 0) for value in configured):
             raise RollingCompatibilityError(

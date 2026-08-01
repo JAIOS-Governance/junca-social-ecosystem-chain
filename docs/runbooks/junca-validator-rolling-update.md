@@ -275,6 +275,13 @@ slot; the following gate still requires two fresh consecutive heights with
 matching timestamps and exact current 3/3 certificates. A stale epoch,
 unbound instance, partial write, boundary drift or failed readback compensates
 to disabled `false/0/0` and stops.
+The replacement safety epoch and live activation epoch are distinct contracts.
+The former retains 900 to 7,230 seconds for serial replacement. Only after all
+three validators are the exact target runtime may an explicit
+`finality_activation_contract` admit the next-slot epoch with 30 to 210 seconds
+remaining. Missing, non-boolean, partial-prefix, too-near or too-far activation
+evidence remains rejected; the near-term exception cannot authorize a rolling
+replacement.
 The cross-head comparison allowlist includes the live-prefix gate, its focused
 negative tests, and this acceptance contract because those files implement and
 specify the same bounded recovery decision. No unrelated runtime, Mainnet,
