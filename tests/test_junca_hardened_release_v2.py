@@ -24,6 +24,7 @@ class HardenedReleaseV2Tests(unittest.TestCase):
             "JUNCA Validator Runtime Artifacts",
             "workflow_run.conclusion == 'success'",
             "workflow_run.event == 'push'",
+            "workflow_run.event == 'workflow_dispatch'",
             "workflow_run.head_branch == 'main'",
             "head_repository.full_name == github.repository",
             'test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"',
@@ -37,6 +38,34 @@ class HardenedReleaseV2Tests(unittest.TestCase):
             "PUBLIC_TESTNET_ACTIVE_ADVANCING",
         ):
             self.assertIn(value, self.parent)
+
+    def test_parent_rebinds_a_superseded_release_without_deploying_it(self) -> None:
+        for value in (
+            'current_main="$(\n            gh api',
+            'git merge-base --is-ancestor "$SOURCE_COMMIT" "$current_main"',
+            '--workflow-name "JUNCA Validator Runtime Artifacts"',
+            '--expected-head "$current_main"',
+            'state: "SUPERSEDED_BY_NEW_MAIN"',
+            "candidate_accepted: false",
+            'echo "superseded=true"',
+            "if: steps.evidence.outputs.superseded != 'true'",
+        ):
+            self.assertIn(value, self.parent)
+        self.assertEqual(
+            self.parent.count(
+                "if: steps.evidence.outputs.superseded != 'true'"
+            ),
+            4,
+        )
+        self.assertIn(
+            '(.event == "push" or .event == "workflow_dispatch")',
+            self.parent,
+        )
+
+    def test_issue_218_is_not_appended_by_release_acceptance(self) -> None:
+        self.assertIn("for issue in 266 244 248 249; do", self.parent)
+        self.assertNotIn("for issue in 266 244 248 249 218; do", self.parent)
+        self.assertIn("one canonical persistent comment", self.parent)
 
     def test_parent_preserves_activation_boundaries(self) -> None:
         for value in (

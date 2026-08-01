@@ -9,6 +9,19 @@ fail-closed and cannot dispatch an AMI build, evidence collector, manifest
 gate, or validator rollout. This prevents two release parents from replacing
 the same three-validator fleet.
 
+The V2 owner is also self-rebinding across an exact fast-forward of `main`.
+If `main` changes after a long immutable AMI build, the older candidate does
+not dispatch baseline, manifest, Foundation, continuity, or acceptance work.
+It proves that its source is an ancestor of the new head, records a
+`SUPERSEDED_BY_NEW_MAIN` artifact with every safety boundary false, and
+dispatches the exact current-head Runtime Artifacts workflow. That successful
+workflow creates a new provenance-bound V2 owner. A rewind, unrelated history,
+ambiguous run, failed successor, or mismatched head remains fail-closed.
+
+Release acceptance never appends to Issue #218. That issue has exactly one
+canonical persistent live-status comment, which is replaced only after the
+complete remote and live evidence has been read back.
+
 1. `JUNCA Runtime Release Manifest Gate` is a **predeployment readiness**
    decision. Its three inputs use `pre-rollout-baseline/v1` schemas. They prove
    that the candidate AMI is immutable, the existing runtime is a distinct
