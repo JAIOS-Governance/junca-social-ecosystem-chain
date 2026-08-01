@@ -692,7 +692,10 @@ set_runtime_finality() {
     if ! expected_artifact_sha256="$(
       jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
     )" || ! allow_missing_finality_keys="$(
-      jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+      # A valid false boolean makes jq --exit-status return 1. The complete
+      # bindings object was schema-checked above, so read this value without
+      # treating false as a failed lookup.
+      jq -r ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
     )"; then
       write_finality_local_gate \
         "$local_gate_path" "$block_interval" "$slot_epoch" \
@@ -743,7 +746,7 @@ set_runtime_finality() {
       jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
     )"
     allow_missing_finality_keys="$(
-      jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+      jq -r ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
     )"
     command="$(
       render_runtime_finality_mutation \
@@ -793,7 +796,7 @@ set_runtime_finality() {
         jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
       )"
       allow_missing_finality_keys="$(
-        jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
+        jq -r ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
       )"
       command="$(
         render_runtime_finality_mutation \
