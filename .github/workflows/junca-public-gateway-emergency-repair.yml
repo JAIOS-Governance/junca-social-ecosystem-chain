@@ -1,0 +1,219 @@
+name: JUNCA Public Gateway Emergency Repair
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - config/junca_public_gateway_repair_request.json
+  workflow_dispatch:
+    inputs:
+      authorize_repair:
+        description: "Exact authorization phrase: PUBLIC_TESTNET_GATEWAY_REPAIR"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-gateway-repair
+  cancel-in-progress: false
+
+jobs:
+  repair-and-verify:
+    if: >-
+      github.event_name == 'push' ||
+      inputs.authorize_repair == 'PUBLIC_TESTNET_GATEWAY_REPAIR'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 20
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate one-shot repair authorization
+        run: |
+          set -euo pipefail
+          request=config/junca_public_gateway_repair_request.json
+          jq -e '
+            .schema_version == "junca-public-gateway-repair-request/v1" and
+            .authorized_scope == "PUBLIC_TESTNET_GATEWAY_REPAIR" and
+            .incident == "HTTP_502_ALL_PUBLIC_GATEWAYS" and
+            (.observed_at | type == "string" and length > 0) and
+            (.one_shot_nonce | type == "string" and length >= 16) and
+            .services == [
+              "junca-public-rpc.service",
+              "junca-public-explorer.service"
+            ] and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false and
+            .mainnet_activation_authorized == false
+          ' "$request" >/dev/null
+          mkdir -p artifacts
+          cp "$request" artifacts/repair-request.json
+          sha256sum "$request" > artifacts/repair-request.json.sha256
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-gateway-repair-${{ github.run_id }}
+
+      - name: Resolve exact running Public Testnet validators
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account == $account and
+            (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances             --filters               "Name=instance-state-name,Values=running"               "Name=tag:Project,Values=JUNCA Social Ecosystem Chain"               "Name=tag:Network,Values=Public Testnet"               "Name=tag:Validator,Values=01,02,03"             > artifacts/ec2-instances.json
+          jq -e '
+            [
+              .Reservations[].Instances[] |
+              {
+                instance_id: .InstanceId,
+                validator: (
+                  .Tags[] | select(.Key == "Validator") | .Value
+                ),
+                private_ip: .PrivateIpAddress,
+                state: .State.Name
+              }
+            ] |
+            sort_by(.validator) |
+            select(
+              length == 3 and
+              (map(.instance_id) | unique | length) == 3 and
+              map(.validator) == ["01","02","03"] and
+              all(.[]; .state == "running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          printf '%s\n' "${instances[@]}" > artifacts/validator-instance-ids.txt
+          aws ssm describe-instance-information             --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")"             > artifacts/ssm-instances.json
+          jq -e --argjson expected "$(jq '[.[].instance_id] | sort' artifacts/validators.json)" '
+            [.InstanceInformationList[] | select(.PingStatus == "Online") | .InstanceId] |
+            sort |
+            . == $expected
+          ' artifacts/ssm-instances.json >/dev/null
+
+      - name: Repair gateway services without changing validator state
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          remote_command="$(cat <<'REMOTE'
+          set -euo pipefail
+          systemctl is-active --quiet junca-validator.service
+          curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json
+          jq -e '.status == "healthy" and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-validator-health.json >/dev/null
+          systemctl daemon-reload
+          systemctl enable junca-public-rpc.service junca-public-explorer.service
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8546/health >/tmp/junca-public-rpc-health.json &&
+               curl -fsS http://127.0.0.1:3000/health >/tmp/junca-public-explorer-health.json; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          systemctl is-active --quiet junca-public-rpc.service
+          systemctl is-active --quiet junca-public-explorer.service
+          jq -e '.status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-public-rpc-health.json >/dev/null
+          jq -e '.status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-public-explorer-health.json >/dev/null
+          printf '%s\n' '{"schema_version":"junca-public-gateway-local-repair/v1","accepted":true,"mainnet_changed":false,"assets_moved":false,"bridge_activated":false}'
+          REMOTE
+          )"
+          jq -n --arg command "$remote_command" '{commands: [$command]}'             > artifacts/ssm-gateway-repair.json
+          command_id="$(aws ssm send-command             --instance-ids "${instances[@]}"             --document-name AWS-RunShellScript             --parameters file://artifacts/ssm-gateway-repair.json             --comment "JUNCA Public Testnet gateway HTTP 502 repair"             --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/ssm-command-id.txt
+          for instance in "${instances[@]}"; do
+            status=""
+            for attempt in $(seq 1 90); do
+              status="$(aws ssm get-command-invocation                 --command-id "$command_id"                 --instance-id "$instance"                 --query Status --output text)"
+              case "$status" in
+                Success) break ;;
+                Failed|Cancelled|TimedOut|Cancelling) break ;;
+              esac
+              test "$attempt" -lt 90
+              sleep 2
+            done
+            aws ssm get-command-invocation               --command-id "$command_id"               --instance-id "$instance"               > "artifacts/gateway-repair-${instance}.json"
+            jq -e '
+              .Status == "Success" and
+              (.ResponseCode // -1) == 0 and
+              (.StandardOutputContent | contains(
+                "junca-public-gateway-local-repair/v1"
+              )) and
+              (.StandardOutputContent | contains("\"accepted\":true"))
+            ' "artifacts/gateway-repair-${instance}.json" >/dev/null
+          done
+
+      - name: Verify public ALB recovery and safety boundary
+        run: |
+          set -euo pipefail
+          accepted=false
+          for attempt in $(seq 1 24); do
+            if curl -fsS https://health.jaios-governance.org/health                  > artifacts/public-health.json &&
+               curl -fsS https://explorer.jaios-governance.org/explorer.json                  > artifacts/public-explorer.json &&
+               curl -fsS -H 'content-type: application/json'                  --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'                  https://rpc.jaios-governance.org/                  > artifacts/public-rpc-chain-id.json &&
+               curl -fsS -H 'content-type: application/json'                  --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}'                  https://rpc.jaios-governance.org/                  > artifacts/public-rpc-block-number.json &&
+               jq -e '
+                 .status == "healthy" and
+                 .read_only == true and
+                 .validator.head_height >= 1 and
+                 .mainnet_changed == false and
+                 .assets_moved == false and
+                 .bridge_activated == false
+               ' artifacts/public-health.json >/dev/null &&
+               jq -e '
+                 .status == "ready" and
+                 .read_only == true and
+                 .finalized_only == true and
+                 .head.height >= 1 and
+                 .head.signed_power == 3 and
+                 .head.total_power == 3 and
+                 .mainnet_changed == false and
+                 .assets_moved == false and
+                 .bridge_activated == false
+               ' artifacts/public-explorer.json >/dev/null &&
+               jq -e '.jsonrpc == "2.0" and .id == 1 and .result == "0x1352773"'                  artifacts/public-rpc-chain-id.json >/dev/null &&
+               jq -e '.jsonrpc == "2.0" and .id == 2 and (.result | test("^0x[0-9a-f]+$"))'                  artifacts/public-rpc-block-number.json >/dev/null; then
+              accepted=true
+              break
+            fi
+            test "$attempt" -lt 24
+            sleep 5
+          done
+          test "$accepted" = "true"
+          jq -n             --arg workflow_run_url               "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"             --argjson validators "$(cat artifacts/validators.json)"             --slurpfile health artifacts/public-health.json             --slurpfile explorer artifacts/public-explorer.json             --slurpfile chain_id artifacts/public-rpc-chain-id.json             --slurpfile block_number artifacts/public-rpc-block-number.json '{
+              schema_version: "junca-public-gateway-emergency-repair/v1",
+              result: "PUBLIC_GATEWAYS_RECOVERED",
+              workflow_run_url: $workflow_run_url,
+              validators: $validators,
+              public_readback: {
+                health: $health[0],
+                explorer: $explorer[0],
+                rpc_chain_id: $chain_id[0],
+                rpc_block_number: $block_number[0]
+              },
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              mainnet_activation_authorized: false
+            }' > artifacts/public-gateway-repair-evidence.json
+          sha256sum artifacts/public-gateway-repair-evidence.json             > artifacts/public-gateway-repair-evidence.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-gateway-repair-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

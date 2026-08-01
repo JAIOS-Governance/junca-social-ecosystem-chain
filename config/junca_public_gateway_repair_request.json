@@ -1,0 +1,15 @@
+{
+  "schema_version": "junca-public-gateway-repair-request/v1",
+  "authorized_scope": "PUBLIC_TESTNET_GATEWAY_REPAIR",
+  "incident": "HTTP_502_ALL_PUBLIC_GATEWAYS",
+  "observed_at": "2026-08-01T08:28:46Z",
+  "one_shot_nonce": "gateway-502-repair-20260801T082846Z-v1",
+  "services": [
+    "junca-public-rpc.service",
+    "junca-public-explorer.service"
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "mainnet_activation_authorized": false
+}
