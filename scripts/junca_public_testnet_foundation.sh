@@ -514,6 +514,36 @@ build_pre_rollout_finality_bindings() {
     '
 }
 
+write_finality_local_gate() {
+  local output_path="$1"
+  local block_interval="$2"
+  local slot_epoch="$3"
+  local bindings_json="$4"
+  local stage="$5"
+  local accepted="$6"
+  local reason="${7:-}"
+  jq -n \
+    --arg stage "$stage" \
+    --arg reason "$reason" \
+    --argjson accepted "$accepted" \
+    --argjson block_interval "$block_interval" \
+    --argjson slot_epoch "$slot_epoch" \
+    --argjson bindings "$bindings_json" '{
+      schema_version: "junca-finality-local-gate/v1",
+      stage: $stage,
+      requested: {
+        block_interval_seconds: $block_interval,
+        slot_epoch_seconds: $slot_epoch
+      },
+      bindings: $bindings,
+      accepted: $accepted,
+      reason: (if $reason == "" then null else $reason end),
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false
+    }' >"$output_path"
+}
+
 set_runtime_finality() {
   local block_interval="$1"
   local slot_epoch="$2"
@@ -527,13 +557,16 @@ set_runtime_finality() {
   local compensation_summary
   local compensation_status
   local readback_status
+  local instance_lines
+  local local_gate_path
   local index
   local mutation_failed=false
   local -a instances=()
   local -a mutation_command_ids=()
-  [[ "$block_interval" =~ ^(0|30)$ ]]
-  [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]]
-  jq -e '
+  local_gate_path="artifacts/finality-local-gate-${block_interval}-${slot_epoch}.json"
+  if ! [[ "$block_interval" =~ ^(0|30)$ ]] ||
+    ! [[ "$slot_epoch" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    ! jq -e '
     type == "array" and length >= 1 and length <= 3 and
     (map(.instance_id) | unique | length) == length and
     all(
@@ -544,34 +577,91 @@ set_runtime_finality() {
       (.allow_missing_finality_keys | type == "boolean")
     )
   ' <<<"$bindings_json" >/dev/null
-  mapfile -t instances < <(jq -er '.[].instance_id' <<<"$bindings_json")
+  then
+    write_finality_local_gate \
+      "$local_gate_path" "$block_interval" "$slot_epoch" \
+      "$bindings_json" INPUT_REJECTED false \
+      "invalid finality request or runtime bindings"
+    return 1
+  fi
+  if ! instance_lines="$(
+    jq -er '.[].instance_id' <<<"$bindings_json"
+  )"; then
+    write_finality_local_gate \
+      "$local_gate_path" "$block_interval" "$slot_epoch" \
+      "$bindings_json" INSTANCE_BINDINGS_REJECTED false \
+      "unable to read the ordered instance bindings"
+    return 1
+  fi
+  mapfile -t instances <<<"$instance_lines"
+  if [[ "${#instances[@]}" -lt 1 || "${#instances[@]}" -gt 3 ]]; then
+    write_finality_local_gate \
+      "$local_gate_path" "$block_interval" "$slot_epoch" \
+      "$bindings_json" INSTANCE_BINDINGS_REJECTED false \
+      "ordered instance binding count is outside one through three"
+    return 1
+  fi
   if [[ "$slot_epoch" != "0" ]]; then
-    test "$slot_epoch" -gt "$(date +%s)"
-    test "$((slot_epoch % 30))" -eq 0
+    if ! test "$slot_epoch" -gt "$(date +%s)" ||
+      ! test "$((slot_epoch % 30))" -eq 0
+    then
+      write_finality_local_gate \
+        "$local_gate_path" "$block_interval" "$slot_epoch" \
+        "$bindings_json" SLOT_EPOCH_REJECTED false \
+        "slot epoch is not a future 30-second boundary"
+      return 1
+    fi
   fi
   if [[ "$block_interval" == "30" ]]; then
-    test "$slot_epoch" != "0"
+    if [[ "$slot_epoch" == "0" ]]; then
+      write_finality_local_gate \
+        "$local_gate_path" "$block_interval" "$slot_epoch" \
+        "$bindings_json" SLOT_EPOCH_REJECTED false \
+        "enabled finality requires a non-zero future slot epoch"
+      return 1
+    fi
     finality_enabled=true
   else
     finality_enabled=false
   fi
 
-  # Complete every read-only preflight before any runtime.env mutation.
+  # Render and retain every read-only command before the first SSM request.
+  # This makes a local binding/render failure distinguishable from a remote
+  # validator preflight failure without weakening the fail-closed boundary.
   for index in "${!instances[@]}"; do
     instance_id="${instances[$index]}"
-    expected_artifact_sha256="$(
+    if ! expected_artifact_sha256="$(
       jq -er ".[$index].expected_artifact_sha256" <<<"$bindings_json"
-    )"
-    allow_missing_finality_keys="$(
+    )" || ! allow_missing_finality_keys="$(
       jq -er ".[$index].allow_missing_finality_keys" <<<"$bindings_json"
-    )"
-    command="$(
+    )"; then
+      write_finality_local_gate \
+        "$local_gate_path" "$block_interval" "$slot_epoch" \
+        "$bindings_json" COMMAND_BINDING_REJECTED false \
+        "unable to read a finality command binding at index ${index}"
+      return 1
+    fi
+    if ! command="$(
       render_runtime_finality_preflight \
         "$finality_enabled" "$block_interval" "$slot_epoch" \
         "$expected_artifact_sha256" "$allow_missing_finality_keys"
-    )"
-    jq -n --arg command "$command" '{commands: [$command]}' \
+    )" || ! jq -n --arg command "$command" '{commands: [$command]}' \
       >"artifacts/ssm-finality-preflight-${index}.json"
+    then
+      write_finality_local_gate \
+        "$local_gate_path" "$block_interval" "$slot_epoch" \
+        "$bindings_json" COMMAND_RENDER_REJECTED false \
+        "unable to render a finality preflight at index ${index}"
+      return 1
+    fi
+  done
+  write_finality_local_gate \
+    "$local_gate_path" "$block_interval" "$slot_epoch" \
+    "$bindings_json" READ_ONLY_PREFLIGHT_RENDERED true
+
+  # Complete every read-only preflight before any runtime.env mutation.
+  for index in "${!instances[@]}"; do
+    instance_id="${instances[$index]}"
     command_id="$(
       aws ssm send-command \
         --instance-ids "$instance_id" \
