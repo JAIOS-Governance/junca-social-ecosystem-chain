@@ -401,6 +401,52 @@ jobs:
           [[ "$AMI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$MANIFEST_GATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$RESUME_RUN_ID" =~ ^(0|[1-9][0-9]*)$ ]]
+          renewal_authorization=NONE
+          renewal_preserve_prefix_count=0
+          if [[ "$RESUME_RUN_ID" != "0" ]]; then
+            resume_artifact_dir=artifacts/foundation-resume-source
+            mkdir -p "$resume_artifact_dir"
+            gh run download "$RESUME_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
+              --dir "$resume_artifact_dir"
+            (
+              cd "$resume_artifact_dir"
+              sha256sum -c rolling-resume-evidence.json.sha256
+            )
+            resume_evidence_path="$resume_artifact_dir/rolling-resume-evidence.json"
+            jq -e \
+              --argjson producer_run_id "$RESUME_RUN_ID" '
+                .schema_version == "junca-validator-rolling-resume/v1" and
+                .producer_run_id == $producer_run_id and
+                .automatic_finality.block_interval_seconds == 30 and
+                .automatic_finality.minimum_remaining_seconds == 900 and
+                .automatic_finality.maximum_remaining_seconds == 7230 and
+                (.automatic_finality.slot_epoch_seconds | type) == "number" and
+                (.automatic_finality.slot_epoch_seconds | floor) ==
+                  .automatic_finality.slot_epoch_seconds and
+                .automatic_finality.slot_epoch_seconds > 0 and
+                .automatic_finality.slot_epoch_seconds % 30 == 0 and
+                (.updated_count | type) == "number" and
+                .updated_count >= 0 and .updated_count <= 3 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' "$resume_evidence_path" >/dev/null
+            prior_slot_epoch="$(
+              jq -er '.automatic_finality.slot_epoch_seconds' \
+                "$resume_evidence_path"
+            )"
+            prior_updated_count="$(
+              jq -er '.updated_count' "$resume_evidence_path"
+            )"
+            prior_remaining="$((prior_slot_epoch - $(date +%s)))"
+            if [[ "$prior_remaining" -lt 900 ||
+                  "$prior_remaining" -gt 7230 ]]; then
+              renewal_authorization=RENEW_EXPIRED_QUIESCED_EPOCH
+              renewal_preserve_prefix_count="$prior_updated_count"
+            fi
+          fi
           workflow_name="JUNCA Validator Foundation Release"
           workflow_path=".github/workflows/junca-validator-foundation-release.yml"
           workflows="$(gh api --paginate \
@@ -419,6 +465,8 @@ jobs:
             -f "inputs[ami_run_id]=${AMI_RUN_ID}" \
             -f "inputs[manifest_gate_run_id]=${MANIFEST_GATE_RUN_ID}" \
             -f "inputs[resume_run_id]=${RESUME_RUN_ID}" \
+            -f "inputs[renew_expired_epoch]=${renewal_authorization}" \
+            -f "inputs[renewal_preserve_prefix_count]=${renewal_preserve_prefix_count}" \
             -f "inputs[authorize_rollout]=PUBLIC_TESTNET_ROLLOUT"
 
           run_id=""
