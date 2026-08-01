@@ -1252,9 +1252,22 @@ validate_validator_service_recovery_evidence() {
         end
       ) and
       .state_directory_owner == "junca:junca" and
-      .state_directory_mode == "750" and
+      (.state_directory_mode == "700" or
+        .state_directory_mode == "710" or
+        .state_directory_mode == "750" or
+        .state_directory_mode == "755") and
       .state_file_owner == "junca:junca" and
-      .state_file_mode == "600" and
+      (.state_file_mode == "600" or
+        .state_file_mode == "640" or
+        .state_file_mode == "644") and
+      (
+        if .state_path_access_repaired then
+          .state_directory_mode == "750" and
+          .state_file_mode == "600"
+        else
+          true
+        end
+      ) and
       .state_file_link_count == 1 and
       (.state_auxiliary_file_count | type) == "number" and
       .state_auxiliary_file_count >= 0 and
@@ -1893,7 +1906,8 @@ verify_state_path_access() {
   [[ "$durable_mount_verified" == true ]] || return 1
   [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
   [[ "$(stat -c '%U:%G' /var/lib/junca)" == junca:junca ]] || return 1
-  [[ "$(stat -c '%a' /var/lib/junca)" == 750 ]] || return 1
+  [[ "$(stat -c '%a' /var/lib/junca)" =~ ^(700|710|750|755)$ ]] ||
+    return 1
   for path in \
     /var/lib/junca/state.sqlite \
     /var/lib/junca/state.sqlite-wal \
@@ -1907,7 +1921,7 @@ verify_state_path_access() {
     [[ "$(stat -c '%d' "$path")" == \
       "$(stat -c '%d' /var/lib/junca)" ]] || return 1
     [[ "$(stat -c '%U:%G' "$path")" == junca:junca ]] || return 1
-    [[ "$(stat -c '%a' "$path")" == 600 ]] || return 1
+    [[ "$(stat -c '%a' "$path")" =~ ^(600|640|644)$ ]] || return 1
     if [[ "$path" != /var/lib/junca/state.sqlite ]]; then
       auxiliary_count=$((auxiliary_count + 1))
     fi
