@@ -126,6 +126,40 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
             ]
         )
 
+    def test_accepts_target_runtime_repaired_in_place_on_bound_old_ami(self):
+        value = self.fixture()
+        for item in (
+            value["validators"][0],
+            value["evidence_validators"][0],
+        ):
+            item["runtime_version"] = TARGET
+            item["ami_id"] = EMERGENCY_AMI
+
+        decision = evaluate_live_rollout_prefix_v2(value)
+
+        self.assertEqual(decision["live_updated_count"], 0)
+        self.assertEqual(decision["next_validator"], "validator-01")
+        self.assertFalse(
+            decision["baseline_bindings"][0]["target_runtime"]
+        )
+        self.assertEqual(
+            decision["baseline_bindings"][0]["runtime_version"], TARGET
+        )
+        self.assertEqual(
+            decision["baseline_bindings"][0]["ami_id"], EMERGENCY_AMI
+        )
+
+    def test_rejects_target_runtime_on_unbound_old_ami(self):
+        value = self.fixture()
+        value["evidence_validators"][0]["runtime_version"] = TARGET
+        value["evidence_validators"][0]["ami_id"] = EMERGENCY_AMI
+        value["validators"][0]["runtime_version"] = TARGET
+
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError, "AMI binding mismatch"
+        ):
+            evaluate_live_rollout_prefix_v2(value)
+
     def test_accepts_one_next_target_replacement(self):
         value = self.fixture()
         baseline = value["evidence_validators"][0]
@@ -287,6 +321,24 @@ class EvidenceBoundRollingLifecycleTests(EvidenceBoundLivePrefixTests):
         self.assertEqual(
             decision["baseline_bindings"][0]["runtime_version"], EMERGENCY
         )
+
+    def test_repaired_target_runtime_on_old_ami_starts_before_validator_one(self):
+        value = self.fixture()
+        for item in (
+            value["validators"][0],
+            value["evidence_validators"][0],
+        ):
+            item["runtime_version"] = TARGET
+            item["ami_id"] = EMERGENCY_AMI
+            self.set_finality(item, enabled=False, interval=0, epoch=0)
+        for item in value["validators"][1:]:
+            self.set_finality(item, enabled=False, interval=0, epoch=0)
+
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+
+        self.assertEqual(decision["state"], "READY_FOR_NEXT_VALIDATOR")
+        self.assertEqual(decision["updated_count"], 0)
+        self.assertEqual(decision["next_validator"], "validator-01")
 
     def test_one_target_is_ready_for_validator_two(self):
         value = self.rolling_fixture()
