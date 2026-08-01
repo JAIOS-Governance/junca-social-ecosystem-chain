@@ -6,7 +6,7 @@ Public governance entity: **JAIOS Institutional Governance**
 
 Operating model: JAIOS-governed automation / separation of duties / former-team dependency prohibited
 
-Testnet label: **Public Testnet / No Monetary Value**
+Testnet label: **Public Testnet / Protocol Validation Environment**
 
 ## Brand architecture / ブランド体系
 

@@ -101,7 +101,7 @@ const candidate = {
   name: "JUNCA Social Ecosystem Chain Public Preview Testnet",
   chainId: 20260723,
   rpcUrl: process.env.JUNCA_TESTNET_RPC_URL,
-  notice: "Public Testnet / No Monetary Value"
+  notice: "Public Testnet / Protocol Validation Environment"
 };
 
 if (!candidate.rpcUrl) {
@@ -235,7 +235,7 @@ export default function Home() {
             <div><dt>Interoperability</dt><dd>Ethereum / ERC · BSC Testnet · TRON Shasta <span>Ethereum binding planned; BSC/TRON controls implemented · all routes BLOCKED</span></dd></div>
             <div><dt>Runtime acceptance</dt><dd><Badge tone="block">BLOCKED</Badge></dd></div>
           </dl>
-          <div className="testnet-notice">Public Testnet / No Monetary Value</div>
+          <div className="testnet-notice">Public Testnet / Protocol Validation Environment</div>
           <p>Issuance, protocol, treasury, operation and release controls: <strong>JAIOS Institutional Governance</strong>.</p>
         </aside>
       </section>
@@ -256,7 +256,7 @@ export default function Home() {
           <dl>
             <div><dt>Document class</dt><dd>Institutional Technical Reference</dd></div>
             <div><dt>Protocol authority</dt><dd>JAIOS Institutional Governance</dd></div>
-            <div><dt>Network state</dt><dd>Public Testnet / No Monetary Value</dd></div>
+            <div><dt>Network state</dt><dd>Public Testnet / Protocol Validation Environment</dd></div>
             <div><dt>Publication state</dt><dd>Controlled · Evidence Gated</dd></div>
           </dl>
         </div>
@@ -332,7 +332,7 @@ export default function Home() {
             <p lang="ja">対応規格と開発ツールは、現行クライアント上の実行確認後に確定します。</p>
           </article>
         </div>
-        <Flow title="Token issuance lifecycle" subtitle="トークン発行ライフサイクル" nodes={["Purpose & classification", "Supply & authority", "Contract & tests", "Testnet evidence", "Release & monitoring"]} gate="No economic value or legal conformity is guaranteed by JAIOS Institutional Governance." />
+        <Flow title="Token issuance lifecycle" subtitle="トークン発行ライフサイクル" nodes={["Purpose & classification", "Supply & authority", "Contract & tests", "Testnet evidence", "Release & monitoring"]} gate="Economic treatment and legal classification are governed separately from protocol testing and require jurisdiction-specific review." />
         <div className="decision-row">
           {[
             ["Fixed supply", "No post-release minting; migration planning becomes central."],
@@ -485,7 +485,7 @@ export default function Home() {
         <Flow title="Partner / JAIOS / network responsibility map" subtitle="責任分界" nodes={["Partner asset & legal design", "Development implementation", "JAIOS release governance", "Network operations", "Independent readback"]} />
         <div className="legal-note">
           <strong>Responsibility boundary</strong>
-          <p>JAIOS Institutional Governance does not guarantee the economic value, market liquidity, legal classification or regulatory conformity of an external partner’s token, NFT or DApp.</p>
+          <p>Market treatment, liquidity, legal classification and regulatory obligations for an external partner’s token, NFT or DApp remain subject to the applicable governance and jurisdiction-specific review.</p>
           <p lang="ja">外部パートナーが発行・運用する資産の経済価値、流動性、法的分類、規制適合性を保証するものではありません。</p>
         </div>
       </section>
@@ -556,7 +556,7 @@ export default function Home() {
           <span>Governance</span><strong>JAIOS Institutional Governance</strong>
         </div>
         <div>
-          <span>Release notice</span><strong>Public Testnet / No Monetary Value</strong>
+          <span>Release notice</span><strong>Public Testnet / Protocol Validation Environment</strong>
         </div>
       </footer>
     </main>

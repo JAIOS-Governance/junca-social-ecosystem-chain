@@ -65,7 +65,7 @@ Use only the strongest statement supported by current evidence.
 - Subsequent reference: `JUNCA Chain`
 - Institutional operator: `JAIOS Institutional Governance`
 - Evidence: use for implementation records, readback, tests, release records, or other verifiable proof
-- Public Testnet / No Monetary Value: retain when communicating testnet state
+- Public Testnet / Protocol Validation Environment: retain when communicating testnet state
 
 ## Prohibited public terminology
 

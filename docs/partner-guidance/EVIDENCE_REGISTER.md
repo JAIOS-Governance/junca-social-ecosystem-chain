@@ -36,7 +36,7 @@
 | Bridge contract | Solidity `0.8.24`, paused-by-default — static and test evidence only |
 | Interoperability tests | `37/37` local; PR records CI evidence success |
 | Public governance | `JAIOS Institutional Governance` |
-| Testnet notice | `Public Testnet / No Monetary Value` |
+| Testnet notice | `Public Testnet / Protocol Validation Environment` |
 
 ## Controlled artifacts
 

@@ -1,7 +1,7 @@
 # JUNCA Social Ecosystem Chain — Public Testnet Runtime Contract
 
 Governance: JAIOS Institutional Governance  
-Network: Public Testnet / No Monetary Value
+Network: Public Testnet / Protocol Validation Environment
 
 The immutable validator AMI must provide all of the following before
 `deployment_enabled=true` is permitted:

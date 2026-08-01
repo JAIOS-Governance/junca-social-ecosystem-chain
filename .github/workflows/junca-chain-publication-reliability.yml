@@ -33,7 +33,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Verify exact source artifact
+      - name: Verify exact source artifact against controlled PR readback
+        if: github.event_name == 'pull_request'
+        working-directory: docs/technical-reference
+        run: npm run test:fixture
+      - name: Wait for accepted live Explorer publication
+        if: github.event_name != 'pull_request'
+        working-directory: docs/technical-reference
+        run: node ./scripts/wait-live-explorer.mjs
+      - name: Verify exact source artifact against live Explorer
+        if: github.event_name != 'pull_request'
         working-directory: docs/technical-reference
         run: npm test
       - name: Verify runner clock and AWS TLS path

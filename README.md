@@ -5,7 +5,7 @@ Canonical protocol source for **JUNCA Social Ecosystem Chain**.
 | Field | Canonical value |
 |---|---|
 | Governance | JAIOS Institutional Governance |
-| Network status | Public Testnet / No Monetary Value |
+| Network status | Public Testnet / Protocol Validation Environment |
 | Repository role | Protocol, node, network specification, interoperability and release evidence |
 | Corporate ownership | None represented |
 

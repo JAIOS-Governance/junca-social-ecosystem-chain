@@ -1,0 +1,93 @@
+{
+  "schema_version": "jsec-native-token-genesis-plan/v1",
+  "official_name": "JUNCA Social Ecosystem Chain",
+  "governance": "JAIOS Institutional Governance",
+  "asset_class": "native-token",
+  "issuance_event": "mainnet-genesis",
+  "target_genesis_date": "2026-10-01",
+  "target_date_locked": true,
+  "contract_token_dependency": false,
+  "contract_address": null,
+  "definition": {
+    "locked": false,
+    "name": null,
+    "symbol": null,
+    "decimals": null,
+    "total_supply_base_units": null,
+    "supply_model": null,
+    "post_genesis_issuance": null,
+    "fee_model": null
+  },
+  "allocations": {
+    "locked": false,
+    "accounts": []
+  },
+  "custody": {
+    "locked": false,
+    "control_model": "institutional-multisig",
+    "threshold": null,
+    "participants": [],
+    "key_ceremony_evidence_sha256": null
+  },
+  "gates": {
+    "native_economics_locked": false,
+    "deterministic_genesis_allocations": false,
+    "custody_key_ceremony": false,
+    "independent_security_review": false,
+    "disaster_recovery_rehearsal": false,
+    "production_slo_and_24h_soak": false,
+    "governance_release_authorization": false,
+    "ceo_final_approval": false
+  },
+  "milestones": [
+    {
+      "id": "native_economics_constitution",
+      "due_date": "2026-08-07",
+      "status": "in_progress",
+      "owner": "JSEC Native Token Genesis Cell"
+    },
+    {
+      "id": "deterministic_genesis_allocations",
+      "due_date": "2026-08-21",
+      "status": "not_started",
+      "owner": "JSEC Mainnet Protocol Cell"
+    },
+    {
+      "id": "custody_key_ceremony_rehearsal",
+      "due_date": "2026-09-04",
+      "status": "not_started",
+      "owner": "JSEC Custody and Key Governance Cell"
+    },
+    {
+      "id": "independent_security_review",
+      "due_date": "2026-09-11",
+      "status": "not_started",
+      "owner": "JSEC Independent Security Review Cell"
+    },
+    {
+      "id": "candidate_genesis_and_recovery",
+      "due_date": "2026-09-18",
+      "status": "not_started",
+      "owner": "JSEC Mainnet Recovery Cell"
+    },
+    {
+      "id": "production_slo_24h_soak_release_evidence",
+      "due_date": "2026-09-25",
+      "status": "not_started",
+      "owner": "JSEC Release Acceptance Cell"
+    },
+    {
+      "id": "governance_and_ceo_final_approval",
+      "due_date": "2026-10-01",
+      "status": "not_started",
+      "owner": "JAIOS Institutional Governance"
+    }
+  ],
+  "safety": {
+    "mainnet_changed": false,
+    "genesis_applied": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "mainnet_activation_authorized": false
+  }
+}

@@ -137,6 +137,38 @@ jobs:
             done
           }
 
+          run_ssm_instance() {
+            local instance="$1"
+            local label="$2"
+            local command="$3"
+            local acceptance="${4:-strict}"
+            local request="artifacts/ssm-${label}-${instance}.json"
+            jq -n --arg command "$command" '{commands: [$command]}' > "$request"
+            local command_id
+            command_id="$(aws ssm send-command \
+              --instance-ids "$instance" \
+              --document-name AWS-RunShellScript \
+              --parameters "file://${request}" \
+              --comment "JUNCA Explorer ${label} ${instance}" \
+              --query Command.CommandId --output text)"
+            aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance" || true
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/${label}-${instance}.json"
+            if jq -e '.Status == "Success"' "artifacts/${label}-${instance}.json" >/dev/null; then
+              return
+            fi
+            if [[ "$acceptance" == "gateway-dependency-readback" ]] && jq -e '
+              .Status == "Failed" and
+              .ResponseCode == 42 and
+              ((.StandardErrorContent // "") |
+                contains("JUNCA_GATEWAY_DEPENDENCY_VERIFICATION_IN_PROGRESS"))
+            ' "artifacts/${label}-${instance}.json" >/dev/null; then
+              echo "::warning title=Gateway activation verification in progress::${instance} was not restarted because its validator dependency is inactive."
+              return
+            fi
+            jq -e '.Status == "Success"' "artifacts/${label}-${instance}.json"
+          }
+
           base=/usr/local/lib/junca/jaios/social_ecosystem_chain
           run_ssm prepare "set -euo pipefail; install -d -m 0755 ${base}/assets /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}/assets; cp -a ${base}/explorer_page.py ${base}/public_gateway.py /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}/ 2>/dev/null || true; cp -a ${base}/assets/junca-chain-logo-gold-on-navy.png ${base}/assets/junca-explorer-icon-gold-on-navy.png /var/lib/junca/scan-rollbacks/${GITHUB_RUN_ID}/assets/ 2>/dev/null || true"
 
@@ -162,7 +194,72 @@ jobs:
           run_ssm surface-install "set -euo pipefail; base64 -d '${remote_b64}' > '${remote_tgz}'; echo '${digest}  ${remote_tgz}' | sha256sum -c -; rm -rf '${remote_tmp}'; install -d -m 0755 '${remote_tmp}'; tar -xzf '${remote_tgz}' -C '${remote_tmp}'; install -m 0644 '${remote_tmp}/explorer_page.py' '${base}/explorer_page.py'; install -m 0644 '${remote_tmp}/public_gateway.py' '${base}/public_gateway.py'; install -m 0644 '${remote_tmp}/assets/junca-chain-logo-gold-on-navy.png' '${base}/assets/junca-chain-logo-gold-on-navy.png'; install -m 0644 '${remote_tmp}/assets/junca-explorer-icon-gold-on-navy.png' '${base}/assets/junca-explorer-icon-gold-on-navy.png'; rm -rf '${remote_tmp}' '${remote_tgz}' '${remote_b64}'"
           run_ssm surface-integrity "set -euo pipefail; echo '${explorer_page_digest}  ${base}/explorer_page.py' | sha256sum -c -; echo '${public_gateway_digest}  ${base}/public_gateway.py' | sha256sum -c -; echo '${chain_logo_digest}  ${base}/assets/junca-chain-logo-gold-on-navy.png' | sha256sum -c -; echo '${explorer_icon_digest}  ${base}/assets/junca-explorer-icon-gold-on-navy.png' | sha256sum -c -"
 
-          run_ssm restart "set -euo pipefail; for unit in junca-public-explorer.service junca-public-rpc.service; do dropin=\"/etc/systemd/system/\${unit}.d\"; install -d -m 0755 \"\$dropin\"; printf '%s\n' '[Service]' 'Environment=JUNCA_RUNTIME_ARTIFACT_COMMIT=${SOURCE_COMMIT}' 'Environment=JUNCA_GENESIS_SHA256=${GENESIS_SHA256}' 'Environment=JUNCA_NODE_ARTIFACT_SHA256=${NODE_ARTIFACT_SHA256}' > \"\$dropin/runtime-artifact.conf\"; chmod 0644 \"\$dropin/runtime-artifact.conf\"; done; systemctl daemon-reload; if ! systemctl is-active --quiet junca-validator.service; then echo JUNCA_GATEWAY_DEPENDENCY_VERIFICATION_IN_PROGRESS >&2; exit 42; fi; systemctl restart junca-public-explorer.service junca-public-rpc.service; for attempt in \$(seq 1 30); do curl -fsS http://127.0.0.1:3000/explorer.json > /tmp/explorer.json && jq -e --arg source_commit '${SOURCE_COMMIT}' --arg genesis_sha256 '${GENESIS_SHA256}' --arg node_artifact_sha256 '${NODE_ARTIFACT_SHA256}' '.status == \"ready\" and .finalized_only == true and .read_only == true and .runtime_artifact.source_commit == \$source_commit and .runtime_artifact.genesis_sha256 == \$genesis_sha256 and .runtime_artifact.node_artifact_sha256 == \$node_artifact_sha256' /tmp/explorer.json && break; test \"\$attempt\" -lt 30; sleep 2; done; for attempt in \$(seq 1 30); do curl -fsS http://127.0.0.1:8546/health > /tmp/public-health.json && jq -e '.status == \"healthy\" and .read_only == true' /tmp/public-health.json && break; test \"\$attempt\" -lt 30; sleep 2; done" gateway-dependency-readback
+          mapfile -t target_groups < <(
+            jq -r '.public_target_group_arns.value | to_entries[] | [.key, .value] | @tsv' \
+              artifacts/public-release-outputs.json
+          )
+          test "${#target_groups[@]}" = 2
+
+          assert_rolling_capacity() {
+            local instance="$1"
+            for target_group in "${target_groups[@]}"; do
+              IFS=$'\t' read -r target_name target_arn <<< "$target_group"
+              aws elbv2 describe-target-health --target-group-arn "$target_arn" \
+                > "artifacts/target-health-${target_name}.json"
+              jq -e --arg instance "$instance" '
+                [.TargetHealthDescriptions[] |
+                  select(.Target.Id != $instance and .TargetHealth.State == "healthy")] |
+                length >= 2
+              ' "artifacts/target-health-${target_name}.json"
+            done
+            curl -fsS --max-time 10 https://explorer.jaios-governance.org/explorer.json >/dev/null
+            curl -fsS --max-time 10 https://health.jaios-governance.org/health >/dev/null
+          }
+
+          wait_rolled_node() {
+            local instance="$1"
+            local invocation="artifacts/restart-${instance}.json"
+            for attempt in $(seq 1 30); do
+              local accepted=true
+              for target_group in "${target_groups[@]}"; do
+                IFS=$'\t' read -r target_name target_arn <<< "$target_group"
+                aws elbv2 describe-target-health --target-group-arn "$target_arn" \
+                  > "artifacts/target-health-${target_name}.json"
+                if jq -e '.Status == "Success"' "$invocation" >/dev/null; then
+                  jq -e --arg instance "$instance" '
+                    [.TargetHealthDescriptions[] |
+                      select(.Target.Id == $instance and .TargetHealth.State == "healthy")] |
+                    length == 1
+                  ' "artifacts/target-health-${target_name}.json" >/dev/null || accepted=false
+                else
+                  jq -e --arg instance "$instance" '
+                    [.TargetHealthDescriptions[] |
+                      select(.Target.Id == $instance and .TargetHealth.State != "healthy")] |
+                    length == 1
+                  ' "artifacts/target-health-${target_name}.json" >/dev/null || accepted=false
+                fi
+                jq -e '
+                  [.TargetHealthDescriptions[] | select(.TargetHealth.State == "healthy")] |
+                  length >= 2
+                ' "artifacts/target-health-${target_name}.json" >/dev/null || accepted=false
+              done
+              if [[ "$accepted" == "true" ]] && \
+                curl -fsS --max-time 10 https://explorer.jaios-governance.org/explorer.json >/dev/null && \
+                curl -fsS --max-time 10 https://health.jaios-governance.org/health >/dev/null; then
+                return
+              fi
+              test "$attempt" -lt 30
+              sleep 5
+            done
+          }
+
+          restart_command="set -euo pipefail; for unit in junca-public-explorer.service junca-public-rpc.service; do dropin=\"/etc/systemd/system/\${unit}.d\"; install -d -m 0755 \"\$dropin\"; printf '%s\n' '[Service]' 'Environment=JUNCA_RUNTIME_ARTIFACT_COMMIT=${SOURCE_COMMIT}' 'Environment=JUNCA_GENESIS_SHA256=${GENESIS_SHA256}' 'Environment=JUNCA_NODE_ARTIFACT_SHA256=${NODE_ARTIFACT_SHA256}' > \"\$dropin/runtime-artifact.conf\"; chmod 0644 \"\$dropin/runtime-artifact.conf\"; done; systemctl daemon-reload; if ! systemctl is-active --quiet junca-validator.service; then echo JUNCA_GATEWAY_DEPENDENCY_VERIFICATION_IN_PROGRESS >&2; exit 42; fi; systemctl restart junca-public-explorer.service junca-public-rpc.service; for attempt in \$(seq 1 30); do curl -fsS http://127.0.0.1:3000/explorer.json > /tmp/explorer.json && jq -e --arg source_commit '${SOURCE_COMMIT}' --arg genesis_sha256 '${GENESIS_SHA256}' --arg node_artifact_sha256 '${NODE_ARTIFACT_SHA256}' '.status == \"ready\" and .notice == \"Public Testnet / Protocol Validation Environment\" and .finalized_only == true and .read_only == true and .runtime_artifact.source_commit == \$source_commit and .runtime_artifact.genesis_sha256 == \$genesis_sha256 and .runtime_artifact.node_artifact_sha256 == \$node_artifact_sha256' /tmp/explorer.json && break; test \"\$attempt\" -lt 30; sleep 2; done; for attempt in \$(seq 1 30); do curl -fsS http://127.0.0.1:8546/health > /tmp/public-health.json && jq -e '.status == \"healthy\" and .read_only == true' /tmp/public-health.json && break; test \"\$attempt\" -lt 30; sleep 2; done"
+
+          for instance in "${instances[@]}"; do
+            assert_rolling_capacity "$instance"
+            run_ssm_instance "$instance" restart "$restart_command" gateway-dependency-readback
+            wait_rolled_node "$instance"
+          done
 
           jq -s '{
             schema_version: "junca-explorer-node-publication/v1",
@@ -190,11 +287,6 @@ jobs:
             ((.ready_nodes + .verification_in_progress_nodes) == 3)
           ' artifacts/explorer-node-publication.json
 
-          mapfile -t target_groups < <(
-            jq -r '.public_target_group_arns.value | to_entries[] | [.key, .value] | @tsv' \
-              artifacts/public-release-outputs.json
-          )
-          test "${#target_groups[@]}" = 2
           isolated=false
           for attempt in $(seq 1 30); do
             for target_group in "${target_groups[@]}"; do
@@ -263,7 +355,8 @@ jobs:
             .runtime_artifact.genesis_sha256 == $genesis_sha256 and
             .runtime_artifact.node_artifact_sha256 == $node_artifact_sha256 and
             .runtime_artifact.evidence_source == "approved immutable validator runtime" and
-            .head.height >= 1 and .head.signed_power == 3 and .head.total_power == 3 and
+            .notice == "Public Testnet / Protocol Validation Environment" and
+            .head.height > 1 and .head.signed_power == 3 and .head.total_power == 3 and
             .mainnet_changed == false and .assets_moved == false and
             .bridge_activated == false
           ' artifacts/explorer.json

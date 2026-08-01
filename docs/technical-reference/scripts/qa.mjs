@@ -16,6 +16,7 @@ const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementati
 const prohibited = [
   "CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled",
   "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
+  "No Monetary Value",
   "Public Testnet Runtime Active", "Runtime Verified", "Live Acceptance Verified", "Automation Active · PASS",
   "Continuous block production remains under review", "No public endpoint is asserted",
   "PENDING", "pending", "保留中",
@@ -44,6 +45,7 @@ for (const route of routes) {
     "JAIOS Institutional Governance",
     "Public Testnet",
     "Governed Read-only Operations",
+    "Protocol Validation Environment",
     "Measured runtime evidence, published from the current Explorer readback.",
     "Finality",
     "READY · READ-ONLY",
@@ -263,7 +265,12 @@ if (releaseManifest.runtime_status !== "VERIFIED_READY_READ_ONLY") {
   failures.push("release manifest must record the verified read-only runtime state");
 }
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
-if (releaseManifest.runtime_evidence?.finalized_height !== 1) failures.push("verified finalized height is missing");
+if (
+  !Number.isInteger(releaseManifest.runtime_evidence?.finalized_height) ||
+  releaseManifest.runtime_evidence.finalized_height <= 1
+) {
+  failures.push("verified advancing finalized height is missing");
+}
 if (releaseManifest.runtime_evidence?.total_power !== 3) failures.push("verified finality quorum is missing");
 for (const field of ["finalized_hash", "certificate_hash", "state_root"]) {
   if (!/^0x[0-9a-f]{64}$/i.test(releaseManifest.runtime_evidence?.[field] ?? "")) {

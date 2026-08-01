@@ -38,7 +38,7 @@ The following require protected review, successful CI and immutable evidence:
 Required:
 
 - `JAIOS Institutional Governance`
-- `Public Testnet / No Monetary Value` while the network is a testnet
+- `Public Testnet / Protocol Validation Environment` while the network is a testnet
 
 Prohibited:
 

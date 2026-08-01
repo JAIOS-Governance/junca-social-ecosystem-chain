@@ -56,4 +56,4 @@ The following routes returned HTTP 200 on 2026-07-27 JST and are the only routes
 - Mainnet Changed: `false`
 - Assets Moved: `false`
 - Bridge Activated: `false`
-- Network wording: `Public Testnet / No Monetary Value`
+- Network wording: `Public Testnet / Protocol Validation Environment`

@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 from .explorer_page import EXPLORER_DOCUMENT
 
 
-NOTICE = "Public Testnet / No Monetary Value"
+NOTICE = "Public Testnet / Protocol Validation Environment"
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_METHODS = frozenset(

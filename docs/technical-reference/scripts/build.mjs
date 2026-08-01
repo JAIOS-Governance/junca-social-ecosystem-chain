@@ -29,7 +29,16 @@ const explorer = await explorerResponse.json();
 if (
   explorer?.status !== "ready" ||
   explorer?.read_only !== true ||
-  explorer?.finalized_only !== true
+  explorer?.finalized_only !== true ||
+  explorer?.notice !== "Public Testnet / Protocol Validation Environment" ||
+  explorer?.mainnet_changed !== false ||
+  explorer?.assets_moved !== false ||
+  explorer?.bridge_activated !== false ||
+  !Number.isInteger(explorer?.head?.height) ||
+  explorer.head.height <= 1 ||
+  explorer.head.signed_power !== 3 ||
+  explorer.head.total_power !== 3 ||
+  explorer?.network?.peer_count !== 2
 ) {
   throw new Error("Live Explorer readback did not satisfy the public evidence boundary");
 }
@@ -103,7 +112,7 @@ const headerExplorerLink = [
 const runtimePanel = [
   '<section class="live-runtime-evidence" aria-labelledby="live-runtime-evidence-title">',
   '<div class="runtime-evidence-heading"><span class="runtime-live-mark"><i aria-hidden="true"></i>Governed readback</span>',
-  '<small>Public Testnet · Read-only · No Monetary Value</small>',
+  '<small>Public Testnet · Read-only · Protocol Validation Environment</small>',
   '<h2 id="live-runtime-evidence-title">Measured runtime evidence, published from the current Explorer readback.</h2>',
   '<p lang="ja">実測済みの運用証跡を、推測を加えずに表示します。</p>',
   `<p>Explorer snapshot observed · ${observedAt}</p></div>`,
@@ -304,6 +313,24 @@ for (const route of routes) {
       .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.07.29-R35"')
       .replaceAll('"inLanguage":["en","ja"]', '"inLanguage":["en","ja","zh-Hans","es","it","ar"]')
       .replaceAll("Runtime Deployment in Progress", "Governed Read-only Operations")
+      .replaceAll("<h3>No Monetary Value</h3>", "<h3>Protocol Validation Environment</h3>")
+      .replaceAll(
+        "A mandatory testnet notice stating that test assets do not represent monetary value.",
+        "A public-testnet notice identifying the network as a protocol-validation environment with test assets separated from Mainnet-issued JSEC.",
+      )
+      .replaceAll(
+        "テスト資産が金銭的価値を表さないことを示す必須のテストネット表示。",
+        "本Public Testnetがプロトコル検証環境であり、テスト資産をMainnet発行のJSECと区分することを示す公開表示。",
+      )
+      .replaceAll(
+        "No Monetary Value、Rate Limit、Abuse Controlを前提に公開します。",
+        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
+      )
+      .replaceAll("No Monetary Value", "Protocol Validation Environment")
+      .replaceAll(
+        "No economic value or legal conformity is guaranteed by JAIOS Institutional Governance.",
+        "Economic treatment and legal classification are governed separately from protocol testing and require jurisdiction-specific review.",
+      )
       .replaceAll("Pending Live Acceptance", "Finality Certificate Observed")
       .replaceAll(
         "throw new Error(&quot;BLOCKED: accepted network registry is required&quot;);",
@@ -355,7 +382,7 @@ for (const route of routes) {
       .replace('<tr><td>Explorer URL</td><td>Evidence-bound Read-only Access</td><td>Canonical RPC parity and verification workflow require acceptance</td></tr>', '<tr><td>Explorer URL</td><td><a href="https://explorer.jaios-governance.org/">explorer.jaios-governance.org</a></td><td>Finalized, read-only public evidence surface</td></tr>')
       .replace('<tr><td>Currency Symbol</td><td>Evidence-bound Read-only Access</td><td>No test asset symbol is asserted before registry approval</td></tr>', '<tr><td>Currency Symbol</td><td>Not asserted</td><td>No test asset symbol is published before registry approval</td></tr>')
       .replace('<tr><td>Faucet URL</td><td>Evidence-bound Read-only Access</td><td>Rate limits and auditable issuance require acceptance</td></tr>', '<tr><td>Faucet URL</td><td>Not asserted</td><td>No faucet endpoint is published without auditable issuance controls</td></tr>')
-      .replace('<tr><td>Genesis Hash</td><td>Evidence-bound Read-only Access</td><td>Must match the deployed canonical genesis</td></tr>', '<tr><td>Genesis Hash</td><td>Not published in this reference</td><td>No value is inferred; it must match the deployed canonical genesis</td></tr>')
+      .replace('<tr><td>Genesis Hash</td><td>Evidence-bound Read-only Access</td><td>Must match the deployed canonical genesis</td></tr>', '<tr><td>Genesis Hash</td><td>Not published in this reference</td><td>No hash is inferred; it must match the deployed canonical genesis</td></tr>')
       .replace('<tr><td>Finality Policy</td><td>Certified finality / strict &gt;2/3 voting power</td><td>Implemented in source; runtime evidence pending</td></tr>', '<tr><td>Finality Policy</td><td>Certified finality · 3 / 3 observed</td><td>Verified against the current read-only Explorer snapshot</td></tr>')
       .replaceAll("34d838b8a59c", "052598647079")
       .replaceAll("052598647079", "6de0979b9725")
@@ -422,7 +449,7 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   runtime_genesis_sha256: runtimeArtifact.genesis_sha256,
   runtime_node_artifact_sha256: runtimeArtifact.node_artifact_sha256,
   canonical_origin: "https://docs.jaios-governance.org",
-  network_label: "Public Testnet / Read-only / Finalized / No Monetary Value",
+  network_label: "Public Testnet / Read-only / Finalized / Protocol Validation Environment",
   runtime_status: "VERIFIED_READY_READ_ONLY",
   public_endpoint_status: "ACTIVE_READ_ONLY",
   runtime_evidence: {

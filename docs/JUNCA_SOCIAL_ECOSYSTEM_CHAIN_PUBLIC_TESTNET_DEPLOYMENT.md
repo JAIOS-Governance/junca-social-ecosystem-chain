@@ -1,7 +1,7 @@
 # JUNCA Social Ecosystem Chain — Public Testnet Deployment
 
 **Governance:** JAIOS Institutional Governance  
-**Network notice:** Public Testnet / No Monetary Value
+**Network notice:** Public Testnet / Protocol Validation Environment
 
 ## Deployment topology
 
