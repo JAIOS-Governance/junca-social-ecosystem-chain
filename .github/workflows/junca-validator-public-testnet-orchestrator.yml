@@ -12,7 +12,11 @@ permissions:
 
 concurrency:
   group: junca-validator-public-testnet-release-orchestrator
-  cancel-in-progress: false
+  # A newer signed one-shot request supersedes an orchestrator that is only
+  # monitoring an older Foundation child. Foundation keeps its own AWS state
+  # serialization, so cancelling this monitor never cancels or overlaps the
+  # child mutation boundary.
+  cancel-in-progress: true
 
 jobs:
   authorize-and-orchestrate:

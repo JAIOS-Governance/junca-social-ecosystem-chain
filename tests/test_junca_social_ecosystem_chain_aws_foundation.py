@@ -570,7 +570,11 @@ class AwsFoundationTests(unittest.TestCase):
             "terraform_wrapper: false", self.validator_foundation_release
         )
         self.assertIn(
-            "group: junca-public-testnet-aws-foundation",
+            "'junca-public-testnet-aws-foundation'",
+            self.validator_foundation_release,
+        )
+        self.assertIn(
+            "junca-public-testnet-finality-next-slot-v24",
             self.validator_foundation_release,
         )
         self.assertIn(
