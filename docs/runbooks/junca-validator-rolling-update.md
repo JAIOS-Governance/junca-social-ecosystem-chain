@@ -300,6 +300,15 @@ negative tests, and this acceptance contract because those files implement and
 specify the same bounded recovery decision. No unrelated runtime, Mainnet,
 asset, bridge, or general infrastructure path is admitted by that exception.
 
+Automatic finality binds every timestamped proposal's consensus round to its
+canonical slot timestamp. The round is therefore deterministic across all
+three validators and never reuses a retained signing-journal coordinate after
+an activation epoch changes. Manual proposals retain their explicit round
+contract. A validator restart must also re-enable and restart both read-only
+public gateways after the private validator health check, then prove local RPC
+and Explorer health before public endpoint acceptance; validator health alone
+cannot admit an ALB target.
+
 The parent release must invoke the dispatch helper with an
 `artifacts/.../*.json` evidence path. The helper atomically records the exact
 child run ID, URL, workflow identity, expected head, status and conclusion

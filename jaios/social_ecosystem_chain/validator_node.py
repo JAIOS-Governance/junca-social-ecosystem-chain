@@ -377,6 +377,7 @@ class PublicTestnetConsensus:
             "chain_id": runtime["chain_id"],
             "head_height": runtime["head_height"],
             "pending_height": runtime["pending_height"],
+            "current_round": runtime["current_round"],
             "authenticated_vote_count": len(self._accepted_peer_votes),
             "required_vote_count": 3,
             "quorum_rule": "strictly-greater-than-two-thirds",
@@ -641,7 +642,7 @@ class NodeState:
     validator_id: str
     signer_resource: str
     started_at: int
-    peer_count: int = 0
+    authenticated_peer_ids: set[str] = field(default_factory=set)
     automatic_finality_enabled: bool = False
     block_interval_seconds: int = 0
     slot_epoch_seconds: int = 0
@@ -671,8 +672,13 @@ class NodeState:
                         // MANUAL_BLOCK_INTERVAL_SECONDS
                         * MANUAL_BLOCK_INTERVAL_SECONDS
                     )
+                # A timestamped proposal uses the canonical slot time as its
+                # consensus round. A retained signing journal therefore cannot
+                # collide with a prior activation that signed this height at
+                # round zero, while every validator derives the same value.
                 proposal = self.consensus.propose(
-                    block_timestamp=block_timestamp
+                    round=block_timestamp,
+                    block_timestamp=block_timestamp,
                 )
             elif block_timestamp is None:
                 block_timestamp = proposal.block_timestamp
@@ -743,6 +749,8 @@ class NodeState:
                 "automatic_finality_enabled": self.automatic_finality_enabled,
                 "block_interval_seconds": self.block_interval_seconds,
                 "slot_epoch_seconds": self.slot_epoch_seconds,
+                "authenticated_peer_count": len(self.authenticated_peer_ids),
+                "authenticated_peer_ids": sorted(self.authenticated_peer_ids),
                 "automatic_finality_loop_running": (
                     self.automatic_finality_loop_running
                 ),
@@ -778,7 +786,7 @@ class NodeState:
         if method == "eth_blockNumber":
             return hex(head.height)
         if method == "net_peerCount":
-            return hex(self.peer_count)
+            return hex(len(self.authenticated_peer_ids))
         if method == "web3_clientVersion":
             return CLIENT_VERSION
         if method == "eth_getBlockByNumber":
@@ -1132,6 +1140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         block_timestamp=packet.block_timestamp,
                     )
                 consensus.submit(packet)
+                if packet.validator_id != state.validator_id:
+                    state.authenticated_peer_ids.add(packet.validator_id)
 
         transport = PrivateVpcPeerTransport(
             validator_id=args.validator_id,

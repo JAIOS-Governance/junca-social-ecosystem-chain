@@ -100,6 +100,8 @@ class ValidatorNodeTests(unittest.TestCase):
             self.assertEqual(health["status"], "healthy")
             self.assertFalse(health["private_key_material_accepted"])
             self.assertFalse(health["automatic_finality_enabled"])
+            self.assertEqual(health["authenticated_peer_count"], 0)
+            self.assertEqual(health["authenticated_peer_ids"], [])
             self.assertEqual(health["block_interval_seconds"], 0)
             self.assertEqual(health["slot_epoch_seconds"], 0)
             self.assertIsNone(health["head_timestamp"])
@@ -369,9 +371,67 @@ class PublicTestnetConsensusTests(unittest.TestCase):
             transport.packets[1].block_timestamp,
         )
         self.assertEqual(transport.packets[0].block_timestamp % 30, 0)
+        self.assertEqual(
+            transport.packets[0].round,
+            transport.packets[0].block_timestamp,
+        )
         self.assertIn(b"block_timestamp", transport.packets[0].peer_signing_payload)
         journal = self.consensus.runtime.evidence()["signing_journal"]
         self.assertEqual(journal["signature_count"], 1)
+        self.assertEqual(journal["latest_height"], 1)
+
+    def test_new_activation_uses_a_fresh_deterministic_journal_round(self) -> None:
+        class PeerKms:
+            def sign(inner_self, resource: str, payload: bytes) -> bytes:
+                return self.signature(resource, payload)
+
+        class Transport:
+            def __init__(inner_self) -> None:
+                inner_self.packets: list[AuthenticatedVote] = []
+
+            def broadcast(inner_self, packet: AuthenticatedVote) -> None:
+                inner_self.packets.append(packet)
+
+        activation_dir = Path(self.directory.name, "activation-journal")
+        activation_dir.mkdir()
+        first = PublicTestnetConsensus(
+            store=self.node.store,
+            data_dir=activation_dir,
+            signer_resources=self.resources,
+            consensus_verifier=self.verify_consensus,
+            peer_verifier=self.verify_peer,
+            consensus_signer=self.sign_consensus,
+        )
+        self.node.consensus = first
+        self.node.kms = PeerKms()
+        first_transport = Transport()
+        self.node.peer_transport = first_transport
+        self.node.broadcast_vote(block_timestamp=1_800_000_030)
+        self.assertEqual(first_transport.packets[0].round, 1_800_000_030)
+        first.close()
+
+        second = PublicTestnetConsensus(
+            store=self.node.store,
+            data_dir=activation_dir,
+            signer_resources=self.resources,
+            consensus_verifier=self.verify_consensus,
+            peer_verifier=self.verify_peer,
+            consensus_signer=self.sign_consensus,
+        )
+        self.addCleanup(second.close)
+        self.node.consensus = second
+        second_transport = Transport()
+        self.node.peer_transport = second_transport
+        self.node.broadcast_vote(block_timestamp=1_800_000_060)
+
+        self.assertEqual(second_transport.packets[0].height, 1)
+        self.assertEqual(second_transport.packets[0].round, 1_800_000_060)
+        self.assertNotEqual(
+            first_transport.packets[0].block_hash,
+            second_transport.packets[0].block_hash,
+        )
+        journal = second.runtime.evidence()["signing_journal"]
+        self.assertEqual(journal["signature_count"], 2)
         self.assertEqual(journal["latest_height"], 1)
 
     def test_canonical_timestamp_is_bound_persisted_and_read_after_restart(self) -> None:
