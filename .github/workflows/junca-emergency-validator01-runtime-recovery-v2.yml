@@ -66,16 +66,26 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/runtime-recovery/public
           for endpoint in health explorer rpc; do
+            method=GET
             case "$endpoint" in
               health) url=https://health.jaios-governance.org/health ;;
               explorer) url=https://explorer.jaios-governance.org/explorer.json ;;
-              rpc) url=https://rpc.jaios-governance.org/ ;;
+              rpc)
+                url=https://rpc.jaios-governance.org/
+                method=POST
+                ;;
             esac
-            status="$(curl -sS -o "artifacts/runtime-recovery/public/${endpoint}.body" -w '%{http_code}' "$url" || true)"
+            if test "$method" = POST; then
+              status="$(curl -sS -o "artifacts/runtime-recovery/public/${endpoint}.body" -w '%{http_code}' -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":"recovery-readback"}' "$url" || true)"
+            else
+              status="$(curl -sS -o "artifacts/runtime-recovery/public/${endpoint}.body" -w '%{http_code}' "$url" || true)"
+            fi
             jq -n --arg endpoint "$endpoint" --arg url "$url" \
-              --arg status "$status" --arg observed_at "$(date -u +%FT%TZ)" '{
+              --arg method "$method" --arg status "$status" \
+              --arg observed_at "$(date -u +%FT%TZ)" '{
                 endpoint: $endpoint,
                 url: $url,
+                method: $method,
                 http_status: $status,
                 observed_at: $observed_at
               }' > "artifacts/runtime-recovery/public/${endpoint}.json"

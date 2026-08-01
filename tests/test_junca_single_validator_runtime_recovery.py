@@ -26,6 +26,9 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
         self.assertIn("group: junca-public-testnet-aws-foundation", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
         self.assertIn("permissions:\n  contents: read\n  id-token: write", self.workflow)
+        self.assertIn("method=POST", self.workflow)
+        self.assertIn('"method":"eth_chainId"', self.workflow)
+        self.assertIn("--arg method \"$method\"", self.workflow)
 
     def test_incident_target_is_exact_and_public_testnet_only(self) -> None:
         for expected in (

@@ -110,6 +110,7 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["checks"]["explorer"]["finalized_height"], 7)
         self.assertEqual(report["finalized_head"]["height"], 7)
         self.assertEqual(report["finalized_head"]["timestamp"], "0x1234")
+        self.assertEqual(report["chain_id"], 20260723)
         self.assertIn("observed_at", report)
         self.assertEqual(
             report["checks"]["safe_rpc"]["methods"],
@@ -193,6 +194,24 @@ class PublicTestnetEndpointAcceptanceTests(unittest.TestCase):
             "chain id hex/decimal mismatch",
         ):
             endpoint_test.run_acceptance(contradictory_transport)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_consistent_non_public_testnet_chain_id_fails_closed(self):
+        def wrong_network_transport(method, url, payload):
+            response = self.transport(method, url, payload)
+            if url == endpoint_test.EXPLORER_URL:
+                body = dict(response.body)
+                body["network"] = dict(body["network"])
+                body["network"]["chain_id"] = "0x1"
+                body["network"]["chain_id_decimal"] = 1
+                return endpoint_test.HttpResponse(response.status, body)
+            return response
+
+        with self.assertRaisesRegex(
+            endpoint_test.AcceptanceError,
+            "unexpected Public Testnet chain id",
+        ):
+            endpoint_test.run_acceptance(wrong_network_transport)
         self.assertEqual(len(self.calls), 2)
 
     def test_explorer_peer_count_dual_projection_must_agree(self):
