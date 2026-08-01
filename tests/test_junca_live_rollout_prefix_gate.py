@@ -405,6 +405,84 @@ class EvidenceBoundRollingLifecycleTests(EvidenceBoundLivePrefixTests):
         decision = evaluate_evidence_bound_rolling_compatibility(value)
         self.assertEqual(decision["state"], "ACCEPTED")
 
+    def test_activation_contract_binds_prior_baseline_and_exact_3_of_3(self):
+        value = self.rolling_fixture()
+        activation_epoch = TARGET_EPOCH + 300
+        value.update(
+            {
+                "evidence_updated_count": 3,
+                "requested_slot_epoch_seconds": activation_epoch,
+                "baseline_slot_epoch_seconds": TARGET_EPOCH,
+                "observed_unix_time": activation_epoch - 180,
+                "finality_activation_contract": True,
+            }
+        )
+        for index in range(3):
+            instance_id = f"i-{index + 10:017x}"
+            self.set_target(
+                value["evidence_validators"][index],
+                instance_id=instance_id,
+                enabled=True,
+                interval=30,
+                epoch=TARGET_EPOCH,
+            )
+            self.set_target(
+                value["validators"][index],
+                instance_id=instance_id,
+                enabled=False,
+                interval=0,
+                epoch=activation_epoch,
+            )
+
+        decision = evaluate_evidence_bound_rolling_compatibility(value)
+        self.assertEqual(decision["state"], "READY_FOR_FINALITY_ENABLE")
+
+        enabled = copy.deepcopy(value)
+        for validator in enabled["validators"]:
+            self.set_finality(
+                validator,
+                enabled=True,
+                interval=30,
+                epoch=activation_epoch,
+            )
+        self.assertEqual(
+            evaluate_evidence_bound_rolling_compatibility(enabled)["state"],
+            "ACCEPTED",
+        )
+
+        for remaining in (29, 211):
+            with self.subTest(remaining=remaining):
+                bounded = copy.deepcopy(value)
+                bounded["observed_unix_time"] = activation_epoch - remaining
+                with self.assertRaisesRegex(
+                    EvidenceBoundPrefixError, "bounded safety window"
+                ):
+                    evaluate_evidence_bound_rolling_compatibility(bounded)
+
+        partial = copy.deepcopy(value)
+        partial["evidence_updated_count"] = 2
+        partial["evidence_validators"][2] = copy.deepcopy(
+            self.rolling_fixture()["evidence_validators"][2]
+        )
+        partial["validators"][2] = copy.deepcopy(
+            self.rolling_fixture()["validators"][2]
+        )
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError, "exact 3/3 target runtime"
+        ):
+            evaluate_evidence_bound_rolling_compatibility(partial)
+
+        malformed = copy.deepcopy(value)
+        malformed["finality_activation_contract"] = "true"
+        with self.assertRaisesRegex(EvidenceBoundPrefixError, "boolean"):
+            evaluate_evidence_bound_rolling_compatibility(malformed)
+
+        live_prefix = copy.deepcopy(value)
+        with self.assertRaisesRegex(
+            EvidenceBoundPrefixError, "only in rolling mode"
+        ):
+            evaluate_live_rollout_prefix_v2(live_prefix)
+
     def test_resume_target_prefix_can_continue(self):
         value = self.rolling_fixture()
         value["evidence_updated_count"] = 1

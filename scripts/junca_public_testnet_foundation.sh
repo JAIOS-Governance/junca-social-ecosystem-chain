@@ -3747,6 +3747,7 @@ write_rolling_compatibility_evidence() {
   local expected_state="$1"
   local expected_next="${2:-}"
   local finality_activation_contract="${3:-false}"
+  local baseline_slot_epoch_seconds="${4:-$validator_slot_epoch_seconds}"
   local -a current_instances
   local index
   local validator_id
@@ -3806,6 +3807,8 @@ write_rolling_compatibility_evidence() {
       "$evidence_bound_baseline_updated_count" \
     --argjson requested_slot_epoch_seconds \
       "$validator_slot_epoch_seconds" \
+    --argjson baseline_slot_epoch_seconds \
+      "$baseline_slot_epoch_seconds" \
     --argjson observed_unix_time "$(date +%s)" \
     --argjson finality_activation_contract \
       "$finality_activation_contract" \
@@ -3822,6 +3825,7 @@ write_rolling_compatibility_evidence() {
       validators: $validators[0],
       evidence_validators: $evidence_validators[0],
       requested_slot_epoch_seconds: $requested_slot_epoch_seconds,
+      baseline_slot_epoch_seconds: $baseline_slot_epoch_seconds,
       observed_unix_time: $observed_unix_time,
       finality_activation_contract: $finality_activation_contract,
       fallback_active: false,
@@ -5225,7 +5229,7 @@ if [[ "$phase" == "foundation-apply" ]]; then
     set_runtime_finality \
       0 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
     write_rolling_compatibility_evidence \
-      READY_FOR_FINALITY_ENABLE "" true
+      READY_FOR_FINALITY_ENABLE "" true "$rollout_slot_epoch_seconds"
     test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
     set_runtime_finality \
       30 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
@@ -5238,7 +5242,8 @@ if [[ "$phase" == "foundation-apply" ]]; then
       .accepted_at = $accepted_at
     ' artifacts/finality-activation.json >"$activation_evidence_tmp"
     mv -f "$activation_evidence_tmp" artifacts/finality-activation.json
-    write_rolling_compatibility_evidence ACCEPTED "" true
+    write_rolling_compatibility_evidence \
+      ACCEPTED "" true "$rollout_slot_epoch_seconds"
   fi
 
   apply_executed=true

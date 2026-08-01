@@ -288,6 +288,13 @@ three validators are the exact target runtime may an explicit
 remaining. Missing, non-boolean, partial-prefix, too-near or too-far activation
 evidence remains rejected; the near-term exception cannot authorize a rolling
 replacement.
+The evidence-bound gate carries both epochs explicitly during that handoff:
+`baseline_slot_epoch_seconds` must match the immutable 3/3 rollout baseline,
+while `requested_slot_epoch_seconds` must match the newly configured activation
+readback. They may differ only under the exact 3/3 activation contract. This
+prevents a recovered long-running rollout from reusing an expired baseline
+epoch while preserving the prior evidence binding through the coordinated
+disable/configure/enable transition.
 The cross-head comparison allowlist includes the live-prefix gate, its focused
 negative tests, and this acceptance contract because those files implement and
 specify the same bounded recovery decision. No unrelated runtime, Mainnet,
