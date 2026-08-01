@@ -5167,13 +5167,59 @@ if [[ "$phase" == "foundation-apply" ]]; then
       build_runtime_finality_bindings \
         "$NODE_ARTIFACT_SHA256" false "${activated_instances[@]}"
     )"
-    test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
+    rollout_slot_epoch_seconds="$validator_slot_epoch_seconds"
+    activation_interval_seconds=30
+    activation_delay_seconds=180
+    activation_now_seconds="$(date +%s)"
+    validator_slot_epoch_seconds="$(
+      echo $((
+        ((activation_now_seconds + activation_delay_seconds +
+          activation_interval_seconds - 1) /
+          activation_interval_seconds) * activation_interval_seconds
+      ))
+    )"
+    test "$validator_slot_epoch_seconds" -gt "$activation_now_seconds"
+    test "$((validator_slot_epoch_seconds % activation_interval_seconds))" -eq 0
+    test "$((validator_slot_epoch_seconds - activation_now_seconds))" -ge \
+      "$activation_delay_seconds"
+    jq -n \
+      --argjson rollout_slot_epoch_seconds "$rollout_slot_epoch_seconds" \
+      --argjson slot_epoch_seconds "$validator_slot_epoch_seconds" \
+      --argjson block_interval_seconds "$activation_interval_seconds" \
+      --argjson activation_delay_seconds "$activation_delay_seconds" \
+      --argjson observed_at "$activation_now_seconds" \
+      --arg node_artifact_sha256 "$NODE_ARTIFACT_SHA256" \
+      --argjson bindings "$activated_finality_bindings" '{
+        schema_version: "junca-finality-activation/v1",
+        state: "NEXT_CANONICAL_SLOT_PENDING",
+        rollout_slot_epoch_seconds: $rollout_slot_epoch_seconds,
+        enabled: true,
+        block_interval_seconds: $block_interval_seconds,
+        slot_epoch_seconds: $slot_epoch_seconds,
+        activation_delay_seconds: $activation_delay_seconds,
+        observed_at: $observed_at,
+        node_artifact_sha256: $node_artifact_sha256,
+        bindings: $bindings,
+        accepted: false,
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }' > artifacts/finality-activation.json
     set_runtime_finality \
       0 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
     write_rolling_compatibility_evidence READY_FOR_FINALITY_ENABLE
-    test "$((validator_slot_epoch_seconds - $(date +%s)))" -ge 900
+    test "$validator_slot_epoch_seconds" -gt "$(date +%s)"
     set_runtime_finality \
       30 "$validator_slot_epoch_seconds" "$activated_finality_bindings"
+    activation_evidence_tmp="$(
+      mktemp artifacts/.finality-activation.XXXXXX
+    )"
+    jq --argjson accepted_at "$(date +%s)" '
+      .state = "NEXT_CANONICAL_SLOT_BOUND" |
+      .accepted = true |
+      .accepted_at = $accepted_at
+    ' artifacts/finality-activation.json >"$activation_evidence_tmp"
+    mv -f "$activation_evidence_tmp" artifacts/finality-activation.json
     write_rolling_compatibility_evidence ACCEPTED
   fi
 

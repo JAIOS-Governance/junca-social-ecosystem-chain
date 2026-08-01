@@ -263,6 +263,18 @@ checksummed resume artifact is preserved separately and is never rewritten.
 A larger delta is stale evidence. A gap, unknown AMI, checksum failure,
 candidate mismatch, changed EBS/snapshot binding or state rewind rejects the
 resume. A 3/3 prefix resumes only the separately gated finality activation.
+The long rollout epoch is a replacement safety boundary, not the live start
+time. After all three exact-runtime validators pass SSM, service, retained
+volume and finalized-certificate readback, Foundation binds a separate
+`junca-finality-activation/v1` artifact to the exact runtime and ordered
+instances. It then re-anchors all three nodes to one future 30-second boundary
+with a bounded three-minute lead, disables finality before the coordinated
+write, and only then enables it. The pre-slot readback permits an authenticated
+vote count from zero through three because no vote is due before the bound
+slot; the following gate still requires two fresh consecutive heights with
+matching timestamps and exact current 3/3 certificates. A stale epoch,
+unbound instance, partial write, boundary drift or failed readback compensates
+to disabled `false/0/0` and stops.
 The cross-head comparison allowlist includes the live-prefix gate, its focused
 negative tests, and this acceptance contract because those files implement and
 specify the same bounded recovery decision. No unrelated runtime, Mainnet,

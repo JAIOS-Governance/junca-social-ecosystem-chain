@@ -488,6 +488,24 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t instances < artifacts/validator-instance-ids.txt
+          slot_epoch="$(
+            jq -er '
+              select(
+                .schema_version == "junca-finality-activation/v1" and
+                .state == "NEXT_CANONICAL_SLOT_BOUND" and
+                .accepted == true and
+                .enabled == true and
+                .block_interval_seconds == 30 and
+                (.slot_epoch_seconds | type) == "number" and
+                .slot_epoch_seconds > 0 and
+                .slot_epoch_seconds % 30 == 0 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              )
+              | .slot_epoch_seconds
+            ' artifacts/finality-activation.json
+          )"
           health_poll='sleep 5; curl -fsS http://127.0.0.1:8545/health'
           jq -n --arg command "$health_poll" \
             '{commands: [$command]}' > artifacts/ssm-health.json
@@ -520,7 +538,7 @@ jobs:
               "artifacts/health-command-${instance}.json" \
               > "artifacts/health-${instance}.json"
           done
-          jq -s -e '
+          jq -s -e --argjson slot_epoch "$slot_epoch" '
             length == 3 and
             (map(.status) | unique) == ["healthy"] and
             (map(.head_height) | min) >= 1 and
@@ -554,6 +572,12 @@ jobs:
             all(.automatic_finality_last_attempted_slot == null) and
             all(.automatic_finality_last_successful_slot == null) and
             all(.consensus.required_vote_count == 3) and
+            all(
+              .automatic_finality_enabled == true and
+              .automatic_finality_loop_running == true and
+              .block_interval_seconds == 30 and
+              .slot_epoch_seconds == $slot_epoch
+            ) and
             all(.private_key_material_accepted == false) and
             all(.mainnet_changed == false) and
             all(.assets_moved == false) and
@@ -584,15 +608,20 @@ jobs:
           )"
           finality="$(
             jq -ce '
-              .automatic_finality_readback.value
-              | select(
-                  .enabled == true and
-                  .block_interval_seconds == 30 and
-                  (.slot_epoch_seconds | type) == "number" and
-                  .slot_epoch_seconds > 0 and
-                  .slot_epoch_seconds % 30 == 0
-                )
-            ' artifacts/foundation-outputs.json
+              select(
+                .schema_version == "junca-finality-activation/v1" and
+                .state == "NEXT_CANONICAL_SLOT_BOUND" and
+                .accepted == true and
+                .enabled == true and
+                .block_interval_seconds == 30 and
+                (.slot_epoch_seconds | type) == "number" and
+                .slot_epoch_seconds > 0 and
+                .slot_epoch_seconds % 30 == 0 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              )
+            ' artifacts/finality-activation.json
           )"
           slot_epoch="$(jq -er .slot_epoch_seconds <<<"$finality")"
           interval="$(jq -er .block_interval_seconds <<<"$finality")"
