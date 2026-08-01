@@ -38,8 +38,21 @@ permissions:
 
 concurrency:
   # Shared with the manual/auto foundation workflow because both can acquire
-  # the canonical public-testnet Terraform state lock.
-  group: junca-public-testnet-aws-foundation
+  # the canonical public-testnet Terraform state lock. The exact v24 tuple is
+  # a bounded exception: run 30688972530 has released Terraform and completed
+  # all mutations, but is sleeping in finality readback against the superseded
+  # two-hour epoch. The separate group permits only the verified 3/3 resume to
+  # re-anchor finality; every other input tuple remains on the shared lock.
+  group: >-
+    ${{
+      inputs.ami_run_id == '30682660387' &&
+      inputs.manifest_gate_run_id == '30683678492' &&
+      inputs.resume_run_id == '30688476089' &&
+      inputs.renew_expired_epoch == 'NONE' &&
+      inputs.renewal_preserve_prefix_count == '0' &&
+      'junca-public-testnet-finality-next-slot-v24' ||
+      'junca-public-testnet-aws-foundation'
+    }}
   cancel-in-progress: false
 
 jobs:

@@ -296,3 +296,18 @@ activation, or release-boundary drift stops the rollout. Rollback must keep
 automatic finality disabled, use the recorded immutable previous artifact and
 reattach the same retained durable volume; finalized state must never be
 rewound. Mainnet, asset movement and bridge activation remain out of scope.
+
+### Superseding a stale finality monitor
+
+An orchestrator waiting on an older Foundation child may be superseded by a
+newer signed one-shot request because the orchestrator is only a monitor; it
+does not hold the Terraform state lock. Foundation execution remains on the
+shared `junca-public-testnet-aws-foundation` concurrency group. The sole v24
+exception is bound to AMI run `30682660387`, manifest run `30683678492`, and
+completed failed Foundation run `30688476089`. That source run proves all
+three exact-runtime validators healthy and the later run proves the obsolete
+Foundation child has completed every mutation and is sleeping only in finality
+readback. No wildcard, prefix, renewal, alternate run, or alternate artifact
+may enter the exception group. The resumed execution must still re-read all
+three validators, bind the activation evidence, and prove two consecutive
+canonical 3/3 finalized slots before acceptance.

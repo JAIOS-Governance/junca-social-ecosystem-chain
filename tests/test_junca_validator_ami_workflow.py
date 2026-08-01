@@ -196,6 +196,31 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             r"-[0-9]{8}(?:-[a-z0-9-]+)?$",
         )
 
+    def test_exact_v24_finality_resume_bypasses_only_the_stale_monitor(self):
+        self.assertIn("cancel-in-progress: true", self.orchestrator)
+        self.assertIn(
+            "junca-public-testnet-finality-next-slot-v24",
+            self.foundation,
+        )
+        for exact_binding in (
+            "inputs.ami_run_id == '30682660387'",
+            "inputs.manifest_gate_run_id == '30683678492'",
+            "inputs.resume_run_id == '30688476089'",
+            "inputs.renew_expired_epoch == 'NONE'",
+            "inputs.renewal_preserve_prefix_count == '0'",
+        ):
+            self.assertIn(exact_binding, self.foundation)
+        self.assertIn(
+            "'junca-public-testnet-aws-foundation'",
+            self.foundation,
+        )
+        self.assertIn("cancel-in-progress: false", self.foundation)
+        concurrency = self.foundation.split("concurrency:", 1)[1].split(
+            "\njobs:", 1
+        )[0]
+        self.assertNotIn("inputs.resume_run_id !=", concurrency)
+        self.assertNotIn("startsWith(inputs.resume_run_id", concurrency)
+
     def test_exact_foundation_resume_request_is_digest_bound(self):
         request = {
             "schema_version": (
