@@ -260,6 +260,44 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
         self.assertNotIn("aws elbv2 register-targets", self.script)
         self.assertNotIn("aws elbv2 deregister-targets", self.script)
 
+    def test_gateway_private_health_uses_direct_schema_and_rejects_rpc_wrapper(self) -> None:
+        if shutil.which("jq") is None:
+            self.skipTest("jq is not installed")
+        gateway = self.script.split("render_public_gateway_recovery", 1)[1]
+        match = re.search(
+            r"jq -e '(.*?)' /tmp/junca-validator-health\.json",
+            gateway,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        jq_filter = match.group(1)
+        exact = {
+            "status": "healthy",
+            "network": "Public Testnet / No Monetary Value",
+            "chain_id": 20260723,
+            "validator_id": "validator-01",
+            "private_key_material_accepted": False,
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+
+        def accepted(payload: dict) -> bool:
+            result = subprocess.run(
+                ["jq", "-e", jq_filter],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            return result.returncode == 0
+
+        self.assertTrue(accepted(exact))
+        self.assertFalse(accepted({"result": exact}))
+        self.assertFalse(accepted({**exact, "validator_id": "validator-02"}))
+        self.assertNotIn(".result.status", jq_filter)
+        self.assertIn("JUNCA_GATEWAY_RECOVERY_FAILURE", gateway)
+
     def test_library_mode_exits_before_terraform(self) -> None:
         guard = self.foundation.index("JUNCA_FOUNDATION_LIBRARY_ONLY")
         terraform = self.foundation.index(
