@@ -6,6 +6,13 @@ on:
       - main
     paths:
       - config/junca_public_gateway_repair_request.json
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+    paths:
+      - config/junca_public_gateway_repair_request.json
   workflow_dispatch:
     inputs:
       authorize_repair:
@@ -25,6 +32,8 @@ jobs:
   repair-and-verify:
     if: >-
       github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true) ||
       inputs.authorize_repair == 'PUBLIC_TESTNET_GATEWAY_REPAIR'
     runs-on: ubuntu-24.04
     environment: public-testnet
