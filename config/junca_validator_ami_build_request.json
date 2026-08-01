@@ -9,8 +9,8 @@
   "manifest_gate_run_id": "30683678492",
   "resume_run_id": "30683689710",
   "target_workflow": ".github/workflows/junca-validator-foundation-release.yml",
-  "one_shot_nonce": "foundation-resume-30683689710-20260801-signing-journal-v14",
-  "request_sha256": "b1d4e4b7c38e6c1511bc42657eafc88433d1522a9545d8d2d121dfc66b7df7b2",
+  "one_shot_nonce": "foundation-resume-30683689710-20260801-recovered-prefix-v15",
+  "request_sha256": "a251317f5e6d34d725ea86d0e8aced35642ac5acda15145821d4e8cfabcb4698",
   "boundaries": {
     "rebuild_ami": false,
     "rebuild_manifest": false,
