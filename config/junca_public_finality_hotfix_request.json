@@ -10,7 +10,7 @@
   "base_validator_node_sha256": "09c87bbc7f2ce8fb048677ab899ba708ae8b31c0c8a862b869e9c7fa9f2bf778",
   "target_validator_node_sha256": "9c7d44b65084b5a32aa20765436af75ac160f1fac1c104b807a40a529f7c6f7f",
   "action": "PATCH_RESIDENT_VALIDATOR_RUNTIME_ONLY",
-  "one_shot_nonce": "finality-hotfix-30688972530-v1",
+  "one_shot_nonce": "finality-hotfix-30688972530-v2-trigger",
   "mainnet_changed": false,
   "assets_moved": false,
   "bridge_activated": false,
