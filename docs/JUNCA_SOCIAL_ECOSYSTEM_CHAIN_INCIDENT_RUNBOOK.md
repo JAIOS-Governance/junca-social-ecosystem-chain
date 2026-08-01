@@ -1,6 +1,6 @@
 # JUNCA Social Ecosystem Chain — Bridge Incident Runbook
 
-**Public Testnet / No Monetary Value**
+**Public Testnet / Protocol Validation Environment**
 
 Governance: **JAIOS Institutional Governance**
 

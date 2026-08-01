@@ -57,7 +57,10 @@ def load_public_testnet_plan(path: str | Path) -> PublicTestnetPlan:
     _require(raw, "issuance_management", "JAIOS Institutional Governance")
     _require(raw, "public_label", "Public Testnet / No Monetary Value")
     if raw.get("mainnet") is not False or raw.get("monetary_value") is not False:
-        raise PublicTestnetError("preview must not be mainnet or have monetary value")
+        raise PublicTestnetError(
+            "preview must remain a public-testnet protocol-validation environment "
+            "and must not be represented as mainnet"
+        )
     if raw.get("legacy_key_reuse") is not False:
         raise PublicTestnetError("legacy key reuse is prohibited")
 

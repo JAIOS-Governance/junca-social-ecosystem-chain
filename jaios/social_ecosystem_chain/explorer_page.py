@@ -481,7 +481,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
       <span id="live-mode">Readback starting</span>
       <span>Finalized-only</span>
       <span>Read-only</span>
-      <span class="notice">Public Testnet / No Monetary Value</span>
+      <span class="notice">Public Testnet / Protocol Validation Environment</span>
     </div>
   </div>
 
@@ -581,9 +581,9 @@ EXPLORER_DOCUMENT = """<!doctype html>
         <div class="boundary"><span>Asset Movement</span><strong>Not Active</strong></div>
         <div class="boundary"><span>Bridge</span><strong>Not Active</strong></div>
         <div class="boundary"><span>Public Access</span><strong>Read-only</strong></div>
-        <div class="boundary"><span>Monetary Value</span><strong>None</strong></div>
+        <div class="boundary"><span>Test Asset Status</span><strong>Validation Only</strong></div>
       </div>
-      <p class="footnote">JUNCA Social Ecosystem Chain Public Testnet is a test environment for validating the protocol, validator topology, finality, and public read-only access. Mainnet, asset movement, and bridge functionality are not active.<br>本Public Testnetは、プロトコル、Validator構成、Finalityおよび公開読取経路の検証を目的とするテスト環境です。</p>
+      <p class="footnote">JUNCA Social Ecosystem Chain Public Testnet is a public protocol-validation environment. Test assets, when available, are separated from Mainnet-issued JSEC. Mainnet, production asset movement, and bridge activation remain separately governed.<br>本Public Testnetは、プロトコル検証のための公開環境です。テスト資産はMainnet発行のJSECと区分され、Mainnet、実資産移動およびBridge有効化は個別の統制対象です。</p>
     </section>
 
     <section aria-labelledby="future-title">

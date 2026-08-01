@@ -20,7 +20,7 @@
 
 - Official name is `JUNCA Social Ecosystem Chain`.
 - Public governance label is `JAIOS Institutional Governance`.
-- Every testnet context carries `Public Testnet / No Monetary Value`.
+- Every testnet context carries `Public Testnet / Protocol Validation Environment`.
 - No current-use reference to the former chain name is present in the Web
   implementation or canonical guidance.
 - No public RPC, WebSocket, Explorer or Faucet placeholder is exposed.

@@ -160,7 +160,7 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("Latest Finalized Block", document)
         self.assertIn("NOT YET PUBLISHED", document)
         self.assertNotIn("Not Available Yet", document)
-        self.assertIn("Public Testnet / No Monetary Value", document)
+        self.assertIn("Public Testnet / Protocol Validation Environment", document)
         self.assertIn("https://explorer.jaios-governance.org/", document)
         self.assertIn('href="https://jaios-governance.org/"', document)
         self.assertIn('href="https://chain.jaios-governance.org/"', document)

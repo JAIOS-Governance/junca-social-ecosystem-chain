@@ -40,7 +40,14 @@ jobs:
           node-version: 20
       - name: Lint generators and QA
         run: npm run lint
-      - name: Build and verify eight-route artifact
+      - name: Verify eight-route artifact against controlled PR readback
+        if: github.event_name == 'pull_request'
+        run: npm run test:fixture
+      - name: Wait for accepted live Explorer publication
+        if: github.event_name != 'pull_request'
+        run: node ./scripts/wait-live-explorer.mjs
+      - name: Build and verify eight-route artifact against live Explorer
+        if: github.event_name != 'pull_request'
         run: npm test
       - name: Upload exact publication artifact
         uses: actions/upload-artifact@v4
@@ -63,6 +70,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Wait for accepted live Explorer publication
+        working-directory: docs/technical-reference
+        run: node ./scripts/wait-live-explorer.mjs
       - name: Rebuild exact source artifact
         working-directory: docs/technical-reference
         run: npm test

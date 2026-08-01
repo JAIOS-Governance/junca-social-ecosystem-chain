@@ -9,7 +9,7 @@ deployment, governance, test, workflow, and release-evidence assets from the
 former mixed repository. Voice Admin, mailing, kids-drawing, corporate,
 administrative, unrelated application, and secret material are excluded.
 
-The public network remains `Public Testnet / No Monetary Value`.
+The public network remains `Public Testnet / Protocol Validation Environment`.
 
 - Mainnet Changed=false
 - Assets Moved=false

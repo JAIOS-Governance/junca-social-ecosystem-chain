@@ -2,7 +2,7 @@
 
 Status: Public Testnet release control  
 Governance: JAIOS Institutional Governance  
-Network notice: Public Testnet / No Monetary Value
+Network notice: Public Testnet / Protocol Validation Environment
 
 Runtime acceptance is a fail-closed, machine-readable gate. It does not claim that infrastructure exists merely because configuration is present.
 
@@ -15,7 +15,7 @@ Runtime acceptance is a fail-closed, machine-readable gate. It does not claim th
 - Administrative, personal, mining and debug RPC methods are rejected.
 - Explorer head equals the last independently collected RPC head.
 - Public metadata displays JAIOS Institutional Governance.
-- Public metadata displays Public Testnet / No Monetary Value.
+- Public metadata displays Public Testnet / Protocol Validation Environment.
 
 ## Evidence lifecycle
 

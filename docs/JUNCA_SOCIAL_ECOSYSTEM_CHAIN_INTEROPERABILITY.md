@@ -1,6 +1,6 @@
 # JUNCA Social Ecosystem Chain — Testnet Interoperability
 
-**Public Testnet / No Monetary Value**
+**Public Testnet / Protocol Validation Environment**
 
 Governance: **JAIOS Institutional Governance**
 

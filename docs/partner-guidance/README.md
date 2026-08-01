@@ -8,7 +8,7 @@ release control and operational readiness.
 
 - Official chain name: `JUNCA Social Ecosystem Chain`
 - Public governance label: `JAIOS Institutional Governance`
-- Testnet notice: `Public Testnet / No Monetary Value`
+- Testnet notice: `Public Testnet / Protocol Validation Environment`
 - Technical source baseline: PR #158 at
   `df74d30f95faf4e0c18f7927494ab20f0dee8766`
 - Public technical publication: `NO-GO`

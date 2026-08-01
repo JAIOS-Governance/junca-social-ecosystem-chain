@@ -2,7 +2,7 @@ export const candidate = Object.freeze({
   name: "JUNCA Social Ecosystem Chain Public Preview Testnet",
   chainId: 20260723,
   rpcUrl: process.env.JUNCA_TESTNET_RPC_URL,
-  notice: "Public Testnet / No Monetary Value",
+  notice: "Public Testnet / Protocol Validation Environment",
 });
 
 export function validateNetworkBinding(config = candidate) {

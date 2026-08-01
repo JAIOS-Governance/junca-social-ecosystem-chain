@@ -1,7 +1,7 @@
 # JUNCA Social Ecosystem Chain AWS Infrastructure
 
 This Terraform package is a plan-mode, fail-closed AWS implementation for
-`Public Testnet / No Monetary Value` under `JAIOS Institutional Governance`.
+`Public Testnet / Protocol Validation Environment` under `JAIOS Institutional Governance`.
 
 The intended external boundary is XServer as registrar for
 `jaios-governance.org`, with the registrar's NS records delegated to a

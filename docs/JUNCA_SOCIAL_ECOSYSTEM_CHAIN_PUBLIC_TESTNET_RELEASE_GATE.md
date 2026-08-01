@@ -4,7 +4,7 @@
 
 - Official chain name: JUNCA Social Ecosystem Chain
 - Governance: JAIOS Institutional Governance
-- Network: Public Testnet / No Monetary Value
+- Network: Public Testnet / Protocol Validation Environment
 - Mainnet Changed=false
 - Assets Moved=false
 - Bridge Activated=false

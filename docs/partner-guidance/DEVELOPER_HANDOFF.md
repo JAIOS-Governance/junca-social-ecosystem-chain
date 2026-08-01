@@ -45,7 +45,7 @@ and SHA-256 digest for every deployed file.
 
 - Official name: `JUNCA Social Ecosystem Chain`
 - Governance: `JAIOS Institutional Governance`
-- Network: `Public Testnet / No Monetary Value`
+- Network: `Public Testnet / Protocol Validation Environment`
 - This package does not launch mainnet, validators, bridges, tokens, NFTs,
   KMS/HSM resources, or asset movement.
 - AWS and DNS state remains **UNVERIFIED** until same-deployment readback.

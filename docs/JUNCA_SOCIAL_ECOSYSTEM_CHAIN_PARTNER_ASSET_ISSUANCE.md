@@ -1,7 +1,7 @@
 # JUNCA Social Ecosystem Chain — Partner Asset Issuance
 
 Governance: JAIOS Institutional Governance  
-Network: Public Testnet / No Monetary Value
+Network: Public Testnet / Protocol Validation Environment
 
 This control plane converts a partner token or NFT specification into deterministic, auditable deployment evidence. It does not deploy contracts and does not represent legal, economic or security approval.
 

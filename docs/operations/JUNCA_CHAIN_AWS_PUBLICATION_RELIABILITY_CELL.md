@@ -10,7 +10,7 @@ Maintain the AWS publication path for the JUNCA Social Ecosystem Chain technical
 
 ## Immutable boundaries
 
-- Network label: `Public Testnet / No Monetary Value`
+- Network label: `Public Testnet / Protocol Validation Environment`
 - Institutional manager: `JAIOS Institutional Governance`
 - Mainnet, assets, bridge, validator, KMS/HSM, EC2, RDS, EKS, NAT Gateway: out of scope
 - AWS access keys: prohibited

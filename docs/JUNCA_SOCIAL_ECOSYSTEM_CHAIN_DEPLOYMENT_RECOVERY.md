@@ -1,7 +1,7 @@
 # JUNCA Social Ecosystem Chain — Deployment Recovery
 
 **Governance:** JAIOS Institutional Governance  
-**Network:** Public Testnet / No Monetary Value
+**Network:** Public Testnet / Protocol Validation Environment
 
 ## Current release boundary
 

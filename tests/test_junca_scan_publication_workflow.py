@@ -41,9 +41,22 @@ class JuncaScanPublicationWorkflowTests(unittest.TestCase):
             ".ready_nodes >= .required_ready_nodes",
             "((.ready_nodes + .verification_in_progress_nodes) == 3)",
             "aws elbv2 describe-target-health",
+            'assert_rolling_capacity "$instance"',
+            "wait_rolled_node",
             'all(.[]; . != "healthy")',
         ):
             self.assertIn(required, self.workflow)
+
+    def test_public_gateways_are_restarted_one_node_at_a_time(self) -> None:
+        self.assertIn('run_ssm_instance "$instance" restart', self.workflow)
+        self.assertIn('for instance in "${instances[@]}"; do', self.workflow)
+        self.assertIn('--instance-ids "$instance"', self.workflow)
+        self.assertNotIn('run_ssm restart ', self.workflow)
+        self.assertNotIn("systemctl restart junca-validator.service", self.workflow)
+        self.assertIn(
+            "systemctl restart junca-public-explorer.service junca-public-rpc.service",
+            self.workflow,
+        )
 
     def test_production_evidence_keeps_node_publication_state(self) -> None:
         for required in (
