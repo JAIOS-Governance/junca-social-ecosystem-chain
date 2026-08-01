@@ -171,10 +171,14 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertIn("always()", self.orchestrator)
         self.assertIn("if-no-files-found: error", self.orchestrator)
         for path in (
+            ".github/workflows/junca-public-gateway-emergency-repair.yml",
             ".github/workflows/"
             "junca-validator-public-testnet-orchestrator.yml",
+            "config/junca_public_gateway_repair_request.json",
             "config/junca_validator_ami_build_request.json",
+            "jaios/social_ecosystem_chain/validator_node.py",
             "scripts/junca_validator_ami_build_request.py",
+            "tests/test_junca_social_ecosystem_chain_validator_node.py",
             "tests/test_junca_validator_ami_workflow.py",
         ):
             self.assertIn(path, RECOVERY_FILE_ALLOWLIST)
