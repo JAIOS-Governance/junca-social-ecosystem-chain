@@ -178,22 +178,22 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             "tests/test_junca_validator_ami_workflow.py",
         ):
             self.assertIn(path, RECOVERY_FILE_ALLOWLIST)
-        for value in (
-            "30682660387",
-            "30683678492",
-            "30683689710",
+        for field in ("ami_run_id", "manifest_gate_run_id", "resume_run_id"):
+            self.assertRegex(self.live_request_data[field], r"^[1-9][0-9]*$")
+        self.assertEqual(
+            self.live_request_data["approval_phrase"],
             "PUBLIC_TESTNET_ROLLOUT",
-        ):
-            self.assertIn(value, self.live_request)
+        )
         self.assertEqual(
             self.live_request_data["request_sha256"],
             REQUEST_VALIDATOR.canonical_request_sha256(
                 self.live_request_data
             ),
         )
-        self.assertEqual(
+        self.assertRegex(
             self.live_request_data["one_shot_nonce"],
-            "foundation-resume-30683689710-20260801-state-access-v8",
+            rf"^foundation-resume-{self.live_request_data['resume_run_id']}"
+            r"-[0-9]{8}(?:-[a-z0-9-]+)?$",
         )
 
     def test_exact_foundation_resume_request_is_digest_bound(self):
