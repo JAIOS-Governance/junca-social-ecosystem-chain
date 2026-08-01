@@ -1,0 +1,582 @@
+name: JUNCA Public Testnet Finality Realign
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+    paths:
+      - config/junca_public_finality_realign_request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-finality-hotfix
+  cancel-in-progress: false
+
+jobs:
+  realign-and-accept:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 20
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      BASE_RUNTIME_SHA256: cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f
+      TARGET_VALIDATOR_NODE_SHA256: 9c7d44b65084b5a32aa20765436af75ac160f1fac1c104b807a40a529f7c6f7f
+      CANONICAL_HEIGHT: "2"
+      CANONICAL_HASH: 0x8a87c4e0572964214ab53866e10bc2ab121d870c5d6624fe3559348a9a7374b6
+      CANONICAL_CERTIFICATE_HASH: 0x1cc72c10e7e85da782bf0cb1957082a3d9caca2e1db0519f9ca3218b4f75522f
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate one-shot realignment authorization
+        run: |
+          set -euo pipefail
+          request=config/junca_public_finality_realign_request.json
+          jq -e \
+            --arg canonical_hash "$CANONICAL_HASH" \
+            --arg certificate_hash "$CANONICAL_CERTIFICATE_HASH" '
+              .schema_version == "junca-public-finality-realign-request/v1" and
+              .authorized_scope == "PUBLIC_TESTNET_FINALITY_REALIGN" and
+              .failed_foundation_run_id == 30688972530 and
+              .failed_hotfix_run_id == 30692994540 and
+              .approved_ami_run_id == 30682660387 and
+              .approved_manifest_run_id == 30683678492 and
+              .source_validator == "validator-01" and
+              .canonical_height == 2 and
+              .canonical_hash == $canonical_hash and
+              .canonical_certificate_hash == $certificate_hash and
+              .action == "AUTHENTICATED_CHECKPOINT_REALIGN_AND_FUTURE_EPOCH_BARRIER" and
+              (.one_shot_nonce | type == "string" and length >= 16) and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false and
+              .mainnet_activation_authorized == false
+            ' "$request" >/dev/null
+          mkdir -p artifacts
+          cp "$request" artifacts/realign-request.json
+          sha256sum "$request" > artifacts/realign-request.json.sha256
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-finality-realign-${{ github.run_id }}
+
+      - name: Resolve exact resident validators
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account == $account and
+            (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[] | {
+              instance_id: .InstanceId,
+              validator: (.Tags[] | select(.Key == "Validator") | .Value),
+              private_ip: .PrivateIpAddress,
+              image_id: .ImageId,
+              state: .State.Name
+            }] | sort_by(.validator) |
+            select(
+              length == 3 and
+              map(.validator) == ["01","02","03"] and
+              (map(.instance_id) | unique | length) == 3 and
+              all(.[]; .state == "running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          printf '%s\n' "${instances[@]}" > artifacts/validator-instance-ids.txt
+          jq -r '.[] | select(.validator == "01") | .instance_id' \
+            artifacts/validators.json > artifacts/source-instance-id.txt
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
+          jq -e \
+            --argjson expected "$(jq '[.[].instance_id] | sort' artifacts/validators.json)" '
+              [.InstanceInformationList[] |
+                select(.PingStatus == "Online") | .InstanceId] |
+              sort | . == $expected
+            ' artifacts/ssm-instances.json >/dev/null
+
+      - name: Extract and authenticate canonical finalized height two
+        run: |
+          set -euo pipefail
+          source_instance="$(cat artifacts/source-instance-id.txt)"
+          remote_command="$(cat <<'REMOTE'
+          set -euo pipefail
+          systemctl is-active --quiet junca-validator.service
+          curl -fsS http://127.0.0.1:8545/health >/tmp/health.json
+          jq -e '
+            .validator_id == "validator-01" and
+            .head_height == 2 and
+            .head_hash == "0x8a87c4e0572964214ab53866e10bc2ab121d870c5d6624fe3559348a9a7374b6" and
+            .consensus.last_certificate_hash == "0x1cc72c10e7e85da782bf0cb1957082a3d9caca2e1db0519f9ca3218b4f75522f" and
+            .consensus.last_certificate.signed_power == 3 and
+            .consensus.last_certificate.total_power == 3 and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' /tmp/health.json >/dev/null
+          python3 - <<'PY'
+          import json
+          import sqlite3
+          connection = sqlite3.connect(
+              "file:/var/lib/junca/state.sqlite?mode=ro", uri=True
+          )
+          connection.row_factory = sqlite3.Row
+          block = dict(connection.execute(
+              "SELECT * FROM blocks WHERE height=2"
+          ).fetchone())
+          certificate_row = connection.execute(
+              "SELECT certificate_json FROM finality_certificates WHERE height=2"
+          ).fetchone()
+          timestamp_row = connection.execute(
+              "SELECT timestamp FROM block_timestamps WHERE height=2"
+          ).fetchone()
+          if certificate_row is None or timestamp_row is None:
+              raise SystemExit("canonical finalized rows are incomplete")
+          print(json.dumps({
+              "schema_version": "junca-resident-canonical-finalized-state/v1",
+              "block": block,
+              "certificate": json.loads(certificate_row[0]),
+              "timestamp": timestamp_row[0],
+              "mainnet_changed": False,
+              "assets_moved": False,
+              "bridge_activated": False,
+          }, sort_keys=True, separators=(",", ":")))
+          connection.close()
+          PY
+          REMOTE
+          )"
+          jq -n --arg command "$remote_command" '{commands:[$command]}' \
+            > artifacts/ssm-extract-canonical.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "$source_instance" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-extract-canonical.json \
+            --comment "JUNCA extract canonical finalized height two" \
+            --query Command.CommandId --output text)"
+          for attempt in $(seq 1 60); do
+            status="$(aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$source_instance" \
+              --query Status --output text)"
+            case "$status" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+            esac
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          aws ssm get-command-invocation \
+            --command-id "$command_id" --instance-id "$source_instance" \
+            > artifacts/extract-canonical-command.json
+          jq -er .StandardOutputContent artifacts/extract-canonical-command.json \
+            > artifacts/canonical-finalized-state.json
+          jq -e \
+            --arg hash "$CANONICAL_HASH" \
+            --arg certificate_hash "$CANONICAL_CERTIFICATE_HASH" '
+              .schema_version == "junca-resident-canonical-finalized-state/v1" and
+              .block.height == 2 and
+              .block.block_hash == $hash and
+              .block.parent_hash ==
+                "0x7efec4608721d4b40d40fa1b1eb19f01509c33bf8e12e656f1419c7b43cb3d57" and
+              .block.finalized == 1 and
+              .block.certificate_hash == $certificate_hash and
+              .certificate.height == 2 and
+              .certificate.block_hash == $hash and
+              .certificate.certificate_hash == $certificate_hash and
+              .certificate.finality_status == "FINALIZED" and
+              .certificate.signed_power == 3 and
+              .certificate.total_power == 3 and
+              .certificate.validator_ids ==
+                ["validator-01","validator-02","validator-03"] and
+              (.certificate.vote_hashes | length) == 3 and
+              (.certificate.vote_hashes | unique | length) == 3 and
+              .timestamp == .certificate.round and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false
+            ' artifacts/canonical-finalized-state.json >/dev/null
+          sha256sum artifacts/canonical-finalized-state.json \
+            > artifacts/canonical-finalized-state.json.sha256
+
+      - name: Quiesce realign and bind a shared future epoch
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          future_epoch="$(( (( $(date +%s) + 60 + 29) / 30) * 30 ))"
+          echo "$future_epoch" > artifacts/future-epoch.txt
+          canonical_b64="$(base64 -w0 artifacts/canonical-finalized-state.json)"
+          remote_command="$(cat <<'REMOTE'
+          set -euo pipefail
+          canonical_b64='__CANONICAL_B64__'
+          future_epoch='__FUTURE_EPOCH__'
+          base_runtime=cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f
+          target_node=9c7d44b65084b5a32aa20765436af75ac160f1fac1c104b807a40a529f7c6f7f
+          runtime_node=/usr/local/lib/junca/jaios/social_ecosystem_chain/validator_node.py
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz | cut -d' ' -f1)" = "$base_runtime"
+          test "$(sha256sum "$runtime_node" | cut -d' ' -f1)" = "$target_node"
+          systemctl stop junca-public-rpc.service junca-public-explorer.service junca-validator.service
+          ! systemctl is-active --quiet junca-validator.service
+          python3 - "$canonical_b64" "$future_epoch" <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sqlite3
+          import sys
+
+          canonical = json.loads(base64.b64decode(sys.argv[1]))
+          future_epoch = int(sys.argv[2])
+          state_path = Path("/var/lib/junca/state.sqlite")
+          connection = sqlite3.connect(str(state_path), isolation_level=None)
+          connection.row_factory = sqlite3.Row
+          if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+              raise SystemExit("state quick_check failed before realignment")
+          head = connection.execute(
+              "SELECT height,block_hash FROM blocks ORDER BY height DESC LIMIT 1"
+          ).fetchone()
+          if head is None or head[0] not in (1, 2):
+              raise SystemExit("resident head is outside the admitted realignment set")
+          if head[0] == 2 and head[1] != canonical["block"]["block_hash"]:
+              raise SystemExit("resident height two conflicts with canonical certificate")
+          if head[0] == 1:
+              backup = Path("/var/lib/junca/state-pre-finality-realign.sqlite")
+              if not backup.exists():
+                  destination = sqlite3.connect(str(backup))
+                  connection.backup(destination)
+                  destination.close()
+                  stat = state_path.stat()
+                  os.chown(backup, stat.st_uid, stat.st_gid)
+                  os.chmod(backup, 0o640)
+              block = canonical["block"]
+              certificate = canonical["certificate"]
+              connection.execute("BEGIN IMMEDIATE")
+              try:
+                  connection.execute(
+                      """INSERT INTO blocks(
+                        height,block_hash,parent_hash,state_root,base_fee_per_gas,
+                        gas_used,finalized,certificate_hash,accounts_json,receipts_json
+                      ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                      tuple(block[key] for key in (
+                          "height", "block_hash", "parent_hash", "state_root",
+                          "base_fee_per_gas", "gas_used", "finalized",
+                          "certificate_hash", "accounts_json", "receipts_json"
+                      )),
+                  )
+                  connection.execute(
+                      "INSERT INTO finality_certificates(height,certificate_json) VALUES(?,?)",
+                      (2, json.dumps(certificate, sort_keys=True, separators=(",", ":"))),
+                  )
+                  connection.execute(
+                      "INSERT INTO block_timestamps(height,timestamp) VALUES(?,?)",
+                      (2, canonical["timestamp"]),
+                  )
+                  connection.execute("COMMIT")
+              except Exception:
+                  connection.execute("ROLLBACK")
+                  raise
+          final = connection.execute(
+              "SELECT height,block_hash,certificate_hash FROM blocks ORDER BY height DESC LIMIT 1"
+          ).fetchone()
+          if tuple(final) != (
+              2,
+              canonical["block"]["block_hash"],
+              canonical["block"]["certificate_hash"],
+          ):
+              raise SystemExit("resident canonical head verification failed")
+          if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+              raise SystemExit("state quick_check failed after realignment")
+          connection.close()
+
+          env_path = Path("/etc/junca/runtime.env")
+          env_text = env_path.read_text(encoding="utf-8")
+          rendered, count = re.subn(
+              r"^TESTNET_SLOT_EPOCH_SECONDS=[0-9]+$",
+              f"TESTNET_SLOT_EPOCH_SECONDS={future_epoch}",
+              env_text,
+              flags=re.MULTILINE,
+          )
+          if count != 1:
+              raise SystemExit("canonical runtime epoch assignment is not unique")
+          temporary = env_path.with_name(".runtime.env.finality-realign")
+          temporary.write_text(rendered, encoding="utf-8")
+          os.chown(temporary, 0, os.stat(env_path).st_gid)
+          os.chmod(temporary, 0o640)
+          os.replace(temporary, env_path)
+          PY
+          systemctl restart junca-validator.service
+          systemctl enable junca-public-rpc.service junca-public-explorer.service
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/realigned-health.json &&
+               curl -fsS http://127.0.0.1:8546/health >/dev/null &&
+               curl -fsS http://127.0.0.1:3000/health >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          jq -e --argjson epoch "$future_epoch" '
+            .status == "healthy" and
+            .head_height == 2 and
+            .head_hash == "0x8a87c4e0572964214ab53866e10bc2ab121d870c5d6624fe3559348a9a7374b6" and
+            .slot_epoch_seconds == $epoch and
+            .automatic_finality_loop_running == true and
+            .consensus.last_certificate_hash ==
+              "0x1cc72c10e7e85da782bf0cb1957082a3d9caca2e1db0519f9ca3218b4f75522f" and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' /tmp/realigned-health.json >/dev/null
+          printf '%s\n' '{"schema_version":"junca-finality-realignment/v1","accepted":true,"mainnet_changed":false,"assets_moved":false,"bridge_activated":false}'
+          REMOTE
+          )"
+          remote_command="${remote_command/__CANONICAL_B64__/$canonical_b64}"
+          remote_command="${remote_command/__FUTURE_EPOCH__/$future_epoch}"
+          jq -n --arg command "$remote_command" '{commands:[$command]}' \
+            > artifacts/ssm-realign.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-realign.json \
+            --comment "JUNCA authenticated finality realignment and epoch barrier" \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/realign-command-id.txt
+          for instance in "${instances[@]}"; do
+            status=""
+            for attempt in $(seq 1 90); do
+              status="$(aws ssm get-command-invocation \
+                --command-id "$command_id" --instance-id "$instance" \
+                --query Status --output text)"
+              case "$status" in
+                Success) break ;;
+                Failed|Cancelled|TimedOut|Cancelling) break ;;
+              esac
+              test "$attempt" -lt 90
+              sleep 2
+            done
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/realign-${instance}.json"
+            jq -e '
+              .Status == "Success" and
+              (.ResponseCode // -1) == 0 and
+              (.StandardOutputContent | contains("junca-finality-realignment/v1"))
+            ' "artifacts/realign-${instance}.json" >/dev/null
+          done
+
+      - name: Require two canonical post-barrier slots
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          future_epoch="$(cat artifacts/future-epoch.txt)"
+          ready_at="$((future_epoch + 35))"
+          now="$(date +%s)"
+          if (( ready_at > now )); then sleep "$((ready_at - now))"; fi
+          jq -n '{commands:["curl -fsS http://127.0.0.1:8545/health"]}' \
+            > artifacts/ssm-health.json
+          previous_height=2
+          previous_timestamp=0
+          for series in 1 2; do
+            accepted=false
+            for observation in $(seq 1 24); do
+              command_id="$(aws ssm send-command \
+                --instance-ids "${instances[@]}" \
+                --document-name AWS-RunShellScript \
+                --parameters file://artifacts/ssm-health.json \
+                --comment "JUNCA realigned finality slot ${series}" \
+                --query Command.CommandId --output text)"
+              for instance in "${instances[@]}"; do
+                for attempt in $(seq 1 30); do
+                  status="$(aws ssm get-command-invocation \
+                    --command-id "$command_id" --instance-id "$instance" \
+                    --query Status --output text)"
+                  case "$status" in
+                    Success) break ;;
+                    Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+                  esac
+                  test "$attempt" -lt 30
+                  sleep 2
+                done
+                aws ssm get-command-invocation \
+                  --command-id "$command_id" --instance-id "$instance" \
+                  > "artifacts/slot-${series}-command-${instance}.json"
+                jq -er .StandardOutputContent \
+                  "artifacts/slot-${series}-command-${instance}.json" \
+                  > "artifacts/slot-${series}-health-${instance}.json"
+              done
+              if jq -s -e \
+                --argjson previous_height "$previous_height" \
+                --argjson previous_timestamp "$previous_timestamp" '
+                  length == 3 and
+                  (map(.status) | unique) == ["healthy"] and
+                  (map(.head_height) | unique | length) == 1 and
+                  .[0].head_height == ($previous_height + 1) and
+                  (map(.head_hash) | unique | length) == 1 and
+                  (map(.head_timestamp) | unique | length) == 1 and
+                  ($previous_timestamp == 0 or
+                    .[0].head_timestamp == ($previous_timestamp + 30)) and
+                  (map(.consensus.last_certificate_hash) | unique | length) == 1 and
+                  all(
+                    .authenticated_peer_count == 2 and
+                    (.authenticated_peer_ids | length) == 2 and
+                    .automatic_finality.last_successful_height == .head_height and
+                    .consensus.last_certificate.height == .head_height and
+                    .consensus.last_certificate.block_hash == .head_hash and
+                    .consensus.last_certificate.finality_status == "FINALIZED" and
+                    .consensus.last_certificate.signed_power == 3 and
+                    .consensus.last_certificate.total_power == 3 and
+                    .consensus.last_certificate.validator_ids ==
+                      ["validator-01","validator-02","validator-03"] and
+                    .mainnet_changed == false and
+                    .assets_moved == false and
+                    .bridge_activated == false
+                  )
+                ' artifacts/slot-${series}-health-i-*.json >/dev/null; then
+                accepted=true
+                previous_height="$(jq -r .head_height \
+                  artifacts/slot-${series}-health-i-* | sort -u)"
+                previous_timestamp="$(jq -r .head_timestamp \
+                  artifacts/slot-${series}-health-i-* | sort -u)"
+                break
+              fi
+              test "$observation" -lt 24
+              sleep 5
+            done
+            test "$accepted" = "true"
+          done
+
+      - name: Verify public parity freshness and acceptance
+        run: |
+          set -euo pipefail
+          height="$(jq -r .head_height artifacts/slot-2-health-i-* | sort -u)"
+          hash="$(jq -r .head_hash artifacts/slot-2-health-i-* | sort -u)"
+          timestamp="$(jq -r .head_timestamp artifacts/slot-2-health-i-* | sort -u)"
+          certificate="$(jq -r .consensus.last_certificate_hash \
+            artifacts/slot-2-health-i-* | sort -u)"
+          accepted=false
+          for observation in $(seq 1 24); do
+            curl -fsS https://health.jaios-governance.org/health > artifacts/public-health.json
+            curl -fsS https://explorer.jaios-governance.org/explorer.json > artifacts/public-explorer.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+              https://rpc.jaios-governance.org/ > artifacts/rpc-chain-id.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' \
+              https://rpc.jaios-governance.org/ > artifacts/rpc-height.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":3,"method":"net_peerCount","params":[]}' \
+              https://rpc.jaios-governance.org/ > artifacts/rpc-peers.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":4,"method":"eth_getBlockByNumber","params":["latest",false]}' \
+              https://rpc.jaios-governance.org/ > artifacts/rpc-block.json
+            explorer_height="$(jq -er .head.height artifacts/public-explorer.json)"
+            explorer_hash="$(jq -er .head.hash artifacts/public-explorer.json)"
+            explorer_timestamp="$(( $(jq -er .head.timestamp artifacts/public-explorer.json) ))"
+            rpc_height="$(( $(jq -er .result artifacts/rpc-height.json) ))"
+            rpc_hash="$(jq -er .result.hash artifacts/rpc-block.json)"
+            rpc_timestamp="$(( $(jq -er .result.timestamp artifacts/rpc-block.json) ))"
+            now="$(date +%s)"
+            if [[ "$explorer_height" == "$height" &&
+                  "$explorer_hash" == "$hash" &&
+                  "$explorer_timestamp" == "$timestamp" &&
+                  "$rpc_height" == "$height" &&
+                  "$rpc_hash" == "$hash" &&
+                  "$rpc_timestamp" == "$timestamp" ]] &&
+               (( now >= timestamp && now - timestamp <= 90 )) &&
+               jq -e --argjson height "$height" --arg hash "$hash" '
+                 .status == "healthy" and .read_only == true and
+                 .validator.head_height == $height and .validator.head_hash == $hash and
+                 .mainnet_changed == false and .assets_moved == false and
+                 .bridge_activated == false
+               ' artifacts/public-health.json >/dev/null &&
+               jq -e --arg certificate "$certificate" '
+                 .status == "ready" and .read_only == true and
+                 .finalized_only == true and
+                 .head.certificate_hash == $certificate and
+                 .head.signed_power == 3 and .head.total_power == 3 and
+                 .network.peer_count == 2 and .network.peer_count_hex == "0x2" and
+                 .mainnet_changed == false and .assets_moved == false and
+                 .bridge_activated == false
+               ' artifacts/public-explorer.json >/dev/null &&
+               jq -e '.result == "0x1352773"' artifacts/rpc-chain-id.json >/dev/null &&
+               jq -e '.result == "0x2"' artifacts/rpc-peers.json >/dev/null; then
+              accepted=true
+              break
+            fi
+            test "$observation" -lt 24
+            sleep 5
+          done
+          test "$accepted" = "true"
+          jq -n \
+            --arg workflow_run_url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg failed_run_url "https://github.com/${{ github.repository }}/actions/runs/30688972530" \
+            --slurpfile validators artifacts/validators.json \
+            --slurpfile canonical artifacts/canonical-finalized-state.json \
+            --slurpfile first <(jq -s '.' artifacts/slot-1-health-i-*.json) \
+            --slurpfile second <(jq -s '.' artifacts/slot-2-health-i-*.json) \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile chain artifacts/rpc-chain-id.json \
+            --slurpfile rpc_height artifacts/rpc-height.json \
+            --slurpfile rpc_peers artifacts/rpc-peers.json \
+            --slurpfile rpc_block artifacts/rpc-block.json '{
+              schema_version: "junca-public-finality-realignment-acceptance/v1",
+              result: "PASS",
+              workflow_run_url: $workflow_run_url,
+              failed_run_url: $failed_run_url,
+              approved_inputs: {
+                ami_run_id: 30682660387,
+                manifest_run_id: 30683678492,
+                rebuilt: false
+              },
+              resident_infrastructure: $validators[0],
+              canonical_realign_source: $canonical[0],
+              runtime_acceptance: {
+                before_height: 2,
+                first: $first[0],
+                second: $second[0],
+                final_height: $second[0][0].head_height,
+                authenticated_peers_per_validator: 2,
+                consecutive_advances: 2,
+                canonical_timestamp_delta_seconds:
+                  ($second[0][0].head_timestamp - $first[0][0].head_timestamp),
+                bounded_soak: "PASS"
+              },
+              public_readback: {
+                health: $health[0], explorer: $explorer[0],
+                rpc_chain_id: $chain[0], rpc_height: $rpc_height[0],
+                rpc_peers: $rpc_peers[0], rpc_block: $rpc_block[0]
+              },
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              mainnet_activation_authorized: false
+            }' > artifacts/public-finality-realignment-acceptance.json
+          sha256sum artifacts/public-finality-realignment-acceptance.json \
+            > artifacts/public-finality-realignment-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-finality-realign-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
