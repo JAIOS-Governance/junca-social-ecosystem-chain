@@ -1,0 +1,47 @@
+{
+  "schema_version": "jsec-mainnet-delivery-cell/v1",
+  "governance": "JAIOS Institutional Governance",
+  "decision": {
+    "effective_date": "2026-08-01",
+    "prior_cell": "JSEC Native Genesis Release Cell",
+    "prior_cell_status": "disqualified",
+    "reason": "monitoring-only delivery without source implementation progress"
+  },
+  "active_cell": {
+    "name": "JSEC Mainnet Native Release Engineering Cell",
+    "position": "Mainnet Protocol Delivery & Release Lead",
+    "status": "active",
+    "target_release_date": "2026-10-01",
+    "current_phase": "development",
+    "mandatory_sequence": [
+      "development",
+      "repair-and-refinement",
+      "audit",
+      "activation",
+      "monitoring",
+      "post-activation-repair-and-refinement",
+      "stabilization"
+    ],
+    "progress_policy": "implementation-evidence-required"
+  },
+  "delivery_rules": {
+    "monitoring_only_is_governance_violation": true,
+    "monitoring_is_progress": false,
+    "public_testnet_must_remain_running": true,
+    "required_progress_evidence": [
+      "source_commit",
+      "changed_paths",
+      "tests",
+      "next_unblocked_task"
+    ],
+    "blocked_requires_unique_cause": true,
+    "blocked_requires_repair_action": true
+  },
+  "safety": {
+    "mainnet_changed": false,
+    "genesis_applied": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "mainnet_activation_authorized": false
+  }
+}

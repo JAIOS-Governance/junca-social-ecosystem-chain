@@ -172,6 +172,28 @@ class NativeTokenGenesisTests(unittest.TestCase):
         self.assertFalse(evidence["assets_moved"])
         self.assertEqual(evidence["native_economics"]["status"], "approved")
 
+    def test_approved_plan_compiles_deterministic_non_activated_genesis(self) -> None:
+        first = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        second = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        self.assertEqual(first, second)
+        self.assertEqual(first["schema_version"], "jsec-native-genesis-candidate/v1")
+        self.assertEqual(first["target_genesis_date"], "2026-10-01")
+        self.assertEqual(first["definition"]["symbol"], "JSEC")
+        self.assertEqual(
+            sum(item["amount_base_units"] for item in first["allocations"]),
+            first["definition"]["total_supply_base_units"],
+        )
+        self.assertEqual(len(first["allocations_sha256"]), 64)
+        self.assertEqual(len(first["custody_sha256"]), 64)
+        self.assertFalse(first["safety"]["mainnet_changed"])
+        self.assertFalse(first["safety"]["genesis_applied"])
+        self.assertFalse(first["safety"]["assets_moved"])
+        self.assertFalse(first["safety"]["bridge_activated"])
+
+    def test_unapproved_plan_cannot_compile_genesis_candidate(self) -> None:
+        with self.assertRaisesRegex(NativeTokenGenesisError, "ceremony blocked"):
+            load_native_token_genesis_plan(CONFIG).genesis_candidate()
+
     def test_economics_approval_is_bound_to_exact_definition(self) -> None:
         value = ready_plan()
         value["definition"]["decimals"] = 8

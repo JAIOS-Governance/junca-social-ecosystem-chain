@@ -52,13 +52,13 @@
       "id": "native_economics_constitution",
       "due_date": "2026-08-07",
       "status": "in_progress",
-      "owner": "JSEC Native Token Genesis Cell"
+      "owner": "JSEC Mainnet Native Release Engineering Cell"
     },
     {
       "id": "deterministic_genesis_allocations",
       "due_date": "2026-08-21",
       "status": "not_started",
-      "owner": "JSEC Mainnet Protocol Cell"
+      "owner": "JSEC Mainnet Native Release Engineering Cell"
     },
     {
       "id": "custody_key_ceremony_rehearsal",
@@ -76,7 +76,7 @@
       "id": "candidate_genesis_and_recovery",
       "due_date": "2026-09-18",
       "status": "not_started",
-      "owner": "JSEC Mainnet Recovery Cell"
+      "owner": "JSEC Mainnet Native Release Engineering Cell"
     },
     {
       "id": "production_slo_24h_soak_release_evidence",

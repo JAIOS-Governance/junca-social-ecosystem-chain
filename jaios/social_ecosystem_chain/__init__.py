@@ -80,6 +80,14 @@ from .legacy import (
     LegacySourceFingerprint,
     fingerprint_legacy_source,
 )
+from .mainnet_delivery_governance import (
+    ACTIVE_CELL,
+    ACTIVE_POSITION,
+    MainnetDeliveryCell,
+    MainnetDeliveryGovernanceError,
+    evaluate_mainnet_delivery_cell,
+    load_mainnet_delivery_cell,
+)
 from .native_token_genesis import (
     ECONOMICS_AUTHORITY,
     NativeTokenGenesisError,
@@ -237,6 +245,12 @@ __all__ = [
     "LegacyGenesisFingerprint",
     "LegacySourceFingerprint",
     "fingerprint_legacy_source",
+    "ACTIVE_CELL",
+    "ACTIVE_POSITION",
+    "MainnetDeliveryCell",
+    "MainnetDeliveryGovernanceError",
+    "evaluate_mainnet_delivery_cell",
+    "load_mainnet_delivery_cell",
     "NativeTokenGenesisError",
     "NativeTokenGenesisPlan",
     "ECONOMICS_AUTHORITY",

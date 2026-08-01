@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = "jsec-native-token-genesis-plan/v1"
 ECONOMICS_DEFINITION_SCHEMA_VERSION = "jsec-native-economics-definition/v1"
+GENESIS_CANDIDATE_SCHEMA_VERSION = "jsec-native-genesis-candidate/v1"
 OFFICIAL_NAME = "JUNCA Social Ecosystem Chain"
 GOVERNANCE = "JAIOS Institutional Governance"
 ECONOMICS_AUTHORITY = "JUNCA Holdings Founder / Chairman / CEO"
@@ -204,6 +205,56 @@ class NativeTokenGenesisPlan:
             },
         }
 
+    def genesis_candidate(self) -> dict[str, Any]:
+        """Compile an approved plan into a deterministic, non-activated Genesis."""
+
+        self.assert_ready_for_genesis_ceremony()
+        allocations = [
+            {
+                "address": item.address,
+                "amount_base_units": item.amount_base_units,
+                "category": item.category,
+            }
+            for item in sorted(self.allocations, key=lambda item: item.address)
+        ]
+        allocation_commitment = {
+            "schema_version": "jsec-native-genesis-allocations/v1",
+            "accounts": allocations,
+        }
+        custody_commitment = {
+            "control_model": self.custody["control_model"],
+            "threshold": self.custody["threshold"],
+            "participants": sorted(self.custody["participants"]),
+            "key_ceremony_evidence_sha256": self.custody[
+                "key_ceremony_evidence_sha256"
+            ],
+        }
+        return {
+            "schema_version": GENESIS_CANDIDATE_SCHEMA_VERSION,
+            "official_name": OFFICIAL_NAME,
+            "governance": GOVERNANCE,
+            "asset_class": "native-token",
+            "issuance_event": "mainnet-genesis",
+            "target_genesis_date": TARGET_GENESIS_DATE.isoformat(),
+            "definition": {
+                key: self.definition[key]
+                for key in ("locked", *ECONOMICS_DEFINITION_FIELDS)
+            },
+            "economics_approval": dict(self.economics_approval),
+            "allocations": allocations,
+            "allocations_sha256": _canonical_sha256(allocation_commitment),
+            "custody": custody_commitment,
+            "custody_sha256": _canonical_sha256(custody_commitment),
+            "source_plan_sha256": self.specification_digest,
+            "safety": {
+                "mainnet_changed": False,
+                "genesis_applied": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+                "mainnet_activation_authorized": False,
+            },
+        }
+
     def as_evidence(self, as_of: date) -> dict[str, Any]:
         _require_date(as_of, "as_of")
         next_milestone = next(
@@ -339,7 +390,11 @@ def native_economics_definition_digest(definition: Mapping[str, Any]) -> str:
             for key in ECONOMICS_DEFINITION_FIELDS
         },
     }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+    return _canonical_sha256(payload)
+
+
+def _canonical_sha256(value: Mapping[str, Any]) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
     return hashlib.sha256(canonical).hexdigest()

@@ -5,26 +5,36 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/junca-mainnet-readiness.yml"
+      - "GOVERNANCE.md"
+      - "config/jsec_mainnet_delivery_cell_v1.json"
       - "config/jsec_native_token_genesis_plan_v1.json"
+      - "jaios/social_ecosystem_chain/mainnet_delivery_governance.py"
       - "jaios/social_ecosystem_chain/mainnet_readiness.py"
       - "jaios/social_ecosystem_chain/native_token_genesis.py"
+      - "scripts/jsec_mainnet_delivery_gate.py"
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
       - "scripts/jsec_native_economics_decision_packet.py"
+      - "scripts/jsec_native_genesis_candidate.py"
+      - "tests/test_jsec_mainnet_delivery_governance.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
   push:
     branches: [main]
     paths:
       - ".github/workflows/junca-mainnet-readiness.yml"
+      - "GOVERNANCE.md"
+      - "config/jsec_mainnet_delivery_cell_v1.json"
       - "config/jsec_native_token_genesis_plan_v1.json"
+      - "jaios/social_ecosystem_chain/mainnet_delivery_governance.py"
       - "jaios/social_ecosystem_chain/mainnet_readiness.py"
       - "jaios/social_ecosystem_chain/native_token_genesis.py"
+      - "scripts/jsec_mainnet_delivery_gate.py"
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
       - "scripts/jsec_native_economics_decision_packet.py"
+      - "scripts/jsec_native_genesis_candidate.py"
+      - "tests/test_jsec_mainnet_delivery_governance.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
-  schedule:
-    - cron: "17 0 * * *"
   workflow_dispatch:
 
 permissions:
@@ -45,9 +55,12 @@ jobs:
       - name: Verify fail-closed Candidate Mainnet gate
         run: |
           set -euo pipefail
+          python -m unittest tests.test_jsec_mainnet_delivery_governance -v
           python -m unittest tests.test_junca_mainnet_readiness -v
           python -m unittest tests.test_jsec_native_token_genesis -v
           mkdir -p artifacts
+          python scripts/jsec_mainnet_delivery_gate.py \
+            --output artifacts/jsec-mainnet-delivery-cell.json
           python scripts/jsec_native_token_genesis_schedule_gate.py \
             --as-of "$(date -u +%F)" \
             --output artifacts/jsec-native-token-genesis-schedule.json
@@ -88,6 +101,8 @@ jobs:
           PY
           sha256sum artifacts/mainnet-readiness.json \
             > artifacts/mainnet-readiness.json.sha256
+          sha256sum artifacts/jsec-mainnet-delivery-cell.json \
+            > artifacts/jsec-mainnet-delivery-cell.json.sha256
           sha256sum artifacts/jsec-native-token-genesis-schedule.json \
             > artifacts/jsec-native-token-genesis-schedule.json.sha256
           sha256sum artifacts/jsec-native-economics-decision-packet.json \
