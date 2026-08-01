@@ -615,6 +615,23 @@ jobs:
           sha256sum artifacts/public-testnet-runtime-acceptance.json \
             > artifacts/public-testnet-runtime-acceptance.json.sha256
 
+      - name: Wait for shared automatic finality epoch
+        run: |
+          set -euo pipefail
+          slot_epoch="$(jq -er .slot_epoch_seconds artifacts/finality-activation.json)"
+          ready_at="$((slot_epoch + 5))"
+          now="$(date +%s)"
+          if (( ready_at > now )); then
+            sleep "$((ready_at - now))"
+          fi
+
+      - name: Refresh AWS credentials after bounded epoch wait
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-finality-readback-${{ github.run_id }}
+
       - name: Require two consecutive canonical finality slots
         run: |
           set -euo pipefail
@@ -645,11 +662,6 @@ jobs:
           )"
           slot_epoch="$(jq -er .slot_epoch_seconds <<<"$finality")"
           interval="$(jq -er .block_interval_seconds <<<"$finality")"
-          ready_at="$((slot_epoch + 5))"
-          now="$(date +%s)"
-          if (( ready_at > now )); then
-            sleep "$((ready_at - now))"
-          fi
 
           health_command='curl -fsS http://127.0.0.1:8545/health'
           jq -n --arg command "$health_command" \
