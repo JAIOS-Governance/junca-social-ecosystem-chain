@@ -1239,6 +1239,30 @@ validate_validator_service_recovery_evidence() {
         end
       ) and
       .state_store_integrity == true and
+      .state_store_access_verified == true and
+      (.state_store_access_repair_attempted | type) == "boolean" and
+      (.state_store_access_repaired | type) == "boolean" and
+      (.state_store_access_repair_exit | type) == "number" and
+      .state_store_access_repair_exit == 0 and
+      (
+        if .state_store_access_repaired then
+          (.before_status != "active" or
+            .controlled_active_repair == true) and
+          .state_store_access_repair_attempted == true
+        else
+          .state_store_access_repair_attempted == false
+        end
+      ) and
+      .state_directory_owner == "junca:junca" and
+      (.state_directory_mode == "700" or
+        .state_directory_mode == "750" or
+        .state_directory_mode == "755") and
+      .state_sqlite_owner == "junca:junca" and
+      (.state_sqlite_mode == "600" or
+        .state_sqlite_mode == "640" or
+        .state_sqlite_mode == "644" or
+        .state_sqlite_mode == "660") and
+      .state_sqlite_link_count == 1 and
       .binary_artifact_verified == true and
       .genesis_verified == true and
       .system_identity_verified == true and
@@ -1510,6 +1534,15 @@ scan_rollbacks_quarantined=false
 scan_rollbacks_quarantine_path=
 scan_rollbacks_manifest_sha256=
 state_store_integrity=false
+state_store_access_verified=false
+state_store_access_repair_attempted=false
+state_store_access_repaired=false
+state_store_access_repair_exit=0
+state_directory_owner=""
+state_directory_mode=""
+state_sqlite_owner=""
+state_sqlite_mode=""
+state_sqlite_link_count=0
 binary_artifact_verified=false
 genesis_verified=false
 system_identity_verified=false
@@ -1812,6 +1845,108 @@ ensure_junca_system_identity() {
     --shell /sbin/nologin --no-create-home junca || return 1
   verify_junca_system_identity || return 1
   system_identity_repaired=true
+}
+
+verify_durable_state_runtime_access() {
+  local state_sidecar=""
+  [[ "$durable_mount_verified" == true ]] || return 1
+  [[ "$state_store_integrity" == true ]] || return 1
+  [[ "$system_identity_verified" == true ]] || return 1
+  [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
+  mountpoint -q /var/lib/junca || return 1
+  [[ "$(stat -c '%U:%G' /var/lib/junca)" == "junca:junca" ]] ||
+    return 1
+  [[ "$(stat -c '%a' /var/lib/junca)" =~ ^(700|750|755)$ ]] ||
+    return 1
+  [[ -f /var/lib/junca/state.sqlite &&
+    ! -L /var/lib/junca/state.sqlite ]] || return 1
+  [[ "$(stat -c '%U:%G' /var/lib/junca/state.sqlite)" == \
+    "junca:junca" ]] || return 1
+  [[ "$(stat -c '%a' /var/lib/junca/state.sqlite)" =~ \
+    ^(600|640|644|660)$ ]] || return 1
+  [[ "$(stat -c '%h' /var/lib/junca/state.sqlite)" == 1 ]] || return 1
+  for state_sidecar in \
+    /var/lib/junca/state.sqlite-wal \
+    /var/lib/junca/state.sqlite-shm; do
+    if [[ -e "$state_sidecar" || -L "$state_sidecar" ]]; then
+      [[ -f "$state_sidecar" && ! -L "$state_sidecar" ]] || return 1
+      [[ "$(stat -c '%U:%G' "$state_sidecar")" == "junca:junca" ]] ||
+        return 1
+      [[ "$(stat -c '%a' "$state_sidecar")" =~ \
+        ^(600|640|644|660)$ ]] || return 1
+      [[ "$(stat -c '%h' "$state_sidecar")" == 1 ]] || return 1
+    fi
+  done
+  runuser -u junca -- test -r /var/lib/junca/state.sqlite || return 1
+  runuser -u junca -- test -w /var/lib/junca/state.sqlite || return 1
+  runuser -u junca -- test -r /var/lib/junca || return 1
+  runuser -u junca -- test -w /var/lib/junca || return 1
+  runuser -u junca -- test -x /var/lib/junca || return 1
+  [[ "$(
+    runuser -u junca -- python3 -c \
+      'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=rw", uri=True); connection.execute("PRAGMA query_only=ON"); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()' \
+      2>/dev/null || true
+  )" == ok ]] || return 1
+  state_directory_owner="$(stat -c '%U:%G' /var/lib/junca)"
+  state_directory_mode="$(stat -c '%a' /var/lib/junca)"
+  state_sqlite_owner="$(stat -c '%U:%G' /var/lib/junca/state.sqlite)"
+  state_sqlite_mode="$(stat -c '%a' /var/lib/junca/state.sqlite)"
+  state_sqlite_link_count="$(stat -c '%h' /var/lib/junca/state.sqlite)"
+  state_store_access_verified=true
+}
+
+repair_durable_state_runtime_access() {
+  local state_device_number=""
+  local state_sidecar=""
+  local sidecar_device_number=""
+  [[ "$allow_runtime_env_repair" == true ]] || return 1
+  [[ "$repair_status_admitted" == true ]] || return 1
+  [[ "$durable_mount_verified" == true ]] || return 1
+  [[ "$state_store_integrity" == true ]] || return 1
+  [[ "$system_identity_verified" == true ]] || return 1
+  ! systemctl is-active --quiet junca-validator.service || return 1
+  [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
+  mountpoint -q /var/lib/junca || return 1
+  [[ "$(stat -c '%U:%G' /var/lib/junca)" =~ \
+    ^(root:root|root:junca|junca:junca)$ ]] || return 1
+  [[ "$(stat -c '%a' /var/lib/junca)" =~ ^(700|750|755)$ ]] ||
+    return 1
+  [[ -f /var/lib/junca/state.sqlite &&
+    ! -L /var/lib/junca/state.sqlite ]] || return 1
+  [[ "$(stat -c '%U:%G' /var/lib/junca/state.sqlite)" =~ \
+    ^(root:root|root:junca|junca:junca)$ ]] || return 1
+  [[ "$(stat -c '%a' /var/lib/junca/state.sqlite)" =~ \
+    ^(600|640|644|660)$ ]] || return 1
+  [[ "$(stat -c '%h' /var/lib/junca/state.sqlite)" == 1 ]] || return 1
+  state_device_number="$(stat -c '%d' /var/lib/junca)" || return 1
+  [[ "$(stat -c '%d' /var/lib/junca/state.sqlite)" == \
+    "$state_device_number" ]] || return 1
+  for state_sidecar in \
+    /var/lib/junca/state.sqlite-wal \
+    /var/lib/junca/state.sqlite-shm; do
+    if [[ -e "$state_sidecar" || -L "$state_sidecar" ]]; then
+      [[ -f "$state_sidecar" && ! -L "$state_sidecar" ]] || return 1
+      [[ "$(stat -c '%U:%G' "$state_sidecar")" =~ \
+        ^(root:root|root:junca|junca:junca)$ ]] || return 1
+      [[ "$(stat -c '%a' "$state_sidecar")" =~ \
+        ^(600|640|644|660)$ ]] || return 1
+      [[ "$(stat -c '%h' "$state_sidecar")" == 1 ]] || return 1
+      sidecar_device_number="$(stat -c '%d' "$state_sidecar")" ||
+        return 1
+      [[ "$sidecar_device_number" == "$state_device_number" ]] || return 1
+    fi
+  done
+  chown junca:junca /var/lib/junca || return 1
+  chown junca:junca /var/lib/junca/state.sqlite || return 1
+  for state_sidecar in \
+    /var/lib/junca/state.sqlite-wal \
+    /var/lib/junca/state.sqlite-shm; do
+    if [[ -e "$state_sidecar" ]]; then
+      chown junca:junca "$state_sidecar" || return 1
+    fi
+  done
+  sync -f /var/lib/junca/state.sqlite || return 1
+  sync -f /var/lib/junca || return 1
 }
 
 verify_durable_mount_persistence_contract() (
@@ -2345,6 +2480,22 @@ if [[ "$repair_status_admitted" == true &&
       "$system_identity_verified" != true ]]; then
   ensure_junca_system_identity || true
 fi
+verify_durable_state_runtime_access || true
+if [[ "$state_store_access_verified" != true ]]; then
+  admit_controlled_active_repair || true
+fi
+if [[ "$state_store_access_verified" != true &&
+      "$repair_status_admitted" == true ]]; then
+  state_store_access_repair_attempted=true
+  if repair_durable_state_runtime_access; then
+    verify_durable_state_runtime_access || state_store_access_repair_exit=$?
+    if [[ "$state_store_access_verified" == true ]]; then
+      state_store_access_repaired=true
+    fi
+  else
+    state_store_access_repair_exit=$?
+  fi
+fi
 if [[ "$repair_status_admitted" == true &&
       "$genesis_verified" == true &&
       -d /etc/junca &&
@@ -2488,6 +2639,7 @@ if [[ "$runtime_env_verified" != true &&
       "$repair_status_admitted" != true &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
+      "$state_store_access_verified" == true &&
       "$binary_artifact_verified" == true &&
       "$genesis_verified" == true &&
       "$runtime_config_access_verified" == true &&
@@ -2501,6 +2653,7 @@ if [[ "$runtime_env_verified" != true &&
       "$runtime_env_target_admitted" == true &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
+      "$state_store_access_verified" == true &&
       "$binary_artifact_verified" == true &&
       "$genesis_verified" == true &&
       "$runtime_config_access_verified" == true &&
@@ -2593,6 +2746,7 @@ fi
 if [[ "$repair_status_admitted" == true &&
       "$durable_mount_verified" == true &&
       "$state_store_integrity" == true &&
+      "$state_store_access_verified" == true &&
       "$binary_artifact_verified" == true &&
       "$genesis_verified" == true &&
       "$runtime_config_access_verified" == true &&
@@ -2637,6 +2791,7 @@ for attempts in $(seq 1 60); do
           "$restart_exit" == 0 &&
           "$durable_mount_verified" == true &&
           "$state_store_integrity" == true &&
+          "$state_store_access_verified" == true &&
           "$binary_artifact_verified" == true &&
           "$genesis_verified" == true &&
           "$runtime_config_access_verified" == true &&
@@ -2780,6 +2935,19 @@ jq -n \
   --arg scan_rollbacks_quarantine_path "$scan_rollbacks_quarantine_path" \
   --arg scan_rollbacks_manifest_sha256 "$scan_rollbacks_manifest_sha256" \
   --argjson state_store_integrity "$state_store_integrity" \
+  --argjson state_store_access_verified \
+    "$state_store_access_verified" \
+  --argjson state_store_access_repair_attempted \
+    "$state_store_access_repair_attempted" \
+  --argjson state_store_access_repaired \
+    "$state_store_access_repaired" \
+  --argjson state_store_access_repair_exit \
+    "$state_store_access_repair_exit" \
+  --arg state_directory_owner "$state_directory_owner" \
+  --arg state_directory_mode "$state_directory_mode" \
+  --arg state_sqlite_owner "$state_sqlite_owner" \
+  --arg state_sqlite_mode "$state_sqlite_mode" \
+  --argjson state_sqlite_link_count "$state_sqlite_link_count" \
   --argjson binary_artifact_verified "$binary_artifact_verified" \
   --argjson genesis_verified "$genesis_verified" \
   --argjson system_identity_verified "$system_identity_verified" \
@@ -2895,6 +3063,16 @@ jq -n \
       (if $scan_rollbacks_manifest_sha256 == "" then null
        else $scan_rollbacks_manifest_sha256 end),
     state_store_integrity: $state_store_integrity,
+    state_store_access_verified: $state_store_access_verified,
+    state_store_access_repair_attempted:
+      $state_store_access_repair_attempted,
+    state_store_access_repaired: $state_store_access_repaired,
+    state_store_access_repair_exit: $state_store_access_repair_exit,
+    state_directory_owner: $state_directory_owner,
+    state_directory_mode: $state_directory_mode,
+    state_sqlite_owner: $state_sqlite_owner,
+    state_sqlite_mode: $state_sqlite_mode,
+    state_sqlite_link_count: $state_sqlite_link_count,
     binary_artifact_verified: $binary_artifact_verified,
     genesis_verified: $genesis_verified,
     system_identity_verified: $system_identity_verified,
