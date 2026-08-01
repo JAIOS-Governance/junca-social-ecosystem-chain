@@ -95,8 +95,7 @@ jobs:
             )
           ' artifacts/ec2-instances.json > artifacts/validators.json
           mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
-          printf '%s
-' "${instances[@]}" > artifacts/validator-instance-ids.txt
+          printf '%s\n' "${instances[@]}" > artifacts/validator-instance-ids.txt
           aws ssm describe-instance-information             --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")"             > artifacts/ssm-instances.json
           jq -e --argjson expected "$(jq '[.[].instance_id] | sort' artifacts/validators.json)" '
             [.InstanceInformationList[] | select(.PingStatus == "Online") | .InstanceId] |
@@ -128,8 +127,7 @@ jobs:
           systemctl is-active --quiet junca-public-explorer.service
           jq -e '.status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-public-rpc-health.json >/dev/null
           jq -e '.status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-public-explorer-health.json >/dev/null
-          printf '%s
-' '{"schema_version":"junca-public-gateway-local-repair/v1","accepted":true,"mainnet_changed":false,"assets_moved":false,"bridge_activated":false}'
+          printf '%s\n' '{"schema_version":"junca-public-gateway-local-repair/v1","accepted":true,"mainnet_changed":false,"assets_moved":false,"bridge_activated":false}'
           REMOTE
           )"
           jq -n --arg command "$remote_command" '{commands: [$command]}'             > artifacts/ssm-gateway-repair.json
