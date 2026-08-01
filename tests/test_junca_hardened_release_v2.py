@@ -23,10 +23,7 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         for value in (
             "JUNCA Validator Runtime Artifacts",
             "workflow_run.conclusion == 'success'",
-            "workflow_run.event == 'push'",
-            "workflow_run.event == 'workflow_dispatch'",
             "workflow_run.head_branch == 'main'",
-            "head_repository.full_name == github.repository",
             'test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"',
             ".github/workflows/junca-validator-ami-build.yml",
             ".github/workflows/junca-runtime-release-evidence-collector-v2.yml",
@@ -59,6 +56,27 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         )
         self.assertIn(
             '(.event == "push" or .event == "workflow_dispatch")',
+            self.parent,
+        )
+        self.assertIn(
+            ".head_repository.full_name == $repository",
+            self.parent,
+        )
+
+    def test_job_filter_defers_exact_provenance_to_api_readback(self) -> None:
+        job_filter = self.parent.split("    if: >-", 1)[1].split(
+            "    runs-on:", 1
+        )[0]
+        self.assertIn("workflow_run.conclusion == 'success'", job_filter)
+        self.assertIn("workflow_run.head_branch == 'main'", job_filter)
+        self.assertNotIn("workflow_run.event", job_filter)
+        self.assertNotIn("head_repository", job_filter)
+        self.assertIn(
+            '.name == "JUNCA Validator Runtime Artifacts"',
+            self.parent,
+        )
+        self.assertIn(
+            '.path == ".github/workflows/junca-validator-runtime-artifacts.yml"',
             self.parent,
         )
 
