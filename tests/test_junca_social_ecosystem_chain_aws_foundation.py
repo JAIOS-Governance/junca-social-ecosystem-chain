@@ -2437,6 +2437,40 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(admission, repair)
         self.assertLess(repair, config_repair)
 
+    def test_state_access_repair_admits_a_healthy_live_prefix_stop(self) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        verify = remote.index("verify_state_path_access || true")
+        admission = remote.index(
+            'if [[ "$state_path_access_verified" != true &&\n'
+            '      "$repair_status_admitted" != true &&\n'
+            '      "$system_identity_verified" == true ]]; then',
+            verify,
+        )
+        controlled_stop = remote.index(
+            "admit_controlled_active_repair || true", admission
+        )
+        repair = remote.index("repair_state_path_access || true", controlled_stop)
+        self.assertLess(verify, admission)
+        self.assertLess(admission, controlled_stop)
+        self.assertLess(controlled_stop, repair)
+
+    def test_state_access_repair_does_not_bypass_identity_or_stop_gate(
+        self,
+    ) -> None:
+        remote = validator_service_recovery_remote_script(
+            self.foundation_script
+        )
+        start = remote.index("verify_state_path_access || true")
+        end = remote.index("repair_state_path_access || true", start)
+        admission = remote[start:end]
+        self.assertIn('"$system_identity_verified" == true', admission)
+        self.assertIn('"$repair_status_admitted" != true', admission)
+        self.assertIn("admit_controlled_active_repair || true", admission)
+        self.assertNotIn("repair_status_admitted=true", admission)
+        self.assertNotIn("systemctl stop", admission)
+
     def test_validator_config_identity_comparison_is_lexical(self) -> None:
         remote = validator_service_recovery_remote_script(
             self.foundation_script

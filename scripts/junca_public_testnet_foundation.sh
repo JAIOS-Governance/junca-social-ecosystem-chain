@@ -2519,6 +2519,15 @@ if [[ "$repair_status_admitted" == true &&
 fi
 verify_state_path_access || true
 if [[ "$state_path_access_verified" != true &&
+      "$repair_status_admitted" != true &&
+      "$system_identity_verified" == true ]]; then
+  # A live-prefix readback can encounter an exact healthy validator whose
+  # runtime configuration is already canonical while its retained state still
+  # has legacy root ownership. Enter the same identity-bound controlled stop
+  # used by the other bounded repairs before changing only the state allowlist.
+  admit_controlled_active_repair || true
+fi
+if [[ "$state_path_access_verified" != true &&
       "$repair_status_admitted" == true ]]; then
   repair_state_path_access || true
 fi

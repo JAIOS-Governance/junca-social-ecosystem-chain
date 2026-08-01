@@ -139,6 +139,11 @@ stable height alone is never activation evidence.
    present allowlisted files to `junca:junca` `0600`, fsync each path, prove
    every pinned identity and size unchanged, and run `PRAGMA quick_check` as
    the service user through a read/write-opened, query-only connection. Never
+   infer that canonical runtime configuration makes legacy state ownership
+   safe. During live-prefix readback, an exact active and healthy validator
+   with mismatched state access must enter the same identity-bound controlled
+   stop before this allowlisted repair; a degraded service, wrong validator ID,
+   unverified system identity, or failed stop remains blocked. Never
    recurse, touch another entry, copy, truncate, format, detach, replace, or
    repair the database. A symlink, hard link, special file, cross-filesystem
    entry, foreign owner, broad mode or failed service-user readback blocks the
