@@ -20,7 +20,8 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.name == 'JUNCA Validator Runtime Artifacts' &&
-      github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.event == 'push' ||
+       github.event.workflow_run.event == 'workflow_dispatch') &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
@@ -51,7 +52,7 @@ jobs:
               .conclusion == "success" and
               .name == "JUNCA Validator Runtime Artifacts" and
               .path == ".github/workflows/junca-validator-runtime-artifacts.yml" and
-              .event == "push" and
+              (.event == "push" or .event == "workflow_dispatch") and
               .head_branch == "main" and
               .head_sha == $head and
               .repository.full_name == $repository and
@@ -211,6 +212,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          current_main="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq .object.sha
+          )"
+          [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$current_main" != "$SOURCE_COMMIT" ]]; then
+            git fetch --no-tags origin "$current_main"
+            git merge-base --is-ancestor "$SOURCE_COMMIT" "$current_main"
+            successor_runtime_run_id="$(
+              bash scripts/junca_dispatch_workflow_and_wait.sh \
+                --workflow-name "JUNCA Validator Runtime Artifacts" \
+                --workflow-path ".github/workflows/junca-validator-runtime-artifacts.yml" \
+                --expected-head "$current_main" \
+                --attempts 80 \
+                --sleep-seconds 15
+            )"
+            jq -n \
+              --arg source_commit "$SOURCE_COMMIT" \
+              --arg current_main "$current_main" \
+              --arg successor_runtime_run_id "$successor_runtime_run_id" '{
+                schema_version: "junca-hardened-immutable-release-supersession/v1",
+                state: "SUPERSEDED_BY_NEW_MAIN",
+                source_commit: $source_commit,
+                successor_source_commit: $current_main,
+                successor_runtime_run_id: ($successor_runtime_run_id | tonumber),
+                candidate_accepted: false,
+                terraform_state_changed: false,
+                mainnet_changed: false,
+                assets_moved: false,
+                bridge_activated: false,
+                mainnet_activation_authorized: false
+              }' > artifacts/release-v2/superseded.json
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "successor_source_commit=$current_main" >> "$GITHUB_OUTPUT"
+            echo "successor_runtime_run_id=$successor_runtime_run_id" \
+              >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "superseded=false" >> "$GITHUB_OUTPUT"
           evidence_run_id="$(
             bash scripts/junca_dispatch_workflow_and_wait.sh \
               --workflow-name "JUNCA Runtime Release Evidence Collector" \
@@ -227,6 +267,7 @@ jobs:
 
       - name: Pass release manifest gate
         id: manifest
+        if: steps.evidence.outputs.superseded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -247,6 +288,7 @@ jobs:
 
       - name: Execute fresh serial validator rollout
         id: foundation
+        if: steps.evidence.outputs.superseded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -268,6 +310,7 @@ jobs:
 
       - name: Verify advancing finality continuity
         id: continuity
+        if: steps.evidence.outputs.superseded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -303,6 +346,7 @@ jobs:
           echo "finalized_height=$(jq -er '.observations[-1].operational.finalized_height' artifacts/continuity/evidence.json)" >> "$GITHUB_OUTPUT"
 
       - name: Publish immutable release V2 acceptance evidence
+        if: steps.evidence.outputs.superseded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -367,7 +411,9 @@ jobs:
           - Mainnet Activation Authorized: false
           EOF
           )"
-          for issue in 266 244 248 249 218; do
+          # Issue #218 uses one canonical persistent comment and is updated only
+          # by the live-status controller after complete evidence readback.
+          for issue in 266 244 248 249; do
             gh api --method POST \
               "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" \
               -f body="$body" >/dev/null
