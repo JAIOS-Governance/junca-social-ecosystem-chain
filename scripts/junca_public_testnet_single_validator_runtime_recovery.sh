@@ -254,12 +254,25 @@ jq -e '
 render_public_gateway_recovery() {
   cat <<'EOF'
 set -euo pipefail
+phase=validator_health_readback
+trap 'status=$?; printf "JUNCA_GATEWAY_RECOVERY_FAILURE phase=%s line=%s status=%s\n" "$phase" "$LINENO" "$status" >&2; exit "$status"' ERR
 curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json
-jq -e '.result.status == "healthy"' /tmp/junca-validator-health.json >/dev/null
+jq -e '
+  .status == "healthy" and
+  .network == "Public Testnet / No Monetary Value" and
+  .chain_id == 20260723 and
+  .validator_id == "validator-01" and
+  .private_key_material_accepted == false and
+  .mainnet_changed == false and
+  .assets_moved == false and
+  .bridge_activated == false
+' /tmp/junca-validator-health.json >/dev/null
+phase=public_gateway_service_restart
 systemctl daemon-reload
 systemctl reset-failed junca-public-rpc.service junca-public-explorer.service || true
 systemctl enable --now junca-public-rpc.service junca-public-explorer.service
 systemctl restart junca-public-rpc.service junca-public-explorer.service
+phase=public_gateway_health_readback
 for attempt in $(seq 1 30); do
   rpc_status="$(curl -sS -o /tmp/junca-rpc-health.json -w '%{http_code}' http://127.0.0.1:8546/health || true)"
   explorer_status="$(curl -sS -o /tmp/junca-explorer-health.json -w '%{http_code}' http://127.0.0.1:3000/health || true)"
@@ -272,6 +285,7 @@ for attempt in $(seq 1 30); do
   test "$attempt" -lt 30
   sleep 2
 done
+phase=public_gateway_timeout_diagnostics
 systemctl status junca-public-rpc.service junca-public-explorer.service --no-pager -l
 exit 1
 EOF

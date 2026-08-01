@@ -203,6 +203,15 @@ than the recovery evidence inspected. Non-comment content is restricted to
 those 18 assignments; unknown variables and non-canonical assignment syntax
 are rejected so an unreviewed environment toggle cannot enter the validator.
 
+Public gateway recovery is admitted only after the private validator health
+endpoint returns its direct health document with the exact Public Testnet
+network, chain ID, validator ID and false safety boundaries. The private
+`/health` document is not a JSON-RPC envelope; a wrapped `result` object,
+wrong validator, Mainnet/asset/bridge drift, or an unhealthy state fails before
+either gateway service is restarted. Remote recovery records an explicit phase
+marker for private-health, service-restart, gateway-health and timeout failures
+so a failed SSM command cannot be retried without root-cause isolation.
+
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a
 single GitHub-hosted job cannot safely own a 24-hour observation. Every segment
