@@ -79,6 +79,12 @@ and then pass the unchanged strict live-prefix readback. Missing durable state,
 corrupt SQLite, ambiguous provenance, or failed local health remains
 fail-closed and prevents Terraform mutation.
 
+The immutable replacement prefix advances only when both the candidate runtime
+SHA-256 and candidate AMI ID match. An in-place service recovery may place the
+candidate runtime on an older, evidence-bound AMI; that node remains at the
+captured baseline count until serial replacement proves the candidate AMI,
+instance transition, retained volume, health, and finality provenance together.
+
 If health never becomes accepted after this attempt created the file, rollback
 stops the service, removes only a single-link canonical file with the exact
 expected digest and the same recorded device/inode identity, and syncs

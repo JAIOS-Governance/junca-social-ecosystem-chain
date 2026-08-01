@@ -272,7 +272,13 @@ def _baseline_binding(
         canonical.AMI.fullmatch(baseline_ami) is not None,
         f"{validator_id} baseline AMI is invalid",
     )
-    baseline_is_target = baseline_runtime == target
+    # A runtime repaired in place can already carry the candidate artifact on
+    # an older, fully observed AMI. It is still part of the evidence-bound
+    # baseline: only the exact runtime+AMI pair proves an immutable candidate
+    # replacement and advances the committed prefix.
+    baseline_is_target = (
+        baseline_runtime == target and baseline_ami == target_ami
+    )
     _require(
         baseline_is_target == (index < evidence_count),
         f"{validator_id} evidence prefix does not match updated count",
@@ -380,7 +386,10 @@ def evaluate_live_rollout_prefix_v2(
             current_runtime in (binding["runtime_version"], target),
             f"{validator_id} has an unexpected runtime version",
         )
-        is_target = current_runtime == target
+        # Count only the immutable candidate pair. A target runtime repaired
+        # in place on its evidence-bound AMI must remain a non-updated baseline
+        # until the serial instance replacement proves the target AMI too.
+        is_target = current_runtime == target and current_ami == target_ami
         if is_target:
             _require(
                 current_ami == target_ami,
@@ -535,7 +544,7 @@ def evaluate_evidence_bound_rolling_compatibility(
             canonical.AMI.fullmatch(current_ami) is not None,
             f"{validator_id} live AMI is invalid",
         )
-        is_target = current_runtime == target
+        is_target = current_runtime == target and current_ami == target_ami
         if is_target:
             _require(
                 current_ami == target_ami,
