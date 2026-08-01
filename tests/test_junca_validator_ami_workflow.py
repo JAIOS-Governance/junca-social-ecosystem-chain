@@ -153,17 +153,6 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             "inputs[resume_run_id]=${RESUME_RUN_ID}",
             self.orchestrator,
         )
-        for required in (
-            "rolling-resume-evidence.json.sha256",
-            "sha256sum -c rolling-resume-evidence.json.sha256",
-            '.producer_run_id == $producer_run_id',
-            'prior_remaining="$((prior_slot_epoch - $(date +%s)))"',
-            "RENEW_EXPIRED_QUIESCED_EPOCH",
-            "inputs[renew_expired_epoch]=${renewal_authorization}",
-            "inputs[renewal_preserve_prefix_count]="
-            "${renewal_preserve_prefix_count}",
-        ):
-            self.assertIn(required, self.orchestrator)
         self.assertIn(
             "steps.request.outputs.ami_run_id",
             self.orchestrator,
@@ -224,6 +213,8 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
                 ".github/workflows/junca-validator-foundation-release.yml"
             ),
             "one_shot_nonce": "foundation-resume-30311386951-20260727",
+            "renew_expired_epoch": "NONE",
+            "renewal_preserve_prefix_count": "0",
             "boundaries": {
                 "rebuild_ami": False,
                 "rebuild_manifest": False,
@@ -244,6 +235,23 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         self.assertEqual(outputs["ami_run_id"], "30311265807")
         self.assertEqual(outputs["manifest_gate_run_id"], "30311368029")
         self.assertEqual(outputs["resume_run_id"], "30311386951")
+        self.assertEqual(outputs["renew_expired_epoch"], "NONE")
+        self.assertEqual(outputs["renewal_preserve_prefix_count"], "0")
+
+        renewed = dict(request)
+        renewed["renew_expired_epoch"] = "RENEW_EXPIRED_QUIESCED_EPOCH"
+        renewed["renewal_preserve_prefix_count"] = "2"
+        renewed["request_sha256"] = (
+            REQUEST_VALIDATOR.canonical_request_sha256(renewed)
+        )
+        renewed_outputs = REQUEST_VALIDATOR.validate_request(renewed)
+        self.assertEqual(
+            renewed_outputs["renew_expired_epoch"],
+            "RENEW_EXPIRED_QUIESCED_EPOCH",
+        )
+        self.assertEqual(
+            renewed_outputs["renewal_preserve_prefix_count"], "2"
+        )
 
         for field, value in (
             ("ami_run_id", "0"),
@@ -251,6 +259,8 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             ("resume_run_id", "0"),
             ("approval_phrase", "PUBLIC_TESTNET_RUNTIME_RECOVERY"),
             ("mode", "ami-build"),
+            ("renew_expired_epoch", "RENEW_ANY_EPOCH"),
+            ("renewal_preserve_prefix_count", "4"),
         ):
             with self.subTest(field=field):
                 invalid = dict(request)
@@ -262,6 +272,29 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
 
         invalid = dict(request)
         invalid["unexpected"] = True
+        with self.assertRaises(REQUEST_VALIDATOR.RequestValidationError):
+            REQUEST_VALIDATOR.validate_request(invalid)
+
+        for renewal, prefix in (
+            ("NONE", "1"),
+            ("RENEW_EXPIRED_QUIESCED_EPOCH", "0"),
+        ):
+            invalid = dict(request)
+            invalid["renew_expired_epoch"] = renewal
+            invalid["renewal_preserve_prefix_count"] = prefix
+            invalid["request_sha256"] = (
+                REQUEST_VALIDATOR.canonical_request_sha256(invalid)
+            )
+            with self.assertRaises(
+                REQUEST_VALIDATOR.RequestValidationError
+            ):
+                REQUEST_VALIDATOR.validate_request(invalid)
+
+        invalid = dict(request)
+        invalid.pop("renewal_preserve_prefix_count")
+        invalid["request_sha256"] = (
+            REQUEST_VALIDATOR.canonical_request_sha256(invalid)
+        )
         with self.assertRaises(REQUEST_VALIDATOR.RequestValidationError):
             REQUEST_VALIDATOR.validate_request(invalid)
 

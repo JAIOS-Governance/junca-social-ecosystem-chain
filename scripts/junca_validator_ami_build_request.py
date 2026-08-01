@@ -54,6 +54,8 @@ OUTPUT_FIELDS = (
     "ami_run_id",
     "manifest_gate_run_id",
     "resume_run_id",
+    "renew_expired_epoch",
+    "renewal_preserve_prefix_count",
     "target_workflow",
     "one_shot_nonce",
 )
@@ -90,6 +92,10 @@ FOUNDATION_RESUME_REQUEST_FIELDS = {
     "one_shot_nonce",
     "boundaries",
     "request_sha256",
+}
+FOUNDATION_RESUME_RENEWAL_FIELDS = {
+    "renew_expired_epoch",
+    "renewal_preserve_prefix_count",
 }
 
 
@@ -188,7 +194,11 @@ def validate_request(
 def _validate_foundation_resume_request(
     request: Mapping[str, Any],
 ) -> dict[str, str]:
-    if set(request) != FOUNDATION_RESUME_REQUEST_FIELDS:
+    request_fields = set(request)
+    if request_fields not in (
+        FOUNDATION_RESUME_REQUEST_FIELDS,
+        FOUNDATION_RESUME_REQUEST_FIELDS | FOUNDATION_RESUME_RENEWAL_FIELDS,
+    ):
         raise RequestValidationError(
             "request fields do not match the foundation resume v1 contract"
         )
@@ -213,11 +223,31 @@ def _validate_foundation_resume_request(
     if not NONCE.fullmatch(str(request["one_shot_nonce"])):
         raise RequestValidationError("one_shot_nonce format is invalid")
 
+    renew_expired_epoch = str(request.get("renew_expired_epoch", "NONE"))
+    renewal_preserve_prefix_count = str(
+        request.get("renewal_preserve_prefix_count", "0")
+    )
+    if renew_expired_epoch not in ("NONE", "RENEW_EXPIRED_QUIESCED_EPOCH"):
+        raise RequestValidationError("expired epoch renewal phrase is invalid")
+    if renewal_preserve_prefix_count not in ("0", "1", "2", "3"):
+        raise RequestValidationError("renewal preserve prefix count is invalid")
+    if renew_expired_epoch == "NONE":
+        if renewal_preserve_prefix_count != "0":
+            raise RequestValidationError(
+                "epoch renewal prefix requires explicit authorization"
+            )
+    elif renewal_preserve_prefix_count == "0":
+        raise RequestValidationError(
+            "expired epoch renewal requires a preserved target prefix"
+        )
+
     expected_digest = canonical_request_sha256(request)
     if request["request_sha256"] != expected_digest:
         raise RequestValidationError("request_sha256 mismatch")
 
     outputs = {field: str(request.get(field, "")) for field in OUTPUT_FIELDS}
+    outputs["renew_expired_epoch"] = renew_expired_epoch
+    outputs["renewal_preserve_prefix_count"] = renewal_preserve_prefix_count
     outputs["request_type"] = "foundation-resume"
     return outputs
 

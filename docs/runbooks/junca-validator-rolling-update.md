@@ -239,7 +239,11 @@ decision digest all match. The original 30-second-aligned slot epoch is part of
 the checksummed evidence and must be reused unchanged in Terraform/user data.
 It must retain between 900 and 7,230 seconds of lead time; missing, altered,
 expired, too-near or excessively future epoch evidence rejects the resume. The
-live validators must form a strict ordered
+one-shot resume request may bind the exact phrase
+`RENEW_EXPIRED_QUIESCED_EPOCH` and a preserved prefix count from `1` through
+`3`; the orchestrator forwards that pair unchanged. `NONE` is valid only with
+prefix `0`, and partial or contradictory pairs fail before workflow dispatch.
+The live validators must form a strict ordered
 target-runtime/target-AMI prefix of length 0, 1, 2 or 3; Terraform replacement
 addresses must be the exact remaining suffix. Previously accepted prefix
 instances must retain their instance identity and may not regress below their
