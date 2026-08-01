@@ -1,9 +1,6 @@
 import pathlib
 import unittest
 
-import yaml
-
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/junca_public_testnet_single_validator_runtime_recovery.sh"
 WORKFLOW = ROOT / ".github/workflows/junca-emergency-validator01-runtime-recovery-v2.yml"
@@ -16,15 +13,13 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
         cls.script = SCRIPT.read_text(encoding="utf-8")
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.foundation = FOUNDATION.read_text(encoding="utf-8")
-        cls.workflow_document = yaml.safe_load(cls.workflow)
 
     def test_workflow_is_main_push_only_and_serialized(self) -> None:
         self.assertNotIn("workflow_dispatch:", self.workflow)
         self.assertIn("branches: [main]", self.workflow)
         self.assertIn("group: junca-public-testnet-aws-foundation", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
-        self.assertEqual(self.workflow_document["permissions"]["contents"], "read")
-        self.assertEqual(self.workflow_document["permissions"]["id-token"], "write")
+        self.assertIn("permissions:\n  contents: read\n  id-token: write", self.workflow)
 
     def test_incident_target_is_exact_and_public_testnet_only(self) -> None:
         for expected in (
