@@ -1443,6 +1443,10 @@ class AwsFoundationTests(unittest.TestCase):
             "artifacts/live-prefix-decision.json",
             'build_pre_rollout_finality_bindings \\\n'
             '      "$live_updated_count"',
+            'evidence_bound_baseline_updated_count="$live_updated_count"',
+            ".promoted_bindings",
+            "cp artifacts/live-prefix-validators.json \\\n"
+            "    artifacts/evidence-bound-rollout-baseline.json",
         ):
             self.assertIn(required, self.foundation_script)
         live_readback_definition = self.foundation_script.index(
@@ -1467,6 +1471,10 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(volume_readback, first_mutation)
         self.assertLess(snapshot_readback, first_mutation)
         self.assertLess(rollback_floor, first_mutation)
+        promoted_floor = self.foundation_script.index(
+            "cp artifacts/live-prefix-validators.json", live_readback_call
+        )
+        self.assertLess(promoted_floor, first_mutation)
 
         renewal_guard = """if [[ "$rolling_epoch_renewal_performed" == "true" ]]; then
     if [[ "$live_updated_count" != "$rolling_epoch_renewal_prefix_count" ]]; then

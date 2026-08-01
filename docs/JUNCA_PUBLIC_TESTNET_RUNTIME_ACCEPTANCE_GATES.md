@@ -101,6 +101,10 @@ SHA-256 and candidate AMI ID match. An in-place service recovery may place the
 candidate runtime on an older, evidence-bound AMI; that node remains at the
 captured baseline count until serial replacement proves the candidate AMI,
 instance transition, retained volume, health, and finality provenance together.
+If strict resume readback proves exactly the one next contiguous replacement,
+that observed validator set becomes the run-local evidence floor before any
+next mutation. This promotion cannot skip a validator, accept more than one
+uncommitted replacement, or modify the original checksummed resume evidence.
 
 After a validator replacement, validator health alone is not sufficient for
 public admission. The exact replacement must restart and pass local readback

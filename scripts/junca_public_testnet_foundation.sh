@@ -3548,7 +3548,7 @@ write_live_rollout_prefix_readback() {
       }' >"$rollback_path"
   fi
   cp "$evidence_validators_path" \
-    artifacts/evidence-bound-rollout-baseline.json
+    artifacts/resume-evidence-bound-rollout-baseline.json
   cp "$rollback_path" artifacts/evidence-bound-rollout-rollback.json
   jq -n \
     --arg target_version "$NODE_ARTIFACT_SHA256" \
@@ -4405,18 +4405,6 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   evidence_bound_baseline_updated_count="$(
     jq -er '.evidence_updated_count' artifacts/live-prefix-decision.json
   )"
-  evidence_bound_baseline_bindings="$(
-    jq -ce '
-      .baseline_bindings
-      | select(
-          length == 3 and
-          [.[].validator_id] ==
-            ["validator-01", "validator-02", "validator-03"] and
-          all(.[]; .runtime_version | test("^[0-9a-f]{64}$")) and
-          all(.[]; .instance_id | test("^i-[0-9a-f]{8,17}$"))
-        )
-    ' artifacts/live-prefix-decision.json
-  )"
   if [[ "$rolling_epoch_renewal_performed" == "true" ]]; then
     if [[ "$live_updated_count" != "$rolling_epoch_renewal_prefix_count" ]]; then
       # Epoch renewal is resolved before the live-prefix readback and service
@@ -4431,6 +4419,26 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   else
     test "$rolling_epoch_renewal_prefix_count" = "0"
   fi
+
+  # The strict gate may recover exactly one completed-but-uncommitted target
+  # replacement. Promote that fully observed contiguous live prefix as the
+  # run-local evidence floor before any further mutation. The checksummed
+  # producer artifact remains immutable and is still recorded separately.
+  evidence_bound_baseline_updated_count="$live_updated_count"
+  evidence_bound_baseline_bindings="$(
+    jq -ce '
+      .promoted_bindings
+      | select(
+          length == 3 and
+          [.[].validator_id] ==
+            ["validator-01", "validator-02", "validator-03"] and
+          all(.[]; .runtime_version | test("^[0-9a-f]{64}$")) and
+          all(.[]; .instance_id | test("^i-[0-9a-f]{8,17}$"))
+        )
+    ' artifacts/live-prefix-decision.json
+  )"
+  cp artifacts/live-prefix-validators.json \
+    artifacts/evidence-bound-rollout-baseline.json
 
   # Stop automatic finality before the next replacement. The observed target
   # prefix is bound strictly to the candidate artifact; only the remaining

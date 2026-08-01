@@ -245,7 +245,12 @@ addresses must be the exact remaining suffix. Previously accepted prefix
 instances must retain their instance identity and may not regress below their
 recorded head/certificate. Live discovery may exceed the recorded prefix by at
 most one validator, covering a stop between one targeted apply and its evidence
-write. A larger delta is stale evidence. A gap, unknown AMI, checksum failure,
+write. After that exact one-node delta passes retained-volume, rollback,
+candidate AMI/runtime, health, finalized-head and finality-provenance readback,
+the workflow promotes the observed contiguous prefix to its run-local evidence
+floor before quiescing finality or planning the next validator. The original
+checksummed resume artifact is preserved separately and is never rewritten.
+A larger delta is stale evidence. A gap, unknown AMI, checksum failure,
 candidate mismatch, changed EBS/snapshot binding or state rewind rejects the
 resume. A 3/3 prefix resumes only the separately gated finality activation.
 

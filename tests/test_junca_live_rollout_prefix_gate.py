@@ -174,6 +174,16 @@ class EvidenceBoundLivePrefixTests(unittest.TestCase):
         self.assertEqual(decision["live_updated_count"], 1)
         self.assertEqual(decision["recovered_uncommitted_count"], 1)
         self.assertEqual(decision["next_validator"], "validator-02")
+        self.assertFalse(decision["baseline_bindings"][0]["target_runtime"])
+        self.assertTrue(decision["promoted_bindings"][0]["target_runtime"])
+        self.assertEqual(
+            decision["promoted_bindings"][0]["instance_id"],
+            "i-0000000000000000a",
+        )
+        self.assertEqual(
+            decision["promoted_bindings"][1]["instance_id"],
+            value["evidence_validators"][1]["instance_id"],
+        )
 
     def test_accepts_quiesced_uncommitted_target_replacement(self):
         value = self.fixture()
