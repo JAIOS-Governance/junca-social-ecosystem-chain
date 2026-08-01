@@ -1,5 +1,8 @@
 name: JUNCA Emergency Validator 01 Runtime Recovery V2
 
+# Incident trigger revision 2: the workflow is already present on main before
+# this reviewed path change is merged, so GitHub must evaluate this push.
+
 on:
   push:
     branches: [main]
