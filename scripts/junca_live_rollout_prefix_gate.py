@@ -337,6 +337,7 @@ def evaluate_live_rollout_prefix_v2(
     updated: list[bool] = []
     current_heads: set[tuple[int, str, str]] = set()
     baseline_bindings: list[dict[str, Any]] = []
+    promoted_bindings: list[dict[str, Any]] = []
 
     for index, validator_id in enumerate(order):
         current = current_validators[index]
@@ -417,6 +418,9 @@ def evaluate_live_rollout_prefix_v2(
                     f"{validator_id} target runtime did not replace its "
                     "evidence-bound instance",
                 )
+            current_phase = _target_finality_phase(
+                current, requested_epoch, validator_id
+            )
         else:
             _require(
                 binding["target_runtime"] is False,
@@ -444,7 +448,26 @@ def evaluate_live_rollout_prefix_v2(
                 f"{validator_id} non-target finality state drifted from evidence",
             )
             canonical._finality_provenance(current, target_runtime=False)
+            current_phase = "BASELINE"
         updated.append(is_target)
+        promoted_bindings.append(
+            {
+                "validator_id": validator_id,
+                "runtime_version": current_runtime,
+                "ami_id": current_ami,
+                "instance_id": current_instance,
+                "volume_id": current.get("volume_id"),
+                "target_runtime": is_target,
+                "automatic_finality_enabled": current.get(
+                    "automatic_finality_enabled"
+                ),
+                "block_interval_seconds": current.get(
+                    "block_interval_seconds"
+                ),
+                "slot_epoch_seconds": current.get("slot_epoch_seconds"),
+                "finality_phase": current_phase,
+            }
+        )
 
     _require(
         len(current_heads) == 1,
@@ -469,6 +492,7 @@ def evaluate_live_rollout_prefix_v2(
         "updated_validator_ids": list(order[:live_count]),
         "next_validator": order[live_count] if live_count < 3 else None,
         "baseline_bindings": baseline_bindings,
+        "promoted_bindings": promoted_bindings,
         "mainnet_changed": False,
         "assets_moved": False,
         "bridge_activated": False,

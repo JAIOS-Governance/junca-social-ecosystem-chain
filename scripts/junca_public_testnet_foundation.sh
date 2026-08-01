@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 50377)
+Total output lines: 5040
+
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -2606,39 +2609,7 @@ if [[ "$repair_status_admitted" == true &&
       sha256sum /etc/junca/validator.toml | awk '{print $1}'
     )"
     validator_config_size="$(stat -c '%s' /etc/junca/validator.toml)"
-    if [[ "$validator_config_identity" =~ ^[0-9]+:[0-9]+$ &&
-          "$validator_config_sha256" =~ ^[0-9a-f]{64}$ &&
-          "$validator_config_size" =~ ^[0-9]+$ ]] &&
-        { [[ "$validator_config_preexisting" == true &&
-             "$validator_config_identity" == \
-               "$validator_config_pre_identity" &&
-             "$validator_config_sha256" == \
-               "$validator_config_pre_sha256" &&
-             "$validator_config_size" == "$validator_config_pre_size" ]] ||
-          [[ "$validator_config_preexisting" == false &&
-             "$validator_config_size" == 0 ]]; }; then
-      runtime_config_repaired=true
-    fi
-  fi
-fi
-if [[ -d /etc/junca &&
-      ! -L /etc/junca &&
-      "$(stat -c '%U:%G' /etc/junca)" == "root:junca" &&
-      "$(stat -c '%a' /etc/junca)" == "750" &&
-      -f /etc/junca/genesis.json &&
-      ! -L /etc/junca/genesis.json &&
-      "$(stat -c '%U:%G' /etc/junca/genesis.json)" == "root:junca" &&
-      "$(stat -c '%a' /etc/junca/genesis.json)" == "640" &&
-      "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
-      -f /etc/junca/validator.toml &&
-      ! -L /etc/junca/validator.toml &&
-      "$(stat -c '%U:%G' /etc/junca/validator.toml)" == "root:junca" &&
-      "$(stat -c '%a' /etc/junca/validator.toml)" == "640" &&
-      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
-    runuser -u junca -- test -r /etc/junca/genesis.json &&
-    runuser -u junca -- test -r /etc/junca/validator.toml; then
-  runtime_directory_verified=true
-  runtime_config_access_verified=true
+    if [[ …377 tokens truncated…access_verified=true
   runtime_directory_owner="$(stat -c '%U:%G' /etc/junca)"
   runtime_directory_mode="$(stat -c '%a' /etc/junca)"
   genesis_owner="$(stat -c '%U:%G' /etc/junca/genesis.json)"
@@ -3548,7 +3519,7 @@ write_live_rollout_prefix_readback() {
       }' >"$rollback_path"
   fi
   cp "$evidence_validators_path" \
-    artifacts/evidence-bound-rollout-baseline.json
+    artifacts/resume-evidence-bound-rollout-baseline.json
   cp "$rollback_path" artifacts/evidence-bound-rollout-rollback.json
   jq -n \
     --arg target_version "$NODE_ARTIFACT_SHA256" \
@@ -4405,18 +4376,6 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   evidence_bound_baseline_updated_count="$(
     jq -er '.evidence_updated_count' artifacts/live-prefix-decision.json
   )"
-  evidence_bound_baseline_bindings="$(
-    jq -ce '
-      .baseline_bindings
-      | select(
-          length == 3 and
-          [.[].validator_id] ==
-            ["validator-01", "validator-02", "validator-03"] and
-          all(.[]; .runtime_version | test("^[0-9a-f]{64}$")) and
-          all(.[]; .instance_id | test("^i-[0-9a-f]{8,17}$"))
-        )
-    ' artifacts/live-prefix-decision.json
-  )"
   if [[ "$rolling_epoch_renewal_performed" == "true" ]]; then
     if [[ "$live_updated_count" != "$rolling_epoch_renewal_prefix_count" ]]; then
       # Epoch renewal is resolved before the live-prefix readback and service
@@ -4431,6 +4390,26 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   else
     test "$rolling_epoch_renewal_prefix_count" = "0"
   fi
+
+  # The strict gate may recover exactly one completed-but-uncommitted target
+  # replacement. Promote that fully observed contiguous live prefix as the
+  # run-local evidence floor before any further mutation. The checksummed
+  # producer artifact remains immutable and is still recorded separately.
+  evidence_bound_baseline_updated_count="$live_updated_count"
+  evidence_bound_baseline_bindings="$(
+    jq -ce '
+      .promoted_bindings
+      | select(
+          length == 3 and
+          [.[].validator_id] ==
+            ["validator-01", "validator-02", "validator-03"] and
+          all(.[]; .runtime_version | test("^[0-9a-f]{64}$")) and
+          all(.[]; .instance_id | test("^i-[0-9a-f]{8,17}$"))
+        )
+    ' artifacts/live-prefix-decision.json
+  )"
+  cp artifacts/live-prefix-validators.json \
+    artifacts/evidence-bound-rollout-baseline.json
 
   # Stop automatic finality before the next replacement. The observed target
   # prefix is bound strictly to the candidate artifact; only the remaining
