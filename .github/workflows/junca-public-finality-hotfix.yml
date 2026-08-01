@@ -1,0 +1,515 @@
+name: JUNCA Public Testnet Finality Hotfix
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+    paths:
+      - config/junca_public_finality_hotfix_request.json
+  workflow_dispatch:
+    inputs:
+      authorize_hotfix:
+        description: "Exact authorization phrase: PUBLIC_TESTNET_FINALITY_HOTFIX"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-finality-hotfix
+  cancel-in-progress: false
+
+jobs:
+  repair-and-accept:
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true) ||
+      inputs.authorize_hotfix == 'PUBLIC_TESTNET_FINALITY_HOTFIX'
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 20
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      BASE_RUNTIME_SHA256: cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f
+      BASE_VALIDATOR_NODE_SHA256: 09c87bbc7f2ce8fb048677ab899ba708ae8b31c0c8a862b869e9c7fa9f2bf778
+      TARGET_VALIDATOR_NODE_SHA256: 9c7d44b65084b5a32aa20765436af75ac160f1fac1c104b807a40a529f7c6f7f
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate bounded hotfix authorization and source
+        run: |
+          set -euo pipefail
+          request=config/junca_public_finality_hotfix_request.json
+          jq -e \
+            --arg base_runtime "$BASE_RUNTIME_SHA256" \
+            --arg base_node "$BASE_VALIDATOR_NODE_SHA256" \
+            --arg target_node "$TARGET_VALIDATOR_NODE_SHA256" '
+              .schema_version == "junca-public-finality-hotfix-request/v1" and
+              .authorized_scope == "PUBLIC_TESTNET_FINALITY_HOTFIX" and
+              .failed_foundation_run_id == 30688972530 and
+              .approved_ami_run_id == 30682660387 and
+              .approved_manifest_run_id == 30683678492 and
+              .fix_pull_request == 401 and
+              .fix_merge_sha ==
+                "dbfff41d83bc36c319c120085a17d5caf18a542a" and
+              .base_runtime_sha256 == $base_runtime and
+              .base_validator_node_sha256 == $base_node and
+              .target_validator_node_sha256 == $target_node and
+              .action == "PATCH_RESIDENT_VALIDATOR_RUNTIME_ONLY" and
+              (.one_shot_nonce | type == "string" and length >= 16) and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false and
+              .mainnet_activation_authorized == false
+            ' "$request" >/dev/null
+          test "$(sha256sum jaios/social_ecosystem_chain/validator_node.py | cut -d' ' -f1)" = \
+            "$TARGET_VALIDATOR_NODE_SHA256"
+          mkdir -p artifacts
+          cp "$request" artifacts/hotfix-request.json
+          sha256sum "$request" > artifacts/hotfix-request.json.sha256
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-finality-hotfix-${{ github.run_id }}
+
+      - name: Resolve exact resident Public Testnet validators
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account == $account and
+            (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [
+              .Reservations[].Instances[] |
+              {
+                instance_id: .InstanceId,
+                validator: (.Tags[] | select(.Key == "Validator") | .Value),
+                private_ip: .PrivateIpAddress,
+                state: .State.Name,
+                image_id: .ImageId
+              }
+            ] |
+            sort_by(.validator) |
+            select(
+              length == 3 and
+              (map(.instance_id) | unique | length) == 3 and
+              map(.validator) == ["01","02","03"] and
+              all(.[]; .state == "running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          printf '%s\n' "${instances[@]}" > artifacts/validator-instance-ids.txt
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
+          jq -e \
+            --argjson expected "$(jq '[.[].instance_id] | sort' artifacts/validators.json)" '
+              [.InstanceInformationList[] |
+                select(.PingStatus == "Online") | .InstanceId] |
+              sort | . == $expected
+            ' artifacts/ssm-instances.json >/dev/null
+
+      - name: Apply exact reviewed finality overlay and restart three validators
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          remote_command="$(cat <<'REMOTE'
+          set -euo pipefail
+          base_runtime=cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f
+          base_node=09c87bbc7f2ce8fb048677ab899ba708ae8b31c0c8a862b869e9c7fa9f2bf778
+          target_node=9c7d44b65084b5a32aa20765436af75ac160f1fac1c104b807a40a529f7c6f7f
+          target=/usr/local/lib/junca/jaios/social_ecosystem_chain/validator_node.py
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz | cut -d' ' -f1)" = "$base_runtime"
+          runtime_env_before="$(sha256sum /etc/junca/runtime.env | cut -d' ' -f1)"
+          python3 - "$target" "$base_node" "$target_node" <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          base_sha, target_sha = sys.argv[2:]
+          data = path.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          if digest == target_sha:
+              raise SystemExit(0)
+          if digest != base_sha:
+              raise SystemExit(f"unapproved validator source preimage: {digest}")
+          text = data.decode("utf-8")
+          replacements = [
+              (
+                  '            "pending_height": runtime["pending_height"],\n',
+                  '            "pending_height": runtime["pending_height"],\n'
+                  '            "current_round": runtime["current_round"],\n',
+              ),
+              (
+                  '    peer_count: int = 0\n',
+                  '    authenticated_peer_ids: set[str] = field(default_factory=set)\n',
+              ),
+              (
+                  '                proposal = self.consensus.propose(\n'
+                  '                    block_timestamp=block_timestamp\n'
+                  '                )\n',
+                  '                # A timestamped proposal uses the canonical slot time as its\n'
+                  '                # consensus round. A retained signing journal therefore cannot\n'
+                  '                # collide with a prior activation that signed this height at\n'
+                  '                # round zero, while every validator derives the same value.\n'
+                  '                proposal = self.consensus.propose(\n'
+                  '                    round=block_timestamp,\n'
+                  '                    block_timestamp=block_timestamp,\n'
+                  '                )\n',
+              ),
+              (
+                  '                "slot_epoch_seconds": self.slot_epoch_seconds,\n'
+                  '                "automatic_finality_loop_running": (\n',
+                  '                "slot_epoch_seconds": self.slot_epoch_seconds,\n'
+                  '                "authenticated_peer_count": len(self.authenticated_peer_ids),\n'
+                  '                "authenticated_peer_ids": sorted(self.authenticated_peer_ids),\n'
+                  '                "automatic_finality_loop_running": (\n',
+              ),
+              (
+                  '            return hex(self.peer_count)\n',
+                  '            return hex(len(self.authenticated_peer_ids))\n',
+              ),
+              (
+                  '                consensus.submit(packet)\n\n'
+                  '        transport = PrivateVpcPeerTransport(\n',
+                  '                consensus.submit(packet)\n'
+                  '                if packet.validator_id != state.validator_id:\n'
+                  '                    state.authenticated_peer_ids.add(packet.validator_id)\n\n'
+                  '        transport = PrivateVpcPeerTransport(\n',
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit("reviewed hotfix preimage fragment mismatch")
+              text = text.replace(old, new, 1)
+          rendered = text.encode("utf-8")
+          rendered_sha = hashlib.sha256(rendered).hexdigest()
+          if rendered_sha != target_sha:
+              raise SystemExit(f"reviewed hotfix target mismatch: {rendered_sha}")
+          backup = Path("/opt/junca/hotfixes/dbfff41d83bc36c319c120085a17d5caf18a542a")
+          backup.mkdir(mode=0o755, parents=True, exist_ok=True)
+          backup_file = backup / f"validator_node.py.{base_sha}"
+          if not backup_file.exists():
+              backup_file.write_bytes(data)
+              os.chmod(backup_file, 0o644)
+          temporary = path.with_name(".validator_node.py.finality-hotfix")
+          temporary.write_bytes(rendered)
+          os.chmod(temporary, 0o644)
+          os.chown(temporary, 0, 0)
+          os.replace(temporary, path)
+          PY
+          test "$(sha256sum "$target" | cut -d' ' -f1)" = "$target_node"
+          test "$(sha256sum /etc/junca/runtime.env | cut -d' ' -f1)" = "$runtime_env_before"
+          systemctl restart junca-validator.service
+          systemctl enable junca-public-rpc.service junca-public-explorer.service
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/junca-health.json &&
+               curl -fsS http://127.0.0.1:8546/health >/dev/null &&
+               curl -fsS http://127.0.0.1:3000/health >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          systemctl is-active --quiet junca-validator.service junca-public-rpc.service junca-public-explorer.service
+          jq -e '
+            .status == "healthy" and
+            .automatic_finality_enabled == true and
+            .automatic_finality_loop_running == true and
+            (.authenticated_peer_count | type) == "number" and
+            (.authenticated_peer_ids | type) == "array" and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' /tmp/junca-health.json >/dev/null
+          printf '%s\n' '{"schema_version":"junca-public-finality-overlay/v1","accepted":true,"base_ami_preserved":true,"manifest_preserved":true,"mainnet_changed":false,"assets_moved":false,"bridge_activated":false}'
+          REMOTE
+          )"
+          jq -n --arg command "$remote_command" '{commands: [$command]}' \
+            > artifacts/ssm-finality-hotfix.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-finality-hotfix.json \
+            --comment "JUNCA Public Testnet finality journal collision hotfix" \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/hotfix-command-id.txt
+          for instance in "${instances[@]}"; do
+            status=""
+            for attempt in $(seq 1 90); do
+              status="$(aws ssm get-command-invocation \
+                --command-id "$command_id" --instance-id "$instance" \
+                --query Status --output text)"
+              case "$status" in
+                Success) break ;;
+                Failed|Cancelled|TimedOut|Cancelling) break ;;
+              esac
+              test "$attempt" -lt 90
+              sleep 2
+            done
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/hotfix-${instance}.json"
+            jq -e '
+              .Status == "Success" and
+              (.ResponseCode // -1) == 0 and
+              (.StandardOutputContent | contains(
+                "junca-public-finality-overlay/v1"
+              ))
+            ' "artifacts/hotfix-${instance}.json" >/dev/null
+          done
+
+      - name: Require two consecutive authenticated 3-of-3 finality slots
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/validator-instance-ids.txt
+          jq -n '{commands:["curl -fsS http://127.0.0.1:8545/health"]}' \
+            > artifacts/ssm-health.json
+          previous_height=1
+          previous_timestamp=0
+          for series in 1 2; do
+            accepted=false
+            for observation in $(seq 1 24); do
+              command_id="$(aws ssm send-command \
+                --instance-ids "${instances[@]}" \
+                --document-name AWS-RunShellScript \
+                --parameters file://artifacts/ssm-health.json \
+                --comment "JUNCA finality hotfix acceptance slot ${series}" \
+                --query Command.CommandId --output text)"
+              for instance in "${instances[@]}"; do
+                status=""
+                for attempt in $(seq 1 30); do
+                  status="$(aws ssm get-command-invocation \
+                    --command-id "$command_id" --instance-id "$instance" \
+                    --query Status --output text)"
+                  case "$status" in
+                    Success) break ;;
+                    Failed|Cancelled|TimedOut|Cancelling) exit 1 ;;
+                  esac
+                  test "$attempt" -lt 30
+                  sleep 2
+                done
+                aws ssm get-command-invocation \
+                  --command-id "$command_id" --instance-id "$instance" \
+                  > "artifacts/slot-${series}-command-${instance}.json"
+                jq -er .StandardOutputContent \
+                  "artifacts/slot-${series}-command-${instance}.json" \
+                  > "artifacts/slot-${series}-health-${instance}.json"
+              done
+              if jq -s -e \
+                --argjson previous_height "$previous_height" \
+                --argjson previous_timestamp "$previous_timestamp" '
+                  length == 3 and
+                  (map(.status) | unique) == ["healthy"] and
+                  (map(.head_height) | unique | length) == 1 and
+                  .[0].head_height == ($previous_height + 1) and
+                  (map(.head_hash) | unique | length) == 1 and
+                  (map(.head_timestamp) | unique | length) == 1 and
+                  ($previous_timestamp == 0 or
+                    .[0].head_timestamp == ($previous_timestamp + 30)) and
+                  (map(.consensus.last_certificate_hash) | unique | length) == 1 and
+                  all(
+                    .authenticated_peer_count == 2 and
+                    (.authenticated_peer_ids | length) == 2 and
+                    (. as $node |
+                      ($node.authenticated_peer_ids |
+                        index($node.validator_id) | not)) and
+                    .automatic_finality_enabled == true and
+                    .automatic_finality_loop_running == true and
+                    .automatic_finality.last_successful_height == .head_height and
+                    .consensus.last_certificate.finality_status == "FINALIZED" and
+                    .consensus.last_certificate.height == .head_height and
+                    .consensus.last_certificate.block_hash == .head_hash and
+                    .consensus.last_certificate.signed_power == 3 and
+                    .consensus.last_certificate.total_power == 3 and
+                    .consensus.last_certificate.validator_ids ==
+                      ["validator-01","validator-02","validator-03"] and
+                    .private_key_material_accepted == false and
+                    .mainnet_changed == false and
+                    .assets_moved == false and
+                    .bridge_activated == false
+                  )
+                ' artifacts/slot-${series}-health-i-*.json >/dev/null; then
+                accepted=true
+                previous_height="$(jq -r .head_height \
+                  artifacts/slot-${series}-health-i-* | sort -u)"
+                previous_timestamp="$(jq -r .head_timestamp \
+                  artifacts/slot-${series}-health-i-* | sort -u)"
+                break
+              fi
+              test "$observation" -lt 24
+              sleep 5
+            done
+            test "$accepted" = "true"
+          done
+
+      - name: Verify public freshness Explorer RPC parity and bounded soak
+        run: |
+          set -euo pipefail
+          expected_height="$(jq -r .head_height artifacts/slot-2-health-i-* | sort -u)"
+          expected_hash="$(jq -r .head_hash artifacts/slot-2-health-i-* | sort -u)"
+          expected_timestamp="$(jq -r .head_timestamp artifacts/slot-2-health-i-* | sort -u)"
+          expected_certificate="$(jq -r .consensus.last_certificate_hash \
+            artifacts/slot-2-health-i-* | sort -u)"
+          test "$(printf '%s\n' "$expected_height" | wc -l)" = 1
+          test "$(printf '%s\n' "$expected_hash" | wc -l)" = 1
+          accepted=false
+          for observation in $(seq 1 24); do
+            curl -fsS https://health.jaios-governance.org/health \
+              > artifacts/public-health.json
+            curl -fsS https://explorer.jaios-governance.org/explorer.json \
+              > artifacts/public-explorer.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+              https://rpc.jaios-governance.org/ \
+              > artifacts/public-rpc-chain-id.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' \
+              https://rpc.jaios-governance.org/ \
+              > artifacts/public-rpc-block-number.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":3,"method":"net_peerCount","params":[]}' \
+              https://rpc.jaios-governance.org/ \
+              > artifacts/public-rpc-peer-count.json
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":4,"method":"eth_getBlockByNumber","params":["latest",false]}' \
+              https://rpc.jaios-governance.org/ \
+              > artifacts/public-rpc-latest-block.json
+            now="$(date +%s)"
+            explorer_height="$(jq -er .head.height artifacts/public-explorer.json)"
+            explorer_hash="$(jq -er .head.hash artifacts/public-explorer.json)"
+            explorer_timestamp_hex="$(jq -er .head.timestamp artifacts/public-explorer.json)"
+            explorer_timestamp="$((explorer_timestamp_hex))"
+            rpc_height_hex="$(jq -er .result artifacts/public-rpc-block-number.json)"
+            rpc_height="$((rpc_height_hex))"
+            rpc_block_hash="$(jq -er .result.hash artifacts/public-rpc-latest-block.json)"
+            rpc_block_timestamp_hex="$(jq -er .result.timestamp artifacts/public-rpc-latest-block.json)"
+            rpc_block_timestamp="$((rpc_block_timestamp_hex))"
+            if [[ "$explorer_height" == "$expected_height" &&
+                  "$explorer_hash" == "$expected_hash" &&
+                  "$explorer_timestamp" == "$expected_timestamp" &&
+                  "$rpc_height" == "$expected_height" &&
+                  "$rpc_block_hash" == "$expected_hash" &&
+                  "$rpc_block_timestamp" == "$expected_timestamp" ]] &&
+               (( now >= expected_timestamp && now - expected_timestamp <= 90 )) &&
+               jq -e \
+                 --argjson height "$expected_height" \
+                 --arg hash "$expected_hash" '
+                   .status == "healthy" and
+                   .read_only == true and
+                   .validator.head_height == $height and
+                   .validator.head_hash == $hash and
+                   .mainnet_changed == false and
+                   .assets_moved == false and
+                   .bridge_activated == false
+                 ' artifacts/public-health.json >/dev/null &&
+               jq -e \
+                 --arg certificate "$expected_certificate" '
+                   .status == "ready" and
+                   .read_only == true and
+                   .finalized_only == true and
+                   .head.certificate_hash == $certificate and
+                   .head.signed_power == 3 and
+                   .head.total_power == 3 and
+                   .network.peer_count == 2 and
+                   .network.peer_count_hex == "0x2" and
+                   .mainnet_changed == false and
+                   .assets_moved == false and
+                   .bridge_activated == false
+                 ' artifacts/public-explorer.json >/dev/null &&
+               jq -e '.result == "0x1352773"' artifacts/public-rpc-chain-id.json >/dev/null &&
+               jq -e '.result == "0x2"' artifacts/public-rpc-peer-count.json >/dev/null; then
+              accepted=true
+              break
+            fi
+            test "$observation" -lt 24
+            sleep 5
+          done
+          test "$accepted" = "true"
+          jq -n \
+            --arg workflow_run_url \
+              "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg failed_run_url \
+              "https://github.com/${{ github.repository }}/actions/runs/30688972530" \
+            --arg fix_pull_request \
+              "https://github.com/${{ github.repository }}/pull/401" \
+            --arg base_runtime_sha256 "$BASE_RUNTIME_SHA256" \
+            --arg target_validator_node_sha256 "$TARGET_VALIDATOR_NODE_SHA256" \
+            --slurpfile validators artifacts/validators.json \
+            --slurpfile first <(jq -s '.' artifacts/slot-1-health-i-*.json) \
+            --slurpfile second <(jq -s '.' artifacts/slot-2-health-i-*.json) \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile chain_id artifacts/public-rpc-chain-id.json \
+            --slurpfile block_number artifacts/public-rpc-block-number.json \
+            --slurpfile peer_count artifacts/public-rpc-peer-count.json \
+            --slurpfile latest_block artifacts/public-rpc-latest-block.json '{
+              schema_version: "junca-public-finality-hotfix-acceptance/v1",
+              result: "PASS",
+              workflow_run_url: $workflow_run_url,
+              failed_run_url: $failed_run_url,
+              fix_pull_request: $fix_pull_request,
+              approved_inputs: {
+                ami_run_id: 30682660387,
+                manifest_run_id: 30683678492,
+                base_runtime_sha256: $base_runtime_sha256,
+                rebuilt: false
+              },
+              resident_overlay: {
+                target_validator_node_sha256: $target_validator_node_sha256,
+                validators: $validators[0]
+              },
+              runtime_acceptance: {
+                first: $first[0],
+                second: $second[0],
+                initial_height: 1,
+                final_height: $second[0][0].head_height,
+                authenticated_peers_per_validator: 2,
+                consecutive_advances: 2,
+                canonical_timestamp_delta_seconds:
+                  ($second[0][0].head_timestamp - $first[0][0].head_timestamp),
+                bounded_soak: "PASS"
+              },
+              public_readback: {
+                health: $health[0],
+                explorer: $explorer[0],
+                rpc_chain_id: $chain_id[0],
+                rpc_block_number: $block_number[0],
+                rpc_peer_count: $peer_count[0],
+                rpc_latest_block: $latest_block[0]
+              },
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              mainnet_activation_authorized: false
+            }' > artifacts/public-finality-hotfix-acceptance.json
+          sha256sum artifacts/public-finality-hotfix-acceptance.json \
+            > artifacts/public-finality-hotfix-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-finality-hotfix-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
