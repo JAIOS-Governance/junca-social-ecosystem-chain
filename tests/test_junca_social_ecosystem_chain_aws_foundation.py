@@ -66,6 +66,13 @@ def runtime_finality_binding_functions(script: str) -> str:
     )[0].join(("build_runtime_finality_bindings() {", ""))
 
 
+def pre_rollout_quiesce_reuse_function(script: str) -> str:
+    definition = script.split(
+        "write_pre_rollout_quiesce_reuse_decision() {", 1
+    )[1].split("\n}\n\nset_runtime_finality() {", 1)[0]
+    return "write_pre_rollout_quiesce_reuse_decision() {" + definition + "\n}"
+
+
 def ssm_online_function(script: str) -> str:
     return script.split("wait_for_ssm_online() {", 1)[1].split(
         "\n}\n\nwrite_post_apply_checkpoint()", 1
@@ -1450,8 +1457,9 @@ class AwsFoundationTests(unittest.TestCase):
             "artifacts/live-prefix-decision.json",
             'jq -er \'.recovered_uncommitted_count\' '
             "artifacts/live-prefix-decision.json",
-            'build_pre_rollout_finality_bindings \\\n'
-            '      "$live_updated_count"',
+            "build_pre_rollout_finality_bindings",
+            "write_pre_rollout_quiesce_reuse_decision",
+            "EXACT_QUIESCED_READBACK_REUSED",
             'evidence_bound_baseline_updated_count="$live_updated_count"',
             ".promoted_bindings",
             "cp artifacts/live-prefix-validators.json \\\n"
@@ -1465,7 +1473,7 @@ class AwsFoundationTests(unittest.TestCase):
             "write_live_rollout_prefix_readback \\"
         )
         first_mutation = self.foundation_script.index(
-            "set_runtime_finality \\\n    0 0", live_readback_call
+            "if ! set_runtime_finality \\\n      0 0", live_readback_call
         )
         volume_readback = self.foundation_script.index(
             "artifacts/live-prefix-volume-$((index + 1)).json",
@@ -1500,6 +1508,109 @@ class AwsFoundationTests(unittest.TestCase):
     test "$rolling_epoch_renewal_prefix_count" = "0"
   fi"""
         self.assertIn(renewal_guard, self.foundation_script)
+
+    def test_exact_quiesced_prefix_is_reused_only_after_dual_readback(self) -> None:
+        helper = pre_rollout_quiesce_reuse_function(self.foundation_script)
+        target = "a" * 64
+        legacy = "b" * 64
+
+        def validator(index: int, runtime_version: str) -> dict[str, object]:
+            return {
+                "validator_id": f"validator-0{index}",
+                "runtime_version": runtime_version,
+                "healthy": True,
+                "service_active": True,
+                "ssm_online": True,
+                "automatic_finality_enabled": False,
+                "block_interval_seconds": 0,
+                "slot_epoch_seconds": 0,
+                "finality_readback": {
+                    "health_supported": True,
+                    "runtime_env": {
+                        "automatic_finality_enabled": False,
+                        "block_interval_seconds": 0,
+                        "slot_epoch_seconds": 0,
+                    },
+                    "health": {
+                        "automatic_finality_enabled": False,
+                        "block_interval_seconds": 0,
+                        "slot_epoch_seconds": 0,
+                    },
+                },
+                "mainnet_changed": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+            }
+
+        accepted = [
+            validator(1, target),
+            validator(2, target),
+            validator(3, legacy),
+        ]
+        rejected = []
+        for mutate in (
+            lambda value: value[0].update(automatic_finality_enabled=True),
+            lambda value: value[1]["finality_readback"]["runtime_env"].update(
+                slot_epoch_seconds=30
+            ),
+            lambda value: value[2]["finality_readback"].update(
+                health_supported=False
+            ),
+            lambda value: value[1].update(runtime_version=legacy),
+            lambda value: value[0].update(mainnet_changed=True),
+            lambda value: value.reverse(),
+        ):
+            candidate = json.loads(json.dumps(accepted))
+            mutate(candidate)
+            rejected.append(candidate)
+
+        with tempfile.TemporaryDirectory() as task_dir:
+            task_path = pathlib.Path(task_dir)
+            input_path = task_path / "validators.json"
+            output_path = task_path / "decision.json"
+            input_path.write_text(json.dumps(accepted), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    helper
+                    + "\nwrite_pre_rollout_quiesce_reuse_decision "
+                    + '"$1" 2 "$2" "$3"',
+                    "quiesce-positive",
+                    str(input_path),
+                    target,
+                    str(output_path),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            decision = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(decision["state"], "EXACT_QUIESCED_READBACK_REUSED")
+            self.assertFalse(decision["mutation_performed"])
+            self.assertTrue(decision["accepted"])
+
+            for index, candidate in enumerate(rejected):
+                with self.subTest(index=index):
+                    input_path.write_text(json.dumps(candidate), encoding="utf-8")
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            helper
+                            + "\nwrite_pre_rollout_quiesce_reuse_decision "
+                            + '"$1" 2 "$2" "$3"',
+                            "quiesce-negative",
+                            str(input_path),
+                            target,
+                            str(output_path),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_required_boolean_readback_accepts_false_and_rejects_invalid_types(
         self,
@@ -1742,7 +1853,7 @@ class AwsFoundationTests(unittest.TestCase):
             "capture_validator_observation \\", recovery
         )
         first_mutation = self.foundation_script.index(
-            "set_runtime_finality \\\n    0 0", strict_readback
+            "if ! set_runtime_finality \\\n      0 0", strict_readback
         )
         self.assertLess(recovery, strict_readback)
         self.assertLess(strict_readback, first_mutation)

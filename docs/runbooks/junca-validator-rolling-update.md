@@ -243,6 +243,12 @@ one-shot resume request may bind the exact phrase
 `RENEW_EXPIRED_QUIESCED_EPOCH` and a preserved prefix count from `1` through
 `3`; the orchestrator forwards that pair unchanged. `NONE` is valid only with
 prefix `0`, and partial or contradictory pairs fail before workflow dispatch.
+After the live-prefix gate, Foundation reuses an already quiesced readback only
+when all three validators independently report `false/0/0` through both
+`runtime.env` and Health, the promoted prefix is bound to the exact candidate,
+and every safety boundary is false. Otherwise it performs the existing
+fail-closed quiesce mutation; an ambiguous or failed readback never advances to
+the next validator.
 The live validators must form a strict ordered
 target-runtime/target-AMI prefix of length 0, 1, 2 or 3; Terraform replacement
 addresses must be the exact remaining suffix. Previously accepted prefix

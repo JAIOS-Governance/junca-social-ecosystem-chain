@@ -544,6 +544,65 @@ write_finality_local_gate() {
     }' >"$output_path"
 }
 
+write_pre_rollout_quiesce_reuse_decision() {
+  local validators_path="$1"
+  local updated_count="$2"
+  local target_artifact_sha256="$3"
+  local output_path="$4"
+  [[ "$updated_count" =~ ^[0-3]$ ]]
+  [[ "$target_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]
+  test -f "$validators_path"
+  if ! jq -e \
+    --argjson updated_count "$updated_count" \
+    --arg target_artifact_sha256 "$target_artifact_sha256" '
+      . as $validators |
+      type == "array" and length == 3 and
+      [.[].validator_id] ==
+        ["validator-01", "validator-02", "validator-03"] and
+      all(
+        .[];
+        .healthy == true and
+        .service_active == true and
+        .ssm_online == true and
+        .automatic_finality_enabled == false and
+        .block_interval_seconds == 0 and
+        .slot_epoch_seconds == 0 and
+        .finality_readback.health_supported == true and
+        .finality_readback.runtime_env.automatic_finality_enabled == false and
+        .finality_readback.runtime_env.block_interval_seconds == 0 and
+        .finality_readback.runtime_env.slot_epoch_seconds == 0 and
+        .finality_readback.health.automatic_finality_enabled == false and
+        .finality_readback.health.block_interval_seconds == 0 and
+        .finality_readback.health.slot_epoch_seconds == 0 and
+        .mainnet_changed == false and
+        .assets_moved == false and
+        .bridge_activated == false
+      ) and
+      all(
+        range(0; $updated_count);
+        . as $index |
+        $validators[$index].runtime_version == $target_artifact_sha256
+      )
+    ' "$validators_path" >/dev/null
+  then
+    return 1
+  fi
+  jq -n \
+    --argjson updated_count "$updated_count" '{
+      schema_version: "junca-pre-rollout-finality-quiesce/v1",
+      state: "EXACT_QUIESCED_READBACK_REUSED",
+      updated_count: $updated_count,
+      mutation_performed: false,
+      automatic_finality_enabled: false,
+      block_interval_seconds: 0,
+      slot_epoch_seconds: 0,
+      accepted: true,
+      mainnet_changed: false,
+      assets_moved: false,
+      bridge_activated: false
+    }' >"$output_path"
+}
+
 set_runtime_finality() {
   local block_interval="$1"
   local slot_epoch="$2"
@@ -4533,14 +4592,61 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   # Stop automatic finality before the next replacement. The observed target
   # prefix is bound strictly to the candidate artifact; only the remaining
   # legacy suffix may initialize all-absent false/0/0 keys.
-  pre_rollout_finality_bindings="$(
-    build_pre_rollout_finality_bindings \
-      "$live_updated_count" \
-      "$NODE_ARTIFACT_SHA256" "$evidence_bound_baseline_bindings" \
-      "${pre_rollout_instances[@]}"
-  )"
-  set_runtime_finality \
-    0 0 "$pre_rollout_finality_bindings"
+  pre_rollout_quiesce_decision_path=\
+artifacts/pre-rollout-finality-quiesce-decision.json
+  if write_pre_rollout_quiesce_reuse_decision \
+    artifacts/live-prefix-validators.json \
+    "$live_updated_count" "$NODE_ARTIFACT_SHA256" \
+    "$pre_rollout_quiesce_decision_path"
+  then
+    :
+  else
+    if ! pre_rollout_finality_bindings="$(
+      build_pre_rollout_finality_bindings \
+        "$live_updated_count" \
+        "$NODE_ARTIFACT_SHA256" "$evidence_bound_baseline_bindings" \
+        "${pre_rollout_instances[@]}"
+    )"; then
+      jq -n '{
+        schema_version: "junca-pre-rollout-finality-quiesce/v1",
+        state: "BINDING_REJECTED",
+        mutation_performed: false,
+        accepted: false,
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }' >"$pre_rollout_quiesce_decision_path"
+      exit 1
+    fi
+    if ! set_runtime_finality \
+      0 0 "$pre_rollout_finality_bindings"
+    then
+      jq -n '{
+        schema_version: "junca-pre-rollout-finality-quiesce/v1",
+        state: "QUIESCE_MUTATION_FAILED",
+        mutation_performed: true,
+        accepted: false,
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }' >"$pre_rollout_quiesce_decision_path"
+      exit 1
+    fi
+    jq -n \
+      --argjson updated_count "$live_updated_count" '{
+        schema_version: "junca-pre-rollout-finality-quiesce/v1",
+        state: "QUIESCE_MUTATION_ACCEPTED",
+        updated_count: $updated_count,
+        mutation_performed: true,
+        automatic_finality_enabled: false,
+        block_interval_seconds: 0,
+        slot_epoch_seconds: 0,
+        accepted: true,
+        mainnet_changed: false,
+        assets_moved: false,
+        bridge_activated: false
+      }' >"$pre_rollout_quiesce_decision_path"
+  fi
   for index in 0 1 2; do
     capture_validator_observation \
       "validator-0$((index + 1))" \
