@@ -1,4 +1,8 @@
+import json
 import pathlib
+import re
+import shutil
+import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -48,6 +52,63 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
             "read_instance_ami_binding",
         ):
             self.assertLess(self.script.index(admission), recovery)
+
+    def test_instance_admission_jq_compiles_accepts_exact_and_rejects_drift(self) -> None:
+        if shutil.which("jq") is None:
+            self.skipTest("jq is not installed")
+        instance_section = self.script.split(
+            "aws ec2 describe-instances", 1
+        )[1].split("aws ec2 describe-volumes", 1)[0]
+        match = re.search(
+            r'''--arg\s+volume\s+.*?\s+'(.*?)'\s+
+                artifacts/runtime-recovery/instance\.json''',
+            instance_section,
+            re.DOTALL | re.VERBOSE,
+        )
+        self.assertIsNotNone(match)
+        jq_filter = match.group(1)
+        exact = {
+            "Reservations": [{"Instances": [{
+                "InstanceId": "i-0b15c21a599bf41be",
+                "ImageId": "ami-0ddf86c982e6b1cba",
+                "State": {"Name": "running"},
+                "Tags": [
+                    {"Key": "Validator", "Value": "01"},
+                    {"Key": "Network", "Value": "Public Testnet"},
+                    {"Key": "MonetaryUse", "Value": "None"},
+                ],
+                "BlockDeviceMappings": [{
+                    "DeviceName": "/dev/sdf",
+                    "Ebs": {
+                        "VolumeId": "vol-0277b6a13ecf87efe",
+                        "Status": "attached",
+                        "DeleteOnTermination": False,
+                    },
+                }],
+            }]}],
+        }
+
+        def run(payload: dict) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "jq", "-e",
+                    "--arg", "expected_instance", "i-0b15c21a599bf41be",
+                    "--arg", "ami", "ami-0ddf86c982e6b1cba",
+                    "--arg", "volume", "vol-0277b6a13ecf87efe",
+                    jq_filter,
+                ],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        accepted = run(exact)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        drifted = json.loads(json.dumps(exact))
+        drifted["Reservations"][0]["Instances"][0]["ImageId"] = "ami-deadbeef"
+        rejected = run(drifted)
+        self.assertNotEqual(rejected.returncode, 0)
 
     def test_recovery_reuses_audited_helper_and_is_fail_closed(self) -> None:
         self.assertIn("JUNCA_FOUNDATION_LIBRARY_ONLY=true", self.script)
