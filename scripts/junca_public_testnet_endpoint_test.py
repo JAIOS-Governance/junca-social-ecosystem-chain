@@ -50,6 +50,7 @@ UNSAFE_RPC_METHODS = (
 BOUNDARY_FIELDS = ("mainnet_changed", "assets_moved", "bridge_activated")
 HEALTH_SCHEMA = "junca-public-gateway-health/v1"
 EXPLORER_SCHEMA = "junca-public-explorer/v4"
+EXPECTED_CHAIN_ID = 20260723
 MAX_SAMPLE_ATTEMPTS = 10
 MAX_SAMPLE_INTERVAL_SECONDS = 60.0
 DEFAULT_SAMPLE_ATTEMPTS = 5
@@ -187,6 +188,10 @@ def run_acceptance(
     _require(
         network["chain_id"] == hex(network["chain_id_decimal"]),
         "explorer: chain id hex/decimal mismatch",
+    )
+    _require(
+        network["chain_id_decimal"] == EXPECTED_CHAIN_ID,
+        "explorer: unexpected Public Testnet chain id",
     )
     _require(
         isinstance(network.get("client_version"), str)
@@ -329,6 +334,7 @@ def run_acceptance(
             "state_root": head["state_root"],
             "certificate_hash": head["certificate_hash"],
         },
+        "chain_id": network["chain_id_decimal"],
         "checks": checks,
     }
 

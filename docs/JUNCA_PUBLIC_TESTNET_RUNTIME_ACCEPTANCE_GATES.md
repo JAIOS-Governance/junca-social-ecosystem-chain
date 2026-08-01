@@ -211,6 +211,10 @@ wrong validator, Mainnet/asset/bridge drift, or an unhealthy state fails before
 either gateway service is restarted. Remote recovery records an explicit phase
 marker for private-health, service-restart, gateway-health and timeout failures
 so a failed SSM command cannot be retried without root-cause isolation.
+The external RPC readback uses an exact read-only `eth_chainId` POST rather
+than a GET request to the RPC root. Runtime acceptance requires both explorer
+chain-ID projections and the RPC result to equal decimal `20260723`; a
+different but internally consistent network is rejected before rollout.
 
 The real-time soak is automatically started by a successful
 `JUNCA Public Testnet Release`. It uses six sequential four-hour jobs because a
