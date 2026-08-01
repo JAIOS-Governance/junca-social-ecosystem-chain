@@ -155,6 +155,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
     def test_stale_release_runs_are_cancelled_only_for_current_main(self) -> None:
         for value in (
             'workflow_path="junca-hardened-immutable-candidate-release.yml"',
+            'workflow_path="junca-hardened-immutable-candidate-release-v2.yml"',
             'workflow_path="junca-validator-ami-build.yml"',
             'workflow_path="junca-validator-foundation-release.yml"',
             '[ "$source_binding" = "EXACT_CURRENT_MAIN" ]',
