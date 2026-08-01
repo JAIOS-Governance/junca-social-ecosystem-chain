@@ -544,7 +544,15 @@ jobs:
               (.consensus.last_certificate.vote_hashes | unique | length) == 3
             ) and
             all(.consensus.head_height == .head_height) and
-            all(.consensus.authenticated_vote_count == 3) and
+            # The restart above intentionally clears volatile in-progress
+            # votes. Before the shared future epoch, the durable 3/3 finalized
+            # certificate is authoritative and the volatile vote set must be
+            # empty. The following step separately requires two new canonical
+            # 3/3 finality slots after that epoch.
+            all(.consensus.authenticated_vote_count == 0) and
+            all(.consensus.pending_height == null) and
+            all(.automatic_finality_last_attempted_slot == null) and
+            all(.automatic_finality_last_successful_slot == null) and
             all(.consensus.required_vote_count == 3) and
             all(.private_key_material_accepted == false) and
             all(.mainnet_changed == false) and
