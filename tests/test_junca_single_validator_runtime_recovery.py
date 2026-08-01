@@ -175,6 +175,31 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
         self.assertIn("terraform_apply_executed: false", self.script)
         self.assertIn("instance_replacement_executed: false", self.script)
 
+    def test_public_gateways_restart_only_after_exact_validator_acceptance(self) -> None:
+        validator_acceptance = self.script.index(
+            "artifacts/runtime-recovery/service-recovery.json >/dev/null"
+        )
+        gateway_restart = self.script.index(
+            "systemctl restart junca-public-rpc.service"
+        )
+        target_health = self.script.index("aws elbv2 describe-target-health")
+        final_acceptance = self.script.index(
+            "artifacts/runtime-recovery/gateway-acceptance.json >/dev/null"
+        )
+        self.assertLess(validator_acceptance, gateway_restart)
+        self.assertLess(gateway_restart, target_health)
+        self.assertLess(target_health, final_acceptance)
+        self.assertIn(
+            '--instance-ids "$EXPECTED_INSTANCE_ID"', self.script
+        )
+        self.assertIn(
+            '.TargetHealthDescriptions[0].TargetHealth.State == "healthy"',
+            self.script,
+        )
+        self.assertIn('command_status: $command[0].Status', self.script)
+        self.assertNotIn("aws elbv2 register-targets", self.script)
+        self.assertNotIn("aws elbv2 deregister-targets", self.script)
+
     def test_library_mode_exits_before_terraform(self) -> None:
         guard = self.foundation.index("JUNCA_FOUNDATION_LIBRARY_ONLY")
         terraform = self.foundation.index(

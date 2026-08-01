@@ -238,6 +238,103 @@ jq -e '
   .mainnet_activation_authorized == false
 ' artifacts/runtime-recovery/service-recovery.json >/dev/null
 
+render_public_gateway_recovery() {
+  cat <<'EOF'
+set -euo pipefail
+curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json
+jq -e '.result.status == "healthy"' /tmp/junca-validator-health.json >/dev/null
+systemctl daemon-reload
+systemctl reset-failed junca-public-rpc.service junca-public-explorer.service || true
+systemctl enable --now junca-public-rpc.service junca-public-explorer.service
+systemctl restart junca-public-rpc.service junca-public-explorer.service
+for attempt in $(seq 1 30); do
+  rpc_status="$(curl -sS -o /tmp/junca-rpc-health.json -w '%{http_code}' http://127.0.0.1:8546/health || true)"
+  explorer_status="$(curl -sS -o /tmp/junca-explorer-health.json -w '%{http_code}' http://127.0.0.1:3000/health || true)"
+  if test "$rpc_status" = 200 && test "$explorer_status" = 200 &&
+     jq -e '.schema_version == "junca-public-gateway-health/v1" and .status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-rpc-health.json >/dev/null &&
+     jq -e '.schema_version == "junca-public-gateway-health/v1" and .status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-explorer-health.json >/dev/null; then
+    jq -cn --slurpfile rpc /tmp/junca-rpc-health.json --slurpfile explorer /tmp/junca-explorer-health.json '{rpc:$rpc[0],explorer:$explorer[0]}'
+    exit 0
+  fi
+  test "$attempt" -lt 30
+  sleep 2
+done
+systemctl status junca-public-rpc.service junca-public-explorer.service --no-pager -l
+exit 1
+EOF
+}
+
+gateway_command="$(render_public_gateway_recovery)"
+jq -n --arg command "$gateway_command" '{commands: [$command]}' \
+  > artifacts/runtime-recovery/gateway-recovery-commands.json
+gateway_command_id="$(
+  aws ssm send-command \
+    --instance-ids "$EXPECTED_INSTANCE_ID" \
+    --document-name AWS-RunShellScript \
+    --parameters file://artifacts/runtime-recovery/gateway-recovery-commands.json \
+    --comment "JUNCA exact validator-01 public gateway recovery" \
+    --query Command.CommandId \
+    --output text
+)"
+wait_for_ssm_command \
+  "$gateway_command_id" \
+  "$EXPECTED_INSTANCE_ID" \
+  artifacts/runtime-recovery/gateway-recovery.json
+
+for target in rpc:8546 explorer:3000; do
+  target_name="${target%%:*}"
+  target_port="${target##*:}"
+  target_group_arn="$(
+    jq -er --arg name "$target_name" \
+      '.public_target_group_arns.value[$name]' \
+      artifacts/runtime-recovery/foundation-outputs.json
+  )"
+  target_health_path="artifacts/runtime-recovery/target-health-${target_name}.json"
+  for attempt in $(seq 1 60); do
+    aws elbv2 describe-target-health \
+      --target-group-arn "$target_group_arn" \
+      --targets "Id=${EXPECTED_INSTANCE_ID},Port=${target_port}" \
+      > "$target_health_path"
+    if jq -e \
+      --arg instance "$EXPECTED_INSTANCE_ID" \
+      --argjson port "$target_port" '
+        (.TargetHealthDescriptions | length) == 1 and
+        .TargetHealthDescriptions[0].Target.Id == $instance and
+        .TargetHealthDescriptions[0].Target.Port == $port and
+        .TargetHealthDescriptions[0].TargetHealth.State == "healthy"
+      ' "$target_health_path" >/dev/null; then
+      break
+    fi
+    test "$attempt" -lt 60
+    sleep 5
+  done
+done
+
+jq -n \
+  --arg instance_id "$EXPECTED_INSTANCE_ID" \
+  --arg command_id "$gateway_command_id" \
+  --slurpfile command artifacts/runtime-recovery/gateway-recovery.json \
+  --slurpfile rpc artifacts/runtime-recovery/target-health-rpc.json \
+  --slurpfile explorer artifacts/runtime-recovery/target-health-explorer.json '{
+    schema_version: "junca-single-validator-public-gateway-recovery/v1",
+    instance_id: $instance_id,
+    command_id: $command_id,
+    command_status: $command[0].Status,
+    rpc_target_health: $rpc[0].TargetHealthDescriptions[0].TargetHealth.State,
+    explorer_target_health: $explorer[0].TargetHealthDescriptions[0].TargetHealth.State,
+    accepted: (
+      $command[0].Status == "Success" and
+      $rpc[0].TargetHealthDescriptions[0].TargetHealth.State == "healthy" and
+      $explorer[0].TargetHealthDescriptions[0].TargetHealth.State == "healthy"
+    ),
+    mainnet_changed: false,
+    assets_moved: false,
+    bridge_activated: false,
+    mainnet_activation_authorized: false
+  }' > artifacts/runtime-recovery/gateway-acceptance.json
+jq -e '.accepted == true' \
+  artifacts/runtime-recovery/gateway-acceptance.json >/dev/null
+
 jq -n \
   --arg request_sha256 "$REQUEST_SHA256" \
   --arg decision_sha256 "$MANIFEST_DECISION_SHA256" \
@@ -245,7 +342,8 @@ jq -n \
   --arg validator_id "$EXPECTED_VALIDATOR_ID" \
   --arg instance_id "$EXPECTED_INSTANCE_ID" \
   --arg state_volume_id "$EXPECTED_STATE_VOLUME_ID" \
-  --slurpfile recovery artifacts/runtime-recovery/service-recovery.json '{
+  --slurpfile recovery artifacts/runtime-recovery/service-recovery.json \
+  --slurpfile gateway artifacts/runtime-recovery/gateway-acceptance.json '{
     schema_version: "junca-single-validator-runtime-recovery-acceptance/v1",
     result: "PASS",
     request_sha256: $request_sha256,
@@ -255,6 +353,7 @@ jq -n \
     instance_id: $instance_id,
     state_volume_id: $state_volume_id,
     recovery: $recovery[0],
+    public_gateway_recovery: $gateway[0],
     terraform_apply_executed: false,
     instance_replacement_executed: false,
     mainnet_changed: false,
