@@ -3,7 +3,7 @@
   "state": "AUTHORIZED",
   "network": "Public Testnet",
   "environment": "public-testnet",
-  "minimum_hardened_main_commit": "8ff509be3733cb1f6e55cb4c0d3af66d997678d1",
+  "minimum_hardened_main_commit": "4693dd7cd610dcb8827a35bbc8f9f122fb2f905e",
   "migration_binding": {
     "run_id": "30301559973",
     "evidence_sha256": "9e91cd13dd1971c2f9630aa51813263997e10bb4562e8b7228cbc18e47fc7334"
@@ -80,5 +80,5 @@
     "transaction_submission_enabled": false,
     "mainnet_activation_authorized": false
   },
-  "policy_sha256": "cad3fae62c84ae48db67e921a5463d29193a81950649c9eea290a0018b4666b0"
+  "policy_sha256": "60ee2d7f6ce8c406f616da659813481e95909307e6e4a1b3d5c270ece49f0267"
 }
