@@ -1183,6 +1183,9 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertNotIn("sed ", block)
         self.assertNotIn("mv ", block)
         self.assertNotIn("printf ", block)
+        render_loop = self.foundation_script.index(
+            "# Render and retain every read-only command before the first SSM request."
+        )
         preflight_loop = self.foundation_script.index(
             "# Complete every read-only preflight before any runtime.env mutation."
         )
@@ -1196,10 +1199,16 @@ class AwsFoundationTests(unittest.TestCase):
         compensation = self.foundation_script.index(
             "# Best-effort compensation always returns every reachable node"
         )
+        self.assertLess(render_loop, preflight_loop)
         self.assertLess(preflight_loop, mutation_loop)
         self.assertLess(mutation_loop, collect_loop)
         self.assertLess(collect_loop, compensation)
         for required in (
+            "junca-finality-local-gate/v1",
+            "READ_ONLY_PREFLIGHT_RENDERED true",
+            "COMMAND_BINDING_REJECTED false",
+            "COMMAND_RENDER_REJECTED false",
+            'mapfile -t instances <<<"$instance_lines"',
             "mutation_failed=true",
             "finality-compensation-${instance_id}.json",
             "finality-compensation-readback-${instance_id}.json",
