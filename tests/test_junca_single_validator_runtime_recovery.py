@@ -14,9 +14,11 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.foundation = FOUNDATION.read_text(encoding="utf-8")
 
-    def test_workflow_is_main_push_only_and_serialized(self) -> None:
-        self.assertNotIn("workflow_dispatch:", self.workflow)
+    def test_workflow_is_exact_main_only_and_serialized(self) -> None:
         self.assertIn("branches: [main]", self.workflow)
+        self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertIn("RECOVER_EXACT_VALIDATOR_01_RUNTIME", self.workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", self.workflow)
         self.assertIn("group: junca-public-testnet-aws-foundation", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
         self.assertIn("permissions:\n  contents: read\n  id-token: write", self.workflow)
