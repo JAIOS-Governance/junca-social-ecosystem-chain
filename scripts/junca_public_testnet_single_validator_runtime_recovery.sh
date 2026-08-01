@@ -43,9 +43,9 @@ jq -e \
   --arg expected_instance "$EXPECTED_INSTANCE_ID" \
   --arg ami "$EXPECTED_AMI_ID" \
   --arg volume "$EXPECTED_STATE_VOLUME_ID" '
-    .Reservations | length == 1 and
-    .[0].Instances | length == 1 and
-    .[0].Instances[0] as $instance and
+    (.Reservations | length) == 1 and
+    (.Reservations[0].Instances | length) == 1 and
+    .Reservations[0].Instances[0] as $instance |
     $instance.InstanceId == $expected_instance and
     $instance.ImageId == $ami and
     $instance.State.Name == "running" and
@@ -64,7 +64,7 @@ aws ec2 describe-volumes --volume-ids "$EXPECTED_STATE_VOLUME_ID" \
 jq -e \
   --arg expected_instance "$EXPECTED_INSTANCE_ID" \
   --arg volume "$EXPECTED_STATE_VOLUME_ID" '
-    .Volumes | length == 1 and
+    (.Volumes | length) == 1 and
     .[0].VolumeId == $volume and
     .[0].Encrypted == true and
     .[0].State == "in-use" and
