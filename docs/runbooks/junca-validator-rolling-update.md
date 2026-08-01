@@ -253,6 +253,10 @@ checksummed resume artifact is preserved separately and is never rewritten.
 A larger delta is stale evidence. A gap, unknown AMI, checksum failure,
 candidate mismatch, changed EBS/snapshot binding or state rewind rejects the
 resume. A 3/3 prefix resumes only the separately gated finality activation.
+The cross-head comparison allowlist includes the live-prefix gate, its focused
+negative tests, and this acceptance contract because those files implement and
+specify the same bounded recovery decision. No unrelated runtime, Mainnet,
+asset, bridge, or general infrastructure path is admitted by that exception.
 
 The parent release must invoke the dispatch helper with an
 `artifacts/.../*.json` evidence path. The helper atomically records the exact

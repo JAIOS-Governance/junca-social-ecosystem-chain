@@ -38,6 +38,7 @@ RECOVERY_FILE_ALLOWLIST = frozenset(
         "scripts/junca_validator_ami_build_request.py",
         "tests/test_junca_live_rollout_prefix_gate.py",
         "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
+        "tests/test_junca_live_rollout_prefix_gate.py",
         "tests/test_junca_validator_ami_workflow.py",
         "tests/test_junca_validator_rolling_compatibility.py",
     }
