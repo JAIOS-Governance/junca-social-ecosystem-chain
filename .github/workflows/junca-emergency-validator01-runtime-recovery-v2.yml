@@ -1,0 +1,76 @@
+name: JUNCA Emergency Validator 01 Runtime Recovery V2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/junca-emergency-validator01-runtime-recovery-v2.yml
+      - scripts/junca_public_testnet_single_validator_runtime_recovery.sh
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      STATE_BUCKET_NAME: junca-social-ecosystem-chain-tfstate-595710543956-us-east-1
+      DOMAIN_NAME: jaios-governance.org
+      ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+      AVAILABILITY_ZONES_JSON: '["us-east-1a","us-east-1b","us-east-1c"]'
+      SOURCE_COMMIT: ${{ github.sha }}
+      EXPECTED_VALIDATOR_ID: validator-01
+      EXPECTED_INSTANCE_ID: i-0b15c21a599bf41be
+      EXPECTED_AMI_ID: ami-0ddf86c982e6b1cba
+      EXPECTED_RUNTIME_SHA256: cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f
+      EXPECTED_GENESIS_SHA256: 285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95
+      EXPECTED_STATE_VOLUME_ID: vol-0277b6a13ecf87efe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator01-runtime-v2-${{ github.run_id }}
+      - name: Recover exact validator 01 runtime
+        run: bash scripts/junca_public_testnet_single_validator_runtime_recovery.sh
+      - name: Capture public endpoint transition
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/runtime-recovery/public
+          for endpoint in health explorer rpc; do
+            case "$endpoint" in
+              health) url=https://health.jaios-governance.org/health ;;
+              explorer) url=https://explorer.jaios-governance.org/explorer.json ;;
+              rpc) url=https://rpc.jaios-governance.org/ ;;
+            esac
+            status="$(curl -sS -o "artifacts/runtime-recovery/public/${endpoint}.body" -w '%{http_code}' "$url" || true)"
+            jq -n --arg endpoint "$endpoint" --arg url "$url" \
+              --arg status "$status" --arg observed_at "$(date -u +%FT%TZ)" '{
+                endpoint: $endpoint,
+                url: $url,
+                http_status: $status,
+                observed_at: $observed_at
+              }' > "artifacts/runtime-recovery/public/${endpoint}.json"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator01-runtime-recovery-v2-${{ github.run_id }}
+          path: artifacts/runtime-recovery/
+          if-no-files-found: error
+          retention-days: 90

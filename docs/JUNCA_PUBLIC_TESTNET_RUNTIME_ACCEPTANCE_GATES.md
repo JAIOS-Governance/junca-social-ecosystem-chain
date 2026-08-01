@@ -134,6 +134,19 @@ deleted by rollback. Recovery evidence records the exact admitted identity,
 owner, mode, and link count rather than reducing those properties to an
 unverifiable success claim.
 
+### Interrupted replacement recovery admission
+
+When a serial replacement has already updated Terraform state and the public
+baseline is unavailable because the replacement lacks only the mutable
+`runtime.env`, the incident recovery path is narrower than a rollout. It binds
+one exact validator, instance, AMI, retained EBS volume, artifact, genesis,
+signer set and disabled-finality readback. All admission is read-only. The only
+mutation is the existing bounded canonical runtime repair and service start for
+that validator. Terraform apply, EC2 replacement, volume detach, Mainnet
+change, asset movement and bridge activation are not authorized. Successful
+repair returns control to the ordinary unchanged gates; it is not operational
+recovery by itself.
+
 A predecessor AMI may contain a stale `runtime.env` that is a root-owned,
 single-link regular file but is not the current validator-canonical contract.
 Recovery may replace it only after the exact healthy validator is stopped and

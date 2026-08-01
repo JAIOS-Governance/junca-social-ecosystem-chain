@@ -183,6 +183,15 @@ stable height alone is never activation evidence.
    validator, and read back the exact healthy validator ID. A failed recovery
    is a serial circuit breaker: keep later validators untouched and do not
    mutate finality or mark the replacement accepted.
+   If that replacement has already committed in Terraform and makes the
+   ordinary public baseline unavailable solely because its mutable
+   `runtime.env` is absent, use the main-push-only Validator 01 Runtime
+   Recovery V2 incident workflow. It admits only the exact running instance,
+   AMI, retained EBS attachment, Terraform signer set and disabled-finality
+   state, then calls the same bounded helper once. It cannot run Terraform
+   apply, replace an instance or detach a volume. After success, return to the
+   unchanged baseline and manifest gates; incident repair is not rollout
+   acceptance.
 4. Update only the validator returned as `next_validator` by
    `evaluate_rolling_compatibility`. Re-read version, health and finalized head
    after every node. A newly booted replacement is immediately returned to the
