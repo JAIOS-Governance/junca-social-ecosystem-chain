@@ -141,6 +141,17 @@ def scan_rollbacks_quarantine_function(script: str) -> str:
     )[0].join(("quarantine_scan_rollbacks_for_mount() {", "\n}"))
 
 
+def state_path_access_admission_function(script: str) -> str:
+    remote = validator_service_recovery_remote_script(script)
+    return (
+        "admit_state_path_access_repair() {"
+        + remote.split("admit_state_path_access_repair() {", 1)[1].split(
+            "\n}\n\nverify_state_path_access()", 1
+        )[0]
+        + "\n}"
+    )
+
+
 # Public services remain disabled until validator quorum evidence is accepted.
 class AwsFoundationTests(unittest.TestCase):
     @classmethod
@@ -1614,6 +1625,16 @@ class AwsFoundationTests(unittest.TestCase):
             "durable_mount_persistence_verified=true",
             "durable_mount_volume_id",
             '"$state_store_integrity" == true',
+            '"$state_path_access_verified" == true',
+            "admit_state_path_access_repair()",
+            "verify_state_path_access()",
+            "repair_state_path_access()",
+            "state_path_access_repair_attempted=true",
+            "state_path_access_repaired=true",
+            "runuser -u junca -- test -r -w /var/lib/junca/state.sqlite",
+            'sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=rw"',
+            'chown junca:junca /var/lib/junca "${paths[@]}"',
+            'chmod 0600 "${paths[@]}"',
             '"$runtime_config_access_verified" == true',
             "runtime_config_repair_attempted=true",
             "runtime_config_repaired=true",
@@ -1658,7 +1679,7 @@ class AwsFoundationTests(unittest.TestCase):
             "recovery_request_sha256",
             "recovery_command_id",
             "recovery_dispatch_sequence",
-            "junca-validator-service-recovery/v7",
+            "junca-validator-service-recovery/v8",
             "wait_for_ssm_command_result",
             "mainnet_activation_authorized: false",
         ):
@@ -1799,10 +1820,11 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v7"',
+            '"junca-validator-service-recovery/v8"',
             rollback,
         )
         self.assertLess(rollback, evidence)
+
         self.assertLess(evidence, definition)
         persistence_repair = self.foundation_script.index(
             "repair_durable_mount_persistence_contract() ("
@@ -1825,6 +1847,65 @@ class AwsFoundationTests(unittest.TestCase):
             '          "$canonical_runtime_env_sha256"',
             self.foundation_script[rollback:evidence],
         )
+
+    def test_state_path_access_repair_admission_rejects_unsafe_targets(
+        self,
+    ) -> None:
+        function = state_path_access_admission_function(self.foundation_script)
+
+        def admitted(state_root: pathlib.Path) -> bool:
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + function
+                    + '\nadmit_state_path_access_repair "$1" "$2" "$3"\n',
+                    "state-path-admission",
+                    str(state_root),
+                    str(os.getuid()),
+                    str(os.getgid()),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = pathlib.Path(directory) / "state"
+            state_root.mkdir(mode=0o750)
+            database = state_root / "state.sqlite"
+            database.write_bytes(b"durable-state")
+            database.chmod(0o600)
+            self.assertTrue(admitted(state_root))
+
+            database.chmod(0o666)
+            self.assertFalse(admitted(state_root))
+            database.chmod(0o600)
+
+            hard_link = state_root / "state.sqlite.link"
+            os.link(database, hard_link)
+            self.assertFalse(admitted(state_root))
+            hard_link.unlink()
+
+            database.unlink()
+            target = state_root / "foreign.sqlite"
+            target.write_bytes(b"foreign")
+            database.symlink_to(target.name)
+            self.assertFalse(admitted(state_root))
+            database.unlink()
+            database.write_bytes(b"durable-state")
+            database.chmod(0o600)
+
+            wal = state_root / "state.sqlite-wal"
+            wal.symlink_to(database.name)
+            self.assertFalse(admitted(state_root))
+            wal.unlink()
+
+            shared_memory = state_root / "state.sqlite-shm"
+            os.mkfifo(shared_memory)
+            self.assertFalse(admitted(state_root))
 
     @unittest.skipUnless(
         os.geteuid() == 0,
@@ -2086,7 +2167,7 @@ class AwsFoundationTests(unittest.TestCase):
         )
         evidence = self.foundation_script.index(
             "jq -n \\\n  --arg schema_version "
-            '"junca-validator-service-recovery/v7"',
+            '"junca-validator-service-recovery/v8"',
             rollback,
         )
         self.assertIn(
@@ -2966,7 +3047,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_manifest_decision_sha256 = "2" * 64
         expected_candidate_head_sha = "3" * 40
         valid = {
-            "schema_version": "junca-validator-service-recovery/v7",
+            "schema_version": "junca-validator-service-recovery/v8",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -3000,6 +3081,15 @@ class AwsFoundationTests(unittest.TestCase):
             "durable_mount_repaired": True,
             "durable_mount_repair_exit": 0,
             "state_store_integrity": True,
+            "state_path_access_verified": True,
+            "state_path_access_repair_attempted": True,
+            "state_path_access_repaired": True,
+            "state_directory_owner": "junca:junca",
+            "state_directory_mode": "750",
+            "state_file_owner": "junca:junca",
+            "state_file_mode": "600",
+            "state_file_link_count": 1,
+            "state_auxiliary_file_count": 0,
             "binary_artifact_verified": True,
             "genesis_verified": True,
             "system_identity_verified": True,
@@ -3097,6 +3187,15 @@ class AwsFoundationTests(unittest.TestCase):
             {"durable_mount_repaired": False},
             {"durable_mount_repair_exit": 1},
             {"state_store_integrity": False},
+            {"state_path_access_verified": False},
+            {"state_path_access_repair_attempted": False},
+            {"state_path_access_repaired": False},
+            {"state_directory_owner": "root:root"},
+            {"state_directory_mode": "755"},
+            {"state_file_owner": "root:root"},
+            {"state_file_mode": "640"},
+            {"state_file_link_count": 2},
+            {"state_auxiliary_file_count": 3},
             {"binary_artifact_verified": False},
             {"genesis_verified": False},
             {"system_identity_verified": False},
@@ -3220,7 +3319,7 @@ class AwsFoundationTests(unittest.TestCase):
         expected_manifest_decision_sha256 = "2" * 64
         expected_candidate_head_sha = "3" * 40
         evidence = {
-            "schema_version": "junca-validator-service-recovery/v7",
+            "schema_version": "junca-validator-service-recovery/v8",
             "validator_id": "validator-01",
             "instance_id": "i-00000000000000001",
             "ami_id": "ami-00000000000000001",
@@ -3254,6 +3353,15 @@ class AwsFoundationTests(unittest.TestCase):
             "durable_mount_repaired": False,
             "durable_mount_repair_exit": 0,
             "state_store_integrity": True,
+            "state_path_access_verified": True,
+            "state_path_access_repair_attempted": False,
+            "state_path_access_repaired": False,
+            "state_directory_owner": "junca:junca",
+            "state_directory_mode": "750",
+            "state_file_owner": "junca:junca",
+            "state_file_mode": "600",
+            "state_file_link_count": 1,
+            "state_auxiliary_file_count": 2,
             "binary_artifact_verified": True,
             "genesis_verified": True,
             "system_identity_verified": True,

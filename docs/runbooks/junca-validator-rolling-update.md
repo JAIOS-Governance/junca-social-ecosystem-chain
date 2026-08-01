@@ -127,6 +127,22 @@ stable height alone is never activation evidence.
    numeric IDs must match that contract exactly; any conflicting passwd or
    group record blocks repair. A partially completed exact group creation is
    resumable, while no non-canonical identity is edited or deleted.
+   A retained database may still be inaccessible after an immutable-instance
+   replacement when its prior file ownership does not match the fixed `junca`
+   UID/GID. Only while that exact validator is stopped, and only after the
+   retained volume identity, mount contract and read-only SQLite integrity have
+   passed, admission may normalize `/var/lib/junca` plus the exact allowlist
+   `state.sqlite`, `state.sqlite-wal`, and `state.sqlite-shm`. Require a real
+   directory, real single-link regular files on the mounted filesystem,
+   root/JUNCA ownership and non-writable legacy modes; pin device, inode and
+   size before mutation. Set only the directory to `junca:junca` `0750` and
+   present allowlisted files to `junca:junca` `0600`, fsync each path, prove
+   every pinned identity and size unchanged, and run `PRAGMA quick_check` as
+   the service user through a read/write-opened, query-only connection. Never
+   recurse, touch another entry, copy, truncate, format, detach, replace, or
+   repair the database. A symlink, hard link, special file, cross-filesystem
+   entry, foreign owner, broad mode or failed service-user readback blocks the
+   rollout before restart.
    Every shape and metadata predicate must return immediately on failure,
    including when the admission helper is evaluated inside a shell
    conditional. This keeps a wholly absent path on the explicit create-empty
