@@ -5,6 +5,7 @@ on:
     workflows:
       - "JUNCA Validator Runtime Artifacts"
       - "JUNCA Hardened Immutable Candidate Release"
+      - "JUNCA Hardened Immutable Candidate Release V2"
       - "JUNCA Validator Immutable AMI Build"
       - "JUNCA Runtime Release Evidence Collector"
       - "JUNCA Runtime Release Manifest Gate"
@@ -79,6 +80,12 @@ jobs:
               issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-hardened-immutable-candidate-release.yml"
+              ;;
+            "JUNCA Hardened Immutable Candidate Release V2")
+              phase="IMMUTABLE_RELEASE_CHAIN_V2"
+              issues="244 248"
+              environment_review="REVIEW_IF_REQUESTED"
+              workflow_path="junca-hardened-immutable-candidate-release-v2.yml"
               ;;
             "JUNCA Validator Immutable AMI Build")
               phase="NEW_IMMUTABLE_AMI"
