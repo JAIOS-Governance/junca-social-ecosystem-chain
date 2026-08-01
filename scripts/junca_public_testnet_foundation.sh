@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 50377)
-Total output lines: 5040
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -2609,7 +2606,39 @@ if [[ "$repair_status_admitted" == true &&
       sha256sum /etc/junca/validator.toml | awk '{print $1}'
     )"
     validator_config_size="$(stat -c '%s' /etc/junca/validator.toml)"
-    if [[ …377 tokens truncated…access_verified=true
+    if [[ "$validator_config_identity" =~ ^[0-9]+:[0-9]+$ &&
+          "$validator_config_sha256" =~ ^[0-9a-f]{64}$ &&
+          "$validator_config_size" =~ ^[0-9]+$ ]] &&
+        { [[ "$validator_config_preexisting" == true &&
+             "$validator_config_identity" == \
+               "$validator_config_pre_identity" &&
+             "$validator_config_sha256" == \
+               "$validator_config_pre_sha256" &&
+             "$validator_config_size" == "$validator_config_pre_size" ]] ||
+          [[ "$validator_config_preexisting" == false &&
+             "$validator_config_size" == 0 ]]; }; then
+      runtime_config_repaired=true
+    fi
+  fi
+fi
+if [[ -d /etc/junca &&
+      ! -L /etc/junca &&
+      "$(stat -c '%U:%G' /etc/junca)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca)" == "750" &&
+      -f /etc/junca/genesis.json &&
+      ! -L /etc/junca/genesis.json &&
+      "$(stat -c '%U:%G' /etc/junca/genesis.json)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/genesis.json)" == "640" &&
+      "$(stat -c '%h' /etc/junca/genesis.json)" == 1 &&
+      -f /etc/junca/validator.toml &&
+      ! -L /etc/junca/validator.toml &&
+      "$(stat -c '%U:%G' /etc/junca/validator.toml)" == "root:junca" &&
+      "$(stat -c '%a' /etc/junca/validator.toml)" == "640" &&
+      "$(stat -c '%h' /etc/junca/validator.toml)" == 1 ]] &&
+    runuser -u junca -- test -r /etc/junca/genesis.json &&
+    runuser -u junca -- test -r /etc/junca/validator.toml; then
+  runtime_directory_verified=true
+  runtime_config_access_verified=true
   runtime_directory_owner="$(stat -c '%U:%G' /etc/junca)"
   runtime_directory_mode="$(stat -c '%a' /etc/junca)"
   genesis_owner="$(stat -c '%U:%G' /etc/junca/genesis.json)"
