@@ -1926,8 +1926,10 @@ verify_state_path_access() {
       auxiliary_count=$((auxiliary_count + 1))
     fi
   done
-  runuser -u junca -- test -x -w /var/lib/junca || return 1
-  runuser -u junca -- test -r -w /var/lib/junca/state.sqlite || return 1
+  runuser -u junca -- test -x /var/lib/junca || return 1
+  runuser -u junca -- test -w /var/lib/junca || return 1
+  runuser -u junca -- test -r /var/lib/junca/state.sqlite || return 1
+  runuser -u junca -- test -w /var/lib/junca/state.sqlite || return 1
   quick_check="$(
     runuser -u junca -- python3 -c \
       'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=rw", uri=True); connection.execute("PRAGMA query_only=ON"); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()' \
