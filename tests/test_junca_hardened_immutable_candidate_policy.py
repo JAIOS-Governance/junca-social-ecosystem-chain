@@ -25,7 +25,7 @@ class HardenedImmutableCandidatePolicyTests(unittest.TestCase):
         outputs = MODULE.validate_policy(self.policy)
         self.assertEqual(
             outputs["minimum_hardened_main_commit"],
-            "8ff509be3733cb1f6e55cb4c0d3af66d997678d1",
+            "4693dd7cd610dcb8827a35bbc8f9f122fb2f905e",
         )
         self.assertEqual(outputs["migration_run_id"], "30301559973")
         self.assertEqual(
