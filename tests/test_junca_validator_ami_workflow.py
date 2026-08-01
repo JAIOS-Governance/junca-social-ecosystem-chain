@@ -179,9 +179,9 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(path, RECOVERY_FILE_ALLOWLIST)
         for value in (
-            "30311265807",
-            "30311368029",
-            "30311386951",
+            "30682660387",
+            "30683678492",
+            "30683689710",
             "PUBLIC_TESTNET_ROLLOUT",
         ):
             self.assertIn(value, self.live_request)
@@ -193,7 +193,7 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(
             self.live_request_data["one_shot_nonce"],
-            "foundation-resume-30311386951-20260727-retry-2",
+            "foundation-resume-30683689710-20260801-state-access-v8",
         )
 
     def test_exact_foundation_resume_request_is_digest_bound(self):
