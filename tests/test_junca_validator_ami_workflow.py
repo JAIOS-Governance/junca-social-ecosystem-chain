@@ -153,6 +153,17 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
             "inputs[resume_run_id]=${RESUME_RUN_ID}",
             self.orchestrator,
         )
+        for required in (
+            "rolling-resume-evidence.json.sha256",
+            "sha256sum -c rolling-resume-evidence.json.sha256",
+            '.producer_run_id == $producer_run_id',
+            'prior_remaining="$((prior_slot_epoch - $(date +%s)))"',
+            "RENEW_EXPIRED_QUIESCED_EPOCH",
+            "inputs[renew_expired_epoch]=${renewal_authorization}",
+            "inputs[renewal_preserve_prefix_count]="
+            "${renewal_preserve_prefix_count}",
+        ):
+            self.assertIn(required, self.orchestrator)
         self.assertIn(
             "steps.request.outputs.ami_run_id",
             self.orchestrator,
