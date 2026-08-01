@@ -11,8 +11,8 @@
   "renew_expired_epoch": "RENEW_EXPIRED_QUIESCED_EPOCH",
   "renewal_preserve_prefix_count": "2",
   "target_workflow": ".github/workflows/junca-validator-foundation-release.yml",
-  "one_shot_nonce": "foundation-resume-30683689710-20260801-renew-prefix2-v20",
-  "request_sha256": "45c7d98070c85fb443b44b6baecd88cefbb793e9725303c173b8b48708092dcc",
+  "one_shot_nonce": "foundation-resume-30683689710-20260801-renew-prefix2-v21",
+  "request_sha256": "5158883d4ad9085cd40fb8a6ca94882991683d5ab3b5fd729e78941e68f7a79f",
   "boundaries": {
     "rebuild_ami": false,
     "rebuild_manifest": false,
