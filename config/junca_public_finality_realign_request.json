@@ -10,7 +10,7 @@
   "canonical_hash": "0x8a87c4e0572964214ab53866e10bc2ab121d870c5d6624fe3559348a9a7374b6",
   "canonical_certificate_hash": "0x1cc72c10e7e85da782bf0cb1957082a3d9caca2e1db0519f9ca3218b4f75522f",
   "action": "AUTHENTICATED_CHECKPOINT_REALIGN_AND_FUTURE_EPOCH_BARRIER",
-  "one_shot_nonce": "finality-realign-30692994540-v1",
+  "one_shot_nonce": "finality-realign-30692994540-v2-trigger",
   "mainnet_changed": false,
   "assets_moved": false,
   "bridge_activated": false,
