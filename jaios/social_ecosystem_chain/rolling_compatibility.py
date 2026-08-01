@@ -27,6 +27,7 @@ RECOVERY_FILE_ALLOWLIST = frozenset(
         ".github/workflows/junca-validator-foundation-release.yml",
         ".github/workflows/junca-validator-public-testnet-orchestrator.yml",
         "config/junca_validator_ami_build_request.json",
+        "docs/runbooks/junca-validator-rolling-update.md",
         "infra/aws/public-testnet/main.tf",
         "infra/aws/public-testnet/outputs.tf",
         "infra/aws/public-testnet/variables.tf",

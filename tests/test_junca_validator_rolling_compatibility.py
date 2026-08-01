@@ -180,6 +180,7 @@ class RollingCompatibilityTests(unittest.TestCase):
 
         recovery_files = [
             ".github/workflows/junca-validator-foundation-release.yml",
+            "docs/runbooks/junca-validator-rolling-update.md",
             "infra/aws/public-testnet/main.tf",
             "infra/aws/public-testnet/outputs.tf",
             "infra/aws/public-testnet/variables.tf",
