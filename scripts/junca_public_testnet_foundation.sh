@@ -230,6 +230,47 @@ wait_for_ssm_command_result() {
     --instance-id "$instance_id" >"$output_path"
 }
 
+ensure_public_gateways_available() {
+  local instance_id="$1"
+  local command_path="$2"
+  local result_path="$3"
+  local command_id=""
+
+  jq -n '{
+    commands: [
+      "set -euo pipefail",
+      "systemctl is-active --quiet junca-validator.service",
+      "curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json",
+      "systemctl daemon-reload",
+      "systemctl enable junca-public-rpc.service junca-public-explorer.service",
+      "systemctl restart junca-public-rpc.service junca-public-explorer.service",
+      "for attempt in $(seq 1 60); do if curl -fsS http://127.0.0.1:8546/health >/tmp/junca-public-rpc-health.json && curl -fsS http://127.0.0.1:3000/health >/tmp/junca-public-explorer-health.json; then break; fi; test \"$attempt\" -lt 60; sleep 2; done",
+      "systemctl is-active --quiet junca-public-rpc.service junca-public-explorer.service",
+      "jq -e \".status == \\\"healthy\\\" and .read_only == true\" /tmp/junca-public-rpc-health.json >/dev/null",
+      "jq -e \".status == \\\"healthy\\\" and .read_only == true\" /tmp/junca-public-explorer-health.json >/dev/null",
+      "echo \"{\\\"schema_version\\\":\\\"junca-public-gateway-local-readback/v1\\\",\\\"accepted\\\":true,\\\"mainnet_changed\\\":false,\\\"assets_moved\\\":false,\\\"bridge_activated\\\":false}\""
+    ]
+  }' >"$command_path"
+  command_id="$(
+    aws ssm send-command \
+      --instance-ids "$instance_id" \
+      --document-name AWS-RunShellScript \
+      --parameters "file://$command_path" \
+      --comment "JUNCA Public Testnet local gateway readiness" \
+      --query Command.CommandId \
+      --output text
+  )"
+  wait_for_ssm_command_result "$command_id" "$instance_id" "$result_path"
+  jq -e '
+    .Status == "Success" and
+    (.ResponseCode // -1) == 0 and
+    (.StandardOutputContent | contains(
+      "junca-public-gateway-local-readback/v1"
+    )) and
+    (.StandardOutputContent | contains("\"accepted\":true"))
+  ' "$result_path" >/dev/null
+}
+
 render_runtime_finality_preflight() {
   local finality_enabled="$1"
   local block_interval="$2"
@@ -4570,16 +4611,54 @@ if [[ "$phase" == "foundation-apply" ]]; then
         "${state_volume_id:-}"
 
       if [[ "$public_services_enabled" == "true" ]]; then
+        write_post_apply_checkpoint \
+          "$index" public-gateway started "$new_instance" \
+          "${state_volume_id:-}"
+        if ! ensure_public_gateways_available \
+          "$new_instance" \
+          "artifacts/post-apply-validator-${index}-public-gateway-command.json" \
+          "artifacts/post-apply-validator-${index}-public-gateway.json"
+        then
+          write_post_apply_checkpoint \
+            "$index" public-gateway failed "$new_instance" \
+            "${state_volume_id:-}"
+          exit 1
+        fi
+        write_post_apply_checkpoint \
+          "$index" public-gateway succeeded "$new_instance" \
+          "${state_volume_id:-}"
+
         current_outputs="$(
           terraform -chdir=infra/aws/public-testnet output -json
         )"
+        target_group_index=0
         for target_group in \
           "$(jq -er '.public_target_group_arns.value.rpc' <<<"$current_outputs")" \
           "$(jq -er '.public_target_group_arns.value.explorer' <<<"$current_outputs")"
         do
-          aws elbv2 wait target-in-service \
+          target_health_path="artifacts/post-apply-validator-${index}-target-health-${target_group_index}.json"
+          if ! aws elbv2 wait target-in-service \
+              --target-group-arn "$target_group" \
+              --targets "Id=${new_instance}"
+          then
+            aws elbv2 describe-target-health \
+              --target-group-arn "$target_group" \
+              --targets "Id=${new_instance}" \
+              >"$target_health_path" || true
+            write_post_apply_checkpoint \
+              "$index" target-health failed "$new_instance" \
+              "${state_volume_id:-}"
+            exit 1
+          fi
+          aws elbv2 describe-target-health \
             --target-group-arn "$target_group" \
-            --targets "Id=${new_instance}"
+            --targets "Id=${new_instance}" \
+            >"$target_health_path"
+          jq -e '
+            (.TargetHealthDescriptions | length) >= 1 and
+            all(.TargetHealthDescriptions[]; .TargetHealth.State == "healthy")
+          ' "$target_health_path" >/dev/null
+          target_group_index="$((target_group_index + 1))"
         done
       fi
 

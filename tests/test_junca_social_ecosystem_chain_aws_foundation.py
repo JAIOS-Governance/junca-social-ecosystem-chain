@@ -184,6 +184,10 @@ class AwsFoundationTests(unittest.TestCase):
             ROOT
             / ".github/workflows/junca-validator-foundation-release.yml"
         ).read_text(encoding="utf-8")
+        cls.current_public_gateway_readiness = (
+            ROOT
+            / ".github/workflows/junca-current-public-gateway-readiness.yml"
+        ).read_text(encoding="utf-8")
         cls.public_testnet_release = (
             ROOT
             / ".github/workflows/junca-public-testnet-release.yml"
@@ -220,6 +224,36 @@ class AwsFoundationTests(unittest.TestCase):
             'billing_mode = "PAY_PER_REQUEST"',
         ):
             self.assertIn(required, self.bootstrap)
+
+    def test_current_gateway_recovery_is_dynamic_bounded_and_fail_closed(
+        self,
+    ) -> None:
+        workflow = self.current_public_gateway_readiness
+        for required in (
+            "junca-testnet-validator-${validator}",
+            'test "${#matches[@]}" = 1',
+            "PingStatus==`Online`",
+            "systemctl is-active --quiet junca-validator.service",
+            "systemctl restart junca-public-rpc.service junca-public-explorer.service",
+            "http://127.0.0.1:8546/health",
+            "http://127.0.0.1:3000/health",
+            "aws elbv2 wait target-in-service",
+            "junca-current-public-gateway-recovery/v1",
+            "mainnet_changed",
+            "assets_moved",
+            "bridge_activated",
+            "mainnet_activation_authorized: false",
+        ):
+            self.assertIn(required, workflow)
+        for prohibited in (
+            "terraform apply",
+            "register-targets",
+            "deregister-targets",
+            "terminate-instances",
+            "create-volume",
+            "delete-volume",
+        ):
+            self.assertNotIn(prohibited, workflow)
 
     def test_three_isolated_asymmetric_signers_are_bootstrapped(self) -> None:
         for required in (
@@ -3333,9 +3367,13 @@ class AwsFoundationTests(unittest.TestCase):
             "state-volume started",
             "service-recovery started",
             "finality-quiesce started",
+            "public-gateway started",
+            "target-health failed",
             "post-apply-validator-${index}-instances.json",
             "post-apply-validator-${index}-volume.json",
             "post-apply-validator-$((index + 1))-service-recovery.json",
+            "post-apply-validator-${index}-public-gateway.json",
+            "post-apply-validator-${index}-target-health-${target_group_index}.json",
         ):
             self.assertIn(required, self.foundation_script)
         self.assertNotIn(
@@ -3379,6 +3417,41 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertIn("service-recovery failed", recovery)
         self.assertGreaterEqual(recovery.count("exit 1"), 4)
         self.assertNotIn("terraform apply", recovery)
+
+    def test_post_apply_gateway_readiness_precedes_alb_admission_and_fails_closed(
+        self,
+    ) -> None:
+        post_apply = self.foundation_script.split(
+            '"$index" finality-quiesce succeeded "$new_instance"',
+            1,
+        )[1].split('updated_count="$((index + 1))"', 1)[0]
+        self.assertLess(
+            post_apply.index("public-gateway started"),
+            post_apply.index("aws elbv2 wait target-in-service"),
+        )
+        self.assertIn("ensure_public_gateways_available", post_apply)
+        self.assertIn("public-gateway failed", post_apply)
+        self.assertIn("target-health failed", post_apply)
+        self.assertIn("aws elbv2 describe-target-health", post_apply)
+        self.assertNotIn("terraform apply", post_apply)
+
+        helper = self.foundation_script.split(
+            "ensure_public_gateways_available() {", 1
+        )[1].split("\n}\n\nrender_runtime_finality_preflight()", 1)[0]
+        for required in (
+            "systemctl is-active --quiet junca-validator.service",
+            "systemctl enable junca-public-rpc.service junca-public-explorer.service",
+            "systemctl restart junca-public-rpc.service junca-public-explorer.service",
+            "http://127.0.0.1:8546/health",
+            "http://127.0.0.1:3000/health",
+            "junca-public-gateway-local-readback/v1",
+            "accepted",
+            "mainnet_changed",
+            "assets_moved",
+            "bridge_activated",
+        ):
+            self.assertIn(required, helper)
+        self.assertNotIn("terraform", helper)
 
     def test_ssm_online_retry_records_transient_cli_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

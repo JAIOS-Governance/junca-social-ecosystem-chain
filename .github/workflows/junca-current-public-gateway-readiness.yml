@@ -1,0 +1,203 @@
+name: JUNCA Current Public Gateway Readiness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/junca-current-public-gateway-readiness.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-aws-foundation
+  cancel-in-progress: false
+
+jobs:
+  restore-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+          aws-region: us-east-1
+          role-session-name: junca-current-gateway-${{ github.run_id }}
+
+      - name: Resolve exact current validator instances
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          instances=()
+          for validator in 01 02 03; do
+            mapfile -t matches < <(
+              aws ec2 describe-instances \
+                --filters \
+                  "Name=tag:Name,Values=junca-testnet-validator-${validator}" \
+                  Name=instance-state-name,Values=running \
+                --query 'Reservations[].Instances[].InstanceId' \
+                --output text | tr '\t' '\n' | sed '/^$/d'
+            )
+            test "${#matches[@]}" = 1
+            instances+=("${matches[0]}")
+          done
+          printf '%s\n' "${instances[@]}" > artifacts/current-validator-instance-ids.txt
+          for attempt in $(seq 1 60); do
+            online="$(
+              aws ssm describe-instance-information \
+                --filters Key=InstanceIds,Values="$(IFS=,; echo "${instances[*]}")" \
+                --query 'length(InstanceInformationList[?PingStatus==`Online`])' \
+                --output text
+            )"
+            [[ "$online" == 3 ]] && break
+            test "$attempt" -lt 60
+            sleep 10
+          done
+
+      - name: Restart and prove local read-only gateways
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/current-validator-instance-ids.txt
+          jq -n '{commands:[
+            "set -euo pipefail",
+            "systemctl is-active --quiet junca-validator.service",
+            "curl -fsS http://127.0.0.1:8545/health >/tmp/validator-health.json",
+            "systemctl daemon-reload",
+            "systemctl enable junca-public-rpc.service junca-public-explorer.service",
+            "systemctl restart junca-public-rpc.service junca-public-explorer.service",
+            "for attempt in $(seq 1 60); do if curl -fsS http://127.0.0.1:8546/health >/tmp/rpc-health.json && curl -fsS http://127.0.0.1:3000/health >/tmp/explorer-health.json; then break; fi; test \"$attempt\" -lt 60; sleep 2; done",
+            "systemctl is-active --quiet junca-public-rpc.service junca-public-explorer.service",
+            "jq -e \".status == \\\"healthy\\\" and .read_only == true\" /tmp/rpc-health.json >/dev/null",
+            "jq -e \".status == \\\"healthy\\\" and .read_only == true\" /tmp/explorer-health.json >/dev/null",
+            "echo \"{\\\"schema_version\\\":\\\"junca-current-public-gateway-readiness/v1\\\",\\\"accepted\\\":true,\\\"mainnet_changed\\\":false,\\\"assets_moved\\\":false,\\\"bridge_activated\\\":false}\""
+          ]}' > artifacts/current-gateway-command.json
+          command_id="$(
+            aws ssm send-command \
+              --instance-ids "${instances[@]}" \
+              --document-name AWS-RunShellScript \
+              --parameters file://artifacts/current-gateway-command.json \
+              --comment "JUNCA current Public Testnet gateway readiness" \
+              --query Command.CommandId --output text
+          )"
+          for instance in "${instances[@]}"; do
+            status=""
+            for attempt in $(seq 1 90); do
+              status="$(
+                aws ssm get-command-invocation \
+                  --command-id "$command_id" \
+                  --instance-id "$instance" \
+                  --query Status --output text
+              )"
+              case "$status" in
+                Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+              esac
+              test "$attempt" -lt 90
+              sleep 2
+            done
+            result="artifacts/current-gateway-${instance}.json"
+            aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$instance" > "$result"
+            jq -e '
+              .Status == "Success" and
+              .ResponseCode == 0 and
+              (.StandardOutputContent | contains(
+                "junca-current-public-gateway-readiness/v1"
+              )) and
+              (.StandardOutputContent | contains("\"accepted\":true"))
+            ' "$result" >/dev/null
+          done
+
+      - name: Require exact current ALB targets healthy
+        run: |
+          set -euo pipefail
+          mapfile -t instances < artifacts/current-validator-instance-ids.txt
+          for binding in rpc:8546 explorer:3000; do
+            name="${binding%%:*}"
+            port="${binding##*:}"
+            target_group="$(
+              aws elbv2 describe-target-groups \
+                --names "junca-testnet-${name}" \
+                --query 'TargetGroups[0].TargetGroupArn' \
+                --output text
+            )"
+            targets=()
+            for instance in "${instances[@]}"; do
+              targets+=("Id=${instance},Port=${port}")
+            done
+            aws elbv2 wait target-in-service \
+              --target-group-arn "$target_group" \
+              --targets "${targets[@]}"
+            output="artifacts/current-${name}-target-health.json"
+            aws elbv2 describe-target-health \
+              --target-group-arn "$target_group" > "$output"
+            expected="$(printf '%s\n' "${instances[@]}" | jq -Rsc 'split("\n")[:-1] | sort')"
+            jq -e --argjson expected "$expected" '
+              ([.TargetHealthDescriptions[].Target.Id] | sort) == $expected and
+              all(
+                .TargetHealthDescriptions[];
+                .TargetHealth.State == "healthy"
+              )
+            ' "$output" >/dev/null
+          done
+
+      - name: Verify restored public endpoints
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            explorer_code="$(curl -sS -o artifacts/public-explorer.json -w '%{http_code}' https://explorer.jaios-governance.org/explorer.json || true)"
+            health_code="$(curl -sS -o artifacts/public-health.json -w '%{http_code}' https://health.jaios-governance.org/health || true)"
+            rpc_code="$(curl -sS -o artifacts/public-rpc.json -w '%{http_code}' -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' https://rpc.jaios-governance.org/ || true)"
+            if [[ "$explorer_code" == 200 && "$health_code" == 200 && "$rpc_code" == 200 ]]; then
+              jq -e '
+                .status == "ready" and
+                .finalized_only == true and
+                .read_only == true and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' artifacts/public-explorer.json >/dev/null
+              jq -e '
+                .status == "healthy" and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' artifacts/public-health.json >/dev/null
+              jq -e '.result == "0x1352773"' artifacts/public-rpc.json >/dev/null
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 5
+          done
+          jq -n \
+            --arg head_sha "$GITHUB_SHA" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile rpc artifacts/public-rpc.json '{
+              schema_version: "junca-current-public-gateway-recovery/v1",
+              head_sha: $head_sha,
+              run_id: $run_id,
+              explorer: $explorer[0],
+              health: $health[0],
+              rpc: $rpc[0],
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              mainnet_activation_authorized: false
+            }' > artifacts/current-public-gateway-recovery.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-current-public-gateway-readiness-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
