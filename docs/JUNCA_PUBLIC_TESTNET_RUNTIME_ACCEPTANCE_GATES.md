@@ -17,6 +17,10 @@ It proves that its source is an ancestor of the new head, records a
 dispatches the exact current-head Runtime Artifacts workflow. That successful
 workflow creates a new provenance-bound V2 owner. A rewind, unrelated history,
 ambiguous run, failed successor, or mismatched head remains fail-closed.
+The lightweight job filter admits only a successful Runtime Artifacts event
+whose reported head branch is `main`; the first executable step then reads the
+exact Actions run through the GitHub API and verifies workflow name, workflow
+path, event type, head SHA, repository and head repository before AWS work.
 
 Release acceptance never appends to Issue #218. That issue has exactly one
 canonical persistent live-status comment, which is replaced only after the
