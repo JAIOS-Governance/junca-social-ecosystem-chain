@@ -1631,7 +1631,10 @@ class AwsFoundationTests(unittest.TestCase):
             "repair_state_path_access()",
             "state_path_access_repair_attempted=true",
             "state_path_access_repaired=true",
-            "runuser -u junca -- test -r -w /var/lib/junca/state.sqlite",
+            "runuser -u junca -- test -x /var/lib/junca",
+            "runuser -u junca -- test -w /var/lib/junca",
+            "runuser -u junca -- test -r /var/lib/junca/state.sqlite",
+            "runuser -u junca -- test -w /var/lib/junca/state.sqlite",
             'sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=rw"',
             'chown junca:junca /var/lib/junca "${paths[@]}"',
             'chmod 0600 "${paths[@]}"',
@@ -1684,6 +1687,14 @@ class AwsFoundationTests(unittest.TestCase):
             "mainnet_activation_authorized: false",
         ):
             self.assertIn(required, self.foundation_script)
+        self.assertNotIn(
+            "runuser -u junca -- test -x -w /var/lib/junca",
+            self.foundation_script,
+        )
+        self.assertNotIn(
+            "runuser -u junca -- test -r -w /var/lib/junca/state.sqlite",
+            self.foundation_script,
+        )
         definition = self.foundation_script.index(
             "write_live_rollout_prefix_readback() {"
         )
