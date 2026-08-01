@@ -85,6 +85,14 @@ candidate runtime on an older, evidence-bound AMI; that node remains at the
 captured baseline count until serial replacement proves the candidate AMI,
 instance transition, retained volume, health, and finality provenance together.
 
+After a validator replacement, validator health alone is not sufficient for
+public admission. The exact replacement must restart and pass local readback
+for the read-only RPC gateway on port `8546` and the finalized-only Explorer
+gateway on port `3000` before either ALB target may be accepted. A gateway
+restart failure or an unhealthy ALB target stops the serial rollout, records
+the exact target-health response, and leaves automatic finality disabled. It
+never advances the replacement prefix from local validator health alone.
+
 If health never becomes accepted after this attempt created the file, rollback
 stops the service, removes only a single-link canonical file with the exact
 expected digest and the same recorded device/inode identity, and syncs
