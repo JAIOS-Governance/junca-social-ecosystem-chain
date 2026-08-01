@@ -1439,6 +1439,8 @@ class AwsFoundationTests(unittest.TestCase):
             "rollback: $rollback[0]",
             'jq -er \'.live_updated_count\' '
             "artifacts/live-prefix-decision.json",
+            'jq -er \'.recovered_uncommitted_count\' '
+            "artifacts/live-prefix-decision.json",
             'build_pre_rollout_finality_bindings \\\n'
             '      "$live_updated_count"',
         ):
@@ -1465,6 +1467,22 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(volume_readback, first_mutation)
         self.assertLess(snapshot_readback, first_mutation)
         self.assertLess(rollback_floor, first_mutation)
+
+        renewal_guard = """if [[ "$rolling_epoch_renewal_performed" == "true" ]]; then
+    if [[ "$live_updated_count" != "$rolling_epoch_renewal_prefix_count" ]]; then
+      # Epoch renewal is resolved before the live-prefix readback and service
+      # recovery. The only admissible advance is the one next exact candidate
+      # that the evidence-bound gate recovered during this same run.
+      test "$recovered_uncommitted_count" = "1"
+      test "$rolling_epoch_renewal_prefix_count" = \\
+        "$evidence_bound_baseline_updated_count"
+      test "$live_updated_count" = \\
+        "$((evidence_bound_baseline_updated_count + 1))"
+    fi
+  else
+    test "$rolling_epoch_renewal_prefix_count" = "0"
+  fi"""
+        self.assertIn(renewal_guard, self.foundation_script)
 
     def test_required_boolean_readback_accepts_false_and_rejects_invalid_types(
         self,

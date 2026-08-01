@@ -4399,6 +4399,9 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
   live_updated_count="$(
     jq -er '.live_updated_count' artifacts/live-prefix-decision.json
   )"
+  recovered_uncommitted_count="$(
+    jq -er '.recovered_uncommitted_count' artifacts/live-prefix-decision.json
+  )"
   evidence_bound_baseline_updated_count="$(
     jq -er '.evidence_updated_count' artifacts/live-prefix-decision.json
   )"
@@ -4415,7 +4418,16 @@ if [[ "$phase" == "foundation-apply" && "$rolling_release" == "true" ]]; then
     ' artifacts/live-prefix-decision.json
   )"
   if [[ "$rolling_epoch_renewal_performed" == "true" ]]; then
-    test "$live_updated_count" = "$rolling_epoch_renewal_prefix_count"
+    if [[ "$live_updated_count" != "$rolling_epoch_renewal_prefix_count" ]]; then
+      # Epoch renewal is resolved before the live-prefix readback and service
+      # recovery. The only admissible advance is the one next exact candidate
+      # that the evidence-bound gate recovered during this same run.
+      test "$recovered_uncommitted_count" = "1"
+      test "$rolling_epoch_renewal_prefix_count" = \
+        "$evidence_bound_baseline_updated_count"
+      test "$live_updated_count" = \
+        "$((evidence_bound_baseline_updated_count + 1))"
+    fi
   else
     test "$rolling_epoch_renewal_prefix_count" = "0"
   fi
