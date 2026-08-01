@@ -1635,6 +1635,8 @@ class AwsFoundationTests(unittest.TestCase):
             "runuser -u junca -- test -w /var/lib/junca",
             "runuser -u junca -- test -r /var/lib/junca/state.sqlite",
             "runuser -u junca -- test -w /var/lib/junca/state.sqlite",
+            "/var/lib/junca/consensus-signing.sqlite",
+            'sqlite3.connect("file:/var/lib/junca/consensus-signing.sqlite?mode=rw"',
             'sqlite3.connect("file:/var/lib/junca/state.sqlite?mode=rw"',
             'chown junca:junca /var/lib/junca "${paths[@]}"',
             'chmod 0600 "${paths[@]}"',
@@ -1916,6 +1918,14 @@ class AwsFoundationTests(unittest.TestCase):
 
             shared_memory = state_root / "state.sqlite-shm"
             os.mkfifo(shared_memory)
+            self.assertFalse(admitted(state_root))
+            shared_memory.unlink()
+
+            signing_journal = state_root / "consensus-signing.sqlite"
+            signing_journal.write_bytes(b"durable-signing-journal")
+            signing_journal.chmod(0o600)
+            self.assertTrue(admitted(state_root))
+            signing_journal.chmod(0o666)
             self.assertFalse(admitted(state_root))
 
     @unittest.skipUnless(
@@ -3254,7 +3264,7 @@ class AwsFoundationTests(unittest.TestCase):
             {"state_file_mode": "644"},
             {"state_file_mode": "666"},
             {"state_file_link_count": 2},
-            {"state_auxiliary_file_count": 3},
+            {"state_auxiliary_file_count": 6},
             {"binary_artifact_verified": False},
             {"genesis_verified": False},
             {"system_identity_verified": False},

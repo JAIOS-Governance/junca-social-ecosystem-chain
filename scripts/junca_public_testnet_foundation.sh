@@ -1271,7 +1271,7 @@ validate_validator_service_recovery_evidence() {
       .state_file_link_count == 1 and
       (.state_auxiliary_file_count | type) == "number" and
       .state_auxiliary_file_count >= 0 and
-      .state_auxiliary_file_count <= 2 and
+      .state_auxiliary_file_count <= 5 and
       .binary_artifact_verified == true and
       .genesis_verified == true and
       .system_identity_verified == true and
@@ -1881,7 +1881,10 @@ admit_state_path_access_repair() {
   for path in \
     "$state_root/state.sqlite" \
     "$state_root/state.sqlite-wal" \
-    "$state_root/state.sqlite-shm"; do
+    "$state_root/state.sqlite-shm" \
+    "$state_root/consensus-signing.sqlite" \
+    "$state_root/consensus-signing.sqlite-wal" \
+    "$state_root/consensus-signing.sqlite-shm"; do
     if [[ ! -e "$path" && ! -L "$path" ]]; then
       [[ "$path" != "$state_root/state.sqlite" ]] || return 1
       continue
@@ -1902,6 +1905,7 @@ verify_state_path_access() {
   local path=""
   local auxiliary_count=0
   local quick_check=""
+  local signing_journal_quick_check=""
   [[ "$system_identity_verified" == true ]] || return 1
   [[ "$durable_mount_verified" == true ]] || return 1
   [[ -d /var/lib/junca && ! -L /var/lib/junca ]] || return 1
@@ -1911,7 +1915,10 @@ verify_state_path_access() {
   for path in \
     /var/lib/junca/state.sqlite \
     /var/lib/junca/state.sqlite-wal \
-    /var/lib/junca/state.sqlite-shm; do
+    /var/lib/junca/state.sqlite-shm \
+    /var/lib/junca/consensus-signing.sqlite \
+    /var/lib/junca/consensus-signing.sqlite-wal \
+    /var/lib/junca/consensus-signing.sqlite-shm; do
     if [[ ! -e "$path" && ! -L "$path" ]]; then
       [[ "$path" != /var/lib/junca/state.sqlite ]] || return 1
       continue
@@ -1922,6 +1929,8 @@ verify_state_path_access() {
       "$(stat -c '%d' /var/lib/junca)" ]] || return 1
     [[ "$(stat -c '%U:%G' "$path")" == junca:junca ]] || return 1
     [[ "$(stat -c '%a' "$path")" =~ ^(600|640|644)$ ]] || return 1
+    runuser -u junca -- test -r "$path" || return 1
+    runuser -u junca -- test -w "$path" || return 1
     if [[ "$path" != /var/lib/junca/state.sqlite ]]; then
       auxiliary_count=$((auxiliary_count + 1))
     fi
@@ -1936,6 +1945,15 @@ verify_state_path_access() {
       2>/dev/null || true
   )"
   [[ "$quick_check" == ok ]] || return 1
+  if [[ -f /var/lib/junca/consensus-signing.sqlite &&
+        ! -L /var/lib/junca/consensus-signing.sqlite ]]; then
+    signing_journal_quick_check="$(
+      runuser -u junca -- python3 -c \
+        'import sqlite3; connection=sqlite3.connect("file:/var/lib/junca/consensus-signing.sqlite?mode=rw", uri=True); connection.execute("PRAGMA query_only=ON"); print(connection.execute("PRAGMA quick_check").fetchone()[0]); connection.close()' \
+        2>/dev/null || true
+    )"
+    [[ "$signing_journal_quick_check" == ok ]] || return 1
+  fi
   state_directory_owner="$(stat -c '%U:%G' /var/lib/junca)"
   state_directory_mode="$(stat -c '%a' /var/lib/junca)"
   state_file_owner="$(stat -c '%U:%G' /var/lib/junca/state.sqlite)"
@@ -1962,7 +1980,10 @@ repair_state_path_access() {
     "$system_identity_uid" "$system_identity_gid" || return 1
   for path in \
     /var/lib/junca/state.sqlite-wal \
-    /var/lib/junca/state.sqlite-shm; do
+    /var/lib/junca/state.sqlite-shm \
+    /var/lib/junca/consensus-signing.sqlite \
+    /var/lib/junca/consensus-signing.sqlite-wal \
+    /var/lib/junca/consensus-signing.sqlite-shm; do
     if [[ -e "$path" || -L "$path" ]]; then
       paths+=("$path")
     fi
