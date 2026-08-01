@@ -3251,6 +3251,7 @@ write_live_rollout_prefix_readback() {
   local evidence_ami_id
   local evidence_instance_id
   local evidence_runtime_version
+  local recovered_uncommitted_target_replacement
   local expected_ami_id
   local expected_runtime_version
   local index
@@ -3357,6 +3358,7 @@ write_live_rollout_prefix_readback() {
     evidence_ami_id=""
     evidence_instance_id=""
     evidence_runtime_version=""
+    recovered_uncommitted_target_replacement=false
     if [[ -n "$evidence_validators_path" ]]; then
       evidence_ami_id="$(
         jq -er \
@@ -3384,7 +3386,12 @@ write_live_rollout_prefix_readback() {
                 test("^i-[0-9a-f]{8,17}$"))
           ' "$evidence_validators_path"
       )"
-      test "$evidence_instance_id" = "${current_instances[$index]}"
+      if [[ "$evidence_instance_id" != "${current_instances[$index]}" ]]; then
+        [[ "$index" -eq "$evidence_updated_count" &&
+          "$binding_ami_id" == "$NODE_AMI_ID" &&
+          "$binding_runtime_version" == "$NODE_ARTIFACT_SHA256" ]]
+        recovered_uncommitted_target_replacement=true
+      fi
     fi
     if [[ "$index" -lt "$evidence_updated_count" ]]; then
       expected_ami_id="$NODE_AMI_ID"
@@ -3393,6 +3400,9 @@ write_live_rollout_prefix_readback() {
         test "$evidence_ami_id" = "$expected_ami_id"
         test "$evidence_runtime_version" = "$expected_runtime_version"
       fi
+    elif [[ "$recovered_uncommitted_target_replacement" == true ]]; then
+      expected_ami_id="$NODE_AMI_ID"
+      expected_runtime_version="$NODE_ARTIFACT_SHA256"
     elif [[ -n "$evidence_validators_path" ]]; then
       expected_ami_id="$evidence_ami_id"
       expected_runtime_version="$evidence_runtime_version"
