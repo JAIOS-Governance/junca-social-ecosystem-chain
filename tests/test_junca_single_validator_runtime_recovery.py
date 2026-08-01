@@ -169,11 +169,71 @@ class SingleValidatorRuntimeRecoveryTest(unittest.TestCase):
     def test_recovery_reuses_audited_helper_and_is_fail_closed(self) -> None:
         self.assertIn("JUNCA_FOUNDATION_LIBRARY_ONLY=true", self.script)
         self.assertIn("ensure_validator_service_available", self.script)
-        self.assertIn(".runtime_env_repaired == true", self.script)
-        self.assertIn(".runtime_env_source == \"canonical\"", self.script)
+        self.assertIn(".runtime_env_verified == true", self.script)
+        self.assertIn(".runtime_env_schema_verified == true", self.script)
+        self.assertIn(".runtime_env_required_assignment_count == 18", self.script)
+        self.assertIn(".runtime_env_source == \"existing\"", self.script)
         self.assertIn(".health_validator_id == \"validator-01\"", self.script)
         self.assertIn("terraform_apply_executed: false", self.script)
         self.assertIn("instance_replacement_executed: false", self.script)
+
+    def test_service_acceptance_is_idempotent_but_rejects_inconsistent_env(self) -> None:
+        section = self.script.split(
+            "ensure_validator_service_available", 1
+        )[1].split("render_public_gateway_recovery", 1)[0]
+        match = re.search(
+            r"jq -e '(.*?)' artifacts/runtime-recovery/service-recovery\.json",
+            section,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        jq_filter = match.group(1)
+        base = {
+            "accepted": True,
+            "runtime_env_verified": True,
+            "runtime_env_schema_verified": True,
+            "runtime_env_required_assignment_count": 18,
+            "runtime_env_post_restart_verified": True,
+            "after_status": "active",
+            "health_status": "healthy",
+            "health_validator_id": "validator-01",
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+            "mainnet_activation_authorized": False,
+        }
+
+        def accepted(payload: dict) -> bool:
+            result = subprocess.run(
+                ["jq", "-e", jq_filter],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            return result.returncode == 0
+
+        repaired = {
+            **base,
+            "runtime_env_source": "canonical",
+            "runtime_env_repaired": True,
+            "runtime_env_persistence_verified": True,
+        }
+        existing = {
+            **base,
+            "runtime_env_source": "existing",
+            "runtime_env_repaired": False,
+            "runtime_env_persistence_verified": False,
+        }
+        inconsistent = {
+            **base,
+            "runtime_env_source": "existing",
+            "runtime_env_repaired": True,
+            "runtime_env_persistence_verified": False,
+        }
+        self.assertTrue(accepted(repaired))
+        self.assertTrue(accepted(existing))
+        self.assertFalse(accepted(inconsistent))
 
     def test_public_gateways_restart_only_after_exact_validator_acceptance(self) -> None:
         validator_acceptance = self.script.index(
