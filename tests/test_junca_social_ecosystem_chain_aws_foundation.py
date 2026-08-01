@@ -1210,6 +1210,15 @@ class AwsFoundationTests(unittest.TestCase):
         self.assertLess(preflight_loop, mutation_loop)
         self.assertLess(mutation_loop, collect_loop)
         self.assertLess(collect_loop, compensation)
+        false_binding_lookup = (
+            'jq -r ".[$index].allow_missing_finality_keys" '
+            '<<<"$bindings_json"'
+        )
+        self.assertEqual(self.foundation_script.count(false_binding_lookup), 3)
+        self.assertNotIn(
+            'jq -er ".[$index].allow_missing_finality_keys"',
+            self.foundation_script,
+        )
         for required in (
             "junca-finality-local-gate/v1",
             "READ_ONLY_PREFLIGHT_RENDERED true",
