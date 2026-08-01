@@ -466,7 +466,14 @@ jobs:
             commands: [
               "set -euo pipefail",
               "if ! systemctl restart junca-validator; then systemctl status junca-validator --no-pager || true; journalctl -u junca-validator -n 100 --no-pager || true; exit 1; fi",
-              "for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:8545/health >/dev/null && exit 0; sleep 2; done; systemctl status junca-validator --no-pager || true; journalctl -u junca-validator -n 100 --no-pager || true; exit 1"
+              "for attempt in $(seq 1 60); do if curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json; then break; fi; test \"$attempt\" -lt 60; sleep 2; done",
+              "systemctl daemon-reload",
+              "systemctl enable junca-public-rpc.service junca-public-explorer.service",
+              "systemctl restart junca-public-rpc.service junca-public-explorer.service",
+              "for attempt in $(seq 1 60); do if curl -fsS http://127.0.0.1:8546/health >/tmp/junca-public-rpc-health.json && curl -fsS http://127.0.0.1:3000/health >/tmp/junca-public-explorer-health.json; then break; fi; test \"$attempt\" -lt 60; sleep 2; done",
+              "jq -e \".status == \\\"healthy\\\" and .read_only == true\" /tmp/junca-public-rpc-health.json >/dev/null",
+              "jq -e \".status == \\\"healthy\\\" and .read_only == true\" /tmp/junca-public-explorer-health.json >/dev/null",
+              "systemctl is-active --quiet junca-validator.service junca-public-rpc.service junca-public-explorer.service"
             ]
           }' > artifacts/ssm-reset-round.json
           command_id="$(aws ssm send-command \

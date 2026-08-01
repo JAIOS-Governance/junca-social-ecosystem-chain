@@ -243,6 +243,23 @@ class AwsFoundationTests(unittest.TestCase):
         ):
             self.assertIn(required, self.bootstrap)
 
+    def test_finality_round_reset_restores_both_public_gateways(self) -> None:
+        workflow = self.validator_foundation_release.split(
+            "- name: Reset volatile consensus round from durable heads", 1
+        )[1].split("- name: Read back identical finalized heads", 1)[0]
+        for required in (
+            "systemctl restart junca-validator",
+            "http://127.0.0.1:8545/health",
+            "systemctl enable junca-public-rpc.service junca-public-explorer.service",
+            "systemctl restart junca-public-rpc.service junca-public-explorer.service",
+            "http://127.0.0.1:8546/health",
+            "http://127.0.0.1:3000/health",
+            "systemctl is-active --quiet junca-validator.service junca-public-rpc.service junca-public-explorer.service",
+        ):
+            self.assertIn(required, workflow)
+        self.assertNotIn("&& exit 0", workflow)
+        self.assertNotIn("terraform", workflow)
+
     def test_current_gateway_recovery_is_dynamic_bounded_and_fail_closed(
         self,
     ) -> None:
