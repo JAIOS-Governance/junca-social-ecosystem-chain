@@ -1,0 +1,18 @@
+{
+  "schema_version": "junca-public-finality-hotfix-request/v1",
+  "authorized_scope": "PUBLIC_TESTNET_FINALITY_HOTFIX",
+  "failed_foundation_run_id": 30688972530,
+  "approved_ami_run_id": 30682660387,
+  "approved_manifest_run_id": 30683678492,
+  "fix_pull_request": 401,
+  "fix_merge_sha": "dbfff41d83bc36c319c120085a17d5caf18a542a",
+  "base_runtime_sha256": "cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f",
+  "base_validator_node_sha256": "09c87bbc7f2ce8fb048677ab899ba708ae8b31c0c8a862b869e9c7fa9f2bf778",
+  "target_validator_node_sha256": "9c7d44b65084b5a32aa20765436af75ac160f1fac1c104b807a40a529f7c6f7f",
+  "action": "PATCH_RESIDENT_VALIDATOR_RUNTIME_ONLY",
+  "one_shot_nonce": "finality-hotfix-30688972530-v1",
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "mainnet_activation_authorized": false
+}
