@@ -81,11 +81,13 @@ from .legacy import (
     fingerprint_legacy_source,
 )
 from .native_token_genesis import (
+    ECONOMICS_AUTHORITY,
     NativeTokenGenesisError,
     NativeTokenGenesisPlan,
     TARGET_GENESIS_DATE,
     evaluate_native_token_genesis_plan,
     load_native_token_genesis_plan,
+    native_economics_definition_digest,
 )
 from .relayer_journal import (
     QueueItem,
@@ -237,9 +239,11 @@ __all__ = [
     "fingerprint_legacy_source",
     "NativeTokenGenesisError",
     "NativeTokenGenesisPlan",
+    "ECONOMICS_AUTHORITY",
     "TARGET_GENESIS_DATE",
     "evaluate_native_token_genesis_plan",
     "load_native_token_genesis_plan",
+    "native_economics_definition_digest",
     "FinalizedProposal",
     "LiveValidatorRuntime",
     "ValidatorRuntimeError",
