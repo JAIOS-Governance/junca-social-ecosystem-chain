@@ -148,6 +148,12 @@ stable height alone is never activation evidence.
    repair the database. A symlink, hard link, special file, cross-filesystem
    entry, foreign owner, broad mode or failed service-user readback blocks the
    rollout before restart.
+   A resume artifact is a committed prefix lower bound. If the exact live
+   instance/AMI provenance shows that a failed targeted apply already replaced
+   the one immediately following validator, adopt only that single contiguous
+   candidate. Every committed-prefix instance and every remaining legacy
+   suffix instance must still match its immutable evidence ID exactly; never
+   skip a validator or adopt two unrecorded candidates in one resume.
    Every shape and metadata predicate must return immediately on failure,
    including when the admission helper is evaluated inside a shell
    conditional. This keeps a wholly absent path on the explicit create-empty

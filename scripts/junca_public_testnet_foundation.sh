@@ -3247,6 +3247,7 @@ write_live_rollout_prefix_readback() {
   local baseline_block_interval_seconds
   local baseline_slot_epoch_seconds
   local binding_ami_id
+  local binding_is_candidate
   local binding_runtime_version
   local evidence_ami_id
   local evidence_instance_id
@@ -3354,6 +3355,11 @@ write_live_rollout_prefix_readback() {
       jq -er '.runtime_version | select(test("^[0-9a-f]{64}$"))' \
         "$ami_binding_path"
     )"
+    binding_is_candidate=false
+    if [[ "$binding_ami_id" == "$NODE_AMI_ID" &&
+          "$binding_runtime_version" == "$NODE_ARTIFACT_SHA256" ]]; then
+      binding_is_candidate=true
+    fi
     evidence_ami_id=""
     evidence_instance_id=""
     evidence_runtime_version=""
@@ -3384,16 +3390,25 @@ write_live_rollout_prefix_readback() {
                 test("^i-[0-9a-f]{8,17}$"))
           ' "$evidence_validators_path"
       )"
-      test "$evidence_instance_id" = "${current_instances[$index]}"
     fi
     if [[ "$index" -lt "$evidence_updated_count" ]]; then
       expected_ami_id="$NODE_AMI_ID"
       expected_runtime_version="$NODE_ARTIFACT_SHA256"
       if [[ -n "$evidence_validators_path" ]]; then
+        test "$evidence_instance_id" = "${current_instances[$index]}"
         test "$evidence_ami_id" = "$expected_ami_id"
         test "$evidence_runtime_version" = "$expected_runtime_version"
       fi
+    elif [[ "$index" -eq "$evidence_updated_count" &&
+            "$binding_is_candidate" == true ]]; then
+      # A targeted apply can commit exactly the next validator before the
+      # previous run writes its resume evidence. Adopt only that contiguous
+      # candidate after exact instance/AMI provenance readback; the following
+      # suffix still has to match the immutable prior evidence exactly.
+      expected_ami_id="$NODE_AMI_ID"
+      expected_runtime_version="$NODE_ARTIFACT_SHA256"
     elif [[ -n "$evidence_validators_path" ]]; then
+      test "$evidence_instance_id" = "${current_instances[$index]}"
       expected_ami_id="$evidence_ami_id"
       expected_runtime_version="$evidence_runtime_version"
     else

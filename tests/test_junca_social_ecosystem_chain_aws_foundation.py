@@ -2658,12 +2658,53 @@ class AwsFoundationTests(unittest.TestCase):
             'expected_runtime_version="$binding_runtime_version"',
             'expected_ami_id="$evidence_ami_id"',
             'expected_runtime_version="$evidence_runtime_version"',
+            'binding_is_candidate=false',
+            '"$binding_ami_id" == "$NODE_AMI_ID"',
+            '"$binding_runtime_version" == "$NODE_ARTIFACT_SHA256"',
+            '"$index" -eq "$evidence_updated_count"',
+            '"$binding_is_candidate" == true',
             'test "$evidence_instance_id" = "${current_instances[$index]}"',
         ):
             self.assertIn(required, self.foundation_script)
         self.assertNotIn(
             'expected_ami_id="$previous_ami_id"',
             definition,
+        )
+
+    def test_live_prefix_adopts_only_one_next_contiguous_candidate(self) -> None:
+        definition = self.foundation_script.split(
+            "write_live_rollout_prefix_readback() {", 1
+        )[1].split("\n}\n\nwrite_rolling_readback()", 1)[0]
+        committed_prefix = definition.index(
+            'if [[ "$index" -lt "$evidence_updated_count" ]]'
+        )
+        next_candidate = definition.index(
+            'elif [[ "$index" -eq "$evidence_updated_count" &&',
+            committed_prefix,
+        )
+        legacy_suffix = definition.index(
+            'elif [[ -n "$evidence_validators_path" ]]',
+            next_candidate,
+        )
+        self.assertIn(
+            'test "$evidence_instance_id" = "${current_instances[$index]}"',
+            definition[committed_prefix:next_candidate],
+        )
+        self.assertNotIn(
+            'test "$evidence_instance_id" = "${current_instances[$index]}"',
+            definition[next_candidate:legacy_suffix],
+        )
+        self.assertIn(
+            'test "$evidence_instance_id" = "${current_instances[$index]}"',
+            definition[legacy_suffix:],
+        )
+        self.assertIn(
+            'expected_ami_id="$NODE_AMI_ID"',
+            definition[next_candidate:legacy_suffix],
+        )
+        self.assertIn(
+            'expected_runtime_version="$NODE_ARTIFACT_SHA256"',
+            definition[next_candidate:legacy_suffix],
         )
         self.assertNotIn(
             'expected_runtime_version="$previous_artifact_sha256"',
