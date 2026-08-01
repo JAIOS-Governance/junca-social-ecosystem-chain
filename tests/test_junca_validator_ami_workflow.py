@@ -193,7 +193,7 @@ class ValidatorAmiWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(
             self.live_request_data["one_shot_nonce"],
-            "foundation-resume-30683689710-20260801-state-access-v8",
+            "foundation-resume-30683689710-20260801-safe-active-modes-v9",
         )
 
     def test_exact_foundation_resume_request_is_digest_bound(self):
