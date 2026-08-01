@@ -65,19 +65,19 @@ jq -e \
   --arg expected_instance "$EXPECTED_INSTANCE_ID" \
   --arg volume "$EXPECTED_STATE_VOLUME_ID" '
     (.Volumes | length) == 1 and
-    .[0].VolumeId == $volume and
-    .[0].Encrypted == true and
-    .[0].State == "in-use" and
-    (.[0].Attachments | length) == 1 and
-    .[0].Attachments[0].InstanceId == $expected_instance and
-    .[0].Attachments[0].Device == "/dev/sdf" and
-    .[0].Attachments[0].State == "attached" and
-    .[0].Attachments[0].DeleteOnTermination == false and
-    any(.[0].Tags[]?; .Key == "Validator" and .Value == "01") and
-    any(.[0].Tags[]?; .Key == "PublicTestnetOnly" and .Value == "true") and
-    any(.[0].Tags[]?; .Key == "MainnetChanged" and .Value == "false") and
-    any(.[0].Tags[]?; .Key == "AssetsMoved" and .Value == "false") and
-    any(.[0].Tags[]?; .Key == "BridgeActivated" and .Value == "false")
+    .Volumes[0].VolumeId == $volume and
+    .Volumes[0].Encrypted == true and
+    .Volumes[0].State == "in-use" and
+    (.Volumes[0].Attachments | length) == 1 and
+    .Volumes[0].Attachments[0].InstanceId == $expected_instance and
+    .Volumes[0].Attachments[0].Device == "/dev/sdf" and
+    .Volumes[0].Attachments[0].State == "attached" and
+    .Volumes[0].Attachments[0].DeleteOnTermination == false and
+    any(.Volumes[0].Tags[]?; .Key == "Validator" and .Value == "01") and
+    any(.Volumes[0].Tags[]?; .Key == "PublicTestnetOnly" and .Value == "true") and
+    any(.Volumes[0].Tags[]?; .Key == "MainnetChanged" and .Value == "false") and
+    any(.Volumes[0].Tags[]?; .Key == "AssetsMoved" and .Value == "false") and
+    any(.Volumes[0].Tags[]?; .Key == "BridgeActivated" and .Value == "false")
   ' artifacts/runtime-recovery/volume.json >/dev/null
 
 terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
