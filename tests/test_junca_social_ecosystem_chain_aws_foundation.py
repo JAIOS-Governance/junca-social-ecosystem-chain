@@ -2658,9 +2658,19 @@ class AwsFoundationTests(unittest.TestCase):
             'expected_runtime_version="$binding_runtime_version"',
             'expected_ami_id="$evidence_ami_id"',
             'expected_runtime_version="$evidence_runtime_version"',
-            'test "$evidence_instance_id" = "${current_instances[$index]}"',
+            "recovered_uncommitted_target_replacement=false",
+            'if [[ "$evidence_instance_id" != "${current_instances[$index]}" ]]; then',
+            '"$index" -eq "$evidence_updated_count"',
+            '"$binding_ami_id" == "$NODE_AMI_ID"',
+            '"$binding_runtime_version" == "$NODE_ARTIFACT_SHA256"',
+            "recovered_uncommitted_target_replacement=true",
+            'elif [[ "$recovered_uncommitted_target_replacement" == true ]]; then',
         ):
             self.assertIn(required, self.foundation_script)
+        self.assertNotIn(
+            'test "$evidence_instance_id" = "${current_instances[$index]}"',
+            definition,
+        )
         self.assertNotIn(
             'expected_ami_id="$previous_ami_id"',
             definition,
