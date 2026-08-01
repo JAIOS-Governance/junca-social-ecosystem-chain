@@ -735,6 +735,10 @@ class AwsFoundationTests(unittest.TestCase):
             self.validator_foundation_release,
         )
         for required in (
+            'schema_version: "junca-finality-activation/v1"',
+            '"NEXT_CANONICAL_SLOT_BOUND"',
+            "activation_delay_seconds=180",
+            "artifacts/finality-activation.json",
             "Require two consecutive canonical finality slots",
             "(map(.head_height) | unique | length) == 1",
             "(.[0].head_height > $previous_height)",
@@ -752,11 +756,59 @@ class AwsFoundationTests(unittest.TestCase):
             "head_advanced: true",
             "final_height: $second[0][0].head_height",
         ):
-            self.assertIn(required, self.validator_foundation_release)
+            self.assertTrue(
+                required in self.validator_foundation_release
+                or required in self.foundation_script
+            )
         self.assertNotIn(
             "slot_epoch + ((initial_height + 1) * interval) + 5",
             self.validator_foundation_release,
         )
+        self.assertNotIn(
+            "all(.consensus.authenticated_vote_count == 3)",
+            self.validator_foundation_release,
+        )
+
+    def test_post_rollout_activation_rejects_stale_or_unbound_epoch(self) -> None:
+        activation = self.foundation_script.index(
+            'rollout_slot_epoch_seconds="$validator_slot_epoch_seconds"'
+        )
+        disable = self.foundation_script.index(
+            "set_runtime_finality \\\n"
+            '      0 "$validator_slot_epoch_seconds"',
+            activation,
+        )
+        enable = self.foundation_script.index(
+            "set_runtime_finality \\\n"
+            '      30 "$validator_slot_epoch_seconds"',
+            disable,
+        )
+        for required in (
+            'test "$validator_slot_epoch_seconds" -gt "$activation_now_seconds"',
+            'test "$((validator_slot_epoch_seconds % activation_interval_seconds))" -eq 0',
+            'node_artifact_sha256: $node_artifact_sha256',
+            'bindings: $bindings',
+            'state: "NEXT_CANONICAL_SLOT_PENDING"',
+            'accepted: false',
+            'mainnet_changed: false',
+            'assets_moved: false',
+            'bridge_activated: false',
+        ):
+            self.assertIn(required, self.foundation_script[activation:enable])
+        accepted = self.foundation_script.index(
+            '.state = "NEXT_CANONICAL_SLOT_BOUND"', enable
+        )
+        for required in (
+            'test "$validator_slot_epoch_seconds" -gt "$(date +%s)"',
+            '.accepted = true',
+            '.accepted_at = $accepted_at',
+            'mktemp artifacts/.finality-activation.XXXXXX',
+            'mv -f "$activation_evidence_tmp" artifacts/finality-activation.json',
+        ):
+            self.assertIn(required, self.foundation_script[disable:accepted + 400])
+        self.assertLess(activation, disable)
+        self.assertLess(disable, enable)
+        self.assertLess(enable, accepted)
 
     def test_foundation_rollout_requires_per_validator_compatibility_gate(self) -> None:
         for required in (
