@@ -724,6 +724,17 @@ class AwsFoundationTests(unittest.TestCase):
 
     def test_foundation_acceptance_requires_automatic_head_advancement(self) -> None:
         for required in (
+            "all(.consensus.authenticated_vote_count == 0)",
+            "all(.consensus.pending_height == null)",
+            "all(.automatic_finality_last_attempted_slot == null)",
+            "all(.automatic_finality_last_successful_slot == null)",
+        ):
+            self.assertIn(required, self.validator_foundation_release)
+        self.assertNotIn(
+            "all(.consensus.authenticated_vote_count == 3)",
+            self.validator_foundation_release,
+        )
+        for required in (
             "Require two consecutive canonical finality slots",
             "(map(.head_height) | unique | length) == 1",
             "(.[0].head_height > $previous_height)",
