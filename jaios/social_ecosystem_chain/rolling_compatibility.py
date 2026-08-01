@@ -27,7 +27,9 @@ MAXIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS = 210
 RECOVERY_FILE_ALLOWLIST = frozenset(
     {
         ".github/workflows/junca-validator-foundation-release.yml",
+        ".github/workflows/junca-public-gateway-emergency-repair.yml",
         ".github/workflows/junca-validator-public-testnet-orchestrator.yml",
+        "config/junca_public_gateway_repair_request.json",
         "config/junca_validator_ami_build_request.json",
         "docs/JUNCA_PUBLIC_TESTNET_RUNTIME_ACCEPTANCE_GATES.md",
         "docs/runbooks/junca-validator-rolling-update.md",
@@ -35,14 +37,22 @@ RECOVERY_FILE_ALLOWLIST = frozenset(
         "infra/aws/public-testnet/outputs.tf",
         "infra/aws/public-testnet/variables.tf",
         "jaios/social_ecosystem_chain/rolling_compatibility.py",
+        "jaios/social_ecosystem_chain/validator_node.py",
         "scripts/junca_live_rollout_prefix_gate.py",
         "scripts/junca_public_testnet_foundation.sh",
         "scripts/junca_validator_ami_build_request.py",
         "tests/test_junca_live_rollout_prefix_gate.py",
         "tests/test_junca_social_ecosystem_chain_aws_foundation.py",
+        "tests/test_junca_social_ecosystem_chain_validator_node.py",
         "tests/test_junca_live_rollout_prefix_gate.py",
         "tests/test_junca_validator_ami_workflow.py",
         "tests/test_junca_validator_rolling_compatibility.py",
+    }
+)
+RECOVERY_ADDED_FILE_ALLOWLIST = frozenset(
+    {
+        ".github/workflows/junca-public-gateway-emergency-repair.yml",
+        "config/junca_public_gateway_repair_request.json",
     }
 )
 
@@ -111,8 +121,13 @@ def evaluate_recovery_head_compare(
         or len(set(filenames)) != len(filenames)
         or any(name not in RECOVERY_FILE_ALLOWLIST for name in filenames)
         or any(
-            item.get("status") != "modified"
-            or item.get("previous_filename") is not None
+            item.get("previous_filename") is not None
+            or item.get("status")
+            not in (
+                ("modified", "added")
+                if item.get("filename") in RECOVERY_ADDED_FILE_ALLOWLIST
+                else ("modified",)
+            )
             for item in files
         )
     ):
