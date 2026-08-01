@@ -132,6 +132,8 @@ def _ordered(
 
 def _common(
     evidence: Mapping[str, Any],
+    *,
+    allow_finality_activation_contract: bool = False,
 ) -> tuple[
     str,
     str,
@@ -143,6 +145,8 @@ def _common(
     Mapping[str, Mapping[str, Any]],
     int,
     int,
+    int,
+    bool,
 ]:
     target = _text(evidence.get("target_version"), "target_version")
     target_ami = _text(evidence.get("target_ami_id"), "target_ami_id")
@@ -203,7 +207,21 @@ def _common(
     for boundary in canonical.BOUNDARIES:
         _require(evidence.get(boundary) is False, f"{boundary} must be false")
 
+    activation_contract = evidence.get(
+        "finality_activation_contract", False
+    )
+    _require(
+        isinstance(activation_contract, bool),
+        "finality activation contract must be boolean",
+    )
+    _require(
+        not activation_contract or allow_finality_activation_contract,
+        "finality activation contract is permitted only in rolling mode",
+    )
     requested_epoch = evidence.get("requested_slot_epoch_seconds")
+    baseline_epoch = evidence.get(
+        "baseline_slot_epoch_seconds", requested_epoch
+    )
     observed_time = evidence.get("observed_unix_time")
     _require(
         isinstance(requested_epoch, int)
@@ -213,11 +231,29 @@ def _common(
         and requested_epoch > observed_time,
         "future canonical slot epoch is required",
     )
-    remaining = requested_epoch - observed_time
     _require(
-        canonical.MINIMUM_SLOT_EPOCH_REMAINING_SECONDS
-        <= remaining
-        <= canonical.MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS,
+        isinstance(baseline_epoch, int)
+        and not isinstance(baseline_epoch, bool)
+        and baseline_epoch > 0,
+        "baseline canonical slot epoch is required",
+    )
+    _require(
+        activation_contract or baseline_epoch == requested_epoch,
+        "baseline slot epoch may differ only during finality activation",
+    )
+    remaining = requested_epoch - observed_time
+    minimum_remaining = (
+        canonical.MINIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS
+        if activation_contract
+        else canonical.MINIMUM_SLOT_EPOCH_REMAINING_SECONDS
+    )
+    maximum_remaining = (
+        canonical.MAXIMUM_FINALITY_ACTIVATION_REMAINING_SECONDS
+        if activation_contract
+        else canonical.MAXIMUM_SLOT_EPOCH_REMAINING_SECONDS
+    )
+    _require(
+        minimum_remaining <= remaining <= maximum_remaining,
         "canonical slot epoch is outside the bounded safety window",
     )
     return (
@@ -231,6 +267,8 @@ def _common(
         rollback_by_id,
         evidence_count,
         requested_epoch,
+        baseline_epoch,
+        activation_contract,
     )
 
 
@@ -332,6 +370,8 @@ def evaluate_live_rollout_prefix_v2(
         rollback_by_id,
         evidence_count,
         requested_epoch,
+        _baseline_epoch,
+        _activation_contract,
     ) = _common(evidence)
 
     updated: list[bool] = []
@@ -513,7 +553,11 @@ def evaluate_evidence_bound_rolling_compatibility(
         rollback_by_id,
         evidence_count,
         requested_epoch,
-    ) = _common(evidence)
+        baseline_epoch,
+        activation_contract,
+    ) = _common(
+        evidence, allow_finality_activation_contract=True
+    )
     _require(
         evidence.get("fallback_active") is False,
         "fallback must remain inactive",
@@ -536,7 +580,7 @@ def evaluate_evidence_bound_rolling_compatibility(
             target=target,
             target_ami=target_ami,
             evidence_count=evidence_count,
-            requested_epoch=requested_epoch,
+            requested_epoch=baseline_epoch,
         )
         baseline_bindings.append(binding)
 
@@ -617,6 +661,10 @@ def evaluate_evidence_bound_rolling_compatibility(
         "validator update order is not contiguous",
     )
     updated_count = sum(updated)
+    _require(
+        not activation_contract or updated_count == 3,
+        "finality activation contract requires the exact 3/3 target runtime",
+    )
     _require(
         updated_count >= evidence_count,
         "live target prefix is behind the evidence-bound prefix",
