@@ -3509,6 +3509,14 @@ write_rolling_resume_evidence() {
   )
 }
 
+# A narrowly scoped recovery workflow may reuse the audited, evidence-bound
+# service recovery helpers without entering Terraform plan/apply.  The caller
+# must still satisfy the required environment validation above and perform its
+# own exact AWS/Terraform admission before invoking any helper.
+if [[ "${JUNCA_FOUNDATION_LIBRARY_ONLY:-false}" == "true" ]]; then
+  return 0
+fi
+
 terraform -chdir=infra/aws/bootstrap init -input=false -reconfigure \
   -backend-config="bucket=$STATE_BUCKET_NAME" \
   -backend-config="key=public-testnet/bootstrap.tfstate" \
