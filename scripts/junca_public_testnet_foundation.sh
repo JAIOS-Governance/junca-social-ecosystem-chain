@@ -3619,7 +3619,16 @@ write_live_rollout_prefix_readback() {
         .[0].Attachments[0].InstanceId == $instance_id and
         .[0].Attachments[0].State == "attached"
       ' "artifacts/live-prefix-volume-$((index + 1)).json" >/dev/null
-    if [[ "$evidence_updated_count" == 0 ||
+    # Once automatic finality is configured, a resumed prefix can still carry
+    # the previously accepted epoch in runtime.env while Terraform is already
+    # bound to the renewed shared epoch.  Permit the existing identity-bound
+    # service-recovery path to reconcile that canonical-only file one validator
+    # at a time.  The remote path still requires an active/healthy exact
+    # validator, the expected AMI/runtime/genesis, durable-state integrity, an
+    # exact canonical assignment allowlist, controlled stop, atomic replacement,
+    # restart, and strict post-restart readback before it can be accepted.
+    if [[ "$baseline_automatic_finality_enabled" == true ||
+          "$evidence_updated_count" == 0 ||
           "$recovered_uncommitted_target_replacement" == true ]]; then
       allow_runtime_env_repair=true
     else

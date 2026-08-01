@@ -2900,7 +2900,8 @@ class AwsFoundationTests(unittest.TestCase):
             '"$binding_runtime_version" == "$NODE_ARTIFACT_SHA256"',
             "recovered_uncommitted_target_replacement=true",
             'elif [[ "$recovered_uncommitted_target_replacement" == true ]]; then',
-            'if [[ "$evidence_updated_count" == 0 ||\n'
+            'if [[ "$baseline_automatic_finality_enabled" == true ||\n'
+            '          "$evidence_updated_count" == 0 ||\n'
             '          "$recovered_uncommitted_target_replacement" == true ]]; then',
         ):
             self.assertIn(required, self.foundation_script)
@@ -2916,6 +2917,14 @@ class AwsFoundationTests(unittest.TestCase):
             'expected_runtime_version="$previous_artifact_sha256"',
             definition,
         )
+        repair_gate = definition.split(
+            'if [[ "$baseline_automatic_finality_enabled" == true ||', 1
+        )[1].split("fi", 1)[0]
+        self.assertIn(
+            '"$recovered_uncommitted_target_replacement" == true',
+            repair_gate,
+        )
+        self.assertIn("allow_runtime_env_repair=true", repair_gate)
 
         account_id = "595710543956"
         region = "us-east-1"
