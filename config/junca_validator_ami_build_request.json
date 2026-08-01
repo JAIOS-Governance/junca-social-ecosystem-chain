@@ -8,9 +8,11 @@
   "ami_run_id": "30682660387",
   "manifest_gate_run_id": "30683678492",
   "resume_run_id": "30683689710",
+  "renew_expired_epoch": "RENEW_EXPIRED_QUIESCED_EPOCH",
+  "renewal_preserve_prefix_count": "2",
   "target_workflow": ".github/workflows/junca-validator-foundation-release.yml",
-  "one_shot_nonce": "foundation-resume-30683689710-20260801-expired-epoch-v18",
-  "request_sha256": "a5fb88d3678b5701e4d28f1af2f10dfebf5c0337f7431c9f90e0bdbce959b92b",
+  "one_shot_nonce": "foundation-resume-30683689710-20260801-expired-epoch-prefix2-v19",
+  "request_sha256": "017a0cf023218144b3600774546c57bed04598e96631ae2d0904eca1c142cfff",
   "boundaries": {
     "rebuild_ami": false,
     "rebuild_manifest": false,
