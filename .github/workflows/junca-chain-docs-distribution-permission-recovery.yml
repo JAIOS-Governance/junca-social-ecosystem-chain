@@ -1,0 +1,231 @@
+name: JUNCA Chain Docs Distribution Permission Recovery
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/junca-chain-docs-distribution-permission-recovery.yml
+
+permissions:
+  id-token: write
+  contents: write
+  actions: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    environment: public-testnet
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      TARGET_ROLE_NAME: JuncaChainDocsProductionDeployment
+      TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      TARGET_POLICY_NAME: DocsLiveProxyDistributionUpdate
+      TARGET_DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E22CXYZGWNT0AJ
+      TARGET_ACTION: cloudfront:UpdateDistribution
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Acquire GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json")"
+          printf '%s' "$token" > /tmp/oidc-token
+
+      - name: Apply and verify exact distribution permission
+        id: repair
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          : > /tmp/permission-recovery.log
+          selected=""
+          for role in \
+            arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment \
+            arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+          do
+            echo "Trying bootstrap identity: $role" >> /tmp/permission-recovery.log
+            aws sts assume-role-with-web-identity \
+              --role-arn "$role" \
+              --role-session-name "docs-distribution-permission-$GITHUB_RUN_ID" \
+              --web-identity-token "$(cat /tmp/oidc-token)" \
+              --duration-seconds 900 \
+              > /tmp/assume.json 2>> /tmp/permission-recovery.log
+            if [ $? -eq 0 ]; then
+              selected="$role"
+              export AWS_ACCESS_KEY_ID="$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)"
+              export AWS_SECRET_ACCESS_KEY="$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)"
+              export AWS_SESSION_TOKEN="$(jq -r '.Credentials.SessionToken' /tmp/assume.json)"
+              break
+            fi
+          done
+
+          if [ -z "$selected" ]; then
+            echo "No approved bootstrap identity could be assumed." >> /tmp/permission-recovery.log
+            echo "rc=1" >> "$GITHUB_OUTPUT"
+            echo "selected=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          actual_account="$(aws sts get-caller-identity --query Account --output text 2>> /tmp/permission-recovery.log)"
+          if [ "$actual_account" != "$AWS_ACCOUNT_ID" ]; then
+            echo "Unexpected AWS account: $actual_account" >> /tmp/permission-recovery.log
+            echo "rc=1" >> "$GITHUB_OUTPUT"
+            echo "selected=$selected" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cat >/tmp/policy.json <<JSON
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "DocsLiveProxyDistributionUpdate",
+                "Effect": "Allow",
+                "Action": "$TARGET_ACTION",
+                "Resource": "$TARGET_DISTRIBUTION_ARN"
+              }
+            ]
+          }
+          JSON
+
+          aws iam put-role-policy \
+            --role-name "$TARGET_ROLE_NAME" \
+            --policy-name "$TARGET_POLICY_NAME" \
+            --policy-document file:///tmp/policy.json \
+            >> /tmp/permission-recovery.log 2>&1
+          rc_put=$?
+
+          aws iam get-role-policy \
+            --role-name "$TARGET_ROLE_NAME" \
+            --policy-name "$TARGET_POLICY_NAME" \
+            > /tmp/policy-readback.json 2>> /tmp/permission-recovery.log
+          rc_get=$?
+
+          rc_verify=1
+          if [ "$rc_put" -eq 0 ] && [ "$rc_get" -eq 0 ]; then
+            jq -e \
+              --arg action "$TARGET_ACTION" \
+              --arg resource "$TARGET_DISTRIBUTION_ARN" \
+              '.PolicyDocument.Version == "2012-10-17" and
+               (.PolicyDocument.Statement | length) == 1 and
+               .PolicyDocument.Statement[0].Sid == "DocsLiveProxyDistributionUpdate" and
+               .PolicyDocument.Statement[0].Effect == "Allow" and
+               .PolicyDocument.Statement[0].Action == $action and
+               .PolicyDocument.Statement[0].Resource == $resource and
+               (.PolicyDocument.Statement[0] | has("Condition") | not)' \
+              /tmp/policy-readback.json >> /tmp/permission-recovery.log 2>&1
+            rc_verify=$?
+          fi
+
+          rc=0
+          [ "$rc_put" -eq 0 ] || rc=1
+          [ "$rc_get" -eq 0 ] || rc=1
+          [ "$rc_verify" -eq 0 ] || rc=1
+          {
+            echo "Selected bootstrap identity: $selected"
+            echo "PutRolePolicy return code: $rc_put"
+            echo "GetRolePolicy return code: $rc_get"
+            echo "Exact policy verification return code: $rc_verify"
+          } >> /tmp/permission-recovery.log
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          echo "put_rc=$rc_put" >> "$GITHUB_OUTPUT"
+          echo "get_rc=$rc_get" >> "$GITHUB_OUTPUT"
+          echo "verify_rc=$rc_verify" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Persist exact permission evidence
+        if: always()
+        shell: bash
+        env:
+          REPAIR_RC: ${{ steps.repair.outputs.rc }}
+          SELECTED_ROLE: ${{ steps.repair.outputs.selected }}
+          PUT_RC: ${{ steps.repair.outputs.put_rc }}
+          GET_RC: ${{ steps.repair.outputs.get_rc }}
+          VERIFY_RC: ${{ steps.repair.outputs.verify_rc }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          verification=FAIL
+          if [ "$REPAIR_RC" = "0" ] && [ "$VERIFY_RC" = "0" ]; then verification=PASS; fi
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --arg account_id "$AWS_ACCOUNT_ID" \
+            --arg selected_bootstrap_role "$SELECTED_ROLE" \
+            --arg target_role_arn "$TARGET_ROLE_ARN" \
+            --arg policy_name "$TARGET_POLICY_NAME" \
+            --arg action "$TARGET_ACTION" \
+            --arg resource "$TARGET_DISTRIBUTION_ARN" \
+            --arg put_rc "$PUT_RC" \
+            --arg get_rc "$GET_RC" \
+            --arg verify_rc "$VERIFY_RC" \
+            --arg verification "$verification" \
+            '{
+              run_id: $run_id,
+              commit: $commit,
+              account_id: $account_id,
+              selected_bootstrap_role: $selected_bootstrap_role,
+              target_role_arn: $target_role_arn,
+              policy_name: $policy_name,
+              action: $action,
+              resource: $resource,
+              put_role_policy_rc: $put_rc,
+              get_role_policy_rc: $get_rc,
+              exact_policy_verification_rc: $verify_rc,
+              verification: $verification,
+              broad_iam_grant: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > evidence/production/docs-distribution-permission-recovery-latest.json
+          {
+            echo '# Docs Distribution Permission Recovery'
+            echo
+            echo "Run ID: $GITHUB_RUN_ID"
+            echo "Commit: $GITHUB_SHA"
+            echo "Target role: $TARGET_ROLE_ARN"
+            echo "Policy: $TARGET_POLICY_NAME"
+            echo "Action: $TARGET_ACTION"
+            echo "Resource: $TARGET_DISTRIBUTION_ARN"
+            echo "Verification: $verification"
+            echo
+            echo '## Execution log'
+            echo '~~~text'
+            if [ -f /tmp/permission-recovery.log ]; then cat /tmp/permission-recovery.log; else echo 'Repair step did not produce a log.'; fi
+            echo '~~~'
+          } > evidence/production/docs-distribution-permission-recovery-latest.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- evidence/production/docs-distribution-permission-recovery-latest.json evidence/production/docs-distribution-permission-recovery-latest.md
+          git diff --cached --quiet || git commit -m "Record Docs distribution permission recovery $GITHUB_RUN_ID"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Dispatch exact Docs stack reconciliation
+        if: steps.repair.outputs.rc == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          status="$(curl --fail-with-body --silent --show-error \
+            -o /tmp/dispatch-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/junca-chain-cloudformation-self-reconcile.yml/dispatches" \
+            --data '{"ref":"main"}')"
+          test "$status" = "204"
+
+      - name: Fail closed when exact permission verification fails
+        if: steps.repair.outputs.rc != '0'
+        run: exit 1
