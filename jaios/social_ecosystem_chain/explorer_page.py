@@ -9,7 +9,13 @@ EXPLORER_DOCUMENT = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#071827">\n  <meta name="application-name" content="JUNCA Explorer">\n  <meta name="apple-mobile-web-app-capable" content="yes">\n  <meta name="apple-mobile-web-app-title" content="JUNCA Explorer">
-  <meta name="description" content="Finalized-only public explorer for the JUNCA Social Ecosystem Chain Public Testnet.">
+  <meta name="description" content="Official finalized-only public explorer for the JUNCA Social Ecosystem Chain Public Testnet under JAIOS Institutional Governance.">
+  <meta name="keywords" content="JUNCA Social Ecosystem Chain, JUNCA Chain, junca chain, juncachain, JUNCA Platform, junca platform, JUNCA, junca, JAIOS, Public Testnet, block explorer, finalized blocks, network evidence">
+  <meta property="og:site_name" content="JUNCA Social Ecosystem Chain Explorer">
+  <meta property="og:title" content="JUNCA Social Ecosystem Chain — Official Public Testnet Explorer">
+  <meta property="og:description" content="Official read-only network evidence and finalized state for the JUNCA Social Ecosystem Chain Public Testnet.">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"JUNCA Social Ecosystem Chain Explorer","alternateName":["JUNCA Chain Explorer","junca chain explorer","juncachain explorer","JUNCA Platform Explorer"],"url":"https://explorer.jaios-governance.org/","applicationCategory":"Blockchain Explorer","operatingSystem":"Web","publisher":{"@type":"Organization","name":"JAIOS Institutional Governance","url":"https://jaios-governance.org/"},"keywords":["JUNCA Social Ecosystem Chain","JUNCA Chain","junca chain","juncachain","JUNCA Platform","JAIOS","Public Testnet","block explorer"]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Is this the current explorer for juncachain or JUNCA Chain?","acceptedAnswer":{"@type":"Answer","text":"Yes. Those search variants resolve to the official JUNCA Social Ecosystem Chain Public Testnet Explorer."}},{"@type":"Question","name":"What is the current network state?","acceptedAnswer":{"@type":"Answer","text":"Public Testnet. Mainnet Changed is false, Assets Moved is false, and Bridge Activated is false."}},{"@type":"Question","name":"Who publishes the official explorer?","acceptedAnswer":{"@type":"Answer","text":"JAIOS Institutional Governance publishes the official governance and public information for JUNCA Social Ecosystem Chain."}}]}</script>
   <link rel="icon" type="image/png" href="/explorer-icon.png">
   <link rel="apple-touch-icon" href="/explorer-icon.png">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -499,6 +505,22 @@ EXPLORER_DOCUMENT = """<!doctype html>
           <button type="button" disabled>Search</button>
         </div>
         <p class="search-note">NOT YET PUBLISHED — history indexer and general transaction access are outside the current public evidence surface.</p>
+      </div>
+    </section>
+
+    <section id="canonical-search" aria-labelledby="canonical-search-title">
+      <div class="section-head">
+        <div><p class="eyebrow">Canonical search identity</p><h2 id="canonical-search-title">Current official explorer identity</h2></div>
+      </div>
+      <div class="two-col">
+        <article class="panel">
+          <h3>Current name and search variants</h3>
+          <p class="lede"><strong>JUNCA Social Ecosystem Chain</strong> is the current formal name. Searches for juncachain, junca chain, JUNCA Chain, junca Platform, or JUNCA Platform should resolve to this current official Public Testnet surface.</p>
+        </article>
+        <article class="panel">
+          <h3>Current governance and boundaries</h3>
+          <p class="lede">JAIOS Institutional Governance publishes the official governance information. Current state: Public Testnet; Mainnet Changed=false; Assets Moved=false; Bridge Activated=false.</p>
+        </article>
       </div>
     </section>
 
