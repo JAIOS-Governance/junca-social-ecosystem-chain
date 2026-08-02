@@ -10,6 +10,7 @@ from jaios.social_ecosystem_chain.native_token_genesis import (
     ECONOMICS_AUTHORITY,
     NativeTokenGenesisError,
     TARGET_GENESIS_DATE,
+    evaluate_native_genesis_candidate,
     evaluate_native_token_genesis_plan,
     load_native_token_genesis_plan,
     native_economics_definition_digest,
@@ -173,8 +174,9 @@ class NativeTokenGenesisTests(unittest.TestCase):
         self.assertEqual(evidence["native_economics"]["status"], "approved")
 
     def test_approved_plan_compiles_deterministic_non_activated_genesis(self) -> None:
-        first = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
-        second = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        source_plan = evaluate_native_token_genesis_plan(ready_plan())
+        first = source_plan.genesis_candidate()
+        second = source_plan.genesis_candidate()
         self.assertEqual(first, second)
         self.assertEqual(first["schema_version"], "jsec-native-genesis-candidate/v1")
         self.assertEqual(first["target_genesis_date"], "2026-10-01")
@@ -189,10 +191,79 @@ class NativeTokenGenesisTests(unittest.TestCase):
         self.assertFalse(first["safety"]["genesis_applied"])
         self.assertFalse(first["safety"]["assets_moved"])
         self.assertFalse(first["safety"]["bridge_activated"])
+        verified = evaluate_native_genesis_candidate(
+            first, source_plan=source_plan
+        ).as_evidence()
+        verified_second = evaluate_native_genesis_candidate(
+            second, source_plan=source_plan
+        ).as_evidence()
+        self.assertEqual(verified["state"], "VERIFIED_NON_ACTIVATED_CANDIDATE")
+        self.assertEqual(
+            verified["candidate_sha256"], verified_second["candidate_sha256"]
+        )
+        self.assertFalse(verified["mainnet_changed"])
+        self.assertFalse(verified["genesis_applied"])
+        self.assertTrue(verified["source_plan_bound"])
+
+    def test_genesis_candidate_requires_exact_source_plan_binding(self) -> None:
+        source_plan = evaluate_native_token_genesis_plan(ready_plan())
+        candidate = source_plan.genesis_candidate()
+        candidate["source_plan_sha256"] = "e" * 64
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError, "source plan mismatch"
+        ):
+            evaluate_native_genesis_candidate(candidate, source_plan=source_plan)
+
+    def test_genesis_candidate_rejects_commitment_tampering(self) -> None:
+        candidate = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        candidate["allocations"][0]["category"] = "tampered"
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError, "allocation commitment mismatch"
+        ):
+            evaluate_native_genesis_candidate(candidate)
+
+        candidate = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        candidate["custody"]["threshold"] = 3
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError, "custody commitment mismatch"
+        ):
+            evaluate_native_genesis_candidate(candidate)
+
+    def test_genesis_candidate_rejects_shadow_fields_or_activation(self) -> None:
+        candidate = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        candidate["alternate_supply"] = 1
+        with self.assertRaisesRegex(NativeTokenGenesisError, "field set mismatch"):
+            evaluate_native_genesis_candidate(candidate)
+
+        candidate = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        candidate["safety"]["mainnet_changed"] = True
+        with self.assertRaisesRegex(NativeTokenGenesisError, "must be False"):
+            evaluate_native_genesis_candidate(candidate)
+
+    def test_genesis_candidate_rejects_economics_approval_drift(self) -> None:
+        candidate = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
+        candidate["economics_approval"]["approved_definition_sha256"] = "f" * 64
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError, "definition digest does not match"
+        ):
+            evaluate_native_genesis_candidate(candidate)
 
     def test_unapproved_plan_cannot_compile_genesis_candidate(self) -> None:
         with self.assertRaisesRegex(NativeTokenGenesisError, "ceremony blocked"):
             load_native_token_genesis_plan(CONFIG).genesis_candidate()
+
+    def test_plan_rejects_shadow_top_level_or_allocation_fields(self) -> None:
+        value = canonical()
+        value["alternate_activation"] = False
+        with self.assertRaisesRegex(NativeTokenGenesisError, "plan field set mismatch"):
+            evaluate_native_token_genesis_plan(value)
+
+        value = ready_plan()
+        value["allocations"]["accounts"][0]["memo"] = "unapproved"
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError, "allocation field set mismatch"
+        ):
+            evaluate_native_token_genesis_plan(value)
 
     def test_economics_approval_is_bound_to_exact_definition(self) -> None:
         value = ready_plan()

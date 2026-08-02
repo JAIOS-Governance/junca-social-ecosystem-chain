@@ -90,10 +90,13 @@ from .mainnet_delivery_governance import (
 )
 from .native_token_genesis import (
     ECONOMICS_AUTHORITY,
+    NativeGenesisCandidate,
     NativeTokenGenesisError,
     NativeTokenGenesisPlan,
     TARGET_GENESIS_DATE,
+    evaluate_native_genesis_candidate,
     evaluate_native_token_genesis_plan,
+    load_native_genesis_candidate,
     load_native_token_genesis_plan,
     native_economics_definition_digest,
 )
@@ -253,9 +256,12 @@ __all__ = [
     "load_mainnet_delivery_cell",
     "NativeTokenGenesisError",
     "NativeTokenGenesisPlan",
+    "NativeGenesisCandidate",
     "ECONOMICS_AUTHORITY",
     "TARGET_GENESIS_DATE",
+    "evaluate_native_genesis_candidate",
     "evaluate_native_token_genesis_plan",
+    "load_native_genesis_candidate",
     "load_native_token_genesis_plan",
     "native_economics_definition_digest",
     "FinalizedProposal",

@@ -14,6 +14,7 @@ from typing import Any, Mapping
 SCHEMA_VERSION = "jsec-native-token-genesis-plan/v1"
 ECONOMICS_DEFINITION_SCHEMA_VERSION = "jsec-native-economics-definition/v1"
 GENESIS_CANDIDATE_SCHEMA_VERSION = "jsec-native-genesis-candidate/v1"
+GENESIS_ALLOCATIONS_SCHEMA_VERSION = "jsec-native-genesis-allocations/v1"
 OFFICIAL_NAME = "JUNCA Social Ecosystem Chain"
 GOVERNANCE = "JAIOS Institutional Governance"
 ECONOMICS_AUTHORITY = "JUNCA Holdings Founder / Chairman / CEO"
@@ -21,6 +22,44 @@ TARGET_GENESIS_DATE = date(2026, 10, 1)
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+PLAN_FIELDS = (
+    "schema_version",
+    "official_name",
+    "governance",
+    "asset_class",
+    "issuance_event",
+    "target_genesis_date",
+    "target_date_locked",
+    "contract_token_dependency",
+    "contract_address",
+    "definition",
+    "economics_approval",
+    "allocations",
+    "custody",
+    "gates",
+    "milestones",
+    "safety",
+)
+
+CANDIDATE_FIELDS = (
+    "schema_version",
+    "official_name",
+    "governance",
+    "asset_class",
+    "issuance_event",
+    "target_genesis_date",
+    "contract_token_dependency",
+    "contract_address",
+    "definition",
+    "economics_approval",
+    "allocations",
+    "allocations_sha256",
+    "custody",
+    "custody_sha256",
+    "source_plan_sha256",
+    "safety",
+)
 
 ECONOMICS_DEFINITION_FIELDS = (
     "name",
@@ -97,6 +136,44 @@ class GenesisMilestone:
     due_date: date
     status: str
     owner: str
+
+
+@dataclass(frozen=True)
+class NativeGenesisCandidate:
+    definition: Mapping[str, Any]
+    economics_approval: Mapping[str, Any]
+    allocations: tuple[GenesisAllocation, ...]
+    allocations_sha256: str
+    custody: Mapping[str, Any]
+    custody_sha256: str
+    source_plan_sha256: str
+    candidate_sha256: str
+    source_plan_bound: bool
+
+    def as_evidence(self) -> dict[str, Any]:
+        return {
+            "schema_version": GENESIS_CANDIDATE_SCHEMA_VERSION,
+            "state": "VERIFIED_NON_ACTIVATED_CANDIDATE",
+            "official_name": OFFICIAL_NAME,
+            "governance": GOVERNANCE,
+            "asset_class": "native-token",
+            "target_genesis_date": TARGET_GENESIS_DATE.isoformat(),
+            "symbol": self.definition["symbol"],
+            "total_supply_base_units": self.definition[
+                "total_supply_base_units"
+            ],
+            "allocation_count": len(self.allocations),
+            "allocations_sha256": self.allocations_sha256,
+            "custody_sha256": self.custody_sha256,
+            "source_plan_sha256": self.source_plan_sha256,
+            "candidate_sha256": self.candidate_sha256,
+            "source_plan_bound": self.source_plan_bound,
+            "mainnet_changed": False,
+            "genesis_applied": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+            "mainnet_activation_authorized": False,
+        }
 
 
 @dataclass(frozen=True)
@@ -218,10 +295,11 @@ class NativeTokenGenesisPlan:
             for item in sorted(self.allocations, key=lambda item: item.address)
         ]
         allocation_commitment = {
-            "schema_version": "jsec-native-genesis-allocations/v1",
+            "schema_version": GENESIS_ALLOCATIONS_SCHEMA_VERSION,
             "accounts": allocations,
         }
         custody_commitment = {
+            "locked": True,
             "control_model": self.custody["control_model"],
             "threshold": self.custody["threshold"],
             "participants": sorted(self.custody["participants"]),
@@ -236,6 +314,8 @@ class NativeTokenGenesisPlan:
             "asset_class": "native-token",
             "issuance_event": "mainnet-genesis",
             "target_genesis_date": TARGET_GENESIS_DATE.isoformat(),
+            "contract_token_dependency": False,
+            "contract_address": None,
             "definition": {
                 key: self.definition[key]
                 for key in ("locked", *ECONOMICS_DEFINITION_FIELDS)
@@ -313,11 +393,24 @@ def load_native_token_genesis_plan(path: str | Path) -> NativeTokenGenesisPlan:
     return evaluate_native_token_genesis_plan(raw)
 
 
+def load_native_genesis_candidate(
+    path: str | Path,
+    source_plan: NativeTokenGenesisPlan | None = None,
+) -> NativeGenesisCandidate:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise NativeTokenGenesisError("unable to load native Genesis candidate") from exc
+    return evaluate_native_genesis_candidate(raw, source_plan=source_plan)
+
+
 def evaluate_native_token_genesis_plan(
     raw: Mapping[str, Any],
 ) -> NativeTokenGenesisPlan:
     if not isinstance(raw, Mapping):
         raise NativeTokenGenesisError("native Genesis plan must be an object")
+    if set(raw) != set(PLAN_FIELDS):
+        raise NativeTokenGenesisError("native Genesis plan field set mismatch")
     rendered = json.dumps(raw, sort_keys=True, separators=(",", ":")).lower()
     for marker in ("private_key", "mnemonic", "seed_phrase", "secret_value"):
         if marker in rendered:
@@ -375,6 +468,98 @@ def evaluate_native_token_genesis_plan(
         gates=gates,
         milestones=milestones,
         specification_digest=hashlib.sha256(canonical).hexdigest(),
+    )
+
+
+def evaluate_native_genesis_candidate(
+    raw: Mapping[str, Any],
+    source_plan: NativeTokenGenesisPlan | None = None,
+) -> NativeGenesisCandidate:
+    if not isinstance(raw, Mapping):
+        raise NativeTokenGenesisError("native Genesis candidate must be an object")
+    if set(raw) != set(CANDIDATE_FIELDS):
+        raise NativeTokenGenesisError("native Genesis candidate field set mismatch")
+    rendered = json.dumps(raw, sort_keys=True, separators=(",", ":")).lower()
+    for marker in ("private_key", "mnemonic", "seed_phrase", "secret_value"):
+        if marker in rendered:
+            raise NativeTokenGenesisError(f"secret material marker prohibited: {marker}")
+
+    _require(raw, "schema_version", GENESIS_CANDIDATE_SCHEMA_VERSION)
+    _require(raw, "official_name", OFFICIAL_NAME)
+    _require(raw, "governance", GOVERNANCE)
+    _require(raw, "asset_class", "native-token")
+    _require(raw, "issuance_event", "mainnet-genesis")
+    _require(raw, "target_genesis_date", TARGET_GENESIS_DATE.isoformat())
+    _require(raw, "contract_token_dependency", False)
+    _require(raw, "contract_address", None)
+
+    definition = _definition(_mapping(raw.get("definition"), "definition"))
+    if definition["locked"] is not True:
+        raise NativeTokenGenesisError("Genesis candidate definition must be locked")
+    economics_approval = _economics_approval(
+        _mapping(raw.get("economics_approval"), "economics_approval"),
+        definition,
+    )
+    if economics_approval["status"] != "approved":
+        raise NativeTokenGenesisError("Genesis candidate economics must be approved")
+
+    allocations = _allocations(raw.get("allocations"))
+    if tuple(item.address for item in allocations) != tuple(
+        sorted(item.address for item in allocations)
+    ):
+        raise NativeTokenGenesisError("Genesis candidate allocations are not canonical")
+    _validate_allocation_supply(definition, True, allocations)
+    allocations_sha256 = _sha256(raw.get("allocations_sha256"), "allocations_sha256")
+    allocation_commitment = {
+        "schema_version": GENESIS_ALLOCATIONS_SCHEMA_VERSION,
+        "accounts": [
+            {
+                "address": item.address,
+                "amount_base_units": item.amount_base_units,
+                "category": item.category,
+            }
+            for item in allocations
+        ],
+    }
+    if allocations_sha256 != _canonical_sha256(allocation_commitment):
+        raise NativeTokenGenesisError("Genesis allocation commitment mismatch")
+
+    custody = _custody(_mapping(raw.get("custody"), "custody"))
+    if custody["locked"] is not True:
+        raise NativeTokenGenesisError("Genesis candidate custody must be locked")
+    if tuple(custody["participants"]) != tuple(sorted(custody["participants"])):
+        raise NativeTokenGenesisError("Genesis candidate custody is not canonical")
+    custody_sha256 = _sha256(raw.get("custody_sha256"), "custody_sha256")
+    if custody_sha256 != _canonical_sha256(custody):
+        raise NativeTokenGenesisError("Genesis custody commitment mismatch")
+
+    source_plan_sha256 = _sha256(
+        raw.get("source_plan_sha256"), "source_plan_sha256"
+    )
+    _validate_safety_boundary(_mapping(raw.get("safety"), "safety"))
+    source_plan_bound = False
+    if source_plan is not None:
+        if not isinstance(source_plan, NativeTokenGenesisPlan):
+            raise NativeTokenGenesisError("source_plan must be a native Genesis plan")
+        source_plan.assert_ready_for_genesis_ceremony()
+        if source_plan_sha256 != source_plan.specification_digest:
+            raise NativeTokenGenesisError("Genesis candidate source plan mismatch")
+        expected_candidate = source_plan.genesis_candidate()
+        if _canonical_sha256(raw) != _canonical_sha256(expected_candidate):
+            raise NativeTokenGenesisError(
+                "Genesis candidate does not match the approved source plan"
+            )
+        source_plan_bound = True
+    return NativeGenesisCandidate(
+        definition=definition,
+        economics_approval=economics_approval,
+        allocations=allocations,
+        allocations_sha256=allocations_sha256,
+        custody=custody,
+        custody_sha256=custody_sha256,
+        source_plan_sha256=source_plan_sha256,
+        candidate_sha256=_canonical_sha256(raw),
+        source_plan_bound=source_plan_bound,
     )
 
 
@@ -448,6 +633,8 @@ def _allocations(value: Any) -> tuple[GenesisAllocation, ...]:
     seen: set[str] = set()
     for index, item in enumerate(value):
         record = _mapping(item, f"allocations.accounts[{index}]")
+        if set(record) != {"address", "amount_base_units", "category"}:
+            raise NativeTokenGenesisError("Genesis allocation field set mismatch")
         address = _address(record.get("address"), f"allocations.accounts[{index}].address")
         if address in seen:
             raise NativeTokenGenesisError("Genesis allocation addresses must be unique")
@@ -549,6 +736,14 @@ def _validate_allocation_supply(
 
 
 def _custody(value: Mapping[str, Any]) -> dict[str, Any]:
+    if set(value) != {
+        "locked",
+        "control_model",
+        "threshold",
+        "participants",
+        "key_ceremony_evidence_sha256",
+    }:
+        raise NativeTokenGenesisError("custody field set mismatch")
     _require(value, "control_model", "institutional-multisig")
     locked = _boolean(value.get("locked"), "custody.locked")
     threshold = _optional_integer(value.get("threshold"), "custody.threshold")
@@ -673,6 +868,13 @@ def _optional_sha256(value: Any, field: str) -> str | None:
     if not isinstance(value, str) or not SHA256.fullmatch(value):
         raise NativeTokenGenesisError(f"{field} must be a SHA-256 digest")
     return value
+
+
+def _sha256(value: Any, field: str) -> str:
+    result = _optional_sha256(value, field)
+    if result is None:
+        raise NativeTokenGenesisError(f"{field} must be a SHA-256 digest")
+    return result
 
 
 def _boolean(value: Any, field: str) -> bool:
