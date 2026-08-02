@@ -319,10 +319,25 @@ jobs:
             /tmp/distribution-config.json > /tmp/preserved-after.json
           cmp -s /tmp/preserved-before.json /tmp/preserved-after.json
 
-          jq -S '.Distribution.DistributionConfig' /tmp/distribution-before.json > /tmp/distribution-current-sorted.json
-          jq -S '.' /tmp/distribution-config.json > /tmp/distribution-candidate-sorted.json
           changed=false
-          if ! cmp -s /tmp/distribution-current-sorted.json /tmp/distribution-candidate-sorted.json; then
+          if ! jq -e \
+              --arg origin_id "$LIVE_ORIGIN_ID" \
+              --arg origin_domain "explorer.jaios-governance.org" \
+              --arg path "$LIVE_PATH" \
+              --arg cache_policy "$CACHE_POLICY_ID" \
+              --arg headers_policy "$RESPONSE_HEADERS_POLICY_ID" \
+              '([.Distribution.DistributionConfig.Origins.Items[]
+                  | select(.Id == $origin_id and
+                           .DomainName == $origin_domain and
+                           .CustomOriginConfig.OriginProtocolPolicy == "https-only")]
+                 | length) == 1 and
+               ([.Distribution.DistributionConfig.CacheBehaviors.Items[]
+                  | select(.PathPattern == $path and
+                           .TargetOriginId == $origin_id and
+                           .CachePolicyId == $cache_policy and
+                           .ResponseHeadersPolicyId == $headers_policy)]
+                 | length) == 1' \
+              /tmp/distribution-before.json >/dev/null; then
             aws cloudfront update-distribution \
               --id "$DISTRIBUTION_ID" \
               --if-match "$etag" \
