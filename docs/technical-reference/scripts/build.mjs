@@ -334,6 +334,7 @@ for (const route of routes) {
         "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
       )
       .replaceAll("No Monetary Value", "Protocol Validation Environment")
+      .replaceAll("NO MONETARY VALUE", "PROTOCOL VALIDATION ENVIRONMENT")
       .replaceAll(
         "No economic value or legal conformity is guaranteed by JAIOS Institutional Governance.",
         "Economic treatment and legal classification are governed separately from protocol testing and require jurisdiction-specific review.",
