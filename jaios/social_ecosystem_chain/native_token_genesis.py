@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = "jsec-native-token-genesis-plan/v1"
 ECONOMICS_DEFINITION_SCHEMA_VERSION = "jsec-native-economics-definition/v1"
+ECONOMICS_DECISION_SCHEMA_VERSION = "jsec-native-economics-decision/v1"
 GENESIS_CANDIDATE_SCHEMA_VERSION = "jsec-native-genesis-candidate/v1"
 GENESIS_ALLOCATIONS_SCHEMA_VERSION = "jsec-native-genesis-allocations/v1"
 OFFICIAL_NAME = "JUNCA Social Ecosystem Chain"
@@ -22,6 +23,9 @@ TARGET_GENESIS_DATE = date(2026, 10, 1)
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+UTC_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
 
 PLAN_FIELDS = (
     "schema_version",
@@ -80,6 +84,36 @@ ECONOMICS_APPROVAL_FIELDS = (
     "approved_at",
 )
 
+ECONOMICS_DECISION_FIELDS = (
+    "schema_version",
+    "official_name",
+    "governance",
+    "authority",
+    "decision",
+    "decision_record_id",
+    "approved_at",
+    "authorization_evidence_sha256",
+    "definition",
+    "constraints",
+)
+
+ECONOMICS_DECISION_CONSTRAINT_FIELDS = (
+    "asset_class",
+    "issuance_event",
+    "target_genesis_date",
+    "contract_token_dependency",
+    "contract_address",
+    "safety",
+)
+
+SAFETY_FIELDS = (
+    "mainnet_changed",
+    "genesis_applied",
+    "assets_moved",
+    "bridge_activated",
+    "mainnet_activation_authorized",
+)
+
 LOCKED_MILESTONES = (
     ("native_economics_constitution", date(2026, 8, 7)),
     ("deterministic_genesis_allocations", date(2026, 8, 21)),
@@ -136,6 +170,41 @@ class GenesisMilestone:
     due_date: date
     status: str
     owner: str
+
+
+@dataclass(frozen=True)
+class NativeEconomicsDecision:
+    decision_record_id: str
+    approved_at: str
+    authorization_evidence_sha256: str
+    definition: Mapping[str, Any]
+    approved_definition_sha256: str
+    decision_record_sha256: str
+
+    def as_evidence(self) -> dict[str, Any]:
+        return {
+            "schema_version": ECONOMICS_DECISION_SCHEMA_VERSION,
+            "state": "VERIFIED_CEO_NATIVE_ECONOMICS_DECISION",
+            "official_name": OFFICIAL_NAME,
+            "governance": GOVERNANCE,
+            "authority": ECONOMICS_AUTHORITY,
+            "decision_record_id": self.decision_record_id,
+            "approved_at": self.approved_at,
+            "authorization_evidence_sha256": (
+                self.authorization_evidence_sha256
+            ),
+            "approved_definition_sha256": self.approved_definition_sha256,
+            "decision_record_sha256": self.decision_record_sha256,
+            "asset_class": "native-token",
+            "target_genesis_date": TARGET_GENESIS_DATE.isoformat(),
+            "contract_token_dependency": False,
+            "contract_address": None,
+            "mainnet_changed": False,
+            "genesis_applied": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+            "mainnet_activation_authorized": False,
+        }
 
 
 @dataclass(frozen=True)
@@ -393,6 +462,18 @@ def load_native_token_genesis_plan(path: str | Path) -> NativeTokenGenesisPlan:
     return evaluate_native_token_genesis_plan(raw)
 
 
+def load_native_economics_decision(
+    path: str | Path,
+) -> NativeEconomicsDecision:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise NativeTokenGenesisError(
+            "unable to load native economics decision"
+        ) from exc
+    return evaluate_native_economics_decision(raw)
+
+
 def load_native_genesis_candidate(
     path: str | Path,
     source_plan: NativeTokenGenesisPlan | None = None,
@@ -402,6 +483,122 @@ def load_native_genesis_candidate(
     except (OSError, json.JSONDecodeError) as exc:
         raise NativeTokenGenesisError("unable to load native Genesis candidate") from exc
     return evaluate_native_genesis_candidate(raw, source_plan=source_plan)
+
+
+def evaluate_native_economics_decision(
+    raw: Mapping[str, Any],
+) -> NativeEconomicsDecision:
+    if not isinstance(raw, Mapping):
+        raise NativeTokenGenesisError("native economics decision must be an object")
+    if set(raw) != set(ECONOMICS_DECISION_FIELDS):
+        raise NativeTokenGenesisError("native economics decision field set mismatch")
+    rendered = json.dumps(raw, sort_keys=True, separators=(",", ":")).lower()
+    for marker in ("private_key", "mnemonic", "seed_phrase", "secret_value"):
+        if marker in rendered:
+            raise NativeTokenGenesisError(
+                f"secret material marker prohibited: {marker}"
+            )
+
+    _require(raw, "schema_version", ECONOMICS_DECISION_SCHEMA_VERSION)
+    _require(raw, "official_name", OFFICIAL_NAME)
+    _require(raw, "governance", GOVERNANCE)
+    _require(raw, "authority", ECONOMICS_AUTHORITY)
+    _require(raw, "decision", "approved")
+    decision_record_id = _text(
+        raw.get("decision_record_id"),
+        "decision_record_id",
+        200,
+    )
+    approved_at = _utc_timestamp(raw.get("approved_at"), "approved_at")
+    authorization_evidence_sha256 = _sha256(
+        raw.get("authorization_evidence_sha256"),
+        "authorization_evidence_sha256",
+    )
+    definition = _definition(_mapping(raw.get("definition"), "definition"))
+    if definition["locked"] is not True:
+        raise NativeTokenGenesisError(
+            "approved native economics decision requires a locked definition"
+        )
+
+    constraints = _mapping(raw.get("constraints"), "constraints")
+    if set(constraints) != set(ECONOMICS_DECISION_CONSTRAINT_FIELDS):
+        raise NativeTokenGenesisError(
+            "native economics decision constraint field set mismatch"
+        )
+    _require(constraints, "asset_class", "native-token")
+    _require(constraints, "issuance_event", "mainnet-genesis")
+    _require(
+        constraints,
+        "target_genesis_date",
+        TARGET_GENESIS_DATE.isoformat(),
+    )
+    _require(constraints, "contract_token_dependency", False)
+    _require(constraints, "contract_address", None)
+    _validate_safety_boundary(_mapping(constraints.get("safety"), "safety"))
+
+    return NativeEconomicsDecision(
+        decision_record_id=decision_record_id,
+        approved_at=approved_at,
+        authorization_evidence_sha256=authorization_evidence_sha256,
+        definition=definition,
+        approved_definition_sha256=native_economics_definition_digest(
+            definition
+        ),
+        decision_record_sha256=_canonical_sha256(raw),
+    )
+
+
+def apply_native_economics_decision(
+    raw_plan: Mapping[str, Any],
+    decision: NativeEconomicsDecision,
+) -> dict[str, Any]:
+    if not isinstance(raw_plan, Mapping):
+        raise NativeTokenGenesisError("native Genesis plan must be an object")
+    if not isinstance(decision, NativeEconomicsDecision):
+        raise NativeTokenGenesisError(
+            "decision must be a verified native economics decision"
+        )
+    current = evaluate_native_token_genesis_plan(raw_plan)
+    for field in ECONOMICS_DEFINITION_FIELDS:
+        existing = current.definition[field]
+        approved = decision.definition[field]
+        if existing is not None and existing != approved:
+            raise NativeTokenGenesisError(
+                f"native economics decision conflicts with definition.{field}"
+            )
+    current_approval = current.economics_approval
+    if current_approval["status"] == "approved":
+        expected = {
+            "decision_record_id": decision.decision_record_id,
+            "approved_definition_sha256": decision.approved_definition_sha256,
+            "decision_record_sha256": decision.decision_record_sha256,
+            "approved_at": decision.approved_at,
+        }
+        for field, value in expected.items():
+            if current_approval[field] != value:
+                raise NativeTokenGenesisError(
+                    f"native economics approval conflicts with {field}"
+                )
+
+    updated = json.loads(
+        json.dumps(raw_plan, sort_keys=True, separators=(",", ":"))
+    )
+    updated["definition"] = dict(decision.definition)
+    updated["economics_approval"] = {
+        "authority": ECONOMICS_AUTHORITY,
+        "status": "approved",
+        "decision_record_id": decision.decision_record_id,
+        "approved_definition_sha256": decision.approved_definition_sha256,
+        "decision_record_sha256": decision.decision_record_sha256,
+        "approved_at": decision.approved_at,
+    }
+    updated["gates"]["native_economics_locked"] = True
+    for milestone in updated["milestones"]:
+        if milestone["id"] == "native_economics_constitution":
+            milestone["status"] = "completed"
+            break
+    evaluate_native_token_genesis_plan(updated)
+    return updated
 
 
 def evaluate_native_token_genesis_plan(
@@ -675,10 +872,14 @@ def _economics_approval(
         value.get("decision_record_sha256"),
         "economics_approval.decision_record_sha256",
     )
-    approved_at = _optional_text(
-        value.get("approved_at"),
-        "economics_approval.approved_at",
-        40,
+    approved_at_raw = value.get("approved_at")
+    approved_at = (
+        None
+        if approved_at_raw is None
+        else _utc_timestamp(
+            approved_at_raw,
+            "economics_approval.approved_at",
+        )
     )
     approval_values = (
         decision_record_id,
@@ -829,13 +1030,9 @@ def _milestones(
 
 
 def _validate_safety_boundary(value: Mapping[str, Any]) -> None:
-    for field in (
-        "mainnet_changed",
-        "genesis_applied",
-        "assets_moved",
-        "bridge_activated",
-        "mainnet_activation_authorized",
-    ):
+    if set(value) != set(SAFETY_FIELDS):
+        raise NativeTokenGenesisError("safety field set mismatch")
+    for field in SAFETY_FIELDS:
         _require(value, field, False)
 
 
@@ -874,6 +1071,21 @@ def _sha256(value: Any, field: str) -> str:
     result = _optional_sha256(value, field)
     if result is None:
         raise NativeTokenGenesisError(f"{field} must be a SHA-256 digest")
+    return result
+
+
+def _utc_timestamp(value: Any, field: str) -> str:
+    result = _text(value, field, 40)
+    if not UTC_TIMESTAMP.fullmatch(result):
+        raise NativeTokenGenesisError(f"{field} must be an ISO-8601 UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(result.removesuffix("Z") + "+00:00")
+    except ValueError as exc:
+        raise NativeTokenGenesisError(
+            f"{field} must be an ISO-8601 UTC timestamp"
+        ) from exc
+    if parsed.tzinfo != timezone.utc:
+        raise NativeTokenGenesisError(f"{field} must be an ISO-8601 UTC timestamp")
     return result
 
 

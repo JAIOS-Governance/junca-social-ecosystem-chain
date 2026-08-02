@@ -14,12 +14,14 @@ on:
       - "scripts/jsec_mainnet_delivery_gate.py"
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
       - "scripts/jsec_native_economics_decision_packet.py"
+      - "scripts/jsec_native_economics_apply_decision.py"
       - "scripts/jsec_native_genesis_candidate.py"
       - "scripts/jsec_native_genesis_candidate_pipeline.py"
       - "scripts/jsec_native_genesis_candidate_verify.py"
       - "tests/test_jsec_mainnet_delivery_governance.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
+      - "tests/test_jsec_native_economics_decision.py"
       - "tests/test_jsec_native_genesis_candidate_pipeline.py"
   push:
     branches: [main]
@@ -34,12 +36,14 @@ on:
       - "scripts/jsec_mainnet_delivery_gate.py"
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
       - "scripts/jsec_native_economics_decision_packet.py"
+      - "scripts/jsec_native_economics_apply_decision.py"
       - "scripts/jsec_native_genesis_candidate.py"
       - "scripts/jsec_native_genesis_candidate_pipeline.py"
       - "scripts/jsec_native_genesis_candidate_verify.py"
       - "tests/test_jsec_mainnet_delivery_governance.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
+      - "tests/test_jsec_native_economics_decision.py"
       - "tests/test_jsec_native_genesis_candidate_pipeline.py"
   workflow_dispatch:
 
@@ -64,6 +68,7 @@ jobs:
           python -m unittest tests.test_jsec_mainnet_delivery_governance -v
           python -m unittest tests.test_junca_mainnet_readiness -v
           python -m unittest tests.test_jsec_native_token_genesis -v
+          python -m unittest tests.test_jsec_native_economics_decision -v
           python -m unittest tests.test_jsec_native_genesis_candidate_pipeline -v
           mkdir -p artifacts
           python scripts/jsec_mainnet_delivery_gate.py \
