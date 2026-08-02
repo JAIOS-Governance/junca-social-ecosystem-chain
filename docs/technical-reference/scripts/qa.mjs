@@ -238,6 +238,9 @@ for (const required of [
 ]) {
   if (!llms.includes(required)) failures.push(`llms.txt missing ${required}`);
 }
+if ((await readFile(join(dist, "googlebc356aae986ed066.html"), "utf8")).trim() !== "google-site-verification: googlebc356aae986ed066.html") {
+  failures.push("Google Search Console verification file is missing or invalid");
+}
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
 if (releaseManifest.revision !== "R35") failures.push("release manifest revision must be R35");
