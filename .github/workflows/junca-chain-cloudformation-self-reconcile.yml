@@ -57,6 +57,11 @@ jobs:
               aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" >>/tmp/reconcile.log 2>&1
               rc_update=$?
             fi
+            if [ "$rc_update" -ne 0 ]; then
+              aws cloudformation describe-stack-events \\
+                --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 40 \\
+                > /tmp/stack-events.json 2>>/tmp/reconcile.log
+            fi
           fi
           aws iam list-role-policies --role-name JuncaChainDocsProductionDeployment > /tmp/inline-policies.json 2>>/tmp/reconcile.log
           rc_inline=$?
@@ -79,6 +84,11 @@ jobs:
             echo
             echo '## Attached policies'
             if [ -s /tmp/attached-policies.json ]; then jq -r '.AttachedPolicies[]? | "- \(.PolicyName)"' /tmp/attached-policies.json; fi
+            echo
+            echo '## Stack failure events'
+            if [ -s /tmp/stack-events.json ]; then
+              jq -r '.StackEvents[] | select(.ResourceStatus | test("FAILED|ROLLBACK")) | "- [\\(.Timestamp)] \\(.LogicalResourceId) · \\(.ResourceStatus) · \\(.ResourceStatusReason // "no reason")"' /tmp/stack-events.json
+            fi
             echo
             echo '## Log'
             echo '```text'
