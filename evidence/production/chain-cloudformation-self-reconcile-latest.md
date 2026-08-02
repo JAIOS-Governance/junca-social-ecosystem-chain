@@ -1,7 +1,7 @@
 # JUNCA Chain CloudFormation Self Reconcile
 
-Run ID: 30754954285
-Commit: 70105a3df1540623bfda96bd0576b5dc3a6283bb
+Run ID: 30755157009
+Commit: d28470242a2bcfc72ac80f3b3497caf74bec43b6
 Identity RC: 0
 Describe RC: 0
 Distribution binding readback RC: 0
@@ -23,6 +23,10 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Attached policies
 
 ## Stack failure events
+- [2026-08-02T15:49:46.362000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_FAILED · The following resource(s) failed to update: [GitHubDocsDeploymentRole]. 
+- [2026-08-02T15:49:46.036000+00:00] GitHubDocsDeploymentRole · UPDATE_FAILED · Resource handler returned message: "User: arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30755157009 is not authorized to perform: iam:UpdateAssumeRolePolicy on resource: role JuncaChainDocsProductionDeployment because no identity-based policy allows the iam:UpdateAssumeRolePolicy action (Service: Iam, Status Code: 403, Request ID: ff34e2da-c985-413d-a7e0-7839e4894ec1) (SDK Attempt Count: 1)" (RequestToken: b5eafc11-86a7-03a6-8428-ed67db4e8f3c, HandlerErrorCode: AccessDenied)
+- [2026-08-02T15:48:47.488000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [GitHubDocsDeploymentRole]. 
+- [2026-08-02T15:48:47.136000+00:00] GitHubDocsDeploymentRole · UPDATE_FAILED · Resource handler returned message: "User: arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30755157009 is not authorized to perform: iam:UpdateAssumeRolePolicy on resource: role JuncaChainDocsProductionDeployment because no identity-based policy allows the iam:UpdateAssumeRolePolicy action (Service: Iam, Status Code: 403, Request ID: 73c8375c-1797-48e7-bd1c-d2a605bd55de) (SDK Attempt Count: 1)" (RequestToken: 0c667db2-8e02-575e-f5e5-ecbc1c058aa6, HandlerErrorCode: AccessDenied)
 - [2026-08-02T15:42:51.785000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
 - [2026-08-02T15:42:50.921000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
 - [2026-08-02T15:42:47.844000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
@@ -58,10 +62,10 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Log
 ```text
 {
-    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30754954285",
+    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30755157009",
     "Account": "595710543956",
-    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30754954285"
+    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30755157009"
 }
 
-aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_COMPLETE" at least once
+aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_FAILED" at least once
 ```
