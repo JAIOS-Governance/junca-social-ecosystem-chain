@@ -226,6 +226,18 @@ for (const route of routes) {
   if (!sitemap.includes(`<loc>${url}</loc>`)) failures.push(`sitemap missing ${url}`);
 }
 if (!(await readFile(join(dist, "robots.txt"), "utf8")).includes("Allow: /")) failures.push("robots.txt does not allow production indexing");
+const llms = await readFile(join(dist, "llms.txt"), "utf8");
+for (const required of [
+  "JUNCA Social Ecosystem Chain",
+  "juncachain",
+  "junca Platform",
+  "Public Testnet",
+  "Mainnet Changed: false",
+  "Assets Moved: false",
+  "Bridge Activated: false",
+]) {
+  if (!llms.includes(required)) failures.push(`llms.txt missing ${required}`);
+}
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
 if (releaseManifest.revision !== "R35") failures.push("release manifest revision must be R35");
