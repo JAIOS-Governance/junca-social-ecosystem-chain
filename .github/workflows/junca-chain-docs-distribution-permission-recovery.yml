@@ -208,24 +208,311 @@ jobs:
           git pull --rebase origin main
           git push origin HEAD:main
 
-      - name: Dispatch exact Docs stack reconciliation
-        if: steps.repair.outputs.rc == '0'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          status="$(curl --fail-with-body --silent --show-error \
-            -o /tmp/dispatch-response.txt \
-            -w '%{http_code}' \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/junca-chain-cloudformation-self-reconcile.yml/dispatches" \
-            --data '{"ref":"main"}')"
-          test "$status" = "204"
-
       - name: Fail closed when exact permission verification fails
         if: steps.repair.outputs.rc != '0'
         run: exit 1
+
+  publish:
+    needs: recover
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      DISTRIBUTION_ID: E22CXYZGWNT0AJ
+      DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E22CXYZGWNT0AJ
+      DOCS_ORIGIN: https://docs.jaios-governance.org
+      EXPLORER_ORIGIN: https://explorer.jaios-governance.org
+      LIVE_ORIGIN_ID: public-explorer-json
+      LIVE_PATH: explorer.json
+      CACHE_POLICY_ID: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+      RESPONSE_HEADERS_POLICY_ID: 67f7725c-6f97-4210-82d7-5512b31e9d03
+      STACK_NAME: junca-chain-docs-publication
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure exact production identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: docs-live-proxy-direct-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Apply only the live JSON origin and behavior
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          test "$actual_account" = "$AWS_ACCOUNT_ID"
+          case "$actual_arn" in
+            arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/*) ;;
+            *) echo "Unexpected production identity: $actual_arn" >&2; exit 1 ;;
+          esac
+
+          aws cloudfront get-distribution --id "$DISTRIBUTION_ID" > /tmp/distribution-before.json
+          jq -e --arg alias "docs.jaios-governance.org" \
+            '.Distribution.Status == "Deployed" and
+             (.Distribution.DistributionConfig.Aliases.Items | index($alias)) != null' \
+            /tmp/distribution-before.json >/dev/null
+          etag="$(jq -r '.ETag' /tmp/distribution-before.json)"
+          test -n "$etag" && test "$etag" != "null"
+
+          jq \
+            --arg origin_id "$LIVE_ORIGIN_ID" \
+            --arg origin_domain "explorer.jaios-governance.org" \
+            --arg path "$LIVE_PATH" \
+            --arg cache_policy "$CACHE_POLICY_ID" \
+            --arg headers_policy "$RESPONSE_HEADERS_POLICY_ID" \
+            '(.Distribution.DistributionConfig.DefaultCacheBehavior
+              | .PathPattern = $path
+              | .TargetOriginId = $origin_id
+              | .CachePolicyId = $cache_policy
+              | .ResponseHeadersPolicyId = $headers_policy) as $live_behavior
+             | .Distribution.DistributionConfig
+             | .Origins.Items = (
+                 (.Origins.Items // [])
+                 | map(select(.Id != $origin_id))
+                 + [{
+                     Id: $origin_id,
+                     DomainName: $origin_domain,
+                     OriginPath: "",
+                     CustomHeaders: {Quantity: 0},
+                     CustomOriginConfig: {
+                       HTTPPort: 80,
+                       HTTPSPort: 443,
+                       OriginProtocolPolicy: "https-only",
+                       OriginSslProtocols: {Quantity: 1, Items: ["TLSv1.2"]},
+                       OriginReadTimeout: 30,
+                       OriginKeepaliveTimeout: 5
+                     },
+                     ConnectionAttempts: 3,
+                     ConnectionTimeout: 10,
+                     OriginShield: {Enabled: false}
+                   }]
+               )
+             | .Origins.Quantity = (.Origins.Items | length)
+             | .CacheBehaviors.Items = (
+                 (.CacheBehaviors.Items // [])
+                 | map(select(.PathPattern != $path))
+                 + [$live_behavior]
+               )
+             | .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)' \
+            /tmp/distribution-before.json > /tmp/distribution-config.json
+
+          jq -S --arg origin_id "$LIVE_ORIGIN_ID" --arg path "$LIVE_PATH" \
+            '.Distribution.DistributionConfig
+             | .Origins.Items = ((.Origins.Items // []) | map(select(.Id != $origin_id)))
+             | .Origins.Quantity = (.Origins.Items | length)
+             | .CacheBehaviors.Items = ((.CacheBehaviors.Items // []) | map(select(.PathPattern != $path)))
+             | .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)' \
+            /tmp/distribution-before.json > /tmp/preserved-before.json
+          jq -S --arg origin_id "$LIVE_ORIGIN_ID" --arg path "$LIVE_PATH" \
+            '.Origins.Items = ((.Origins.Items // []) | map(select(.Id != $origin_id)))
+             | .Origins.Quantity = (.Origins.Items | length)
+             | .CacheBehaviors.Items = ((.CacheBehaviors.Items // []) | map(select(.PathPattern != $path)))
+             | .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)' \
+            /tmp/distribution-config.json > /tmp/preserved-after.json
+          cmp -s /tmp/preserved-before.json /tmp/preserved-after.json
+
+          aws cloudfront update-distribution \
+            --id "$DISTRIBUTION_ID" \
+            --if-match "$etag" \
+            --distribution-config file:///tmp/distribution-config.json \
+            > /tmp/distribution-update.json
+          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          aws cloudfront get-distribution --id "$DISTRIBUTION_ID" > /tmp/distribution-after.json
+
+          jq -e \
+            --arg alias "docs.jaios-governance.org" \
+            --arg origin_id "$LIVE_ORIGIN_ID" \
+            --arg origin_domain "explorer.jaios-governance.org" \
+            --arg path "$LIVE_PATH" \
+            --arg cache_policy "$CACHE_POLICY_ID" \
+            --arg headers_policy "$RESPONSE_HEADERS_POLICY_ID" \
+            '.Distribution.Status == "Deployed" and
+             (.Distribution.DistributionConfig.Aliases.Items | index($alias)) != null and
+             ([.Distribution.DistributionConfig.Origins.Items[]
+               | select(.Id == $origin_id and
+                        .DomainName == $origin_domain and
+                        .CustomOriginConfig.OriginProtocolPolicy == "https-only")]
+              | length) == 1 and
+             ([.Distribution.DistributionConfig.CacheBehaviors.Items[]
+               | select(.PathPattern == $path and
+                        .TargetOriginId == $origin_id and
+                        .CachePolicyId == $cache_policy and
+                        .ResponseHeadersPolicyId == $headers_policy)]
+              | length) == 1' \
+            /tmp/distribution-after.json >/dev/null
+          echo "etag_before=$etag" >> "$GITHUB_OUTPUT"
+          echo "etag_after=$(jq -r '.ETag' /tmp/distribution-after.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify same-origin live JSON and 15-second continuity
+        id: live
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail-with-body --silent --show-error \
+                --connect-timeout 10 --max-time 10 \
+                -H 'Cache-Control: no-cache' \
+                "$DOCS_ORIGIN/explorer.json" > /tmp/docs-explorer-1.json &&
+               jq -e '.schema == "junca-public-explorer/v4" and
+                      .head.height > 1 and
+                      .head.signed_power == 3 and
+                      .head.total_power == 3 and
+                      .network.peer_count == 2 and
+                      .mainnet_changed == false and
+                      .assets_moved == false and
+                      .bridge_activated == false' \
+                 /tmp/docs-explorer-1.json >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "$ready" = true
+
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 10 \
+            -H 'Cache-Control: no-cache' \
+            "$EXPLORER_ORIGIN/explorer.json" > /tmp/canonical-explorer.json
+          jq -n \
+            --slurpfile docs /tmp/docs-explorer-1.json \
+            --slurpfile canonical /tmp/canonical-explorer.json \
+            '($docs[0].schema == $canonical[0].schema) and
+             ($docs[0].network.chain_id == $canonical[0].network.chain_id) and
+             ($docs[0].runtime_artifact == $canonical[0].runtime_artifact) and
+             (($docs[0].head.height - $canonical[0].head.height) | fabs) <= 1' \
+            | grep -qx true
+
+          sleep 16
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 10 \
+            -H 'Cache-Control: no-cache' \
+            "$DOCS_ORIGIN/explorer.json" > /tmp/docs-explorer-2.json
+          jq -n \
+            --slurpfile first /tmp/docs-explorer-1.json \
+            --slurpfile second /tmp/docs-explorer-2.json \
+            '($second[0].observed_at != $first[0].observed_at) and
+             ($second[0].head.height >= $first[0].head.height) and
+             ($second[0].mainnet_changed == false) and
+             ($second[0].assets_moved == false) and
+             ($second[0].bridge_activated == false)' \
+            | grep -qx true
+          echo "height_first=$(jq -r '.head.height' /tmp/docs-explorer-1.json)" >> "$GITHUB_OUTPUT"
+          echo "height_second=$(jq -r '.head.height' /tmp/docs-explorer-2.json)" >> "$GITHUB_OUTPUT"
+          echo "observed_first=$(jq -r '.observed_at' /tmp/docs-explorer-1.json)" >> "$GITHUB_OUTPUT"
+          echo "observed_second=$(jq -r '.observed_at' /tmp/docs-explorer-2.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Recover CloudFormation rollback state
+        id: stack
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          status_before="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text)"
+          rc=0
+          if [ "$status_before" = "UPDATE_ROLLBACK_FAILED" ]; then
+            aws cloudformation continue-update-rollback \
+              --stack-name "$STACK_NAME" \
+              --resources-to-skip GitHubDocsDeploymentRole
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              for attempt in $(seq 1 60); do
+                status_after="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text)"
+                [ "$status_after" = "UPDATE_ROLLBACK_COMPLETE" ] && break
+                sleep 5
+              done
+              [ "$status_after" = "UPDATE_ROLLBACK_COMPLETE" ] || rc=1
+            fi
+          else
+            status_after="$status_before"
+          fi
+          echo "status_before=$status_before" >> "$GITHUB_OUTPUT"
+          echo "status_after=$status_after" >> "$GITHUB_OUTPUT"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Persist direct production evidence
+        if: always()
+        shell: bash
+        env:
+          ETAG_BEFORE: ${{ steps.deploy.outputs.etag_before }}
+          ETAG_AFTER: ${{ steps.deploy.outputs.etag_after }}
+          HEIGHT_FIRST: ${{ steps.live.outputs.height_first }}
+          HEIGHT_SECOND: ${{ steps.live.outputs.height_second }}
+          OBSERVED_FIRST: ${{ steps.live.outputs.observed_first }}
+          OBSERVED_SECOND: ${{ steps.live.outputs.observed_second }}
+          STACK_BEFORE: ${{ steps.stack.outputs.status_before }}
+          STACK_AFTER: ${{ steps.stack.outputs.status_after }}
+          STACK_RC: ${{ steps.stack.outputs.rc }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          deployment=FAIL
+          if [ -s /tmp/distribution-after.json ] && [ -s /tmp/docs-explorer-2.json ]; then deployment=PASS; fi
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --arg account_id "$AWS_ACCOUNT_ID" \
+            --arg distribution_id "$DISTRIBUTION_ID" \
+            --arg distribution_arn "$DISTRIBUTION_ARN" \
+            --arg etag_before "$ETAG_BEFORE" \
+            --arg etag_after "$ETAG_AFTER" \
+            --arg endpoint "$DOCS_ORIGIN/explorer.json" \
+            --arg height_first "$HEIGHT_FIRST" \
+            --arg height_second "$HEIGHT_SECOND" \
+            --arg observed_first "$OBSERVED_FIRST" \
+            --arg observed_second "$OBSERVED_SECOND" \
+            --arg stack_before "$STACK_BEFORE" \
+            --arg stack_after "$STACK_AFTER" \
+            --arg stack_rc "$STACK_RC" \
+            --arg deployment "$deployment" \
+            '{
+              run_id: $run_id,
+              commit: $commit,
+              account_id: $account_id,
+              distribution_id: $distribution_id,
+              distribution_arn: $distribution_arn,
+              etag_before: $etag_before,
+              etag_after: $etag_after,
+              endpoint: $endpoint,
+              height_first: $height_first,
+              height_second: $height_second,
+              observed_first: $observed_first,
+              observed_second: $observed_second,
+              cache_policy_id: "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              response_headers_policy_id: "67f7725c-6f97-4210-82d7-5512b31e9d03",
+              direct_distribution_update: $deployment,
+              stack_status_before: $stack_before,
+              stack_status_after: $stack_after,
+              stack_recovery_rc: $stack_rc,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > evidence/production/docs-live-proxy-direct-reconcile-latest.json
+          {
+            echo '# Docs Live Proxy Direct Reconcile'
+            echo
+            echo "Run ID: $GITHUB_RUN_ID"
+            echo "Commit: $GITHUB_SHA"
+            echo "Distribution: $DISTRIBUTION_ID"
+            echo "Endpoint: $DOCS_ORIGIN/explorer.json"
+            echo "Direct update: $deployment"
+            echo "Height: $HEIGHT_FIRST -> $HEIGHT_SECOND"
+            echo "Observed: $OBSERVED_FIRST -> $OBSERVED_SECOND"
+            echo "Stack: $STACK_BEFORE -> $STACK_AFTER (rc=$STACK_RC)"
+          } > evidence/production/docs-live-proxy-direct-reconcile-latest.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- evidence/production/docs-live-proxy-direct-reconcile-latest.json evidence/production/docs-live-proxy-direct-reconcile-latest.md
+          git diff --cached --quiet || git commit -m "Record Docs live proxy direct reconcile $GITHUB_RUN_ID"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
