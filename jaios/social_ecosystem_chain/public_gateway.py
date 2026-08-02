@@ -413,6 +413,13 @@ def make_handler(gateway: PublicGateway) -> type[BaseHTTPRequestHandler]:
                 elif self.path in {"/", "/explorer"}:
                     status, body = gateway.explorer_html()
                     self._send(status, "text/html; charset=utf-8", body.encode())
+                elif self.path == "/googlebc356aae986ed066.html":
+                    self._send(
+                        200,
+                        "text/html; charset=utf-8",
+                        b"google-site-verification: googlebc356aae986ed066.html\n",
+                        cache=True,
+                    )
                 elif self.path == "/robots.txt":
                     self._send(200, "text/plain; charset=utf-8", ROBOTS_TEXT.encode(), cache=True)
                 elif self.path == "/sitemap.xml":
