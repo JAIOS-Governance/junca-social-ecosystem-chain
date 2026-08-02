@@ -3,4 +3,4 @@ Requested by CEO: 2026-08-02
 Target stack: junca-chain-docs-publication
 Change: Docs R36 same-origin Explorer JSON live proxy
 Source: 1db62dd4c9c87c830378233ea1b779dcc970f9e0
-Attempt: managed-security-headers-20260802-1459
+Attempt: exact-oac-readback-20260802-1506
