@@ -42,12 +42,31 @@ jobs:
           rc_identity=$?
           aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" > /tmp/stack-before.json 2>>/tmp/reconcile.log
           rc_describe=$?
-          rc_update=99
+          rc_oac=99
+          distribution_id=""
+          oac_id=""
+          runtime_template="infra/aws/docs-publication/main.yaml"
           if [ "$rc_describe" -eq 0 ]; then
+            distribution_id=$(jq -r '.Stacks[0].Outputs[] | select(.OutputKey == "DistributionId") | .OutputValue' /tmp/stack-before.json)
+            aws cloudfront get-distribution --id "$distribution_id" > /tmp/distribution.json 2>>/tmp/reconcile.log
+            rc_oac=$?
+            if [ "$rc_oac" -eq 0 ]; then
+              oac_id=$(jq -r '.Distribution.DistributionConfig.Origins.Items[] | select(.Id == "private-docs-bucket") | .OriginAccessControlId' /tmp/distribution.json)
+              if [ -z "$oac_id" ] || [ "$oac_id" = "null" ]; then
+                rc_oac=1
+                echo "Existing private-docs-bucket OAC ID was not published by distribution readback." >> /tmp/reconcile.log
+              else
+                sed "s/OriginAccessControlId: !GetAtt DocsOriginAccessControl.Id/OriginAccessControlId: $oac_id/" infra/aws/docs-publication/main.yaml > /tmp/docs-publication-runtime.yaml
+                runtime_template="/tmp/docs-publication-runtime.yaml"
+              fi
+            fi
+          fi
+          rc_update=99
+          if [ "$rc_describe" -eq 0 ] && [ "$rc_oac" -eq 0 ]; then
             mapfile -t PARAMS < <(jq -r '.Stacks[0].Parameters[] | "ParameterKey=\(.ParameterKey),UsePreviousValue=true"' /tmp/stack-before.json)
             aws cloudformation update-stack \
               --stack-name "$STACK_NAME" \
-              --template-body file://infra/aws/docs-publication/main.yaml \
+              --template-body "file://${runtime_template}" \
               --capabilities CAPABILITY_NAMED_IAM \
               --parameters "${PARAMS[@]}" \
               --region "$AWS_REGION" > /tmp/update.json 2>>/tmp/reconcile.log
@@ -72,6 +91,9 @@ jobs:
             echo "Commit: $GITHUB_SHA"
             echo "Identity RC: $rc_identity"
             echo "Describe RC: $rc_describe"
+            echo "OAC readback RC: $rc_oac"
+            echo "Distribution ID: $distribution_id"
+            echo "Origin Access Control ID: $oac_id"
             echo "Update RC: $rc_update"
             echo "Inline policy read RC: $rc_inline"
             echo "Attached policy read RC: $rc_attached"
@@ -93,7 +115,7 @@ jobs:
             cat /tmp/reconcile.log
             echo '```'
           } > evidence/production/chain-cloudformation-self-reconcile-latest.md
-          if [ "$rc_identity" -ne 0 ] || [ "$rc_describe" -ne 0 ] || [ "$rc_update" -ne 0 ]; then exit 1; fi
+          if [ "$rc_identity" -ne 0 ] || [ "$rc_describe" -ne 0 ] || [ "$rc_oac" -ne 0 ] || [ "$rc_update" -ne 0 ]; then exit 1; fi
       - name: Commit evidence
         if: always()
         shell: bash
