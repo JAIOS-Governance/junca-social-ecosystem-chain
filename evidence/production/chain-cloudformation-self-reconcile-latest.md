@@ -1,7 +1,7 @@
 # JUNCA Chain CloudFormation Self Reconcile
 
-Run ID: 30753182953
-Commit: 65d892cc9aa3f0a9660f864b08dd3dfc0fc1c9d2
+Run ID: 30753426887
+Commit: 6df39a742c2b3535bc0ad57ec853cc80105468ea
 Identity RC: 0
 Describe RC: 0
 Update RC: 255
@@ -17,6 +17,10 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Attached policies
 
 ## Stack failure events
+- [2026-08-02T15:02:18.415000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
+- [2026-08-02T15:02:17.635000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
+- [2026-08-02T15:02:14.362000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
+- [2026-08-02T15:02:13.860000+00:00] DocsDistribution · UPDATE_FAILED · Unable to retrieve Id attribute for AWS::CloudFront::OriginAccessControl, with error message Access denied for operation 'AWS::CloudFront::OriginAccessControl'.
 - [2026-08-02T14:55:48.267000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
 - [2026-08-02T14:55:47.477000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
 - [2026-08-02T14:55:44.114000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsSecurityHeaders, DocsBucket]. 
@@ -36,9 +40,9 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Log
 ```text
 {
-    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753182953",
+    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753426887",
     "Account": "595710543956",
-    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753182953"
+    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753426887"
 }
 
 aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_COMPLETE" at least once
