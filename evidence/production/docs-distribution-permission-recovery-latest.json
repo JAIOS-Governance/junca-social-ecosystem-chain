@@ -1,6 +1,6 @@
 {
-  "run_id": "30755804386",
-  "commit": "ff643c4db50c5a5b12854ca44ade481247dcfe39",
+  "run_id": "30756020763",
+  "commit": "d221198888023833fb2d5c202cacbd3633c72f11",
   "account_id": "595710543956",
   "selected_bootstrap_role": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
   "target_role_arn": "arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment",
