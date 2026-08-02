@@ -1,13 +1,13 @@
 # JUNCA Chain CloudFormation Self Reconcile
 
-Run ID: 30752665566
-Commit: 7555a0cbd3b9768354a67d9c38c0a1857219baa8
+Run ID: 30752975231
+Commit: 3d945efb834676c86007964775114543362ef3be
 Identity RC: 0
 Describe RC: 0
 Update RC: 255
 Inline policy read RC: 0
 Attached policy read RC: 0
-Stack status: CREATE_COMPLETE
+Stack status: UPDATE_ROLLBACK_COMPLETE
 
 ## Inline policies
 - JuncaChainProductionRecovery
@@ -16,12 +16,14 @@ Stack status: CREATE_COMPLETE
 
 ## Attached policies
 
+## Stack failure events
+
 ## Log
 ```text
 {
-    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30752665566",
+    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30752975231",
     "Account": "595710543956",
-    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30752665566"
+    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30752975231"
 }
 
 aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_COMPLETE" at least once
