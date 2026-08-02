@@ -54,7 +54,8 @@ for (const route of routes) {
     "Chain ID",
     "20260723",
     "Block Timestamp",
-    "NOT CURRENTLY PUBLISHED",
+    'data-live-runtime="observed-at"',
+    'data-live-runtime="height"',
     "PR #237 · MERGED",
     "PR #236 · OPEN DRAFT",
     'href="https://chain.jaios-governance.org/"',
@@ -68,10 +69,11 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260729-r35"',
-    'src="/official-brand-lockup-r32.js?v=20260729-r35"',
-    'src="/docs-controls-r32.js?v=20260729-r35"',
-    'src="/secondary-language.js?v=20260729-r35"',
+    'src="/junca-chain-official-wordmark.png?v=20260802-r36"',
+    'src="/official-brand-lockup-r32.js?v=20260802-r36"',
+    'src="/docs-controls-r32.js?v=20260802-r36"',
+    'src="/live-runtime-r36.js?v=20260802-r36"',
+    'src="/secondary-language.js?v=20260802-r36"',
     'href="/favicon.ico"',
     'id="secondary-language-select"',
     'English remains the fixed primary language.',
@@ -142,9 +144,9 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 100000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260729-r35"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260729-r35"',
-  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260729-r35"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260802-r36"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260802-r36"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260802-r36"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -154,7 +156,7 @@ for (const required of [
   "AWS Runtime",
   "Read-only Operations",
   "Assets Moved",
-  "Revision · 2026.07.29 / R35",
+  "Revision · 2026.08.02 / R36",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -243,7 +245,7 @@ if ((await readFile(join(dist, "googlebc356aae986ed066.html"), "utf8")).trim() !
 }
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R35") failures.push("release manifest revision must be R35");
+if (releaseManifest.revision !== "R36") failures.push("release manifest revision must be R36");
 if (!/^[0-9a-f]{40}$/.test(releaseManifest.chain_source_commit ?? "")) {
   failures.push("release manifest must bind the exact development source commit");
 }
@@ -297,18 +299,18 @@ if (!releaseManifest.runtime_evidence?.client_version) failures.push("runtime cl
 if (releaseManifest.runtime_evidence?.mainnet_changed !== false) failures.push("mainnet boundary is missing");
 if (releaseManifest.runtime_evidence?.assets_moved !== false) failures.push("asset movement boundary is missing");
 if (releaseManifest.runtime_evidence?.bridge_activated !== false) failures.push("bridge boundary is missing");
-if (releaseManifest.runtime_evidence?.block_timestamp !== "NOT_CURRENTLY_PUBLISHED") failures.push("public block timestamp classification is missing");
-if (releaseManifest.runtime_evidence?.block_timestamp_public_label !== "NOT CURRENTLY PUBLISHED") {
-  failures.push("English block timestamp label is missing");
+if (!/^0x[0-9a-f]+$/i.test(releaseManifest.runtime_evidence?.block_timestamp ?? "")) failures.push("publication-snapshot block timestamp is missing");
+if (!/^\d{4}-\d{2}-\d{2}T/.test(releaseManifest.runtime_evidence?.block_timestamp_public_label ?? "")) {
+  failures.push("English publication-snapshot block timestamp label is missing");
 }
-if (releaseManifest.runtime_evidence?.block_timestamp_public_label_ja !== "現在は公開対象外") {
-  failures.push("Japanese block timestamp label is missing");
+if (releaseManifest.runtime_evidence?.block_timestamp_public_label_ja !== "公開時点の確定Block時刻") {
+  failures.push("Japanese publication-snapshot block timestamp label is missing");
 }
 if (releaseManifest.runtime_evidence?.mainnet_activation_authorized !== false) {
   failures.push("mainnet activation authorization boundary is missing");
 }
-if (releaseManifest.runtime_evidence?.block_activity_conclusion !== "NOT_INFERRED_FROM_FINALIZED_HEIGHT") {
-  failures.push("elapsed height must not be interpreted as a service failure");
+if (releaseManifest.runtime_evidence?.block_activity_conclusion !== "PUBLICATION_SNAPSHOT_ONLY") {
+  failures.push("manifest height must remain classified as a publication snapshot");
 }
 if (releaseManifest.development_governance?.canonical_foundation?.pull_request !== 237) {
   failures.push("PR #237 canonical development foundation is missing");
@@ -321,9 +323,9 @@ const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanife
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
-  "/icon-192.png?v=20260729-r35",
-  "/icon-512.png?v=20260729-r35",
-  "/icon-maskable-512.png?v=20260729-r35",
+  "/icon-192.png?v=20260802-r36",
+  "/icon-512.png?v=20260802-r36",
+  "/icon-maskable-512.png?v=20260802-r36",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
@@ -351,6 +353,21 @@ for (const required of [
 const docsControls = await readFile(join(dist, "docs-controls-r32.js"), "utf8");
 for (const required of ["Escape", "docs-menu-open", "aria-expanded", "menuButton.focus()"]) {
   if (!docsControls.includes(required)) failures.push(`mobile menu control missing ${required}`);
+}
+const liveRuntime = await readFile(join(dist, "live-runtime-r36.js"), "utf8");
+for (const required of [
+  'fetch("/explorer.json"',
+  'cache: "no-store"',
+  "REFRESH_MS = 15_000",
+  "TIMEOUT_MS = 10_000",
+  "last successful Explorer values",
+  'window.addEventListener("online"',
+  'document.addEventListener("visibilitychange"',
+]) {
+  if (!liveRuntime.includes(required)) failures.push(`live runtime integration missing ${required}`);
+}
+if (liveRuntime.includes("release-manifest.json")) {
+  failures.push("Docs manifest must not be used as the live network source");
 }
 if (!home.includes('class="official-product-name"')) failures.push("/: official product-name lockup missing");
 if (!home.includes('class="official-brand-lockup"')) failures.push("/: documentation brand lockup missing");

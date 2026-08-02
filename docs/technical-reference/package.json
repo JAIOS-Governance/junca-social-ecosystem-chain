@@ -6,7 +6,7 @@
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
     "build": "node ./scripts/build.mjs",
-    "lint": "node --check ./scripts/build.mjs && node --check ./scripts/qa.mjs && node --check ./scripts/clean.mjs && node --check ./scripts/wait-live-explorer.mjs && node --check ./test/explorer-readback-fixture.mjs && node --check ./scripts/write-official-favicon.mjs && node --check ./src/docs-controls.js && node --check ./src/secondary-language.mjs",
+    "lint": "node --check ./scripts/build.mjs && node --check ./scripts/qa.mjs && node --check ./scripts/clean.mjs && node --check ./scripts/wait-live-explorer.mjs && node --check ./test/explorer-readback-fixture.mjs && node --check ./scripts/write-official-favicon.mjs && node --check ./src/docs-controls.js && node --check ./src/live-runtime.js && node --check ./src/secondary-language.mjs",
     "test": "npm run build && node ./scripts/qa.mjs",
     "test:fixture": "NODE_OPTIONS=--import=./test/explorer-readback-fixture.mjs npm test"
   },
