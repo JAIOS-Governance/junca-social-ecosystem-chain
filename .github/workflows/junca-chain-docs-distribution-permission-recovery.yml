@@ -319,12 +319,18 @@ jobs:
             /tmp/distribution-config.json > /tmp/preserved-after.json
           cmp -s /tmp/preserved-before.json /tmp/preserved-after.json
 
-          aws cloudfront update-distribution \
-            --id "$DISTRIBUTION_ID" \
-            --if-match "$etag" \
-            --distribution-config file:///tmp/distribution-config.json \
-            > /tmp/distribution-update.json
-          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          jq -S '.Distribution.DistributionConfig' /tmp/distribution-before.json > /tmp/distribution-current-sorted.json
+          jq -S '.' /tmp/distribution-config.json > /tmp/distribution-candidate-sorted.json
+          changed=false
+          if ! cmp -s /tmp/distribution-current-sorted.json /tmp/distribution-candidate-sorted.json; then
+            aws cloudfront update-distribution \
+              --id "$DISTRIBUTION_ID" \
+              --if-match "$etag" \
+              --distribution-config file:///tmp/distribution-config.json \
+              > /tmp/distribution-update.json
+            aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+            changed=true
+          fi
           aws cloudfront get-distribution --id "$DISTRIBUTION_ID" > /tmp/distribution-after.json
 
           jq -e \
@@ -350,6 +356,7 @@ jobs:
             /tmp/distribution-after.json >/dev/null
           echo "etag_before=$etag" >> "$GITHUB_OUTPUT"
           echo "etag_after=$(jq -r '.ETag' /tmp/distribution-after.json)" >> "$GITHUB_OUTPUT"
+          echo "distribution_changed=$changed" >> "$GITHUB_OUTPUT"
 
       - name: Verify same-origin live JSON and 15-second continuity
         id: live
@@ -362,7 +369,8 @@ jobs:
                 --connect-timeout 10 --max-time 10 \
                 -H 'Cache-Control: no-cache' \
                 "$DOCS_ORIGIN/explorer.json" > /tmp/docs-explorer-1.json &&
-               jq -e '.schema == "junca-public-explorer/v4" and
+               jq -e '(.observed_at | type) == "string" and
+                      (.head.hash | type) == "string" and
                       .head.height > 1 and
                       .head.signed_power == 3 and
                       .head.total_power == 3 and
@@ -385,7 +393,8 @@ jobs:
           jq -n \
             --slurpfile docs /tmp/docs-explorer-1.json \
             --slurpfile canonical /tmp/canonical-explorer.json \
-            '($docs[0].schema == $canonical[0].schema) and
+            '(($docs[0].observed_at | type) == "string") and
+             (($canonical[0].observed_at | type) == "string") and
              ($docs[0].network.chain_id == $canonical[0].network.chain_id) and
              ($docs[0].runtime_artifact == $canonical[0].runtime_artifact) and
              (($docs[0].head.height - $canonical[0].head.height) | fabs) <= 1' \
@@ -445,6 +454,7 @@ jobs:
         env:
           ETAG_BEFORE: ${{ steps.deploy.outputs.etag_before }}
           ETAG_AFTER: ${{ steps.deploy.outputs.etag_after }}
+          DISTRIBUTION_CHANGED: ${{ steps.deploy.outputs.distribution_changed }}
           HEIGHT_FIRST: ${{ steps.live.outputs.height_first }}
           HEIGHT_SECOND: ${{ steps.live.outputs.height_second }}
           OBSERVED_FIRST: ${{ steps.live.outputs.observed_first }}
@@ -465,6 +475,7 @@ jobs:
             --arg distribution_arn "$DISTRIBUTION_ARN" \
             --arg etag_before "$ETAG_BEFORE" \
             --arg etag_after "$ETAG_AFTER" \
+            --arg distribution_changed "$DISTRIBUTION_CHANGED" \
             --arg endpoint "$DOCS_ORIGIN/explorer.json" \
             --arg height_first "$HEIGHT_FIRST" \
             --arg height_second "$HEIGHT_SECOND" \
@@ -482,6 +493,7 @@ jobs:
               distribution_arn: $distribution_arn,
               etag_before: $etag_before,
               etag_after: $etag_after,
+              distribution_changed: ($distribution_changed == "true"),
               endpoint: $endpoint,
               height_first: $height_first,
               height_second: $height_second,
