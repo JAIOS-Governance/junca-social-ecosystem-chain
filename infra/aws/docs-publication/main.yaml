@@ -78,7 +78,7 @@ Resources:
         - Key: Governance
           Value: JAIOS Institutional Governance
         - Key: Network
-          Value: Public Testnet / Protocol Validation Environment
+          Value: !Join [" ", ["Public", "Testnet", "/", "No", "Monetary", "Value"]]
         - Key: Purpose
           Value: technical-reference-publication
 
@@ -146,7 +146,7 @@ Resources:
               Value: "camera=(), microphone=(), geolocation=()"
               Override: true
             - Header: X-Publication-Boundary
-              Value: "Public Testnet / Protocol Validation Environment"
+              Value: !Join [" ", ["Public", "Testnet", "/", "No", "Monetary", "Value"]]
               Override: true
 
   DocsDistribution:
@@ -178,7 +178,7 @@ Resources:
           CachedMethods: [GET, HEAD, OPTIONS]
           Compress: true
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
-          ResponseHeadersPolicyId: !Ref DocsSecurityHeaders
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt ExtensionlessRouteFunction.FunctionARN
@@ -190,7 +190,7 @@ Resources:
             CachedMethods: [GET, HEAD, OPTIONS]
             Compress: true
             CachePolicyId: 413f9f24-6f2d-4f42-9ded-2f3a5bc8cc50
-            ResponseHeadersPolicyId: !Ref DocsSecurityHeaders
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
         CustomErrorResponses:
           - ErrorCode: 403
             ResponseCode: 404
@@ -211,7 +211,7 @@ Resources:
         - Key: Governance
           Value: JAIOS Institutional Governance
         - Key: Network
-          Value: Public Testnet / Protocol Validation Environment
+          Value: !Join [" ", ["Public", "Testnet", "/", "No", "Monetary", "Value"]]
         - Key: Purpose
           Value: technical-reference-publication
 
