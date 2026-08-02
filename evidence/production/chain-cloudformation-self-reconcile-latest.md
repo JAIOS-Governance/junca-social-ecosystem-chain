@@ -1,9 +1,12 @@
 # JUNCA Chain CloudFormation Self Reconcile
 
-Run ID: 30753426887
-Commit: 6df39a742c2b3535bc0ad57ec853cc80105468ea
+Run ID: 30753610349
+Commit: 7a782ead608d917995ed7fb9ccf7c5763d9648a3
 Identity RC: 0
 Describe RC: 0
+OAC readback RC: 0
+Distribution ID: E22CXYZGWNT0AJ
+Origin Access Control ID: E1FWMEHWY4J38G
 Update RC: 255
 Inline policy read RC: 0
 Attached policy read RC: 0
@@ -17,6 +20,10 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Attached policies
 
 ## Stack failure events
+- [2026-08-02T15:07:07.913000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
+- [2026-08-02T15:07:07.128000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
+- [2026-08-02T15:07:04.187000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
+- [2026-08-02T15:07:03.710000+00:00] DocsDistribution · UPDATE_FAILED · Unable to retrieve FunctionARN attribute for AWS::CloudFront::Function, with error message Access denied for operation 'AWS::CloudFront::Function: User: arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753610349 is not authorized to perform: cloudfront:GetFunction on resource: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956 because no identity-based policy allows the cloudfront:GetFunction action (Service: CloudFront, Status Code: 403, Request ID: c844733d-693e-4e9c-8473-5e857c899da6) (SDK Attempt Count: 1)'.
 - [2026-08-02T15:02:18.415000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
 - [2026-08-02T15:02:17.635000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
 - [2026-08-02T15:02:14.362000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
@@ -40,9 +47,9 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Log
 ```text
 {
-    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753426887",
+    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753610349",
     "Account": "595710543956",
-    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753426887"
+    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753610349"
 }
 
 aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_COMPLETE" at least once
