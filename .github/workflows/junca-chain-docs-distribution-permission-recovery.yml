@@ -20,7 +20,6 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
-      STACK_NAME: junca-chain-docs-publication
       TARGET_ROLE_NAME: JuncaChainDocsProductionDeployment
       TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
       TARGET_POLICY_NAME: DocsLiveProxyDistributionUpdate
@@ -124,25 +123,6 @@ jobs:
             rc_verify=$?
           fi
 
-          stack_before="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>> /tmp/permission-recovery.log)"
-          stack_after="$stack_before"
-          stack_rc=0
-          if [ "$stack_before" = "UPDATE_ROLLBACK_FAILED" ]; then
-            aws cloudformation continue-update-rollback \
-              --stack-name "$STACK_NAME" \
-              --resources-to-skip GitHubDocsDeploymentRole \
-              >> /tmp/permission-recovery.log 2>&1
-            stack_rc=$?
-            if [ "$stack_rc" -eq 0 ]; then
-              for attempt in $(seq 1 60); do
-                stack_after="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>> /tmp/permission-recovery.log)"
-                [ "$stack_after" = "UPDATE_ROLLBACK_COMPLETE" ] && break
-                sleep 5
-              done
-              [ "$stack_after" = "UPDATE_ROLLBACK_COMPLETE" ] || stack_rc=1
-            fi
-          fi
-
           rc=0
           [ "$rc_put" -eq 0 ] || rc=1
           [ "$rc_get" -eq 0 ] || rc=1
@@ -158,9 +138,6 @@ jobs:
           echo "put_rc=$rc_put" >> "$GITHUB_OUTPUT"
           echo "get_rc=$rc_get" >> "$GITHUB_OUTPUT"
           echo "verify_rc=$rc_verify" >> "$GITHUB_OUTPUT"
-          echo "stack_before=$stack_before" >> "$GITHUB_OUTPUT"
-          echo "stack_after=$stack_after" >> "$GITHUB_OUTPUT"
-          echo "stack_rc=$stack_rc" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Persist exact permission evidence
@@ -172,9 +149,6 @@ jobs:
           PUT_RC: ${{ steps.repair.outputs.put_rc }}
           GET_RC: ${{ steps.repair.outputs.get_rc }}
           VERIFY_RC: ${{ steps.repair.outputs.verify_rc }}
-          STACK_BEFORE: ${{ steps.repair.outputs.stack_before }}
-          STACK_AFTER: ${{ steps.repair.outputs.stack_after }}
-          STACK_RC: ${{ steps.repair.outputs.stack_rc }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -196,9 +170,6 @@ jobs:
             --arg get_rc "$GET_RC" \
             --arg verify_rc "$VERIFY_RC" \
             --arg verification "$verification" \
-            --arg stack_before "$STACK_BEFORE" \
-            --arg stack_after "$STACK_AFTER" \
-            --arg stack_rc "$STACK_RC" \
             '{
               run_id: $run_id,
               commit: $commit,
@@ -212,9 +183,6 @@ jobs:
               get_role_policy_rc: $get_rc,
               exact_policy_verification_rc: $verify_rc,
               verification: $verification,
-              stack_status_before: $stack_before,
-              stack_status_after: $stack_after,
-              stack_recovery_rc: $stack_rc,
               broad_iam_grant: false,
               mainnet_changed: false,
               assets_moved: false,
@@ -230,7 +198,6 @@ jobs:
             echo "Action: $TARGET_ACTION"
             echo "Resource: $TARGET_DISTRIBUTION_ARN"
             echo "Verification: $verification"
-            echo "Stack: $STACK_BEFORE -> $STACK_AFTER (rc=$STACK_RC)"
             echo
             echo '## Execution log'
             echo '~~~text'
@@ -241,8 +208,8 @@ jobs:
           git diff --cached --quiet || git commit -m "Record Docs distribution permission recovery $GITHUB_RUN_ID"
           git push origin HEAD:main
 
-      - name: Fail closed when permission or bootstrap rollback recovery fails
-        if: steps.repair.outputs.rc != '0' || steps.repair.outputs.stack_rc != '0'
+      - name: Fail closed when exact permission verification fails
+        if: steps.repair.outputs.rc != '0'
         run: exit 1
 
   publish:
@@ -523,7 +490,8 @@ jobs:
               direct_distribution_update: $deployment,
               stack_status_before: $stack_before,
               stack_status_after: $stack_after,
-              stack_recovery_rc: $stack_rc,
+              stack_inspection_rc: $stack_rc,
+              stack_recovery_attempted: false,
               mainnet_changed: false,
               assets_moved: false,
               bridge_activated: false
@@ -538,7 +506,8 @@ jobs:
             echo "Direct update: $deployment"
             echo "Height: $HEIGHT_FIRST -> $HEIGHT_SECOND"
             echo "Observed: $OBSERVED_FIRST -> $OBSERVED_SECOND"
-            echo "Stack: $STACK_BEFORE -> $STACK_AFTER (rc=$STACK_RC)"
+            echo "Stack inspection: $STACK_BEFORE -> $STACK_AFTER (rc=$STACK_RC)"
+            echo "Stack recovery attempted: false"
           } > evidence/production/docs-live-proxy-direct-reconcile-latest.md
           git add -- evidence/production/docs-live-proxy-direct-reconcile-latest.json evidence/production/docs-live-proxy-direct-reconcile-latest.md
           git diff --cached --quiet || git commit -m "Record Docs live proxy direct reconcile $GITHUB_RUN_ID"
