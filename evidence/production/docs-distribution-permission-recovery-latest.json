@@ -1,0 +1,18 @@
+{
+  "run_id": "30754941176",
+  "commit": "8e661ff8741deb630e141f1078d618caab1499ce",
+  "account_id": "595710543956",
+  "selected_bootstrap_role": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "target_role_arn": "arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment",
+  "policy_name": "DocsLiveProxyDistributionUpdate",
+  "action": "cloudfront:UpdateDistribution",
+  "resource": "arn:aws:cloudfront::595710543956:distribution/E22CXYZGWNT0AJ",
+  "put_role_policy_rc": "0",
+  "get_role_policy_rc": "0",
+  "exact_policy_verification_rc": "0",
+  "verification": "PASS",
+  "broad_iam_grant": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}
