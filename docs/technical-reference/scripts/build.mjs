@@ -439,6 +439,11 @@ JCC / junca Cash, remittance, ATM, payment-terminal, legacy PoSV, former-company
 `,
   "utf8",
 );
+await writeFile(
+  join(dist, "googlebc356aae986ed066.html"),
+  "google-site-verification: googlebc356aae986ed066.html\n",
+  "utf8",
+);
 const home404 = (await readFile(join(dist, "index.html"), "utf8"))
   .replace(/<title>[^<]*<\/title>/, "<title>Reference Not Found | JUNCA Social Ecosystem Chain</title>")
   .replace(/<link rel="canonical" href="[^"]+">/, '<link rel="canonical" href="https://docs.jaios-governance.org/404">');
