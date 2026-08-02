@@ -1,12 +1,14 @@
 # JUNCA Chain CloudFormation Self Reconcile
 
-Run ID: 30753610349
-Commit: 7a782ead608d917995ed7fb9ccf7c5763d9648a3
+Run ID: 30753774915
+Commit: 224761653887d3c5692d605a962f6c96d8f15804
 Identity RC: 0
 Describe RC: 0
-OAC readback RC: 0
+Distribution binding readback RC: 0
 Distribution ID: E22CXYZGWNT0AJ
 Origin Access Control ID: E1FWMEHWY4J38G
+S3 Origin Domain: junca-chain-docs-595710543956.s3.us-east-1.amazonaws.com
+Route Function ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
 Update RC: 255
 Inline policy read RC: 0
 Attached policy read RC: 0
@@ -20,6 +22,10 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Attached policies
 
 ## Stack failure events
+- [2026-08-02T15:11:35.594000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
+- [2026-08-02T15:11:34.846000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
+- [2026-08-02T15:11:28.931000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
+- [2026-08-02T15:11:28.607000+00:00] DocsDistribution · UPDATE_FAILED · Resource handler returned message: "Access denied for operation 'User: arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753774915 is not authorized to perform: cloudfront:UpdateDistribution on resource: arn:aws:cloudfront::595710543956:distribution/E22CXYZGWNT0AJ because no identity-based policy allows the cloudfront:UpdateDistribution action (Service: CloudFront, Status Code: 403, Request ID: 27194d8c-e86f-419f-8431-1f5d06626153) (SDK Attempt Count: 1)'." (RequestToken: a628a703-c9df-02b1-7c41-c9aef9e5b6c4, HandlerErrorCode: AccessDenied)
 - [2026-08-02T15:07:07.913000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
 - [2026-08-02T15:07:07.128000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
 - [2026-08-02T15:07:04.187000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
@@ -47,9 +53,9 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Log
 ```text
 {
-    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753610349",
+    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753774915",
     "Account": "595710543956",
-    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753610349"
+    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753774915"
 }
 
 aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_COMPLETE" at least once
