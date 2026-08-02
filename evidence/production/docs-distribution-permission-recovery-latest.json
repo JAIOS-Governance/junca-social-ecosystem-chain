@@ -1,6 +1,6 @@
 {
-  "run_id": "30756216191",
-  "commit": "4ee162fc2e9caebfc02c9676fd8c3a94556e2a7c",
+  "run_id": "30756375628",
+  "commit": "5d2a9c8be54d60ec3e8eda3efb5c43a1fa9ec446",
   "account_id": "595710543956",
   "selected_bootstrap_role": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
   "target_role_arn": "arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment",
@@ -11,9 +11,6 @@
   "get_role_policy_rc": "0",
   "exact_policy_verification_rc": "0",
   "verification": "PASS",
-  "stack_status_before": "",
-  "stack_status_after": "",
-  "stack_recovery_rc": "0",
   "broad_iam_grant": false,
   "mainnet_changed": false,
   "assets_moved": false,
