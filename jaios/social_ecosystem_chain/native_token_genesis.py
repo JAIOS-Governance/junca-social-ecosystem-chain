@@ -14,7 +14,10 @@ from typing import Any, Mapping
 SCHEMA_VERSION = "jsec-native-token-genesis-plan/v1"
 ECONOMICS_DEFINITION_SCHEMA_VERSION = "jsec-native-economics-definition/v1"
 ECONOMICS_DECISION_SCHEMA_VERSION = "jsec-native-economics-decision/v1"
-GENESIS_CANDIDATE_SCHEMA_VERSION = "jsec-native-genesis-candidate/v1"
+ALLOCATION_DECISION_SCHEMA_VERSION = (
+    "jsec-native-genesis-allocation-decision/v1"
+)
+GENESIS_CANDIDATE_SCHEMA_VERSION = "jsec-native-genesis-candidate/v2"
 GENESIS_ALLOCATIONS_SCHEMA_VERSION = "jsec-native-genesis-allocations/v1"
 OFFICIAL_NAME = "JUNCA Social Ecosystem Chain"
 GOVERNANCE = "JAIOS Institutional Governance"
@@ -58,6 +61,7 @@ CANDIDATE_FIELDS = (
     "definition",
     "economics_approval",
     "allocations",
+    "allocation_approval",
     "allocations_sha256",
     "custody",
     "custody_sha256",
@@ -101,6 +105,52 @@ ECONOMICS_DECISION_CONSTRAINT_FIELDS = (
     "asset_class",
     "issuance_event",
     "target_genesis_date",
+    "contract_token_dependency",
+    "contract_address",
+    "safety",
+)
+
+ALLOCATION_SECTION_FIELDS = (
+    "locked",
+    "authority",
+    "status",
+    "decision_record_id",
+    "approved_definition_sha256",
+    "approved_allocations_sha256",
+    "decision_record_sha256",
+    "approved_at",
+    "accounts",
+)
+
+ALLOCATION_APPROVAL_FIELDS = (
+    "authority",
+    "status",
+    "decision_record_id",
+    "approved_definition_sha256",
+    "approved_allocations_sha256",
+    "decision_record_sha256",
+    "approved_at",
+)
+
+ALLOCATION_DECISION_FIELDS = (
+    "schema_version",
+    "official_name",
+    "governance",
+    "authority",
+    "decision",
+    "decision_record_id",
+    "approved_at",
+    "authorization_evidence_sha256",
+    "approved_definition_sha256",
+    "allocations",
+    "constraints",
+)
+
+ALLOCATION_DECISION_CONSTRAINT_FIELDS = (
+    "asset_class",
+    "issuance_event",
+    "target_genesis_date",
+    "total_supply_base_units",
     "contract_token_dependency",
     "contract_address",
     "safety",
@@ -208,9 +258,54 @@ class NativeEconomicsDecision:
 
 
 @dataclass(frozen=True)
+class NativeGenesisAllocationDecision:
+    decision_record_id: str
+    approved_at: str
+    authorization_evidence_sha256: str
+    approved_definition_sha256: str
+    allocations: tuple[GenesisAllocation, ...]
+    total_supply_base_units: int
+    approved_allocations_sha256: str
+    decision_record_sha256: str
+
+    def as_evidence(self) -> dict[str, Any]:
+        return {
+            "schema_version": ALLOCATION_DECISION_SCHEMA_VERSION,
+            "state": "VERIFIED_CEO_GENESIS_ALLOCATION_DECISION",
+            "official_name": OFFICIAL_NAME,
+            "governance": GOVERNANCE,
+            "authority": ECONOMICS_AUTHORITY,
+            "decision_record_id": self.decision_record_id,
+            "approved_at": self.approved_at,
+            "authorization_evidence_sha256": (
+                self.authorization_evidence_sha256
+            ),
+            "approved_definition_sha256": (
+                self.approved_definition_sha256
+            ),
+            "approved_allocations_sha256": (
+                self.approved_allocations_sha256
+            ),
+            "decision_record_sha256": self.decision_record_sha256,
+            "allocation_count": len(self.allocations),
+            "total_supply_base_units": self.total_supply_base_units,
+            "asset_class": "native-token",
+            "target_genesis_date": TARGET_GENESIS_DATE.isoformat(),
+            "contract_token_dependency": False,
+            "contract_address": None,
+            "mainnet_changed": False,
+            "genesis_applied": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+            "mainnet_activation_authorized": False,
+        }
+
+
+@dataclass(frozen=True)
 class NativeGenesisCandidate:
     definition: Mapping[str, Any]
     economics_approval: Mapping[str, Any]
+    allocation_approval: Mapping[str, Any]
     allocations: tuple[GenesisAllocation, ...]
     allocations_sha256: str
     custody: Mapping[str, Any]
@@ -232,6 +327,9 @@ class NativeGenesisCandidate:
                 "total_supply_base_units"
             ],
             "allocation_count": len(self.allocations),
+            "allocation_decision_record_sha256": self.allocation_approval[
+                "decision_record_sha256"
+            ],
             "allocations_sha256": self.allocations_sha256,
             "custody_sha256": self.custody_sha256,
             "source_plan_sha256": self.source_plan_sha256,
@@ -250,6 +348,7 @@ class NativeTokenGenesisPlan:
     definition: Mapping[str, Any]
     economics_approval: Mapping[str, Any]
     allocations_locked: bool
+    allocation_approval: Mapping[str, Any]
     allocations: tuple[GenesisAllocation, ...]
     custody: Mapping[str, Any]
     gates: tuple[tuple[str, bool], ...]
@@ -391,6 +490,7 @@ class NativeTokenGenesisPlan:
             },
             "economics_approval": dict(self.economics_approval),
             "allocations": allocations,
+            "allocation_approval": dict(self.allocation_approval),
             "allocations_sha256": _canonical_sha256(allocation_commitment),
             "custody": custody_commitment,
             "custody_sha256": _canonical_sha256(custody_commitment),
@@ -445,6 +545,19 @@ class NativeTokenGenesisPlan:
                     "decision_record_sha256"
                 ],
             },
+            "genesis_allocations": {
+                "status": self.allocation_approval["status"],
+                "authority": self.allocation_approval["authority"],
+                "approved_definition_sha256": self.allocation_approval[
+                    "approved_definition_sha256"
+                ],
+                "approved_allocations_sha256": self.allocation_approval[
+                    "approved_allocations_sha256"
+                ],
+                "decision_record_sha256": self.allocation_approval[
+                    "decision_record_sha256"
+                ],
+            },
             "contract_token_dependency": False,
             "mainnet_changed": False,
             "genesis_applied": False,
@@ -472,6 +585,18 @@ def load_native_economics_decision(
             "unable to load native economics decision"
         ) from exc
     return evaluate_native_economics_decision(raw)
+
+
+def load_native_genesis_allocation_decision(
+    path: str | Path,
+) -> NativeGenesisAllocationDecision:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise NativeTokenGenesisError(
+            "unable to load native Genesis allocation decision"
+        ) from exc
+    return evaluate_native_genesis_allocation_decision(raw)
 
 
 def load_native_genesis_candidate(
@@ -548,6 +673,92 @@ def evaluate_native_economics_decision(
     )
 
 
+def evaluate_native_genesis_allocation_decision(
+    raw: Mapping[str, Any],
+) -> NativeGenesisAllocationDecision:
+    if not isinstance(raw, Mapping):
+        raise NativeTokenGenesisError(
+            "native Genesis allocation decision must be an object"
+        )
+    if set(raw) != set(ALLOCATION_DECISION_FIELDS):
+        raise NativeTokenGenesisError(
+            "native Genesis allocation decision field set mismatch"
+        )
+    rendered = json.dumps(raw, sort_keys=True, separators=(",", ":")).lower()
+    for marker in ("private_key", "mnemonic", "seed_phrase", "secret_value"):
+        if marker in rendered:
+            raise NativeTokenGenesisError(
+                f"secret material marker prohibited: {marker}"
+            )
+
+    _require(raw, "schema_version", ALLOCATION_DECISION_SCHEMA_VERSION)
+    _require(raw, "official_name", OFFICIAL_NAME)
+    _require(raw, "governance", GOVERNANCE)
+    _require(raw, "authority", ECONOMICS_AUTHORITY)
+    _require(raw, "decision", "approved")
+    decision_record_id = _text(
+        raw.get("decision_record_id"),
+        "decision_record_id",
+        200,
+    )
+    approved_at = _utc_timestamp(raw.get("approved_at"), "approved_at")
+    authorization_evidence_sha256 = _sha256(
+        raw.get("authorization_evidence_sha256"),
+        "authorization_evidence_sha256",
+    )
+    approved_definition_sha256 = _sha256(
+        raw.get("approved_definition_sha256"),
+        "approved_definition_sha256",
+    )
+    allocations = _allocations(raw.get("allocations"))
+    if not allocations:
+        raise NativeTokenGenesisError(
+            "approved Genesis allocation decision requires accounts"
+        )
+    _require_canonical_allocations(allocations)
+
+    constraints = _mapping(raw.get("constraints"), "constraints")
+    if set(constraints) != set(ALLOCATION_DECISION_CONSTRAINT_FIELDS):
+        raise NativeTokenGenesisError(
+            "native Genesis allocation constraint field set mismatch"
+        )
+    _require(constraints, "asset_class", "native-token")
+    _require(constraints, "issuance_event", "mainnet-genesis")
+    _require(
+        constraints,
+        "target_genesis_date",
+        TARGET_GENESIS_DATE.isoformat(),
+    )
+    total_supply_base_units = _positive_integer(
+        constraints.get("total_supply_base_units"),
+        "constraints.total_supply_base_units",
+    )
+    if sum(item.amount_base_units for item in allocations) != (
+        total_supply_base_units
+    ):
+        raise NativeTokenGenesisError(
+            "approved Genesis allocation total must equal declared total supply"
+        )
+    _require(constraints, "contract_token_dependency", False)
+    _require(constraints, "contract_address", None)
+    _validate_safety_boundary(
+        _mapping(constraints.get("safety"), "constraints.safety")
+    )
+
+    return NativeGenesisAllocationDecision(
+        decision_record_id=decision_record_id,
+        approved_at=approved_at,
+        authorization_evidence_sha256=authorization_evidence_sha256,
+        approved_definition_sha256=approved_definition_sha256,
+        allocations=allocations,
+        total_supply_base_units=total_supply_base_units,
+        approved_allocations_sha256=native_genesis_allocations_digest(
+            allocations
+        ),
+        decision_record_sha256=_canonical_sha256(raw),
+    )
+
+
 def apply_native_economics_decision(
     raw_plan: Mapping[str, Any],
     decision: NativeEconomicsDecision,
@@ -601,6 +812,97 @@ def apply_native_economics_decision(
     return updated
 
 
+def apply_native_genesis_allocation_decision(
+    raw_plan: Mapping[str, Any],
+    decision: NativeGenesisAllocationDecision,
+) -> dict[str, Any]:
+    if not isinstance(raw_plan, Mapping):
+        raise NativeTokenGenesisError("native Genesis plan must be an object")
+    if not isinstance(decision, NativeGenesisAllocationDecision):
+        raise NativeTokenGenesisError(
+            "decision must be a verified native Genesis allocation decision"
+        )
+    current = evaluate_native_token_genesis_plan(raw_plan)
+    if current.definition.get("locked") is not True:
+        raise NativeTokenGenesisError(
+            "Genesis allocation decision requires locked native economics"
+        )
+    if current.economics_approval.get("status") != "approved":
+        raise NativeTokenGenesisError(
+            "Genesis allocation decision requires approved native economics"
+        )
+    expected_definition_sha256 = native_economics_definition_digest(
+        current.definition
+    )
+    if decision.approved_definition_sha256 != expected_definition_sha256:
+        raise NativeTokenGenesisError(
+            "Genesis allocation decision definition digest mismatch"
+        )
+    if (
+        decision.total_supply_base_units
+        != current.definition["total_supply_base_units"]
+    ):
+        raise NativeTokenGenesisError(
+            "Genesis allocation decision total supply mismatch"
+        )
+    if current.allocations and current.allocations != decision.allocations:
+        raise NativeTokenGenesisError(
+            "Genesis allocation decision conflicts with existing accounts"
+        )
+
+    approval = current.allocation_approval
+    if approval["status"] == "approved":
+        expected = {
+            "decision_record_id": decision.decision_record_id,
+            "approved_definition_sha256": (
+                decision.approved_definition_sha256
+            ),
+            "approved_allocations_sha256": (
+                decision.approved_allocations_sha256
+            ),
+            "decision_record_sha256": decision.decision_record_sha256,
+            "approved_at": decision.approved_at,
+        }
+        for field, value in expected.items():
+            if approval[field] != value:
+                raise NativeTokenGenesisError(
+                    f"Genesis allocation approval conflicts with {field}"
+                )
+
+    updated = json.loads(
+        json.dumps(raw_plan, sort_keys=True, separators=(",", ":"))
+    )
+    updated["allocations"] = {
+        "locked": True,
+        "authority": ECONOMICS_AUTHORITY,
+        "status": "approved",
+        "decision_record_id": decision.decision_record_id,
+        "approved_definition_sha256": (
+            decision.approved_definition_sha256
+        ),
+        "approved_allocations_sha256": (
+            decision.approved_allocations_sha256
+        ),
+        "decision_record_sha256": decision.decision_record_sha256,
+        "approved_at": decision.approved_at,
+        "accounts": [
+            {
+                "address": item.address,
+                "amount_base_units": item.amount_base_units,
+                "category": item.category,
+            }
+            for item in decision.allocations
+        ],
+    }
+    updated["gates"]["deterministic_genesis_allocations"] = True
+    for milestone in updated["milestones"]:
+        if milestone["id"] == "deterministic_genesis_allocations":
+            milestone["status"] = "completed"
+            break
+    evaluate_native_token_genesis_plan(updated)
+    return updated
+
+
 def evaluate_native_token_genesis_plan(
     raw: Mapping[str, Any],
 ) -> NativeTokenGenesisPlan:
@@ -629,11 +931,22 @@ def evaluate_native_token_genesis_plan(
         definition,
     )
     allocations_section = _mapping(raw.get("allocations"), "allocations")
+    if set(allocations_section) != set(ALLOCATION_SECTION_FIELDS):
+        raise NativeTokenGenesisError("Genesis allocation section field set mismatch")
     allocations_locked = _boolean(
         allocations_section.get("locked"), "allocations.locked"
     )
     allocations = _allocations(allocations_section.get("accounts"))
     _validate_allocation_supply(definition, allocations_locked, allocations)
+    allocation_approval = _allocation_approval(
+        {
+            field: allocations_section.get(field)
+            for field in ALLOCATION_APPROVAL_FIELDS
+        },
+        definition,
+        allocations_locked,
+        allocations,
+    )
 
     custody = _custody(_mapping(raw.get("custody"), "custody"))
     gates_raw = _mapping(raw.get("gates"), "gates")
@@ -648,6 +961,7 @@ def evaluate_native_token_genesis_plan(
         definition,
         economics_approval,
         allocations_locked,
+        allocation_approval,
         custody,
         gate_map,
     )
@@ -660,6 +974,7 @@ def evaluate_native_token_genesis_plan(
         definition=definition,
         economics_approval=economics_approval,
         allocations_locked=allocations_locked,
+        allocation_approval=allocation_approval,
         allocations=allocations,
         custody=custody,
         gates=gates,
@@ -701,11 +1016,18 @@ def evaluate_native_genesis_candidate(
         raise NativeTokenGenesisError("Genesis candidate economics must be approved")
 
     allocations = _allocations(raw.get("allocations"))
-    if tuple(item.address for item in allocations) != tuple(
-        sorted(item.address for item in allocations)
-    ):
-        raise NativeTokenGenesisError("Genesis candidate allocations are not canonical")
+    _require_canonical_allocations(allocations)
     _validate_allocation_supply(definition, True, allocations)
+    allocation_approval = _allocation_approval(
+        _mapping(raw.get("allocation_approval"), "allocation_approval"),
+        definition,
+        True,
+        allocations,
+    )
+    if allocation_approval["status"] != "approved":
+        raise NativeTokenGenesisError(
+            "Genesis candidate allocations must be approved"
+        )
     allocations_sha256 = _sha256(raw.get("allocations_sha256"), "allocations_sha256")
     allocation_commitment = {
         "schema_version": GENESIS_ALLOCATIONS_SCHEMA_VERSION,
@@ -750,6 +1072,7 @@ def evaluate_native_genesis_candidate(
     return NativeGenesisCandidate(
         definition=definition,
         economics_approval=economics_approval,
+        allocation_approval=allocation_approval,
         allocations=allocations,
         allocations_sha256=allocations_sha256,
         custody=custody,
@@ -771,6 +1094,32 @@ def native_economics_definition_digest(definition: Mapping[str, Any]) -> str:
             key: normalized[key]
             for key in ECONOMICS_DEFINITION_FIELDS
         },
+    }
+    return _canonical_sha256(payload)
+
+
+def native_genesis_allocations_digest(
+    allocations: Any,
+) -> str:
+    """Bind allocation approval to exact canonical native Genesis accounts."""
+
+    if isinstance(allocations, tuple) and all(
+        isinstance(item, GenesisAllocation) for item in allocations
+    ):
+        normalized = allocations
+    else:
+        normalized = _allocations(allocations)
+    _require_canonical_allocations(normalized)
+    payload = {
+        "schema_version": GENESIS_ALLOCATIONS_SCHEMA_VERSION,
+        "accounts": [
+            {
+                "address": item.address,
+                "amount_base_units": item.amount_base_units,
+                "category": item.category,
+            }
+            for item in normalized
+        ],
     }
     return _canonical_sha256(payload)
 
@@ -917,6 +1266,96 @@ def _economics_approval(
     }
 
 
+def _allocation_approval(
+    value: Mapping[str, Any],
+    definition: Mapping[str, Any],
+    allocations_locked: bool,
+    allocations: tuple[GenesisAllocation, ...],
+) -> dict[str, Any]:
+    if set(value) != set(ALLOCATION_APPROVAL_FIELDS):
+        raise NativeTokenGenesisError("allocation approval field set mismatch")
+    _require(value, "authority", ECONOMICS_AUTHORITY)
+    status = value.get("status")
+    if status not in {"approval_required", "approved"}:
+        raise NativeTokenGenesisError("allocations.status is unsupported")
+    decision_record_id = _optional_text(
+        value.get("decision_record_id"),
+        "allocations.decision_record_id",
+        200,
+    )
+    approved_definition_sha256 = _optional_sha256(
+        value.get("approved_definition_sha256"),
+        "allocations.approved_definition_sha256",
+    )
+    approved_allocations_sha256 = _optional_sha256(
+        value.get("approved_allocations_sha256"),
+        "allocations.approved_allocations_sha256",
+    )
+    decision_record_sha256 = _optional_sha256(
+        value.get("decision_record_sha256"),
+        "allocations.decision_record_sha256",
+    )
+    approved_at_raw = value.get("approved_at")
+    approved_at = (
+        None
+        if approved_at_raw is None
+        else _utc_timestamp(
+            approved_at_raw,
+            "allocations.approved_at",
+        )
+    )
+    approval_values = (
+        decision_record_id,
+        approved_definition_sha256,
+        approved_allocations_sha256,
+        decision_record_sha256,
+        approved_at,
+    )
+    if status == "approval_required":
+        if any(item is not None for item in approval_values):
+            raise NativeTokenGenesisError(
+                "unapproved allocations must not contain approval evidence"
+            )
+        if allocations_locked:
+            raise NativeTokenGenesisError(
+                "locked Genesis allocations require approved allocation evidence"
+            )
+    else:
+        if not allocations_locked or not allocations:
+            raise NativeTokenGenesisError(
+                "approved Genesis allocations require locked accounts"
+            )
+        if definition.get("locked") is not True:
+            raise NativeTokenGenesisError(
+                "approved Genesis allocations require locked native economics"
+            )
+        if any(item is None for item in approval_values):
+            raise NativeTokenGenesisError(
+                "approved Genesis allocation evidence is incomplete"
+            )
+        if approved_definition_sha256 != native_economics_definition_digest(
+            definition
+        ):
+            raise NativeTokenGenesisError(
+                "approved Genesis allocation definition digest does not match"
+            )
+        if approved_allocations_sha256 != native_genesis_allocations_digest(
+            allocations
+        ):
+            raise NativeTokenGenesisError(
+                "approved Genesis allocation digest does not match"
+            )
+    return {
+        "authority": ECONOMICS_AUTHORITY,
+        "status": status,
+        "decision_record_id": decision_record_id,
+        "approved_definition_sha256": approved_definition_sha256,
+        "approved_allocations_sha256": approved_allocations_sha256,
+        "decision_record_sha256": decision_record_sha256,
+        "approved_at": approved_at,
+    }
+
+
 def _validate_allocation_supply(
     definition: Mapping[str, Any],
     allocations_locked: bool,
@@ -934,6 +1373,17 @@ def _validate_allocation_supply(
             raise NativeTokenGenesisError(
                 "Genesis allocation total must equal native total supply"
             )
+
+
+def _require_canonical_allocations(
+    allocations: tuple[GenesisAllocation, ...],
+) -> None:
+    if tuple(item.address for item in allocations) != tuple(
+        sorted(item.address for item in allocations)
+    ):
+        raise NativeTokenGenesisError(
+            "Genesis allocations are not in canonical address order"
+        )
 
 
 def _custody(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -984,6 +1434,7 @@ def _validate_gate_dependencies(
     definition: Mapping[str, Any],
     economics_approval: Mapping[str, Any],
     allocations_locked: bool,
+    allocation_approval: Mapping[str, Any],
     custody: Mapping[str, Any],
     gates: Mapping[str, bool],
 ) -> None:
@@ -995,9 +1446,12 @@ def _validate_gate_dependencies(
         raise NativeTokenGenesisError(
             "native_economics_locked does not match approved definition evidence"
         )
-    if gates["deterministic_genesis_allocations"] and not allocations_locked:
+    allocations_approved = (
+        allocations_locked and allocation_approval.get("status") == "approved"
+    )
+    if gates["deterministic_genesis_allocations"] != allocations_approved:
         raise NativeTokenGenesisError(
-            "deterministic_genesis_allocations lacks allocation evidence"
+            "deterministic_genesis_allocations does not match allocation evidence"
         )
     if gates["custody_key_ceremony"] and custody.get("locked") is not True:
         raise NativeTokenGenesisError("custody_key_ceremony lacks custody evidence")

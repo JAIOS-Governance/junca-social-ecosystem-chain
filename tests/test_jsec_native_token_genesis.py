@@ -14,6 +14,7 @@ from jaios.social_ecosystem_chain.native_token_genesis import (
     evaluate_native_token_genesis_plan,
     load_native_token_genesis_plan,
     native_economics_definition_digest,
+    native_genesis_allocations_digest,
 )
 
 
@@ -46,20 +47,32 @@ def ready_plan() -> dict[str, object]:
         "decision_record_sha256": "b" * 64,
         "approved_at": "2026-08-06T00:00:00Z",
     }
+    allocation_accounts = [
+        {
+            "address": "0x" + ("1" * 40),
+            "amount_base_units": 600_000,
+            "category": "treasury",
+        },
+        {
+            "address": "0x" + ("2" * 40),
+            "amount_base_units": 400_000,
+            "category": "ecosystem",
+        },
+    ]
     value["allocations"] = {
         "locked": True,
-        "accounts": [
-            {
-                "address": "0x" + ("1" * 40),
-                "amount_base_units": 600_000,
-                "category": "treasury",
-            },
-            {
-                "address": "0x" + ("2" * 40),
-                "amount_base_units": 400_000,
-                "category": "ecosystem",
-            },
-        ],
+        "authority": ECONOMICS_AUTHORITY,
+        "status": "approved",
+        "decision_record_id": "CEO-JSEC-ALLOCATIONS-2026-001",
+        "approved_definition_sha256": native_economics_definition_digest(
+            value["definition"]
+        ),
+        "approved_allocations_sha256": native_genesis_allocations_digest(
+            allocation_accounts
+        ),
+        "decision_record_sha256": "c" * 64,
+        "approved_at": "2026-08-20T00:00:00Z",
+        "accounts": allocation_accounts,
     }
     value["custody"] = {
         "locked": True,
@@ -178,7 +191,7 @@ class NativeTokenGenesisTests(unittest.TestCase):
         first = source_plan.genesis_candidate()
         second = source_plan.genesis_candidate()
         self.assertEqual(first, second)
-        self.assertEqual(first["schema_version"], "jsec-native-genesis-candidate/v1")
+        self.assertEqual(first["schema_version"], "jsec-native-genesis-candidate/v2")
         self.assertEqual(first["target_genesis_date"], "2026-10-01")
         self.assertEqual(first["definition"]["symbol"], "JSEC")
         self.assertEqual(
@@ -218,7 +231,7 @@ class NativeTokenGenesisTests(unittest.TestCase):
         candidate = evaluate_native_token_genesis_plan(ready_plan()).genesis_candidate()
         candidate["allocations"][0]["category"] = "tampered"
         with self.assertRaisesRegex(
-            NativeTokenGenesisError, "allocation commitment mismatch"
+            NativeTokenGenesisError, "allocation digest does not match"
         ):
             evaluate_native_genesis_candidate(candidate)
 
@@ -262,6 +275,14 @@ class NativeTokenGenesisTests(unittest.TestCase):
         value["allocations"]["accounts"][0]["memo"] = "unapproved"
         with self.assertRaisesRegex(
             NativeTokenGenesisError, "allocation field set mismatch"
+        ):
+            evaluate_native_token_genesis_plan(value)
+
+        value = canonical()
+        value["allocations"]["alternate_authority"] = "unapproved"
+        with self.assertRaisesRegex(
+            NativeTokenGenesisError,
+            "allocation section field set mismatch",
         ):
             evaluate_native_token_genesis_plan(value)
 
