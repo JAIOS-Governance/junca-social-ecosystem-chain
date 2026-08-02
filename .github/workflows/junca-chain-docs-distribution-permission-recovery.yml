@@ -151,6 +151,9 @@ jobs:
           VERIFY_RC: ${{ steps.repair.outputs.verify_rc }}
         run: |
           set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
           mkdir -p evidence/production
           verification=FAIL
           if [ "$REPAIR_RC" = "0" ] && [ "$VERIFY_RC" = "0" ]; then verification=PASS; fi
@@ -201,11 +204,8 @@ jobs:
             if [ -f /tmp/permission-recovery.log ]; then cat /tmp/permission-recovery.log; else echo 'Repair step did not produce a log.'; fi
             echo '~~~'
           } > evidence/production/docs-distribution-permission-recovery-latest.md
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- evidence/production/docs-distribution-permission-recovery-latest.json evidence/production/docs-distribution-permission-recovery-latest.md
           git diff --cached --quiet || git commit -m "Record Docs distribution permission recovery $GITHUB_RUN_ID"
-          git pull --rebase origin main
           git push origin HEAD:main
 
       - name: Fail closed when exact permission verification fails
@@ -464,6 +464,9 @@ jobs:
           STACK_RC: ${{ steps.stack.outputs.rc }}
         run: |
           set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
           mkdir -p evidence/production
           deployment=FAIL
           if [ -s /tmp/distribution-after.json ] && [ -s /tmp/docs-explorer-2.json ]; then deployment=PASS; fi
@@ -521,10 +524,7 @@ jobs:
             echo "Observed: $OBSERVED_FIRST -> $OBSERVED_SECOND"
             echo "Stack: $STACK_BEFORE -> $STACK_AFTER (rc=$STACK_RC)"
           } > evidence/production/docs-live-proxy-direct-reconcile-latest.md
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- evidence/production/docs-live-proxy-direct-reconcile-latest.json evidence/production/docs-live-proxy-direct-reconcile-latest.md
           git diff --cached --quiet || git commit -m "Record Docs live proxy direct reconcile $GITHUB_RUN_ID"
-          git pull --rebase origin main
           git push origin HEAD:main
 
