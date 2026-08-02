@@ -15,6 +15,7 @@ from jaios.social_ecosystem_chain.native_token_genesis import (
     load_native_token_genesis_plan,
     native_economics_definition_digest,
     native_genesis_allocations_digest,
+    native_genesis_custody_digest,
 )
 
 
@@ -84,6 +85,22 @@ def ready_plan() -> dict[str, object]:
             "0x" + ("5" * 40),
         ],
         "key_ceremony_evidence_sha256": "a" * 64,
+    }
+    value["custody_approval"] = {
+        "authority": ECONOMICS_AUTHORITY,
+        "status": "approved",
+        "decision_record_id": "CEO-JSEC-CUSTODY-2026-001",
+        "approved_definition_sha256": native_economics_definition_digest(
+            value["definition"]
+        ),
+        "approved_allocations_sha256": native_genesis_allocations_digest(
+            value["allocations"]["accounts"]
+        ),
+        "approved_custody_sha256": native_genesis_custody_digest(
+            value["custody"]
+        ),
+        "decision_record_sha256": "d" * 64,
+        "approved_at": "2026-09-01T00:00:00Z",
     }
     value["gates"] = {name: True for name in value["gates"]}
     for milestone in value["milestones"]:
@@ -191,7 +208,7 @@ class NativeTokenGenesisTests(unittest.TestCase):
         first = source_plan.genesis_candidate()
         second = source_plan.genesis_candidate()
         self.assertEqual(first, second)
-        self.assertEqual(first["schema_version"], "jsec-native-genesis-candidate/v2")
+        self.assertEqual(first["schema_version"], "jsec-native-genesis-candidate/v3")
         self.assertEqual(first["target_genesis_date"], "2026-10-01")
         self.assertEqual(first["definition"]["symbol"], "JSEC")
         self.assertEqual(

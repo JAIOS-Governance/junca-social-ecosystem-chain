@@ -44,6 +44,16 @@
     "participants": [],
     "key_ceremony_evidence_sha256": null
   },
+  "custody_approval": {
+    "authority": "JUNCA Holdings Founder / Chairman / CEO",
+    "status": "approval_required",
+    "decision_record_id": null,
+    "approved_definition_sha256": null,
+    "approved_allocations_sha256": null,
+    "approved_custody_sha256": null,
+    "decision_record_sha256": null,
+    "approved_at": null
+  },
   "gates": {
     "native_economics_locked": false,
     "deterministic_genesis_allocations": false,
