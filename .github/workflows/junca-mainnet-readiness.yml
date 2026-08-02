@@ -15,10 +15,12 @@ on:
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
       - "scripts/jsec_native_economics_decision_packet.py"
       - "scripts/jsec_native_genesis_candidate.py"
+      - "scripts/jsec_native_genesis_candidate_pipeline.py"
       - "scripts/jsec_native_genesis_candidate_verify.py"
       - "tests/test_jsec_mainnet_delivery_governance.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
+      - "tests/test_jsec_native_genesis_candidate_pipeline.py"
   push:
     branches: [main]
     paths:
@@ -33,10 +35,12 @@ on:
       - "scripts/jsec_native_token_genesis_schedule_gate.py"
       - "scripts/jsec_native_economics_decision_packet.py"
       - "scripts/jsec_native_genesis_candidate.py"
+      - "scripts/jsec_native_genesis_candidate_pipeline.py"
       - "scripts/jsec_native_genesis_candidate_verify.py"
       - "tests/test_jsec_mainnet_delivery_governance.py"
       - "tests/test_junca_mainnet_readiness.py"
       - "tests/test_jsec_native_token_genesis.py"
+      - "tests/test_jsec_native_genesis_candidate_pipeline.py"
   workflow_dispatch:
 
 permissions:
@@ -60,6 +64,7 @@ jobs:
           python -m unittest tests.test_jsec_mainnet_delivery_governance -v
           python -m unittest tests.test_junca_mainnet_readiness -v
           python -m unittest tests.test_jsec_native_token_genesis -v
+          python -m unittest tests.test_jsec_native_genesis_candidate_pipeline -v
           mkdir -p artifacts
           python scripts/jsec_mainnet_delivery_gate.py \
             --output artifacts/jsec-mainnet-delivery-cell.json
@@ -68,6 +73,10 @@ jobs:
             --output artifacts/jsec-native-token-genesis-schedule.json
           python scripts/jsec_native_economics_decision_packet.py \
             --output artifacts/jsec-native-economics-decision-packet.json
+          python scripts/jsec_native_genesis_candidate_pipeline.py \
+            --plan config/jsec_native_token_genesis_plan_v1.json \
+            --output-dir artifacts/jsec-native-genesis-candidate \
+            --expect-state BLOCKED
           python - <<'PY'
           import json
           import os
@@ -109,6 +118,9 @@ jobs:
             > artifacts/jsec-native-token-genesis-schedule.json.sha256
           sha256sum artifacts/jsec-native-economics-decision-packet.json \
             > artifacts/jsec-native-economics-decision-packet.json.sha256
+          sha256sum \
+            artifacts/jsec-native-genesis-candidate/pipeline-manifest.json \
+            > artifacts/jsec-native-genesis-candidate/pipeline-manifest.json.sha256
 
       - uses: actions/upload-artifact@v4
         with:
