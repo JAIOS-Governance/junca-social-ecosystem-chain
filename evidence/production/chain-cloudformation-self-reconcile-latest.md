@@ -1,7 +1,7 @@
 # JUNCA Chain CloudFormation Self Reconcile
 
-Run ID: 30753774915
-Commit: 224761653887d3c5692d605a962f6c96d8f15804
+Run ID: 30754954285
+Commit: 70105a3df1540623bfda96bd0576b5dc3a6283bb
 Identity RC: 0
 Describe RC: 0
 Distribution binding readback RC: 0
@@ -15,6 +15,7 @@ Attached policy read RC: 0
 Stack status: UPDATE_ROLLBACK_COMPLETE
 
 ## Inline policies
+- DocsLiveProxyDistributionUpdate
 - JuncaChainProductionRecovery
 - JuncaPointMemberOtpRelayDeployment
 - PublishExactTechnicalReferenceArtifact
@@ -22,6 +23,10 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Attached policies
 
 ## Stack failure events
+- [2026-08-02T15:42:51.785000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
+- [2026-08-02T15:42:50.921000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
+- [2026-08-02T15:42:47.844000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
+- [2026-08-02T15:42:47.499000+00:00] DocsDistribution · UPDATE_FAILED · Resource handler returned message: "Invalid request provided: The specified cache policy does not exist. (Service: CloudFront, Status Code: 404, Request ID: 3bfa5219-b2fa-441c-97d9-caf4cfbf035e) (SDK Attempt Count: 1)" (RequestToken: 1d161a8b-3952-7139-f6d7-0f189ab3481a, HandlerErrorCode: InvalidRequest)
 - [2026-08-02T15:11:35.594000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE · no reason
 - [2026-08-02T15:11:34.846000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS · no reason
 - [2026-08-02T15:11:28.931000+00:00] junca-chain-docs-publication · UPDATE_ROLLBACK_IN_PROGRESS · The following resource(s) failed to update: [DocsDistribution]. 
@@ -53,9 +58,9 @@ Stack status: UPDATE_ROLLBACK_COMPLETE
 ## Log
 ```text
 {
-    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30753774915",
+    "UserId": "AROAYVMY5RBKAUCOXGDPN:chain-cfn-reconcile-30754954285",
     "Account": "595710543956",
-    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30753774915"
+    "Arn": "arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/chain-cfn-reconcile-30754954285"
 }
 
 aws: [ERROR]: Waiter StackUpdateComplete failed: Waiter encountered a terminal failure state: For expression "Stacks[].StackStatus" we matched expected path: "UPDATE_ROLLBACK_COMPLETE" at least once
