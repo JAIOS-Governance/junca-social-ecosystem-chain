@@ -78,7 +78,7 @@ Corporate information: https://junca-global.group/
 
 Current formal name: JUNCA Social Ecosystem Chain.
 Search variants "juncachain", "junca chain", and "JUNCA Chain" resolve to this chain.
-JUNCA PLATFORM APP is the official application layer for the JUNCA PROJECT and is currently under renewal development. Historical financial, remittance and token descriptions do not define its current scope.
+Search terms "junca Platform" and "JUNCA Platform" resolve to JUNCA PLATFORM APP, the official application layer for the JUNCA PROJECT that is currently under renewal development. Historical financial, remittance and token descriptions do not define its current scope.
 Current network state: Public Testnet.
 Mainnet Changed: false.
 Assets Moved: false.
