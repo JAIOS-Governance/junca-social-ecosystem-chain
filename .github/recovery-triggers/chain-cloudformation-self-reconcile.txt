@@ -1,4 +1,5 @@
 Trigger JUNCA Chain CloudFormation self reconcile
-Requested by CEO: 2026-07-26
+Requested by CEO: 2026-08-02
 Target stack: junca-chain-docs-publication
-Retry: evidence-enabled-20260726-0315
+Change: Docs R36 same-origin Explorer JSON live proxy
+Source: 1db62dd4c9c87c830378233ea1b779dcc970f9e0
