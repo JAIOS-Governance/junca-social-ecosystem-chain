@@ -58,9 +58,7 @@ jobs:
               rc_update=$?
             fi
             if [ "$rc_update" -ne 0 ]; then
-              aws cloudformation describe-stack-events \\
-                --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 40 \\
-                > /tmp/stack-events.json 2>>/tmp/reconcile.log
+              aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 5000 > /tmp/stack-events.json 2>>/tmp/reconcile.log
             fi
           fi
           aws iam list-role-policies --role-name JuncaChainDocsProductionDeployment > /tmp/inline-policies.json 2>>/tmp/reconcile.log
@@ -87,7 +85,7 @@ jobs:
             echo
             echo '## Stack failure events'
             if [ -s /tmp/stack-events.json ]; then
-              jq -r '.StackEvents[] | select(.ResourceStatus | test("FAILED|ROLLBACK")) | "- [\\(.Timestamp)] \\(.LogicalResourceId) · \\(.ResourceStatus) · \\(.ResourceStatusReason // "no reason")"' /tmp/stack-events.json
+              jq -r '.StackEvents[] | select((.ResourceStatus // "") | test("FAILED|ROLLBACK")) | "- [\(.Timestamp)] \(.LogicalResourceId) · \(.ResourceStatus) · \(.ResourceStatusReason // "no reason")"' /tmp/stack-events.json
             fi
             echo
             echo '## Log'
