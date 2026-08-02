@@ -78,7 +78,7 @@ Resources:
         - Key: Governance
           Value: JAIOS Institutional Governance
         - Key: Network
-          Value: Public Testnet / No Monetary Value
+          Value: Public Testnet / Protocol Validation Environment
         - Key: Purpose
           Value: technical-reference-publication
 
@@ -146,7 +146,7 @@ Resources:
               Value: "camera=(), microphone=(), geolocation=()"
               Override: true
             - Header: X-Publication-Boundary
-              Value: "Public Testnet / No Monetary Value"
+              Value: "Public Testnet / Protocol Validation Environment"
               Override: true
 
   DocsDistribution:
@@ -165,6 +165,12 @@ Resources:
             OriginAccessControlId: !GetAtt DocsOriginAccessControl.Id
             S3OriginConfig:
               OriginAccessIdentity: ""
+          - Id: public-explorer-json
+            DomainName: explorer.jaios-governance.org
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+              OriginSSLProtocols: [TLSv1.2]
         DefaultCacheBehavior:
           TargetOriginId: private-docs-bucket
           ViewerProtocolPolicy: redirect-to-https
@@ -176,6 +182,15 @@ Resources:
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt ExtensionlessRouteFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: explorer.json
+            TargetOriginId: public-explorer-json
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            Compress: true
+            CachePolicyId: 413f9f24-6f2d-4f42-9ded-2f3a5bc8cc50
+            ResponseHeadersPolicyId: !Ref DocsSecurityHeaders
         CustomErrorResponses:
           - ErrorCode: 403
             ResponseCode: 404
@@ -196,7 +211,7 @@ Resources:
         - Key: Governance
           Value: JAIOS Institutional Governance
         - Key: Network
-          Value: Public Testnet / No Monetary Value
+          Value: Public Testnet / Protocol Validation Environment
         - Key: Purpose
           Value: technical-reference-publication
 
