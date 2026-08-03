@@ -28,6 +28,13 @@
   },
   "allocations": {
     "locked": false,
+    "authority": "JUNCA Holdings Founder / Chairman / CEO",
+    "status": "approval_required",
+    "decision_record_id": null,
+    "approved_definition_sha256": null,
+    "approved_allocations_sha256": null,
+    "decision_record_sha256": null,
+    "approved_at": null,
     "accounts": []
   },
   "custody": {
@@ -36,6 +43,16 @@
     "threshold": null,
     "participants": [],
     "key_ceremony_evidence_sha256": null
+  },
+  "custody_approval": {
+    "authority": "JUNCA Holdings Founder / Chairman / CEO",
+    "status": "approval_required",
+    "decision_record_id": null,
+    "approved_definition_sha256": null,
+    "approved_allocations_sha256": null,
+    "approved_custody_sha256": null,
+    "decision_record_sha256": null,
+    "approved_at": null
   },
   "gates": {
     "native_economics_locked": false,
@@ -52,13 +69,13 @@
       "id": "native_economics_constitution",
       "due_date": "2026-08-07",
       "status": "in_progress",
-      "owner": "JSEC Native Token Genesis Cell"
+      "owner": "JSEC Mainnet Native Release Engineering Cell"
     },
     {
       "id": "deterministic_genesis_allocations",
       "due_date": "2026-08-21",
       "status": "not_started",
-      "owner": "JSEC Mainnet Protocol Cell"
+      "owner": "JSEC Mainnet Native Release Engineering Cell"
     },
     {
       "id": "custody_key_ceremony_rehearsal",
@@ -76,7 +93,7 @@
       "id": "candidate_genesis_and_recovery",
       "due_date": "2026-09-18",
       "status": "not_started",
-      "owner": "JSEC Mainnet Recovery Cell"
+      "owner": "JSEC Mainnet Native Release Engineering Cell"
     },
     {
       "id": "production_slo_24h_soak_release_evidence",
