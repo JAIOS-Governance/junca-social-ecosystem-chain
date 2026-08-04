@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate photo source and build package
+      - name: Validate six-photo source package
         shell: bash
         run: |
           set -euo pipefail
@@ -70,28 +70,9 @@ jobs:
             /tmp/current-root.html sites/jaios-root-news-photo/news-items.json /tmp/index.html
           grep -F "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/index.html
           test "$(grep -o 'data-jaios-news-card=' /tmp/index.html | wc -l)" -eq 12
+          test "$(grep -o '<img src=' /tmp/index.html | wc -l)" -ge 6
           ! grep -Fq "<svg viewBox='0 0 640 360'" /tmp/index.html
           test "$(wc -c < /tmp/index.html)" -lt 1000000
-
-      - name: Verify all six remote photographs
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY' >/tmp/photo-urls.txt
-          import json
-          from pathlib import Path
-          for item in json.loads(Path('sites/jaios-root-news-photo/news-items.json').read_text())['items']:
-              print(item['image_url'])
-          PY
-          index=0
-          while IFS= read -r url; do
-            index=$((index+1))
-            curl --fail-with-body --silent --show-error --location --max-time 45 \
-              --retry 3 --retry-delay 3 --range 0-4095 \
-              --output "/tmp/photo-${index}.bin" "$url"
-            test -s "/tmp/photo-${index}.bin"
-          done </tmp/photo-urls.txt
-          test "$index" -eq 6
 
       - name: Configure bounded AWS preflight identity
         uses: aws-actions/configure-aws-credentials@v4
@@ -138,7 +119,7 @@ jobs:
           role-session-name: jaios-news-photo-production-${{ github.run_id }}
           disable-retry: true
 
-      - name: Publish photo News with exact HTML rollback
+      - name: Publish and accept six article-related photos
         id: publish
         shell: bash
         run: |
@@ -157,14 +138,14 @@ jobs:
           rollback() {
             rc=$?
             if [[ "$changed" -eq 1 ]]; then
-              echo 'Photo publication failed; restoring the exact prior root HTML.' >&2
+              echo 'Photo publication failed; restoring exact prior root HTML.' >&2
               aws s3 cp /tmp/backup-index.html "s3://${DOCS_BUCKET}/${EDGE_OBJECT}" \
                 --content-type 'text/html; charset=utf-8' \
                 --cache-control 'public,max-age=0,must-revalidate' \
                 --metadata-directive REPLACE \
                 --metadata "rollback-run=${GITHUB_RUN_ID}"
-              rollback_invalidation="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/' '/index.html' --query Invalidation.Id --output text)"
-              aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$rollback_invalidation"
+              rollback_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/' '/index.html' --query Invalidation.Id --output text)"
+              aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$rollback_id"
             fi
             exit "$rc"
           }
@@ -214,6 +195,7 @@ jobs:
                   driver.set_window_size(width,1500)
                   driver.get('https://jaios-governance.org/?photo_acceptance='+label)
                   WebDriverWait(driver,45).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card]'))==6)
+                  WebDriverWait(driver,60).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card] .jaios-edge-news-media img'))==6 and all(d.execute_script('return arguments[0].complete && arguments[0].naturalWidth > 100 && arguments[0].naturalHeight > 60',p) for p in d.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card] .jaios-edge-news-media img')))
                   cards=driver.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card]')
                   photos=driver.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card] .jaios-edge-news-media img')
                   vectors=driver.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card] .jaios-edge-news-media svg')
@@ -223,10 +205,10 @@ jobs:
                   assert len(photos)==6,(label,len(photos))
                   assert len(vectors)==0,(label,len(vectors))
                   assert columns==expected,(label,columns,expected)
-                  for photo in photos:
-                      assert driver.execute_script('return arguments[0].complete && arguments[0].naturalWidth > 100 && arguments[0].naturalHeight > 60',photo),photo.get_attribute('src')
+                  sources=[p.get_attribute('currentSrc') or p.get_attribute('src') for p in photos]
+                  assert len(set(sources))==6,(label,sources)
                   driver.save_screenshot(f'/tmp/jaios-news-photo-{label}.png')
-                  records.append({'viewport':label,'cards':6,'photos':6,'svg':0,'columns':columns})
+                  records.append({'viewport':label,'cards':6,'photos':6,'svg':0,'columns':columns,'sources':sources})
               Path('/tmp/browser-readback.json').write_text(json.dumps(records,indent=2)+'\n')
               print('JAIOS_NEWS_PHOTO_BROWSER_ACCEPTANCE_PASS',records)
           finally:
@@ -241,7 +223,7 @@ jobs:
           mkdir -p evidence/production
           export INVALIDATION_ID="$invalidation_id"
           python3 - <<'PY'
-          import hashlib,json,os
+          import json,os
           from datetime import datetime,timezone
           from pathlib import Path
           evidence={
