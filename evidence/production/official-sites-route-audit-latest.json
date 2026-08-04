@@ -1,0 +1,57 @@
+{
+  "schema": "official-sites-route-audit/v1",
+  "observed_at": "2026-08-04T15:32:06.493683+00:00",
+  "workflow_run_id": "30924565681",
+  "source_commit": "312919a034aba498c61b8788ad37a9c51df97e15",
+  "aws_account_id": "595710543956",
+  "sites": {
+    "chain.jaios-governance.org": {
+      "title": "<title>JUNCA Social Ecosystem Chain | JAIOS Institutional Governance",
+      "html_sha256": "6ab77e238599a1c5d2f91c5288d28670a3a1481273d10445ec18730f8749b8b2",
+      "headers": "HTTP/2 200 \ndate: Tue, 04 Aug 2026 15:31:47 GMT\ncontent-type: text/html; charset=utf-8\nvary: RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode\nset-cookie: __cf_bm=wq_rcTPAbyF2U_OIpVJVyMdPhAfwZ4QM0BcNdbMreks-1785857491.2333138-1.0.1.1-iF6QZZEREEKvsEuRyx20uhz306ixoYrt1pRtb02shuHH2VJk375gP9QXWMQfkF333WAPd2hGChnDtY_rSWIdX62vOL1gm_PGBVNwepRZt0hIzZ82aLt.sRYgVxKuUmax; HttpOnly; SameSite=None; Secure; Path=/; Domain=chain.jaios-governance.org; Expires=Tue, 04 Aug 2026 16:01:47 GMT\nserver: cloudflare\ncf-ray: a25e9c083d2fb8b6-SJC",
+      "dns": {
+        "a": "chain.jaios-governance.org. 300\tIN\tCNAME\tcustom-domains.chatgpt.site.\ncustom-domains.chatgpt.site. 300 IN\tA\t104.18.22.186\ncustom-domains.chatgpt.site. 300 IN\tA\t104.18.23.186",
+        "aaaa": "chain.jaios-governance.org. 299\tIN\tCNAME\tcustom-domains.chatgpt.site.\ncustom-domains.chatgpt.site. 300 IN\tAAAA\t2606:4700::6812:17ba\ncustom-domains.chatgpt.site. 300 IN\tAAAA\t2606:4700::6812:16ba",
+        "cname": "chain.jaios-governance.org. 299\tIN\tCNAME\tcustom-domains.chatgpt.site.",
+        "https": "chain.jaios-governance.org. 299\tIN\tCNAME\tcustom-domains.chatgpt.site.\ncustom-domains.chatgpt.site. 300 IN\tHTTPS\t1 . alpn=\"h2\" ipv4hint=104.18.22.186,104.18.23.186 ipv6hint=2606:4700::6812:16ba,2606:4700::6812:17ba",
+        "ns": "custom-domains.chatgpt.site."
+      },
+      "tls": "subject=CN = chain.jaios-governance.org\nissuer=C = US, O = Google Trust Services, CN = WE1\nserial=C0A75E8574DE8FFE1396D5B1B54DFE8D\nnotBefore=Jul 25 17:50:02 2026 GMT\nnotAfter=Oct 23 18:49:54 2026 GMT\nX509v3 Subject Alternative Name: \n    DNS:chain.jaios-governance.org",
+      "native_site_urls": [],
+      "provider_urls": [],
+      "cloudfront_distributions": [],
+      "hosted_zones": [],
+      "route53_records_raw": "",
+      "observed_provider": "unknown",
+      "recommended_route": "provider-write-required"
+    },
+    "junca-global.group": {
+      "title": "<title>JUNCA HOLDINGS｜One Axis. Wider Horizons.",
+      "html_sha256": "fd02ad73d70c619b7f9d22300069d882e31b1e9c9be992c390f3e2c4035be4ec",
+      "headers": "HTTP/2 200 \ndate: Tue, 04 Aug 2026 15:31:58 GMT\ncontent-type: text/html; charset=utf-8\nvary: RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode\nset-cookie: __cf_bm=PFJEoWSjBGBUkwx9lLWHghYNUp5xpGdRRBURMdiakJU-1785857508.4628983-1.0.1.1-9CWGjd21lBEfHiO_SP9WEn0A0xiymKXxFMOIQW.GH2dA.wKGZBRXRu0SA6116lH4RyU4FRxb0dy1215oPD9ryKvA4O5ym.c4.pw2WpBdy2OXNBmm0bru5AZs4s3.naTe; HttpOnly; SameSite=None; Secure; Path=/; Domain=junca-global.group; Expires=Tue, 04 Aug 2026 16:01:58 GMT\nserver: cloudflare\ncf-ray: a25e9c73e8f71b51-SJC",
+      "dns": {
+        "a": "junca-global.group.\t1800\tIN\tA\t172.66.3.26\njunca-global.group.\t1800\tIN\tA\t162.159.143.30",
+        "aaaa": "",
+        "cname": "",
+        "https": "",
+        "ns": "ns1.xserver.jp.\nns2.xserver.jp.\nns3.xserver.jp.\nns4.xserver.jp.\nns5.xserver.jp."
+      },
+      "tls": "subject=CN = junca-global.group\nissuer=C = US, O = Google Trust Services, CN = WE1\nserial=D6A05EFE037936310EE0D0B39C311DB7\nnotBefore=Jul 26 02:05:22 2026 GMT\nnotAfter=Oct 24 03:05:14 2026 GMT\nX509v3 Subject Alternative Name: \n    DNS:junca-global.group",
+      "native_site_urls": [],
+      "provider_urls": [],
+      "cloudfront_distributions": [],
+      "hosted_zones": [],
+      "route53_records_raw": "",
+      "observed_provider": "unknown",
+      "recommended_route": "provider-write-required"
+    }
+  },
+  "mutations": {
+    "route53": false,
+    "cloudfront": false,
+    "s3": false,
+    "tls": false,
+    "provider": false
+  },
+  "result": "PASS"
+}
