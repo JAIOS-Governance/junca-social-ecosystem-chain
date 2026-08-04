@@ -1,0 +1,250 @@
+name: JAIOS Institution-Scale Trust Publication
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/patch_jaios_root_institutional_trust.py"
+      - ".github/workflows/jaios-root-institution-scale-trust.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/patch_jaios_root_institutional_trust.py"
+      - ".github/workflows/jaios-root-institution-scale-trust.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: jaios-root-institution-scale-trust
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  ROOT_DOMAIN: jaios-governance.org
+  DOCS_DOMAIN: docs.jaios-governance.org
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DISTRIBUTION_ID: E2WIXG3DWW8OX1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  TRUST_MARKER: 20260804-institutional-trust
+  NEWS_MARKER: 20260804-six-card-news
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build institution-scale trust derivative
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/patch_jaios_root_institutional_trust.py
+          curl --fail-with-body --silent --show-error --location --max-time 30 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/current-root.html "https://${ROOT_DOMAIN}/"
+          python3 scripts/patch_jaios_root_institutional_trust.py \
+            /tmp/current-root.html /tmp/index.html
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          html=Path('/tmp/index.html').read_text(encoding='utf-8')
+          match=re.search(r"<template id=['\"]jaios-edge-trust-template['\"]>(.*?)</template>",html,re.S)
+          assert match
+          trust=match.group(1)
+          assert 'JUNCA HOLDINGS' not in trust
+          assert '特定の法人や単一プロジェクトに限定されるものではありません' in trust
+          assert 'International standards' in trust
+          assert 'JAIOSの管理基準' in trust
+          assert '国際的な信頼に耐え得る運営環境' in trust
+          assert html.count('data-jaios-news-card=') == 12
+          assert 'Japan adopts the 2026 Priority Plan' in html
+          assert 'UNDP launches Blockchain Advisory Group' in html
+          PY
+          test "$(wc -c < /tmp/index.html)" -lt 1000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-institution-scale-trust-${{ github.sha }}
+          path: /tmp/index.html
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure production AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-institution-scale-${{ github.run_id }}
+          disable-retry: true
+      - name: Build exact public-root derivative
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          curl --fail-with-body --silent --show-error --location --max-time 30 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/current-root.html "https://${ROOT_DOMAIN}/"
+          python3 scripts/patch_jaios_root_institutional_trust.py \
+            /tmp/current-root.html /tmp/index.html
+          sha256sum /tmp/current-root.html | cut -d' ' -f1 > /tmp/before-sha256.txt
+          sha256sum /tmp/index.html | cut -d' ' -f1 > /tmp/after-sha256.txt
+      - name: Publish exact root artifact
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp /tmp/index.html "s3://${DOCS_BUCKET}/jaios-root-news/index.html" \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "public,max-age=0,must-revalidate" \
+            --metadata "source-commit=${GITHUB_SHA},release=institution-scale-trust"
+          aws s3 cp "s3://${DOCS_BUCKET}/jaios-root-news/index.html" /tmp/s3-readback.html
+          cmp /tmp/index.html /tmp/s3-readback.html
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/' '/index.html' \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
+      - name: Public readback and protected-route acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..18}; do
+            if curl --fail-with-body --silent --show-error --location \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output /tmp/public-root.html "https://${ROOT_DOMAIN}/" \
+              && python3 - <<'PY'
+          import re
+          from pathlib import Path
+          html=Path('/tmp/public-root.html').read_text(encoding='utf-8')
+          m=re.search(r"<template id=['\"]jaios-edge-trust-template['\"]>(.*?)</template>",html,re.S)
+          assert m
+          trust=m.group(1)
+          assert 'JUNCA HOLDINGS' not in trust
+          assert '特定の法人や単一プロジェクトに限定されるものではありません' in trust
+          assert 'International standards' in trust
+          assert 'JAIOSの管理基準' in trust
+          assert '国際的な信頼に耐え得る運営環境' in trust
+          assert html.count('data-jaios-news-card=') == 12
+          PY
+            then break; fi
+            sleep 5
+          done
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          html=Path('/tmp/public-root.html').read_text(encoding='utf-8')
+          m=re.search(r"<template id=['\"]jaios-edge-trust-template['\"]>(.*?)</template>",html,re.S)
+          assert m
+          assert 'JUNCA HOLDINGS' not in m.group(1)
+          assert '特定の法人や単一プロジェクトに限定されるものではありません' in m.group(1)
+          PY
+          cmp /tmp/index.html /tmp/public-root.html
+          for route in browser institution social-business observatory evidence; do
+            curl --fail --silent --show-error --location --retry 3 --retry-delay 3 \
+              --output "/tmp/${route}.html" "https://${ROOT_DOMAIN}/${route}"
+            ! grep -Fq "data-jaios-trust-release='${TRUST_MARKER}'" "/tmp/${route}.html"
+          done
+      - name: Browser-rendered acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          options=webdriver.ChromeOptions()
+          options.add_argument('--headless=new')
+          options.add_argument('--no-sandbox')
+          options.add_argument('--disable-dev-shm-usage')
+          options.add_argument('--disable-gpu')
+          driver=webdriver.Chrome(options=options)
+          records=[]
+          try:
+              for label,width,columns_expected in [('desktop',1440,3),('tablet',820,2),('mobile',390,1)]:
+                  driver.set_window_size(width,1600)
+                  driver.get('https://jaios-governance.org/')
+                  WebDriverWait(driver,30).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jaios-trust-release]'))==1)
+                  WebDriverWait(driver,30).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card]'))==6)
+                  trust=driver.find_element(By.CSS_SELECTOR,'[data-jaios-trust-release]')
+                  text=trust.text
+                  assert 'JUNCA HOLDINGS' not in text
+                  assert '特定の法人や単一プロジェクトに限定されるものではありません' in text
+                  assert 'International standards' in text
+                  assert 'JAIOSの管理基準' in text
+                  assert '国際的な信頼に耐え得る運営環境' in text
+                  grid=driver.find_element(By.CSS_SELECTOR,'.jaios-edge-news-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  assert columns == columns_expected,(label,columns,columns_expected)
+                  driver.save_screenshot(f'/tmp/jaios-institution-scale-{label}.png')
+                  records.append({'viewport':label,'news_columns':columns,'holdings_in_trust':False})
+              print('JAIOS_INSTITUTION_SCALE_TRUST_PASS',records)
+          finally:
+              driver.quit()
+          PY
+      - name: Record immutable production evidence
+        env:
+          INVALIDATION_ID: ${{ steps.publish.outputs.invalidation_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          evidence={
+            'schema':'jaios-institution-scale-trust-production/v1',
+            'observed_at':datetime.now(timezone.utc).isoformat(),
+            'source_commit':os.environ['GITHUB_SHA'],
+            'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+            'public_url':'https://jaios-governance.org/',
+            'invalidation_id':os.environ['INVALIDATION_ID'],
+            'before_sha256':Path('/tmp/before-sha256.txt').read_text().strip(),
+            'after_sha256':Path('/tmp/after-sha256.txt').read_text().strip(),
+            'specific_corporate_reference_removed_from_trust_section':True,
+            'institutional_scope_not_limited_to_single_company_or_project':True,
+            'news_cards_preserved':6,
+            'protected_routes_preserved':['/browser','/institution','/social-business','/observatory','/evidence'],
+            'route53_changed':False,
+            'tls_changed':False,
+            'mainnet_changed':False,
+            'assets_moved':False,
+            'bridge_activated':False,
+            'result':'PRODUCTION_ACCEPTED',
+          }
+          Path('evidence/production/jaios-institution-scale-trust-production-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/jaios-institution-scale-trust-production-latest.json
+          git diff --cached --quiet || git commit -m "Record JAIOS institution-scale trust acceptance ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-institution-scale-trust-production-${{ github.run_id }}
+          path: |
+            /tmp/public-root.html
+            /tmp/jaios-institution-scale-desktop.png
+            /tmp/jaios-institution-scale-tablet.png
+            /tmp/jaios-institution-scale-mobile.png
+            evidence/production/jaios-institution-scale-trust-production-latest.json
+          if-no-files-found: error
+          retention-days: 90
