@@ -1,0 +1,320 @@
+name: Chain Brand Shared Edge Repair
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/aws/jaios-root-news-router.js"
+      - "scripts/deploy_chain_brand_shared_edge.py"
+      - ".github/workflows/chain-brand-shared-edge-repair.yml"
+      - ".github/workflows/chain-brand-production-observer.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/aws/jaios-root-news-router.js"
+      - "scripts/deploy_chain_brand_shared_edge.py"
+      - ".github/workflows/chain-brand-shared-edge-repair.yml"
+      - ".github/workflows/chain-brand-production-observer.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  actions: read
+
+concurrency:
+  group: chain-brand-shared-edge-repair
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+  CHAIN_PUBLIC_HOST: chain.jaios-governance.org
+  CHAIN_NATIVE_HOST: junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site
+  CHAIN_NATIVE_URL: https://junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site/
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DOCS_PUBLIC_URL: https://docs.jaios-governance.org/chain-brand-root/index.html
+  DOCS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  SHARED_FUNCTION_NAME: junca-chain-docs-routes-595710543956
+  SHARED_FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+  RELEASE_MARKER: 20260805-chain-institutional-trust
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate repaired shared-edge sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/build_chain_brand_institutional_trust.py scripts/deploy_chain_brand_shared_edge.py scripts/jaios_news_edge_function.py
+          grep -F "const CHAIN_HOST = 'chain.jaios-governance.org';" infra/aws/jaios-root-news-router.js
+          grep -F "routeToGovernedArtifact(request, CHAIN_ROOT_ARTIFACT)" infra/aws/jaios-root-news-router.js
+          grep -F "routeToGovernedArtifact(request, CHAIN_ROBOTS_ARTIFACT)" infra/aws/jaios-root-news-router.js
+          grep -F "routeToGovernedArtifact(request, CHAIN_SITEMAP_ARTIFACT)" infra/aws/jaios-root-news-router.js
+          grep -F "routeToOrigin(request, CHAIN_NATIVE_ORIGIN)" infra/aws/jaios-root-news-router.js
+          grep -F "SHARED_FUNCTION_ARN" scripts/deploy_chain_brand_shared_edge.py
+          if grep -Fq 'reconcile_function' scripts/deploy_chain_brand_shared_edge.py; then
+            echo 'Retired dedicated Function path remains in repaired deployment' >&2
+            exit 1
+          fi
+      - name: Rebuild governed Chain root from current native site
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --output /tmp/native-root.html "$CHAIN_NATIVE_URL"
+          python3 scripts/build_chain_brand_institutional_trust.py /tmp/native-root.html /tmp/index.html
+          grep -F "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/index.html
+          grep -F 'Managed under JAIOS Institutional Governance' /tmp/index.html
+          grep -F 'JAIOS Institutional Governanceの管理基準' /tmp/index.html
+          test "$(wc -c < /tmp/index.html)" -lt 1000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-brand-shared-edge-quality-${{ github.sha }}
+          path: /tmp/index.html
+          if-no-files-found: error
+          retention-days: 90
+
+  publish_artifact:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-shared-artifact-${{ github.run_id }}
+          disable-retry: true
+      - name: Publish exact governed root and search surfaces
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --output /tmp/native-root.html "$CHAIN_NATIVE_URL"
+          python3 scripts/build_chain_brand_institutional_trust.py /tmp/native-root.html /tmp/index.html
+          aws s3 cp /tmp/index.html "s3://${DOCS_BUCKET}/chain-brand-root/index.html" \
+            --content-type 'text/html; charset=utf-8' --cache-control 'public,max-age=0,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},release=${RELEASE_MARKER}"
+          aws s3 cp sites/chain-brand-root/robots.txt "s3://${DOCS_BUCKET}/chain-brand-root/robots.txt" \
+            --content-type 'text/plain; charset=utf-8' --cache-control 'public,max-age=300,must-revalidate'
+          aws s3 cp sites/chain-brand-root/sitemap.xml "s3://${DOCS_BUCKET}/chain-brand-root/sitemap.xml" \
+            --content-type 'application/xml; charset=utf-8' --cache-control 'public,max-age=300,must-revalidate'
+          aws s3 cp "s3://${DOCS_BUCKET}/chain-brand-root/index.html" /tmp/s3-root.html
+          cmp /tmp/index.html /tmp/s3-root.html
+          for _ in $(seq 1 18); do
+            if curl --fail --silent --show-error --location --output /tmp/docs-root.html "$DOCS_PUBLIC_URL" \
+              && grep -Fq "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/docs-root.html; then break; fi
+            sleep 5
+          done
+          cmp /tmp/index.html /tmp/docs-root.html
+
+  publish_shared_function:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-shared-function-${{ github.run_id }}
+          disable-retry: true
+      - name: Publish accepted shared Function with Chain branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet boto3
+          mkdir -p /tmp/shared-function-state
+          python3 scripts/jaios_news_edge_function.py deploy \
+            --composite infra/aws/jaios-root-news-router.js \
+            --state-dir /tmp/shared-function-state | tee /tmp/shared-function-result.json
+          python3 - <<'PY'
+          import json,os
+          import boto3
+          cf=boto3.client('cloudfront',region_name=os.environ['AWS_REGION'])
+          name=os.environ['SHARED_FUNCTION_NAME']
+          description=cf.describe_function(Name=name,Stage='DEVELOPMENT')
+          etag=description['ETag']
+          def event(uri):
+              return json.dumps({'version':'1.0','context':{'eventType':'viewer-request'},'viewer':{'ip':'198.51.100.10'},'request':{'method':'GET','uri':uri,'querystring':{},'headers':{'host':{'value':'chain.jaios-governance.org'}},'cookies':{}}},separators=(',',':')).encode()
+          cases=[('/', '/chain-brand-root/index.html'),('/robots.txt','/chain-brand-root/robots.txt'),('/sitemap.xml','/chain-brand-root/sitemap.xml'),('/governance','/governance')]
+          records=[]
+          for uri,expected in cases:
+              result=cf.test_function(Name=name,IfMatch=etag,Stage='DEVELOPMENT',EventObject=event(uri))['TestResult']
+              error=result.get('FunctionErrorMessage')
+              if error not in (None,'','null'): raise SystemExit(f'{uri}: {error}')
+              output=result.get('FunctionOutput','')
+              if isinstance(output,bytes): output=output.decode()
+              parsed=json.loads(output); request=parsed.get('request',parsed)
+              if request.get('uri')!=expected: raise SystemExit(f'{uri}: {request.get("uri")} != {expected}')
+              records.append(parsed)
+          open('/tmp/shared-function-state/chain-tests.json','w').write(json.dumps(records,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-shared-function-state-${{ github.run_id }}
+          path: /tmp/shared-function-state
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy_edge:
+    if: github.event_name != 'pull_request'
+    needs: [publish_artifact, publish_shared_function]
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Acquire approved AWS bootstrap identity
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" > /tmp/oidc-token
+          selected=''
+          for role in \
+            arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment \
+            arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+          do
+            if aws sts assume-role-with-web-identity --role-arn "$role" \
+              --role-session-name "chain-shared-edge-${GITHUB_RUN_ID}" \
+              --web-identity-token "$(cat /tmp/oidc-token)" --duration-seconds 3600 \
+              > /tmp/assume.json 2>/tmp/assume.err; then selected="$role"; break; fi
+          done
+          test -n "$selected"
+          echo "selected_role=$selected" >> "$GITHUB_OUTPUT"
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "$GITHUB_ENV"
+      - name: Create Chain distribution and controlled DNS cutover
+        id: edge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet boto3
+          mkdir -p /tmp/chain-shared-edge-state
+          python3 scripts/deploy_chain_brand_shared_edge.py \
+            --state-dir /tmp/chain-shared-edge-state | tee /tmp/chain-shared-edge.log
+          jq -e '.result=="EDGE_ACTIVATED"' /tmp/chain-shared-edge-state/edge-result.json >/dev/null
+          echo "distribution_id=$(jq -r '.distribution_id' /tmp/chain-shared-edge-state/edge-result.json)" >> "$GITHUB_OUTPUT"
+          echo "distribution_domain=$(jq -r '.distribution_domain' /tmp/chain-shared-edge-state/edge-result.json)" >> "$GITHUB_OUTPUT"
+      - name: Public DNS, TLS, routes and responsive acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/chain-shared-acceptance
+          for _ in $(seq 1 60); do
+            if curl --fail-with-body --silent --show-error --location --max-time 45 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output /tmp/chain-shared-acceptance/root.html "https://${CHAIN_PUBLIC_HOST}/" \
+              && grep -Fq "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/chain-shared-acceptance/root.html; then break; fi
+            sleep 10
+          done
+          grep -F "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/chain-shared-acceptance/root.html
+          ! grep -Eqi 'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分' /tmp/chain-shared-acceptance/root.html
+          curl --fail --silent --show-error --location --output /tmp/chain-shared-acceptance/robots.txt "https://${CHAIN_PUBLIC_HOST}/robots.txt"
+          curl --fail --silent --show-error --location --output /tmp/chain-shared-acceptance/sitemap.xml "https://${CHAIN_PUBLIC_HOST}/sitemap.xml"
+          grep -F 'Sitemap: https://chain.jaios-governance.org/sitemap.xml' /tmp/chain-shared-acceptance/robots.txt
+          for route in context foundation build possibilities ecosystem experience governance evidence contact; do
+            curl --fail-with-body --silent --show-error --location --max-time 45 \
+              --output "/tmp/chain-shared-acceptance/${route}.html" "https://${CHAIN_PUBLIC_HOST}/${route}"
+            ! grep -Fq "data-jsec-trust-release='${RELEASE_MARKER}'" "/tmp/chain-shared-acceptance/${route}.html"
+          done
+          openssl s_client -connect "${CHAIN_PUBLIC_HOST}:443" -servername "$CHAIN_PUBLIC_HOST" </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName > /tmp/chain-shared-acceptance/tls.txt
+          grep -F "DNS:${CHAIN_PUBLIC_HOST}" /tmp/chain-shared-acceptance/tls.txt
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          options=webdriver.ChromeOptions(); options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage'); options.add_argument('--disable-gpu')
+          driver=webdriver.Chrome(options=options); records=[]
+          try:
+              for label,width,expected in [('desktop',1440,3),('tablet',820,2),('mobile',390,1)]:
+                  driver.set_window_size(width,1800); driver.get('https://chain.jaios-governance.org/')
+                  WebDriverWait(driver,40).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]'))==1)
+                  trust=driver.find_element(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]')
+                  text=trust.text; assert 'Managed under JAIOS Institutional Governance' in text; assert 'JAIOS Institutional Governanceの管理基準' in text
+                  grid=driver.find_element(By.CSS_SELECTOR,'.jsec-institutional-trust-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  assert columns==expected,(label,columns,expected)
+                  driver.save_screenshot(f'/tmp/chain-shared-acceptance/{label}.png'); records.append({'viewport':label,'columns':columns})
+              Path('/tmp/chain-shared-acceptance/browser-results.json').write_text(json.dumps(records,indent=2)+'\n')
+          finally: driver.quit()
+          PY
+      - name: Persist production acceptance
+        env:
+          SELECTED_ROLE: ${{ steps.identity.outputs.selected_role }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import json,os,re
+          from datetime import datetime,timezone
+          from pathlib import Path
+          state=Path('/tmp/chain-shared-edge-state'); public=Path('/tmp/chain-shared-acceptance')
+          edge=json.loads((state/'edge-result.json').read_text()); browser=json.loads((public/'browser-results.json').read_text())
+          html=(public/'root.html').read_text(encoding='utf-8',errors='replace')
+          evidence={'schema':'jsec-chain-brand-institutional-trust-production/v2','observed_at':datetime.now(timezone.utc).isoformat(),'workflow_run_id':os.environ['GITHUB_RUN_ID'],'source_commit':os.environ['GITHUB_SHA'],'selected_aws_role':os.environ['SELECTED_ROLE'],'public_url':'https://chain.jaios-governance.org/','native_origin':'https://junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site/','release_marker':'20260805-chain-institutional-trust','edge':edge,'public_acceptance':{'institutional_trust_visible':True,'jaios_management_visible':True,'closed_information_absent':not bool(re.search(r'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分',html,re.I)),'robots_published':True,'sitemap_published':True,'protected_routes':['/context','/foundation','/build','/possibilities','/ecosystem','/experience','/governance','/evidence','/contact'],'browser_matrix':browser},'boundaries':{'mainnet_changed':False,'assets_moved':False,'bridge_activated':False,'native_sites_origin_preserved':True},'result':'PRODUCTION_ACCEPTED'}
+          Path('evidence/production/jsec-chain-brand-institutional-trust-production-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
+          PY
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/jsec-chain-brand-institutional-trust-production-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain shared-edge acceptance ${GITHUB_RUN_ID}"
+          git pull --rebase origin main; git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chain-brand-shared-edge-${{ github.run_id }}
+          path: |
+            /tmp/chain-shared-edge-state
+            /tmp/chain-shared-acceptance
+            evidence/production/jsec-chain-brand-institutional-trust-production-latest.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  rollback_shared_function:
+    if: always() && needs.publish_shared_function.result == 'success' && needs.deploy_edge.result == 'failure'
+    needs: [publish_shared_function, deploy_edge]
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: chain-shared-function-state-${{ github.run_id }}
+          path: /tmp/shared-function-state
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-shared-function-rollback-${{ github.run_id }}
+          disable-retry: true
+      - name: Restore exact previous shared Function
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet boto3
+          python3 scripts/jaios_news_edge_function.py rollback --state-dir /tmp/shared-function-state

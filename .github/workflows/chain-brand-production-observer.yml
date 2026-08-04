@@ -2,7 +2,7 @@ name: Chain Brand Production Observer
 
 on:
   workflow_run:
-    workflows: ["Chain Brand Institutional Trust Production"]
+    workflows: ["Chain Brand Institutional Trust Production", "Chain Brand Shared Edge Repair"]
     types: [completed]
 
 permissions:
@@ -41,6 +41,7 @@ jobs:
               'observed_at':datetime.now(timezone.utc).isoformat(),
               'run_id':run.get('id'),
               'run_url':run.get('html_url'),
+              'workflow_name':run.get('name'),
               'event':run.get('event'),
               'status':run.get('status'),
               'conclusion':run.get('conclusion'),
