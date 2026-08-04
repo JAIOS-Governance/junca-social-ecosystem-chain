@@ -1,0 +1,128 @@
+name: JAIOS News Public Readback
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/jaios-news-public-readback.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 12
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      ROOT_DOMAIN: jaios-governance.org
+      DISTRIBUTION_ID: E2WIXG3DWW8OX1
+      FUNCTION_NAME: junca-chain-docs-routes-595710543956
+      FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      RELEASE_MARKER: 20260804-six-card-news
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure exact production readback identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-news-public-readback-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Verify CloudFront distribution and LIVE Function identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" > /tmp/distribution.json
+          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution.json)" = "$ROOT_DOMAIN"
+          association_count="$(jq --arg arn "$FUNCTION_ARN" '[.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[]? | select(.FunctionARN==$arn and .EventType=="viewer-request")] | length' /tmp/distribution.json)"
+          test "$association_count" -eq 1
+          python3 -m pip install --quiet boto3
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import boto3
+
+          client=boto3.client('cloudfront',region_name=os.environ['AWS_REGION'])
+          response=client.get_function(Name=os.environ['FUNCTION_NAME'],Stage='LIVE')
+          body=response['FunctionCode']
+          live=body.read() if hasattr(body,'read') else bytes(body)
+          expected=Path('infra/aws/jaios-root-news-router.js').read_bytes()
+          if live != expected:
+              raise SystemExit(f"LIVE function mismatch: {hashlib.sha256(live).hexdigest()} != {hashlib.sha256(expected).hexdigest()}")
+          print('JAIOS_LIVE_FUNCTION_READBACK_PASS',hashlib.sha256(live).hexdigest())
+          PY
+
+      - name: Verify public HTML and protected non-root routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --location \
+            --retry 6 --retry-delay 5 --max-time 30 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/root.html "https://${ROOT_DOMAIN}/"
+          grep -F "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/root.html
+          test "$(grep -o 'data-jaios-news-card=' /tmp/root.html | wc -l)" -eq 12
+          grep -F 'Japan adopts the 2026 Priority Plan' /tmp/root.html
+          grep -F 'UNDP launches Blockchain Advisory Group' /tmp/root.html
+          for route in browser institution social-business observatory evidence; do
+            curl --fail --silent --show-error --location --retry 3 --retry-delay 3 \
+              --output "/tmp/${route}.html" "https://${ROOT_DOMAIN}/${route}"
+            ! grep -Fq "data-jaios-news-release='${RELEASE_MARKER}'" "/tmp/${route}.html"
+          done
+
+      - name: Verify browser-rendered 3 / 2 / 1 responsive grid
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          options=webdriver.ChromeOptions()
+          options.add_argument('--headless=new')
+          options.add_argument('--no-sandbox')
+          options.add_argument('--disable-dev-shm-usage')
+          options.add_argument('--disable-gpu')
+          driver=webdriver.Chrome(options=options)
+          records=[]
+          try:
+              for label,width,expected in [('desktop',1440,3),('tablet',820,2),('mobile',390,1)]:
+                  driver.set_window_size(width,1400)
+                  driver.get('https://jaios-governance.org/')
+                  WebDriverWait(driver,30).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card]'))==6)
+                  cards=driver.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card]')
+                  grid=driver.find_element(By.CSS_SELECTOR,'section .jaios-edge-news-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  assert len(cards)==6,(label,len(cards))
+                  assert columns==expected,(label,columns,expected)
+                  links=driver.find_elements(By.CSS_SELECTOR,'section [data-jaios-news-card] a[href]')
+                  assert len(links)==6,(label,len(links))
+                  driver.save_screenshot(f'/tmp/jaios-news-readback-{label}.png')
+                  records.append({'viewport':label,'cards':len(cards),'columns':columns,'links':len(links)})
+              print('JAIOS_NEWS_PUBLIC_BROWSER_READBACK_PASS',records)
+          finally:
+              driver.quit()
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-news-public-readback-${{ github.run_id }}
+          path: |
+            /tmp/root.html
+            /tmp/distribution.json
+            /tmp/jaios-news-readback-desktop.png
+            /tmp/jaios-news-readback-tablet.png
+            /tmp/jaios-news-readback-mobile.png
+          if-no-files-found: error
+          retention-days: 90
