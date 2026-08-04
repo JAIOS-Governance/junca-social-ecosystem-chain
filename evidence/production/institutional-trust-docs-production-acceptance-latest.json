@@ -1,0 +1,21 @@
+{
+  "schema": "institutional-trust-docs-production-acceptance/v1",
+  "observed_at": "2026-08-04T14:55:54Z",
+  "source_commit": "ef2a2905cd57d98d8aaed489321d23ee0f89a27f",
+  "workflow_run_id": "30921398860",
+  "public_endpoints": [
+    "https://docs.jaios-governance.org/institutional-trust/",
+    "https://docs.jaios-governance.org/institutional-trust.json",
+    "https://docs.jaios-governance.org/institutional-trust.txt",
+    "https://docs.jaios-governance.org/current-identity.json",
+    "https://docs.jaios-governance.org/current-identity.txt"
+  ],
+  "invalidation_id": "I6713X947RIM5220IX2CP049KO",
+  "exact_content_readback": "PASS",
+  "cache_readback": "PASS",
+  "closed_information_absent": true,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "result": "PRODUCTION_ACCEPTED"
+}
