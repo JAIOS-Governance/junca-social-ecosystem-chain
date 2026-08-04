@@ -21,7 +21,7 @@ jobs:
     environment: public-testnet
     timeout-minutes: 15
     env:
-      RECOVERY_TRIGGER: "20260804-2350-JST"
+      RECOVERY_TRIGGER: "20260805-0020-JST-BROWSER"
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
       TARGET_ROLE_NAME: JuncaChainDocsProductionDeployment
@@ -58,7 +58,7 @@ jobs:
           do
             if aws sts assume-role-with-web-identity \
               --role-arn "$role" \
-              --role-session-name "jaios-news-edge-permission-${GITHUB_RUN_ID}" \
+              --role-session-name "jaios-browser-edge-permission-${GITHUB_RUN_ID}" \
               --web-identity-token "$(cat /tmp/oidc-token)" \
               --duration-seconds 900 > /tmp/assume.json 2>/tmp/assume.err; then
               selected="$role"
@@ -201,6 +201,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add evidence/production/jaios-news-edge-permission-recovery-latest.json
-          git diff --cached --quiet || git commit -m "Record JAIOS News edge permission recovery ${GITHUB_RUN_ID}"
+          git diff --cached --quiet || git commit -m "Record JAIOS Browser edge permission recovery ${GITHUB_RUN_ID}"
           git pull --rebase origin main
           git push origin HEAD:main
