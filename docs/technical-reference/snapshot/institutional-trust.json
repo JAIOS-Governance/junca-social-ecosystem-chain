@@ -24,19 +24,12 @@
     "public network evidence",
     "explicit activation boundaries"
   ],
-  "public_disclosure_boundary": {
-    "excluded_from_public_web": [
-      "JUNCA Point information",
-      "Point conversion design",
-      "revenue models and allocation",
-      "token supply and allocation details"
-    ],
-    "managed_in": [
-      "controlled member materials",
-      "whitepaper materials",
-      "internal governance records"
-    ]
-  },
+  "public_information_scope": [
+    "institutional governance",
+    "audit relationships",
+    "network management",
+    "verifiable public evidence"
+  ],
   "official_sources": [
     "https://jaios-governance.org/",
     "https://chain.jaios-governance.org/",
