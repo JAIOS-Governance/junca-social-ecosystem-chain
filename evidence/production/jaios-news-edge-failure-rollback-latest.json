@@ -1,0 +1,12 @@
+{
+  "schema": "jaios-news-edge-failure-rollback/v1",
+  "failed_run_id": "30920625291",
+  "rollback_run_id": "30920696210",
+  "distribution_id": "E2WIXG3DWW8OX1",
+  "function_arn": "arn:aws:cloudfront::595710543956:function/jaios-root-news-router",
+  "association_removed": false,
+  "invalidation_id": "none",
+  "route53_changed": false,
+  "tls_changed": false,
+  "result": "ROLLBACK_ACCEPTED"
+}
