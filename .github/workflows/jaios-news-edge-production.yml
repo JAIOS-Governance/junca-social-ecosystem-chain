@@ -1,0 +1,334 @@
+name: JAIOS News Edge Production
+
+on:
+  pull_request:
+    paths:
+      - "sites/jaios-root-news/**"
+      - "scripts/build_jaios_root_news_edge.py"
+      - "infra/aws/jaios-root-news-router.js"
+      - ".github/workflows/jaios-news-edge-production.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sites/jaios-root-news/**"
+      - "scripts/build_jaios_root_news_edge.py"
+      - "infra/aws/jaios-root-news-router.js"
+      - ".github/workflows/jaios-news-edge-production.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: jaios-news-edge-production
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  ROOT_DOMAIN: jaios-governance.org
+  DOCS_DOMAIN: docs.jaios-governance.org
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DISTRIBUTION_ID: E2WIXG3DWW8OX1
+  EXPECTED_DISTRIBUTION_DOMAIN: d6kqifze013tg.cloudfront.net
+  EXPECTED_ORIGIN_DOMAIN: jaios-institutional-governance.juncajapan-inc.chatgpt.site
+  FUNCTION_NAME: jaios-root-news-router
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  RELEASE_MARKER: 20260804-six-card-news
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/build_jaios_root_news_edge.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('sites/jaios-root-news/news-items.json').read_text())
+          assert len(data['items']) == 6
+          assert len({x['url'] for x in data['items']}) == 6
+          assert [x['date'] for x in data['items']] == sorted([x['date'] for x in data['items']], reverse=True)
+          PY
+          grep -F "import cf from 'cloudfront';" infra/aws/jaios-root-news-router.js
+          grep -F "cf.updateRequestOrigin" infra/aws/jaios-root-news-router.js
+      - name: Build against current production HTML
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --location --max-time 30 \
+            --output /tmp/current-root.html "https://${ROOT_DOMAIN}/"
+          python3 scripts/build_jaios_root_news_edge.py \
+            /tmp/current-root.html sites/jaios-root-news/news-items.json /tmp/index.html
+          test "$(grep -o "data-jaios-news-card=" /tmp/index.html | wc -l)" -eq 12
+          grep -F "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/index.html
+          grep -F "grid-template-columns:repeat(3" /tmp/index.html
+          grep -F "grid-template-columns:repeat(2" /tmp/index.html
+          grep -F "grid-template-columns:1fr" /tmp/index.html
+          test "$(wc -c < /tmp/index.html)" -lt 1000000
+          sha256sum /tmp/current-root.html /tmp/index.html
+      - name: Configure bounded AWS preflight identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-news-preflight-${{ github.run_id }}
+          disable-retry: true
+      - name: Verify existing distribution and publication bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" > /tmp/distribution.json
+          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution.json)" = "$ROOT_DOMAIN"
+          test "$(jq -r '.DistributionConfig.Origins.Items[].DomainName | select(. == env.EXPECTED_ORIGIN_DOMAIN)' /tmp/distribution.json)" = "$EXPECTED_ORIGIN_DOMAIN"
+          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DomainName --output text)" = "$EXPECTED_DISTRIBUTION_DOMAIN"
+          aws s3api get-bucket-versioning --bucket "$DOCS_BUCKET" --query Status --output text | grep -Fx Enabled
+          jq '.DistributionConfig.DefaultCacheBehavior.FunctionAssociations // {"Quantity":0}' /tmp/distribution.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-news-edge-${{ github.sha }}
+          path: /tmp/index.html
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure production AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-news-production-${{ github.run_id }}
+          disable-retry: true
+      - name: Build exact current-root derivative
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --location --max-time 30 \
+            --output /tmp/current-root.html "https://${ROOT_DOMAIN}/"
+          python3 scripts/build_jaios_root_news_edge.py \
+            /tmp/current-root.html sites/jaios-root-news/news-items.json /tmp/index.html
+          sha256sum /tmp/current-root.html | cut -d' ' -f1 > /tmp/original-html-sha256.txt
+          sha256sum /tmp/index.html | cut -d' ' -f1 > /tmp/artifact-sha256.txt
+      - name: Publish exact HTML artifact to governed Docs origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp /tmp/index.html "s3://${DOCS_BUCKET}/jaios-root-news/index.html" \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "public,max-age=0,must-revalidate" \
+            --metadata "source-commit=${GITHUB_SHA},release=${RELEASE_MARKER}"
+          aws s3 cp "s3://${DOCS_BUCKET}/jaios-root-news/index.html" /tmp/s3-readback.html
+          cmp /tmp/index.html /tmp/s3-readback.html
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location \
+              --output /tmp/docs-origin.html "https://${DOCS_DOMAIN}/jaios-root-news/index.html" \
+              && grep -Fq "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/docs-origin.html; then
+              break
+            fi
+            sleep 5
+          done
+          grep -F "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/docs-origin.html
+      - name: Create or update published CloudFront origin router
+        id: function
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp infra/aws/jaios-root-news-router.js /tmp/function.js
+          cat > /tmp/function-config.json <<'JSON'
+          {"Comment":"Route only the JAIOS root document to the governed six-card News artifact","Runtime":"cloudfront-js-2.0"}
+          JSON
+          cat > /tmp/test-event.json <<'JSON'
+          {"version":"1.0","context":{"eventType":"viewer-request"},"viewer":{"ip":"198.51.100.10"},"request":{"method":"GET","uri":"/","querystring":{},"headers":{"host":{"value":"jaios-governance.org"}},"cookies":{}}}
+          JSON
+          if aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT >/tmp/function-description.json 2>/dev/null; then
+            etag="$(jq -r '.ETag' /tmp/function-description.json)"
+            aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$etag" \
+              --function-config file:///tmp/function-config.json --function-code fileb:///tmp/function.js \
+              >/tmp/function-update.json
+          else
+            aws cloudfront create-function --name "$FUNCTION_NAME" \
+              --function-config file:///tmp/function-config.json --function-code fileb:///tmp/function.js \
+              >/tmp/function-create.json
+          fi
+          dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
+          aws cloudfront test-function --name "$FUNCTION_NAME" --if-match "$dev_etag" --stage DEVELOPMENT \
+            --event-object fileb:///tmp/test-event.json >/tmp/function-test.json
+          test "$(jq -r '.TestResult.FunctionErrorMessage' /tmp/function-test.json)" = "null"
+          aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$dev_etag" >/tmp/function-publish.json
+          function_arn="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE --query FunctionSummary.FunctionMetadata.FunctionARN --output text)"
+          test -n "$function_arn"
+          echo "function_arn=$function_arn" >> "$GITHUB_OUTPUT"
+      - name: Activate root-only routing with automatic rollback
+        id: activate
+        env:
+          FUNCTION_ARN: ${{ steps.function.outputs.function_arn }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" > /tmp/distribution-before.json
+          jq '.DistributionConfig' /tmp/distribution-before.json > /tmp/distribution-before-config.json
+          before_etag="$(jq -r '.ETag' /tmp/distribution-before.json)"
+          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution-before.json)" = "$ROOT_DOMAIN"
+          test "$(jq -r '.DistributionConfig.Origins.Items[].DomainName | select(. == env.EXPECTED_ORIGIN_DOMAIN)' /tmp/distribution-before.json)" = "$EXPECTED_ORIGIN_DOMAIN"
+          existing_other="$(jq --arg arn "$FUNCTION_ARN" '[.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[]? | select(.EventType=="viewer-request" and .FunctionARN!=$arn)] | length' /tmp/distribution-before.json)"
+          test "$existing_other" -eq 0
+          jq --arg arn "$FUNCTION_ARN" '
+            .DefaultCacheBehavior.FunctionAssociations = (
+              (.DefaultCacheBehavior.FunctionAssociations // {"Quantity":0,"Items":[]})
+              | .Items = (((.Items // []) | map(select(.EventType != "viewer-request"))) + [{"FunctionARN":$arn,"EventType":"viewer-request"}])
+              | .Quantity = (.Items | length)
+            )
+          ' /tmp/distribution-before-config.json > /tmp/distribution-after-config.json
+
+          activated=0
+          rollback() {
+            rc=$?
+            if [[ "$activated" -eq 1 ]]; then
+              echo "Activation readback failed; restoring exact previous distribution config." >&2
+              current_etag="$(aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" --query ETag --output text)"
+              aws cloudfront update-distribution --id "$DISTRIBUTION_ID" --if-match "$current_etag" \
+                --distribution-config file:///tmp/distribution-before-config.json >/tmp/rollback.json
+              aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+              aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/' '/index.html' >/tmp/rollback-invalidation.json
+            fi
+            exit "$rc"
+          }
+          trap rollback ERR
+
+          aws cloudfront update-distribution --id "$DISTRIBUTION_ID" --if-match "$before_etag" \
+            --distribution-config file:///tmp/distribution-after-config.json >/tmp/distribution-update.json
+          activated=1
+          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/' '/index.html' --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+
+          for attempt in {1..18}; do
+            if curl --fail-with-body --silent --show-error --location \
+              --output /tmp/public-root.html "https://${ROOT_DOMAIN}/" \
+              && grep -Fq "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/public-root.html; then
+              break
+            fi
+            sleep 5
+          done
+          grep -F "data-jaios-news-release='${RELEASE_MARKER}'" /tmp/public-root.html
+          test "$(grep -o "data-jaios-news-card=" /tmp/public-root.html | wc -l)" -eq 12
+          for route in browser institution social-business observatory evidence; do
+            curl --fail --silent --show-error --location --output "/tmp/${route}.html" "https://${ROOT_DOMAIN}/${route}"
+            ! grep -Fq "data-jaios-news-release='${RELEASE_MARKER}'" "/tmp/${route}.html"
+          done
+          trap - ERR
+          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
+      - name: Browser-rendered responsive acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          import os
+          import time
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          options = webdriver.ChromeOptions()
+          options.add_argument('--headless=new')
+          options.add_argument('--no-sandbox')
+          options.add_argument('--disable-dev-shm-usage')
+          options.add_argument('--disable-gpu')
+          driver = webdriver.Chrome(options=options)
+          try:
+              for label, width, expected in [('desktop',1440,3),('tablet',820,2),('mobile',390,1)]:
+                  driver.set_window_size(width, 1400)
+                  driver.get('https://jaios-governance.org/')
+                  WebDriverWait(driver, 30).until(
+                      lambda d: len(d.find_elements(By.CSS_SELECTOR, 'section [data-jaios-news-card]')) == 6
+                  )
+                  cards = driver.find_elements(By.CSS_SELECTOR, 'section [data-jaios-news-card]')
+                  assert len(cards) == 6
+                  grid = driver.find_element(By.CSS_SELECTOR, 'section .jaios-edge-news-grid')
+                  columns = driver.execute_script(
+                      "return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length", grid
+                  )
+                  assert columns == expected, (label, columns, expected)
+                  body = driver.find_element(By.TAG_NAME, 'body').text
+                  assert 'Japan adopts the 2026 Priority Plan' in body
+                  assert 'UNDP launches Blockchain Advisory Group' in body
+                  driver.save_screenshot(f'/tmp/jaios-news-{label}.png')
+              print('JAIOS_NEWS_BROWSER_ACCEPTANCE_PASS')
+          finally:
+              driver.quit()
+          PY
+      - name: Record immutable production evidence
+        env:
+          FUNCTION_ARN: ${{ steps.function.outputs.function_arn }}
+          INVALIDATION_ID: ${{ steps.activate.outputs.invalidation_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          evidence={
+            'schema':'jaios-news-edge-production/v1',
+            'observed_at':datetime.now(timezone.utc).isoformat(),
+            'source_commit':os.environ['GITHUB_SHA'],
+            'news_source_commit':'a4e5497ae866ad78593679387e3a9f930cb5db1d',
+            'public_url':'https://jaios-governance.org/',
+            'distribution_id':os.environ['DISTRIBUTION_ID'],
+            'distribution_domain':os.environ['EXPECTED_DISTRIBUTION_DOMAIN'],
+            'preserved_origin':os.environ['EXPECTED_ORIGIN_DOMAIN'],
+            'function_arn':os.environ['FUNCTION_ARN'],
+            'invalidation_id':os.environ['INVALIDATION_ID'],
+            'release_marker':os.environ['RELEASE_MARKER'],
+            'original_html_sha256':Path('/tmp/original-html-sha256.txt').read_text().strip(),
+            'artifact_sha256':Path('/tmp/artifact-sha256.txt').read_text().strip(),
+            'news_cards':6,
+            'desktop_columns':3,
+            'tablet_columns':2,
+            'mobile_columns':1,
+            'non_root_routes_preserved':['/browser','/institution','/social-business','/observatory','/evidence'],
+            'route53_changed':False,
+            'tls_changed':False,
+            'result':'PRODUCTION_ACCEPTED'
+          }
+          Path('evidence/production/jaios-news-edge-production-latest.json').write_text(json.dumps(evidence,indent=2)+'\n')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add evidence/production/jaios-news-edge-production-latest.json
+          git commit -m "Record JAIOS six-card News production acceptance ${GITHUB_RUN_ID}"
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-news-production-evidence-${{ github.run_id }}
+          path: |
+            /tmp/jaios-news-desktop.png
+            /tmp/jaios-news-tablet.png
+            /tmp/jaios-news-mobile.png
+            /tmp/distribution-before-config.json
+            /tmp/distribution-after-config.json
+            evidence/production/jaios-news-edge-production-latest.json
+          if-no-files-found: error
+          retention-days: 90
