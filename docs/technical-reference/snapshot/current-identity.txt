@@ -36,8 +36,8 @@ Institutional trust: https://docs.jaios-governance.org/institutional-trust/
 JUNCA Holdings: https://junca-global.group/
 Source repository: https://github.com/JAIOS-Governance/junca-social-ecosystem-chain
 
-PUBLIC DISCLOSURE BOUNDARY
-JUNCA Point information, Point conversion design, revenue models, revenue allocation, token supply and allocation details are not included in public web information. They are managed in controlled member, whitepaper or internal-governance materials.
+PUBLIC INFORMATION SCOPE
+This record is limited to institutional governance, audit relationships, network management and verifiable public evidence.
 
 NETWORK BOUNDARY
 Mainnet Changed: false
