@@ -104,19 +104,19 @@ jobs:
       - name: Inventory existing AWS web resources
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           aws cloudfront list-distributions \
             --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '${ROOT_DOMAIN}')].[Id,DomainName,Status,Aliases.Items,Origins.Items[*].DomainName]" \
-            --output json > /tmp/cloudfront.json
+            --output json > /tmp/cloudfront.json 2>/tmp/cloudfront-error.txt || echo '[]' > /tmp/cloudfront.json
           aws s3api list-buckets \
             --query "Buckets[?contains(Name, 'jaios') || contains(Name, 'junca')].[Name,CreationDate]" \
-            --output json > /tmp/buckets.json
+            --output json > /tmp/buckets.json 2>/tmp/buckets-error.txt || echo '[]' > /tmp/buckets.json
           aws acm list-certificates --region us-east-1 \
             --query "CertificateSummaryList[?contains(DomainName, '${ROOT_DOMAIN}') || contains(DomainName, 'jaios-governance.org')].[CertificateArn,DomainName,Status]" \
-            --output json > /tmp/certificates.json
+            --output json > /tmp/certificates.json 2>/tmp/certificates-error.txt || echo '[]' > /tmp/certificates.json
           aws iam list-roles \
             --query "Roles[?contains(RoleName, 'Junca') || contains(RoleName, 'JAIOS')].[RoleName,Arn]" \
-            --output json > /tmp/roles.json
+            --output json > /tmp/roles.json 2>/tmp/roles-error.txt || echo '[]' > /tmp/roles.json
 
       - name: Build audit evidence
         shell: bash
@@ -130,10 +130,11 @@ jobs:
           from pathlib import Path
 
           def text(path):
-              return Path(path).read_text(encoding='utf-8', errors='replace').strip()
+              p = Path(path)
+              return p.read_text(encoding='utf-8', errors='replace').strip() if p.exists() else ''
 
           def load(path):
-              return json.loads(Path(path).read_text(encoding='utf-8'))
+              return json.loads(text(path) or '[]')
 
           evidence = {
               'schema': 'jaios-root-route-audit/v1',
@@ -165,6 +166,12 @@ jobs:
                   'certificates': load('/tmp/certificates.json'),
                   'roles': load('/tmp/roles.json'),
               },
+              'inventory_errors': {
+                  'cloudfront': text('/tmp/cloudfront-error.txt'),
+                  'buckets': text('/tmp/buckets-error.txt'),
+                  'certificates': text('/tmp/certificates-error.txt'),
+                  'roles': text('/tmp/roles-error.txt'),
+              },
               'mutations': {
                   'route53': False,
                   'cloudfront': False,
@@ -177,7 +184,9 @@ jobs:
           Path('evidence/production/jaios-root-route-audit-latest.json').write_text(
               json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
           )
+          print('JAIOS_ROOT_ROUTE_AUDIT_JSON_BEGIN')
           print(json.dumps(evidence, ensure_ascii=False, indent=2))
+          print('JAIOS_ROOT_ROUTE_AUDIT_JSON_END')
           PY
 
       - name: Persist audit evidence to main
