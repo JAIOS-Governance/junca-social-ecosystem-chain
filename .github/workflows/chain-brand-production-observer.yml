@@ -1,0 +1,87 @@
+name: Chain Brand Production Observer
+
+on:
+  workflow_run:
+    workflows: ["Chain Brand Institutional Trust Production"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    if: github.event.workflow_run.event != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Read completed workflow jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence/production /tmp/chain-brand-observer
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+            > /tmp/chain-brand-observer/jobs.json
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
+            > /tmp/chain-brand-observer/run.json
+          python3 - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          run=json.loads(Path('/tmp/chain-brand-observer/run.json').read_text())
+          jobs=json.loads(Path('/tmp/chain-brand-observer/jobs.json').read_text()).get('jobs',[])
+          evidence={
+              'schema':'chain-brand-production-run-observer/v1',
+              'observed_at':datetime.now(timezone.utc).isoformat(),
+              'run_id':run.get('id'),
+              'run_url':run.get('html_url'),
+              'event':run.get('event'),
+              'status':run.get('status'),
+              'conclusion':run.get('conclusion'),
+              'head_sha':run.get('head_sha'),
+              'head_branch':run.get('head_branch'),
+              'run_started_at':run.get('run_started_at'),
+              'updated_at':run.get('updated_at'),
+              'jobs':[
+                  {
+                      'id':job.get('id'),
+                      'name':job.get('name'),
+                      'status':job.get('status'),
+                      'conclusion':job.get('conclusion'),
+                      'started_at':job.get('started_at'),
+                      'completed_at':job.get('completed_at'),
+                      'steps':[
+                          {'name':s.get('name'),'status':s.get('status'),'conclusion':s.get('conclusion'),'number':s.get('number')}
+                          for s in job.get('steps',[])
+                      ],
+                  }
+                  for job in jobs
+              ],
+              'result':'RECORDED',
+          }
+          Path('evidence/production/chain-brand-production-run-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+      - name: Persist observer evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/chain-brand-production-run-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain brand production run ${{ github.event.workflow_run.id }}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-brand-production-observer-${{ github.event.workflow_run.id }}
+          path: |
+            /tmp/chain-brand-observer
+            evidence/production/chain-brand-production-run-latest.json
+          if-no-files-found: error
+          retention-days: 90
