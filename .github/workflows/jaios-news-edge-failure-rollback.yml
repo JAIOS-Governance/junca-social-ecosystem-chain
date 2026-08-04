@@ -23,7 +23,7 @@ jobs:
       AWS_REGION: us-east-1
       DISTRIBUTION_ID: E2WIXG3DWW8OX1
       ROOT_DOMAIN: jaios-governance.org
-      FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/jaios-root-news-router
+      FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
       DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
           role-session-name: jaios-news-failure-rollback-${{ github.run_id }}
           disable-retry: true
 
-      - name: Remove only the governed root News association
+      - name: Remove only the JAIOS root association
         id: rollback
         shell: bash
         run: |
@@ -94,12 +94,13 @@ jobs:
             --arg changed "${CHANGED:-false}" \
             --arg invalidation_id "${INVALIDATION_ID:-none}" \
             '{
-              schema: "jaios-news-edge-failure-rollback/v1",
+              schema: "jaios-news-edge-failure-rollback/v2",
               failed_run_id: $failed_run_id,
               rollback_run_id: $rollback_run_id,
               distribution_id: $distribution_id,
-              function_arn: $function_arn,
-              association_removed: ($changed == "true"),
+              shared_function_arn: $function_arn,
+              root_association_removed: ($changed == "true"),
+              docs_function_behavior_preserved: true,
               invalidation_id: $invalidation_id,
               route53_changed: false,
               tls_changed: false,
