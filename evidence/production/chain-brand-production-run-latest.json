@@ -1,23 +1,24 @@
 {
   "schema": "chain-brand-production-run-observer/v1",
-  "observed_at": "2026-08-04T16:21:22.946826+00:00",
-  "run_id": 30928621407,
-  "run_url": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30928621407",
+  "observed_at": "2026-08-04T16:44:59.367645+00:00",
+  "run_id": 30930480671,
+  "run_url": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/actions/runs/30930480671",
+  "workflow_name": "Chain Brand Shared Edge Repair",
   "event": "push",
   "status": "completed",
   "conclusion": "failure",
-  "head_sha": "8f3e964dbc8fc15e894f58433a1a28d320c1f3ad",
+  "head_sha": "3bafcb5de6249f0f81e16d060bb78c868a032465",
   "head_branch": "main",
-  "run_started_at": "2026-08-04T16:20:09Z",
-  "updated_at": "2026-08-04T16:21:11Z",
+  "run_started_at": "2026-08-04T16:43:08Z",
+  "updated_at": "2026-08-04T16:44:49Z",
   "jobs": [
     {
-      "id": 92057313962,
+      "id": 92063592841,
       "name": "quality",
       "status": "completed",
       "conclusion": "success",
-      "started_at": "2026-08-04T16:20:14Z",
-      "completed_at": "2026-08-04T16:20:26Z",
+      "started_at": "2026-08-04T16:43:16Z",
+      "completed_at": "2026-08-04T16:43:26Z",
       "steps": [
         {
           "name": "Set up job",
@@ -32,13 +33,13 @@
           "number": 2
         },
         {
-          "name": "Validate implementation sources",
+          "name": "Validate repaired shared-edge sources",
           "status": "completed",
           "conclusion": "success",
           "number": 3
         },
         {
-          "name": "Build current native brand root",
+          "name": "Rebuild governed Chain root from current native site",
           "status": "completed",
           "conclusion": "success",
           "number": 4
@@ -64,12 +65,12 @@
       ]
     },
     {
-      "id": 92057396810,
+      "id": 92063673721,
       "name": "publish_artifact",
       "status": "completed",
       "conclusion": "success",
-      "started_at": "2026-08-04T16:20:30Z",
-      "completed_at": "2026-08-04T16:20:46Z",
+      "started_at": "2026-08-04T16:43:31Z",
+      "completed_at": "2026-08-04T16:43:51Z",
       "steps": [
         {
           "name": "Set up job",
@@ -84,19 +85,19 @@
           "number": 2
         },
         {
-          "name": "Configure governed Docs publication identity",
+          "name": "Run aws-actions/configure-aws-credentials@v4",
           "status": "completed",
           "conclusion": "success",
           "number": 3
         },
         {
-          "name": "Build and publish root, robots and sitemap",
+          "name": "Publish exact governed root and search surfaces",
           "status": "completed",
           "conclusion": "success",
           "number": 4
         },
         {
-          "name": "Post Configure governed Docs publication identity",
+          "name": "Post Run aws-actions/configure-aws-credentials@v4",
           "status": "completed",
           "conclusion": "success",
           "number": 7
@@ -116,12 +117,12 @@
       ]
     },
     {
-      "id": 92057490895,
-      "name": "deploy_edge",
+      "id": 92063673734,
+      "name": "publish_shared_function",
       "status": "completed",
-      "conclusion": "failure",
-      "started_at": "2026-08-04T16:20:56Z",
-      "completed_at": "2026-08-04T16:21:11Z",
+      "conclusion": "success",
+      "started_at": "2026-08-04T16:43:30Z",
+      "completed_at": "2026-08-04T16:43:52Z",
       "steps": [
         {
           "name": "Set up job",
@@ -136,64 +137,162 @@
           "number": 2
         },
         {
-          "name": "Acquire GitHub OIDC token",
+          "name": "Run aws-actions/configure-aws-credentials@v4",
           "status": "completed",
           "conclusion": "success",
           "number": 3
         },
         {
-          "name": "Assume approved AWS bootstrap identity",
+          "name": "Publish accepted shared Function with Chain branch",
           "status": "completed",
           "conclusion": "success",
           "number": 4
         },
         {
-          "name": "Create and activate dedicated Chain edge",
-          "status": "completed",
-          "conclusion": "failure",
-          "number": 5
-        },
-        {
-          "name": "Public DNS, TLS and route acceptance",
-          "status": "completed",
-          "conclusion": "skipped",
-          "number": 6
-        },
-        {
-          "name": "Browser-rendered responsive acceptance",
-          "status": "completed",
-          "conclusion": "skipped",
-          "number": 7
-        },
-        {
-          "name": "Roll back Chain DNS if public acceptance failed",
-          "status": "completed",
-          "conclusion": "skipped",
-          "number": 8
-        },
-        {
-          "name": "Persist immutable production acceptance",
-          "status": "completed",
-          "conclusion": "skipped",
-          "number": 9
-        },
-        {
           "name": "Run actions/upload-artifact@v4",
           "status": "completed",
           "conclusion": "success",
-          "number": 10
+          "number": 5
+        },
+        {
+          "name": "Post Run aws-actions/configure-aws-credentials@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
         },
         {
           "name": "Post Run actions/checkout@v4",
           "status": "completed",
           "conclusion": "success",
-          "number": 20
+          "number": 10
         },
         {
           "name": "Complete job",
           "status": "completed",
           "conclusion": "success",
-          "number": 21
+          "number": 11
+        }
+      ]
+    },
+    {
+      "id": 92063789529,
+      "name": "deploy_edge",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-08-04T16:44:00Z",
+      "completed_at": "2026-08-04T16:44:23Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Acquire approved AWS bootstrap identity",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Create Chain distribution and controlled DNS cutover",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 4
+        },
+        {
+          "name": "Public DNS, TLS, routes and responsive acceptance",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5
+        },
+        {
+          "name": "Persist production acceptance",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 6
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        }
+      ]
+    },
+    {
+      "id": 92063930884,
+      "name": "rollback_shared_function",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-08-04T16:44:27Z",
+      "completed_at": "2026-08-04T16:44:48Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/download-artifact@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run aws-actions/configure-aws-credentials@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Restore exact previous shared Function",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Post Run aws-actions/configure-aws-credentials@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
         }
       ]
     }
