@@ -1,0 +1,34 @@
+JAIOS INSTITUTIONAL TRUST ARCHITECTURE
+Effective: 2026-08-04 JST
+Authority: JAIOS Institutional Governance
+
+ENGLISH
+JAIOS Institutional Governance continuously organizes international legal developments, jurisdictional frameworks, technology and financial conditions, user-protection requirements and global affairs into maintained audit and management standards.
+
+JUNCA HOLDINGS advances its business, development, operations and public disclosures while subject to JAIOS review and evidence-based assessment.
+
+JUNCA Social Ecosystem Chain is developed and operated under JAIOS management standards, separating network evidence and release decisions from unsupported single-operator judgment.
+
+Continuous review, transparent records and controlled publication support fairness, accountability and an operating environment capable of earning international trust.
+
+JAPANESE
+JAIOS Institutional Governanceは、国際法令、各国の制度、技術・金融環境、利用者保護に関する要件および国際情勢を継続的に整理し、監査・管理基準へ反映する機関です。
+
+JUNCA HOLDINGSは、JAIOSによる監査と証拠に基づく評価を受けながら、事業・開発・運用・公開を進めています。
+
+JUNCA Social Ecosystem ChainはJAIOSの管理基準のもとで開発・運営され、ネットワーク証跡と公開判断を特定事業者だけの判断から分離します。
+
+継続的な監査、透明な記録、統制された公開により、公平性、説明責任、国際的な信頼に耐え得る運営環境を形成します。
+
+PUBLIC INFORMATION SCOPE
+This record is limited to institutional governance, audit relationships, network management and verifiable public evidence.
+
+公開情報の範囲
+本記録は、機構の統治、監査関係、ネットワーク管理および検証可能な公開証跡に限定しています。
+
+OFFICIAL SOURCES
+https://jaios-governance.org/
+https://chain.jaios-governance.org/
+https://docs.jaios-governance.org/
+https://explorer.jaios-governance.org/
+https://docs.jaios-governance.org/current-identity/
