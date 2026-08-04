@@ -47,7 +47,6 @@ jobs:
             --query "ResourceRecordSets[?Name=='${PUBLIC_HOST}.']" --output json \
             > /tmp/chain-status/dns.json
           aws cloudfront list-distributions --output json > /tmp/chain-status/distributions.json
-          aws acm list-certificates --region us-east-1 --output json > /tmp/chain-status/certificates.json
           curl --silent --show-error --location --max-time 45 \
             -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
             --dump-header /tmp/chain-status/headers.txt \
@@ -64,7 +63,6 @@ jobs:
           root=Path('/tmp/chain-status')
           dns=json.loads((root/'dns.json').read_text())
           distributions=json.loads((root/'distributions.json').read_text())
-          certs=json.loads((root/'certificates.json').read_text())
           html=(root/'root.html').read_text(encoding='utf-8',errors='replace') if (root/'root.html').exists() else ''
           code=(root/'http-code.txt').read_text().strip() if (root/'http-code.txt').exists() else ''
           host=os.environ['PUBLIC_HOST']; marker=os.environ['EXPECTED_MARKER']
@@ -76,7 +74,6 @@ jobs:
                       'id':item.get('Id'),'domain_name':item.get('DomainName'),'status':item.get('Status'),
                       'enabled':item.get('Enabled'),'aliases':aliases,'comment':item.get('Comment'),
                   })
-          cert_matches=[c for c in certs.get('CertificateSummaryList',[]) if c.get('DomainName')==host]
           marker_present=marker in html
           result='PRODUCTION_ACCEPTED' if code=='200' and marker_present and matches else 'NOT_ACCEPTED'
           evidence={
@@ -90,7 +87,6 @@ jobs:
               'marker_present':marker_present,
               'dns_records':dns,
               'cloudfront_distributions':matches,
-              'certificate_summaries':cert_matches,
               'tls_readback':(root/'tls.txt').read_text(errors='replace') if (root/'tls.txt').exists() else '',
               'closed_information_absent':not any(v.lower() in html.lower() for v in ('JUNCA Point','Point交換','revenue model','収益モデル','収益配分')),
               'result':result,
