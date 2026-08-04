@@ -1,0 +1,69 @@
+name: JUNCA Current Identity Public Readback
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-current-identity-readback.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  public-readback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public identity artifacts byte-for-byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="docs/technical-reference/snapshot"
+
+          curl --fail-with-body --silent --show-error --location \
+            --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/current-identity.html \
+            https://docs.jaios-governance.org/current-identity/
+          curl --fail-with-body --silent --show-error --location \
+            --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/current-identity.json \
+            https://docs.jaios-governance.org/current-identity.json
+          curl --fail-with-body --silent --show-error --location \
+            --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/current-identity.txt \
+            https://docs.jaios-governance.org/current-identity.txt
+          curl --fail-with-body --silent --show-error --location \
+            --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/sitemap.xml \
+            https://docs.jaios-governance.org/sitemap.xml
+
+          cmp "${source_root}/current-identity/index.html" /tmp/current-identity.html
+          cmp "${source_root}/current-identity.json" /tmp/current-identity.json
+          cmp "${source_root}/current-identity.txt" /tmp/current-identity.txt
+          cmp "${source_root}/sitemap.xml" /tmp/sitemap.xml
+
+          for url in \
+            https://docs.jaios-governance.org/current-identity/ \
+            https://docs.jaios-governance.org/current-identity.json \
+            https://docs.jaios-governance.org/current-identity.txt \
+            https://docs.jaios-governance.org/sitemap.xml; do
+            headers="$(curl --fail --silent --show-error --head --location "${url}")"
+            grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${headers}"
+          done
+
+          grep -F 'JUNCA Social Ecosystem Chain (JSEC)' /tmp/current-identity.html
+          grep -F 'JUNCA GLOBAL CHAIN' /tmp/current-identity.html
+          grep -F 'historical Proof-of-Concept or legacy project materials' /tmp/current-identity.html
+          grep -F '現在の正式な技術基盤' /tmp/current-identity.html
+          jq -e '.schema == "junca-current-identity/v1"' /tmp/current-identity.json
+          jq -e '.current_identity.formal_name == "JUNCA Social Ecosystem Chain"' /tmp/current-identity.json
+          jq -e '.current_identity.network_state == "Public Testnet"' /tmp/current-identity.json
+          grep -F 'https://docs.jaios-governance.org/current-identity/' /tmp/sitemap.xml
+
+          {
+            echo "### Public current-identity readback"
+            echo "- HTML exact match: PASS"
+            echo "- JSON exact match: PASS"
+            echo "- TXT exact match: PASS"
+            echo "- Sitemap exact match: PASS"
+            echo "- Revalidation cache headers: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
