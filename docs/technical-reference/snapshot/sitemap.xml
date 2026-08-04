@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://docs.jaios-governance.org/</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/protocol</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/assets</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/interoperability</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/implementation</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/governance</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/evidence</loc><lastmod>2026-07-27</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/glossary</loc><lastmod>2026-07-27</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/current-identity/</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/current-identity.json</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/current-identity.txt</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/protocol</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/assets</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/interoperability</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/implementation</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/governance</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/evidence</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/glossary</loc><lastmod>2026-08-04</lastmod></url>
 </urlset>

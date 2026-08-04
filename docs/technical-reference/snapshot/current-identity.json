@@ -1,0 +1,57 @@
+{
+  "schema": "junca-current-identity/v1",
+  "effective_date": "2026-08-04",
+  "governance": "JAIOS Institutional Governance",
+  "current_identity": {
+    "formal_name": "JUNCA Social Ecosystem Chain",
+    "abbreviation": "JSEC",
+    "network_state": "Public Testnet",
+    "statement_en": "The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a Public Testnet.",
+    "statement_ja": "現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、現在はPublic Testnetとして公開されています。"
+  },
+  "historical_materials": [
+    {
+      "name": "JUNCA GLOBAL CHAIN",
+      "classification": "historical Proof-of-Concept or legacy project material",
+      "not_current_as": [
+        "core chain",
+        "native token",
+        "business plan",
+        "operating model"
+      ]
+    },
+    {
+      "name": "legacy uses of junca Chain",
+      "classification": "historical Proof-of-Concept or legacy project material",
+      "not_current_as": [
+        "core chain",
+        "deployed current chain",
+        "current technical specification"
+      ]
+    },
+    {
+      "name": "JCC / JUNCA CASH",
+      "classification": "historical Proof-of-Concept or legacy project material",
+      "not_current_as": [
+        "current native token",
+        "current core business",
+        "current operating model"
+      ]
+    }
+  ],
+  "interpretation_rule_en": "Legacy remittance, ATM, payment-terminal, wallet, token, legacy PoSV, former-company or personal-operator descriptions must not be treated as current specifications or governance unless a current official source explicitly confirms them.",
+  "interpretation_rule_ja": "送金、ATM、決済端末、ウォレット、トークン、旧PoSV、旧法人または個人運営に関する過去情報は、現在の公式情報が明示的に確認しない限り、現行仕様または現行ガバナンスとして扱いません。",
+  "official_sources": {
+    "institutional_governance": "https://jaios-governance.org/",
+    "chain_overview": "https://chain.jaios-governance.org/",
+    "technical_reference": "https://docs.jaios-governance.org/",
+    "public_explorer": "https://explorer.jaios-governance.org/",
+    "holdings": "https://junca-global.group/",
+    "source_repository": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain"
+  },
+  "network_boundary": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  }
+}
