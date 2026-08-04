@@ -1,0 +1,164 @@
+name: Docs Status Language Production Readback
+
+on:
+  workflow_run:
+    workflows: ["JUNCA Chain Docs Production"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-status-language-production-readback
+  cancel-in-progress: false
+
+jobs:
+  verify-and-record:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Read back all public routes and release evidence
+        id: readback
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/docs-readback
+          routes=("" protocol assets interoperability implementation governance evidence glossary)
+          for route in "${routes[@]}"; do
+            name="${route:-home}"
+            url="https://docs.jaios-governance.org/${route}?readback=${SOURCE_SHA}"
+            code="$(curl --fail-with-body --silent --show-error --location \
+              --retry 8 --retry-delay 10 --retry-all-errors \
+              --header 'Cache-Control: no-cache' \
+              --output "/tmp/docs-readback/${name}.html" \
+              --write-out '%{http_code}' "${url}")"
+            test "${code}" = "200"
+          done
+
+          curl --fail --silent --show-error --location \
+            --retry 8 --retry-delay 10 --retry-all-errors \
+            --header 'Cache-Control: no-cache' \
+            --output /tmp/docs-readback/status-language-audit.json \
+            "https://docs.jaios-governance.org/status-language-audit.json?readback=${SOURCE_SHA}"
+          curl --fail --silent --show-error --location \
+            --retry 8 --retry-delay 10 --retry-all-errors \
+            --header 'Cache-Control: no-cache' \
+            --output /tmp/docs-readback/release-manifest.json \
+            "https://docs.jaios-governance.org/release-manifest.json?readback=${SOURCE_SHA}"
+
+          python - <<'PY'
+          from html import unescape
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path('/tmp/docs-readback')
+          prohibited = {
+              'PENDING': re.compile(r'\bPENDING\b', re.I),
+              'BLOCKED': re.compile(r'\bBLOCKED\b', re.I),
+              'No Monetary Value': re.compile(r'No Monetary Value', re.I),
+              '保留中': re.compile(r'保留中'),
+          }
+          failures = []
+          for path in sorted(root.glob('*.html')):
+              html = path.read_text(encoding='utf-8')
+              visible = re.sub(r'<script[\s\S]*?</script>', ' ', html, flags=re.I)
+              visible = re.sub(r'<style[\s\S]*?</style>', ' ', visible, flags=re.I)
+              visible = unescape(re.sub(r'<[^>]+>', ' ', visible))
+              visible = re.sub(r'\s+', ' ', visible)
+              found = [label for label, pattern in prohibited.items() if pattern.search(visible)]
+              if found:
+                  failures.append(f'{path.name}: {", ".join(found)}')
+          if failures:
+              print('Prohibited public status language remains:', file=sys.stderr)
+              print('\n'.join(failures), file=sys.stderr)
+              raise SystemExit(1)
+          print('Visible status-language readback PASS across 8 public routes.')
+          PY
+
+          jq -e '
+            .result == "PASS" and
+            (.routes | length) == 8 and
+            (.audit | length) == 8 and
+            ([.audit[] | select(.result != "PASS" or (.prohibited_visible_terms | length) != 0)] | length) == 0
+          ' /tmp/docs-readback/status-language-audit.json >/dev/null
+
+          jq -e --arg sha "${SOURCE_SHA}" '
+            .development_source_commit == $sha and
+            .public_status_language_policy.result == "PASS" and
+            .public_status_language_policy.routes_audited == 8
+          ' /tmp/docs-readback/release-manifest.json >/dev/null
+
+          printf 'audit_sha256=%s\n' "$(sha256sum /tmp/docs-readback/status-language-audit.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'manifest_sha256=%s\n' "$(sha256sum /tmp/docs-readback/release-manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Persist immutable production acceptance evidence
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          AUDIT_SHA256: ${{ steps.readback.outputs.audit_sha256 }}
+          MANIFEST_SHA256: ${{ steps.readback.outputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          observed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          jq -n \
+            --arg observed_at "${observed_at}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg source_run_id "${SOURCE_RUN_ID}" \
+            --arg source_run_url "${SOURCE_RUN_URL}" \
+            --arg audit_sha256 "${AUDIT_SHA256}" \
+            --arg manifest_sha256 "${MANIFEST_SHA256}" \
+            '{
+              schema: "junca-chain-docs-status-language-production-acceptance/v1",
+              observed_at: $observed_at,
+              authority: "JAIOS Institutional Governance",
+              public_origin: "https://docs.jaios-governance.org",
+              source_commit: $source_sha,
+              source_workflow_run_id: $source_run_id,
+              source_workflow_run_url: $source_run_url,
+              canonical_routes: ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"],
+              prohibited_public_terms: ["PENDING", "BLOCKED", "No Monetary Value", "保留中"],
+              visible_route_readback: "PASS",
+              status_language_audit_result: "PASS",
+              status_language_audit_sha256: $audit_sha256,
+              release_manifest_policy_result: "PASS",
+              release_manifest_sha256: $manifest_sha256,
+              http_readback: "8/8 PASS",
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              result: "PRODUCTION_ACCEPTED"
+            }
+          ' > evidence/production/docs-status-language-production-acceptance-latest.json
+
+          cp /tmp/docs-readback/status-language-audit.json \
+            evidence/production/docs-status-language-audit-public-readback.json
+          cp /tmp/docs-readback/release-manifest.json \
+            evidence/production/docs-release-manifest-public-readback.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add evidence/production/docs-status-language-production-acceptance-latest.json \
+            evidence/production/docs-status-language-audit-public-readback.json \
+            evidence/production/docs-release-manifest-public-readback.json
+          if git diff --cached --quiet; then
+            echo "Production acceptance evidence is already current."
+            exit 0
+          fi
+          git commit -m "Record Docs status-language production acceptance ${SOURCE_RUN_ID}"
+          git push origin HEAD:main
