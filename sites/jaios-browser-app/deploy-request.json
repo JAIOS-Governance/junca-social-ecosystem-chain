@@ -1,0 +1,17 @@
+{
+  "schema": "jaios-browser-app-deployment-request/v1",
+  "nonce": "implementation-installed-20260804",
+  "target": "https://jaios-governance.org/browser/app",
+  "releaseMarker": "20260804-desktop-063-copy-paste-repair",
+  "execute": false,
+  "expectedSourceRuntimeMergeSha": "df797bc9f4ebf72405bbd3bb59ea355d500ff084",
+  "safety": {
+    "dnsChanged": false,
+    "tlsChanged": false,
+    "rootPageReplaced": false,
+    "unrelatedRoutesChanged": false,
+    "mainnetChanged": false,
+    "assetsMoved": false,
+    "bridgeActivated": false
+  }
+}
