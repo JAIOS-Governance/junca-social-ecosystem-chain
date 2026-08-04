@@ -5,6 +5,8 @@
   "releaseMarker": "20260804-desktop-063-copy-paste-repair",
   "execute": true,
   "expectedSourceRuntimeMergeSha": "df797bc9f4ebf72405bbd3bb59ea355d500ff084",
+  "permissionRecoveryCommit": "4efd15d91acf0e14c0cc1c18eaf683750677467c",
+  "permissionRecoveryPolicy": "JAIOSRootNewsEdgeControl",
   "safety": {
     "dnsChanged": false,
     "tlsChanged": false,
