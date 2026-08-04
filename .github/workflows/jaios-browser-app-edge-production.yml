@@ -2,7 +2,7 @@ name: JAIOS Browser App Edge Production
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
     paths:
       - "sites/jaios-browser-app/**"
       - "scripts/build_jaios_browser_app_edge.py"
@@ -10,12 +10,16 @@ on:
       - "infra/aws/jaios-browser-app-router-rollback.js"
       - "infra/aws/jaios-root-news-router.js"
       - ".github/workflows/jaios-browser-app-edge-production.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sites/jaios-browser-app/deploy-request.json"
+      - "infra/aws/jaios-root-news-router.js"
   workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
-  actions: read
 
 concurrency:
   group: jaios-browser-app-edge-production
@@ -40,12 +44,10 @@ env:
 
 jobs:
   quality-and-stage:
-    if: github.event_name == 'workflow_dispatch' || github.event.action != 'closed'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     environment: junca-chain-docs-production
     timeout-minutes: 20
-    outputs:
-      execute: ${{ steps.contract.outputs.execute }}
     steps:
       - uses: actions/checkout@v4
 
@@ -173,20 +175,38 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  production-readback:
-    if: github.event_name == 'workflow_dispatch' || (github.event.action == 'closed' && github.event.pull_request.merged == true)
+  authorize-production:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      execute: ${{ steps.request.outputs.execute }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Read one-shot deployment authorization
+        id: request
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          execute="$(jq -r '.execute' sites/jaios-browser-app/deploy-request.json)"
+          test "$execute" = true -o "$execute" = false
+          echo "execute=$execute" >> "$GITHUB_OUTPUT"
+          echo "JAIOS_BROWSER_DEPLOYMENT_EXECUTE=$execute"
+
+  publish-and-readback:
+    needs: authorize-production
+    if: needs.authorize-production.outputs.execute == 'true'
     runs-on: ubuntu-24.04
     environment: junca-chain-docs-production
     timeout-minutes: 40
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Require exact one-shot activation state
+      - name: Require exact activation state
         id: contract
         shell: bash
         run: |
@@ -207,74 +227,86 @@ jobs:
           PY
           echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for shared root production workflow on the same main commit
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          source_commit="${{ steps.contract.outputs.source_commit }}"
-          root_run=""
-          for attempt in {1..60}; do
-            root_run="$(gh run list \
-              --workflow jaios-root-trust-direct-production.yml \
-              --commit "$source_commit" \
-              --event push \
-              --limit 10 \
-              --json databaseId,createdAt \
-              --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
-            if [[ -n "$root_run" ]]; then
-              break
-            fi
-            sleep 5
-          done
-          test -n "$root_run"
-          echo "ROOT_PRODUCTION_RUN=https://github.com/$GITHUB_REPOSITORY/actions/runs/$root_run"
-          gh run watch "$root_run" --exit-status
-
-      - name: Configure production readback and rollback identity
+      - name: Configure production and rollback identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: jaios-browser-readback-${{ github.run_id }}
+          role-session-name: jaios-browser-production-${{ github.run_id }}
           disable-retry: true
 
-      - name: Activate cache readback with rollback on failure
+      - name: Publish composite router and complete public acceptance
         id: acceptance
         shell: bash
         run: |
           set -Eeuo pipefail
+          activated=0
           rollback() {
             rc=$?
-            echo "Browser public acceptance failed; restoring root-only router." >&2
-            cat > /tmp/rollback-config.json <<'JSON'
-          {"Comment":"Route only the JAIOS root document to the governed institutional trust artifact","Runtime":"cloudfront-js-2.0"}
-          JSON
-            dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-            aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" \
-              --function-config file:///tmp/rollback-config.json \
-              --function-code fileb://infra/aws/jaios-browser-app-router-rollback.js >/tmp/rollback-update.json || true
-            rollback_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-            aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$rollback_etag" >/tmp/rollback-publish.json || true
-            rollback_invalidation="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
-              --paths '/browser/app' '/browser/app/' --query Invalidation.Id --output text 2>/dev/null || true)"
-            if [[ -n "$rollback_invalidation" && "$rollback_invalidation" != "None" ]]; then
-              aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$rollback_invalidation" || true
+            if [[ "$activated" -eq 1 ]]; then
+              echo "Browser public acceptance failed; restoring exact previous LIVE Function." >&2
+              dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
+              aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" \
+                --function-config file:///tmp/function-before-config.json \
+                --function-code fileb:///tmp/function-before.js >/tmp/rollback-update.json || true
+              rollback_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
+              aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$rollback_etag" >/tmp/rollback-publish.json || true
+              rollback_invalidation="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+                --paths '/browser/app' '/browser/app/' --query Invalidation.Id --output text 2>/dev/null || true)"
+              if [[ -n "$rollback_invalidation" && "$rollback_invalidation" != "None" ]]; then
+                aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$rollback_invalidation" || true
+              fi
             fi
             exit "$rc"
           }
           trap rollback ERR
 
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          live_function_arn="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE --query FunctionSummary.FunctionMetadata.FunctionARN --output text)"
-          test "$live_function_arn" = "$FUNCTION_ARN"
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/live-function.js >/tmp/live-function.json
-          cmp /tmp/live-function.js infra/aws/jaios-browser-app-router.js
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" >/tmp/distribution.json
+          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution.json)" = "$ROOT_DOMAIN"
+          test "$(jq -r '.DistributionConfig.Origins.Items[].DomainName | select(. == env.EXPECTED_ORIGIN_DOMAIN)' /tmp/distribution.json)" = "$EXPECTED_ORIGIN_DOMAIN"
+          jq --arg arn "$FUNCTION_ARN" -e '.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[] | select(.EventType=="viewer-request" and .FunctionARN==$arn)' /tmp/distribution.json >/dev/null
+          aws s3 cp "s3://${DOCS_BUCKET}/${ARTIFACT_PATH}" /tmp/expected-browser-app.html
+          grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/expected-browser-app.html
+
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-before.js >/tmp/function-before-get.json
+          aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE >/tmp/function-before-description.json
+          jq '.FunctionSummary.FunctionConfig' /tmp/function-before-description.json >/tmp/function-before-config.json
+
+          cat >/tmp/function-after-config.json <<'JSON'
+          {"Comment":"Route the JAIOS root and Browser app documents to governed exact artifacts","Runtime":"cloudfront-js-2.0"}
+          JSON
+          cat >/tmp/test-root.json <<'JSON'
+          {"version":"1.0","context":{"eventType":"viewer-request"},"viewer":{"ip":"198.51.100.10"},"request":{"method":"GET","uri":"/","querystring":{},"headers":{"host":{"value":"jaios-governance.org"}},"cookies":{}}}
+          JSON
+          cat >/tmp/test-browser.json <<'JSON'
+          {"version":"1.0","context":{"eventType":"viewer-request"},"viewer":{"ip":"198.51.100.10"},"request":{"method":"GET","uri":"/browser/app","querystring":{},"headers":{"host":{"value":"jaios-governance.org"}},"cookies":{}}}
+          JSON
+          cat >/tmp/test-protected.json <<'JSON'
+          {"version":"1.0","context":{"eventType":"viewer-request"},"viewer":{"ip":"198.51.100.10"},"request":{"method":"GET","uri":"/browser","querystring":{},"headers":{"host":{"value":"jaios-governance.org"}},"cookies":{}}}
+          JSON
+          dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
+          aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" \
+            --function-config file:///tmp/function-after-config.json \
+            --function-code fileb://infra/aws/jaios-root-news-router.js >/tmp/function-update.json
+          updated_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
+          for event in root browser protected; do
+            aws cloudfront test-function --name "$FUNCTION_NAME" --if-match "$updated_etag" \
+              --stage DEVELOPMENT --event-object "fileb:///tmp/test-${event}.json" \
+              >"/tmp/function-test-${event}.json"
+            jq -e '.TestResult.FunctionErrorMessage == null or .TestResult.FunctionErrorMessage == ""' "/tmp/function-test-${event}.json" >/dev/null
+          done
+          aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$updated_etag" >/tmp/function-publish.json
+          activated=1
+          live_arn="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE --query FunctionSummary.FunctionMetadata.FunctionARN --output text)"
+          test "$live_arn" = "$FUNCTION_ARN"
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/live-function.js >/tmp/live-function-get.json
+          cmp /tmp/live-function.js infra/aws/jaios-root-news-router.js
 
           invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
             --paths '/browser/app' '/browser/app/' --query Invalidation.Id --output text)"
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
 
-          aws s3 cp "s3://${DOCS_BUCKET}/${ARTIFACT_PATH}" /tmp/expected-browser-app.html
           ready=false
           for attempt in {1..30}; do
             if curl --fail-with-body --silent --show-error --location \
@@ -307,13 +339,7 @@ jobs:
             curl --fail --silent --show-error --location --head \
               --retry 4 --retry-delay 2 --max-time 60 "$url" >/dev/null
           done </tmp/downloads.txt
-          trap - ERR
-          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
 
-      - name: Browser-rendered responsive and click-target acceptance
-        shell: bash
-        run: |
-          set -Eeuo pipefail
           python3 -m pip install --quiet selenium
           python3 - <<'PY'
           from selenium import webdriver
@@ -350,6 +376,9 @@ jobs:
           finally:
               driver.quit()
           PY
+
+          trap - ERR
+          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
 
       - name: Record immutable public deployment evidence
         env:
