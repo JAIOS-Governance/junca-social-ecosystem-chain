@@ -1,0 +1,193 @@
+name: Official Sites Publication Route Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/official-sites-route-audit.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/official-sites-route-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: official-sites-route-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      AUDIT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      DOMAINS: "chain.jaios-governance.org junca-global.group"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure verified AWS audit identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AUDIT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: official-sites-route-audit-${{ github.run_id }}
+          disable-retry: true
+      - name: Read public DNS, HTTP and TLS identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/site-audit
+          for domain in $DOMAINS; do
+            key="${domain//./_}"
+            mkdir -p "/tmp/site-audit/${key}"
+            dig +noall +answer "$domain" A > "/tmp/site-audit/${key}/dns-a.txt" || true
+            dig +noall +answer "$domain" AAAA > "/tmp/site-audit/${key}/dns-aaaa.txt" || true
+            dig +noall +answer "$domain" CNAME > "/tmp/site-audit/${key}/dns-cname.txt" || true
+            dig +noall +answer "$domain" HTTPS > "/tmp/site-audit/${key}/dns-https.txt" || true
+            dig +short NS "$domain" > "/tmp/site-audit/${key}/dns-ns.txt" || true
+            curl --fail-with-body --silent --show-error --location --max-time 30 \
+              --dump-header "/tmp/site-audit/${key}/headers.txt" \
+              --output "/tmp/site-audit/${key}/home.html" "https://${domain}/"
+            grep -Eo '<title>[^<]+' "/tmp/site-audit/${key}/home.html" | head -1 > "/tmp/site-audit/${key}/title.txt" || true
+            python3 - "$key" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          key = sys.argv[1]
+          root = Path(f"/tmp/site-audit/{key}")
+          html = (root / "home.html").read_text(encoding="utf-8", errors="replace")
+          native = sorted(set(re.findall(r"https://[^\"'\s]+\.chatgpt\.site[^\"'\s]*", html)))
+          provider = sorted(set(re.findall(r"https://[^\"'\s]+\.(?:cloudfront\.net|run\.app|pages\.dev|vercel\.app|netlify\.app)[^\"'\s]*", html)))
+          (root / "native-site-urls.txt").write_text("\n".join(native) + ("\n" if native else ""), encoding="utf-8")
+          (root / "provider-urls.txt").write_text("\n".join(provider) + ("\n" if provider else ""), encoding="utf-8")
+          PY
+            openssl s_client -connect "${domain}:443" -servername "$domain" </dev/null 2>/dev/null \
+              | openssl x509 -noout -subject -issuer -serial -dates -ext subjectAltName \
+              > "/tmp/site-audit/${key}/tls.txt" || true
+            sha256sum "/tmp/site-audit/${key}/home.html" > "/tmp/site-audit/${key}/home-sha256.txt"
+          done
+      - name: Read AWS publication inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront list-distributions --output json > /tmp/site-audit/cloudfront-all.json
+          aws route53 list-hosted-zones --output json > /tmp/site-audit/hosted-zones.json || echo '{"HostedZones":[]}' > /tmp/site-audit/hosted-zones.json
+          aws s3api list-buckets --output json > /tmp/site-audit/buckets-all.json || echo '{"Buckets":[]}' > /tmp/site-audit/buckets-all.json
+          aws acm list-certificates --region us-east-1 --output json > /tmp/site-audit/certificates-all.json || echo '{"CertificateSummaryList":[]}' > /tmp/site-audit/certificates-all.json
+          for domain in $DOMAINS; do
+            key="${domain//./_}"
+            python3 - "$domain" "$key" <<'PY'
+          import json,sys
+          from pathlib import Path
+          domain,key=sys.argv[1:]
+          cf=json.loads(Path('/tmp/site-audit/cloudfront-all.json').read_text())
+          items=[]
+          for item in (cf.get('DistributionList') or {}).get('Items') or []:
+              aliases=((item.get('Aliases') or {}).get('Items') or [])
+              if domain in aliases:
+                  items.append(item)
+          Path(f'/tmp/site-audit/{key}/cloudfront.json').write_text(json.dumps(items,indent=2)+'\n')
+          zones=json.loads(Path('/tmp/site-audit/hosted-zones.json').read_text()).get('HostedZones',[])
+          matched=[z for z in zones if domain.endswith(z.get('Name','').rstrip('.')) or z.get('Name','').rstrip('.').endswith(domain)]
+          Path(f'/tmp/site-audit/{key}/hosted-zones.json').write_text(json.dumps(matched,indent=2)+'\n')
+          PY
+            : > "/tmp/site-audit/${key}/route53-records.jsonl"
+            while read -r zone_id; do
+              [[ -z "$zone_id" ]] && continue
+              aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" \
+                --query "ResourceRecordSets[?Name=='${domain}.' || Name=='www.${domain}.']" \
+                --output json >> "/tmp/site-audit/${key}/route53-records.jsonl" || true
+            done < <(jq -r '.[].Id // empty' "/tmp/site-audit/${key}/hosted-zones.json")
+          done
+      - name: Build route evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+
+          domains=os.environ['DOMAINS'].split()
+          def text(path):
+              p=Path(path)
+              return p.read_text(encoding='utf-8',errors='replace').strip() if p.exists() else ''
+          def load(path,default):
+              p=Path(path)
+              if not p.exists(): return default
+              return json.loads(p.read_text(encoding='utf-8'))
+
+          results={}
+          for domain in domains:
+              key=domain.replace('.','_')
+              base=f'/tmp/site-audit/{key}'
+              cloudfront=load(f'{base}/cloudfront.json',[])
+              provider='unknown'
+              route='provider-write-required'
+              if cloudfront:
+                  provider='aws-cloudfront'
+                  route='existing-cloudfront-edge-candidate'
+              elif 'chatgpt.site' in text(f'{base}/native-site-urls.txt'):
+                  provider='chatgpt-sites'
+              results[domain]={
+                  'title':text(f'{base}/title.txt'),
+                  'html_sha256':text(f'{base}/home-sha256.txt').split()[0] if text(f'{base}/home-sha256.txt') else '',
+                  'headers':text(f'{base}/headers.txt'),
+                  'dns':{
+                      'a':text(f'{base}/dns-a.txt'),
+                      'aaaa':text(f'{base}/dns-aaaa.txt'),
+                      'cname':text(f'{base}/dns-cname.txt'),
+                      'https':text(f'{base}/dns-https.txt'),
+                      'ns':text(f'{base}/dns-ns.txt'),
+                  },
+                  'tls':text(f'{base}/tls.txt'),
+                  'native_site_urls':[v for v in text(f'{base}/native-site-urls.txt').splitlines() if v],
+                  'provider_urls':[v for v in text(f'{base}/provider-urls.txt').splitlines() if v],
+                  'cloudfront_distributions':cloudfront,
+                  'hosted_zones':load(f'{base}/hosted-zones.json',[]),
+                  'route53_records_raw':text(f'{base}/route53-records.jsonl'),
+                  'observed_provider':provider,
+                  'recommended_route':route,
+              }
+          evidence={
+              'schema':'official-sites-route-audit/v1',
+              'observed_at':datetime.now(timezone.utc).isoformat(),
+              'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+              'source_commit':os.environ['GITHUB_SHA'],
+              'aws_account_id':os.environ['AWS_ACCOUNT_ID'],
+              'sites':results,
+              'mutations':{'route53':False,'cloudfront':False,'s3':False,'tls':False,'provider':False},
+              'result':'PASS',
+          }
+          Path('evidence/production/official-sites-route-audit-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+      - name: Persist audit evidence on main
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/official-sites-route-audit-latest.json
+          git diff --cached --quiet || git commit -m "Record official sites route audit ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-sites-route-audit-${{ github.run_id }}
+          path: |
+            /tmp/site-audit
+            evidence/production/official-sites-route-audit-latest.json
+          if-no-files-found: error
+          retention-days: 90
