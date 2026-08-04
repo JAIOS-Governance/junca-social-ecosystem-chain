@@ -1,0 +1,415 @@
+name: Official Surface Finalize
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "sites/jaios-root-news-photo/news-items.json"
+      - "scripts/build_jaios_root_news_photo.py"
+      - "scripts/apply_public_cache_convergence.py"
+      - "scripts/jaios_news_edge_function.py"
+      - "infra/aws/jaios-root-news-router.js"
+      - ".github/workflows/official-surface-finalize.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sites/jaios-root-news-photo/news-items.json"
+      - "scripts/build_jaios_root_news_photo.py"
+      - "scripts/apply_public_cache_convergence.py"
+      - "scripts/jaios_news_edge_function.py"
+      - "infra/aws/jaios-root-news-router.js"
+      - ".github/workflows/official-surface-finalize.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: official-surface-finalize
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DOCS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  SHARED_FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+  JAIOS_HOST: jaios-governance.org
+  JAIOS_DISTRIBUTION_ID: E2WIXG3DWW8OX1
+  JAIOS_CONTENT_RELEASE: 20260805-six-card-photo-news
+  JAIOS_DELIVERY_RELEASE: 20260805-six-card-local-photo-news-v2
+  CHAIN_HOST: chain.jaios-governance.org
+  CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ
+  CHAIN_CONTENT_RELEASE: 20260805-chain-institutional-trust
+  CHAIN_DELIVERY_RELEASE: 20260805-chain-institutional-trust-v2
+  ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+  DOCS_RELEASE: 20260805-r37-current-runtime
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate six stable same-domain photographs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/build_jaios_root_news_photo.py scripts/apply_public_cache_convergence.py scripts/jaios_news_edge_function.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+          data=json.loads(Path('sites/jaios-root-news-photo/news-items.json').read_text())
+          items=data['items']
+          assert len(items)==6
+          assert len({x['image_url'] for x in items})==6
+          assert data['selection_policy']['external_image_hotlink_prohibited'] is True
+          for item in items:
+              parsed=urlparse(item['image_url'])
+              assert parsed.scheme=='https' and parsed.netloc=='jaios-governance.org', item
+              assert not item['image_url'].lower().endswith('.svg')
+          print('JAIOS_SAME_DOMAIN_PHOTO_SOURCE_PASS')
+          PY
+          python3 - <<'PY' >/tmp/photo-urls.txt
+          import json
+          from pathlib import Path
+          for item in json.loads(Path('sites/jaios-root-news-photo/news-items.json').read_text())['items']:
+              print(item['image_url'])
+          PY
+          index=0
+          while IFS= read -r url; do
+            index=$((index+1))
+            curl --fail-with-body --silent --show-error --location --max-time 45 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output "/tmp/photo-${index}" "$url"
+            test "$(wc -c < "/tmp/photo-${index}")" -gt 10000
+          done </tmp/photo-urls.txt
+          test "$index" -eq 6
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/current-jaios.html "https://${JAIOS_HOST}/"
+          python3 scripts/build_jaios_root_news_photo.py \
+            /tmp/current-jaios.html sites/jaios-root-news-photo/news-items.json /tmp/jaios-photo-raw.html
+          python3 scripts/apply_public_cache_convergence.py \
+            /tmp/jaios-photo-raw.html /tmp/jaios-photo.html \
+            --marker "$JAIOS_DELIVERY_RELEASE" --surface jaios
+          grep -F "data-jaios-news-release='${JAIOS_CONTENT_RELEASE}'" /tmp/jaios-photo.html
+          grep -F "official-surface-release\" content=\"${JAIOS_DELIVERY_RELEASE}" /tmp/jaios-photo.html
+          test "$(grep -o 'data-jaios-news-card=' /tmp/jaios-photo.html | wc -l)" -eq 12
+          test "$(grep -o '<img src=.https://jaios-governance.org/' /tmp/jaios-photo.html | wc -l)" -eq 6
+          ! grep -Eqi 'images\.unsplash\.com|www\.undp\.org/sites/.+\.jpg' /tmp/jaios-photo.html
+          ! grep -Fq "<svg viewBox='0 0 640 360'" /tmp/jaios-photo.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-finalize-quality-${{ github.sha }}
+          path: /tmp/jaios-photo.html
+          if-no-files-found: error
+          retention-days: 30
+
+  publish_jaios:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 35
+    outputs:
+      invalidation_id: ${{ steps.publish.outputs.invalidation_id }}
+      shared_function_sha256: ${{ steps.publish.outputs.shared_function_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: official-finalize-jaios-${{ github.run_id }}
+          disable-retry: true
+      - name: Publish JAIOS six same-domain photos and shared router
+        id: publish
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          mkdir -p /tmp/official-finalize/shared-function
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/current-jaios.html "https://${JAIOS_HOST}/"
+          python3 scripts/build_jaios_root_news_photo.py \
+            /tmp/current-jaios.html sites/jaios-root-news-photo/news-items.json /tmp/jaios-photo-raw.html
+          python3 scripts/apply_public_cache_convergence.py \
+            /tmp/jaios-photo-raw.html /tmp/jaios-photo.html \
+            --marker "$JAIOS_DELIVERY_RELEASE" --surface jaios
+          aws s3 cp /tmp/jaios-photo.html "s3://${DOCS_BUCKET}/jaios-root-news/index.html" \
+            --content-type 'text/html; charset=utf-8' \
+            --cache-control 'no-store,max-age=0,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},content-release=${JAIOS_CONTENT_RELEASE},delivery-release=${JAIOS_DELIVERY_RELEASE}"
+          aws s3 cp "s3://${DOCS_BUCKET}/jaios-root-news/index.html" /tmp/jaios-s3.html
+          cmp /tmp/jaios-photo.html /tmp/jaios-s3.html
+
+          python3 -m pip install --quiet boto3
+          python3 scripts/jaios_news_edge_function.py deploy \
+            --composite infra/aws/jaios-root-news-router.js \
+            --state-dir /tmp/official-finalize/shared-function | tee /tmp/shared-function.json
+          shared_sha="$(cat /tmp/official-finalize/shared-function/composite-sha256.txt)"
+
+          aws cloudfront get-distribution-config --id "$JAIOS_DISTRIBUTION_ID" >/tmp/jaios-distribution.json
+          jq '.DistributionConfig' /tmp/jaios-distribution.json >/tmp/jaios-config.json
+          etag="$(jq -r '.ETag' /tmp/jaios-distribution.json)"
+          jq --arg arn "$SHARED_FUNCTION_ARN" '
+            .DefaultCacheBehavior.FunctionAssociations = (
+              (.DefaultCacheBehavior.FunctionAssociations // {"Quantity":0,"Items":[]})
+              | .Items = (((.Items // []) | map(select(.EventType != "viewer-request"))) + [{"FunctionARN":$arn,"EventType":"viewer-request"}])
+              | .Quantity = (.Items|length)
+            )
+            | .DefaultCacheBehavior.MinTTL=0
+            | .DefaultCacheBehavior.DefaultTTL=0
+            | .DefaultCacheBehavior.MaxTTL=0
+          ' /tmp/jaios-config.json >/tmp/jaios-config-after.json
+          aws cloudfront update-distribution --id "$JAIOS_DISTRIBUTION_ID" --if-match "$etag" \
+            --distribution-config file:///tmp/jaios-config-after.json >/tmp/jaios-update.json
+          aws cloudfront wait distribution-deployed --id "$JAIOS_DISTRIBUTION_ID"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$JAIOS_DISTRIBUTION_ID" \
+            --paths '/' '/index.html' '/world-diagnostic.webp' '/social-cooperation.png' '/news/*' \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$JAIOS_DISTRIBUTION_ID" --id "$invalidation_id"
+          for _ in $(seq 1 36); do
+            if curl --fail-with-body --silent --show-error --location --max-time 30 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output /tmp/jaios-public.html "https://${JAIOS_HOST}/?finalize=${GITHUB_RUN_ID}" \
+              && grep -Fq "data-jaios-news-release='${JAIOS_CONTENT_RELEASE}'" /tmp/jaios-public.html \
+              && grep -Fq "official-surface-release\" content=\"${JAIOS_DELIVERY_RELEASE}" /tmp/jaios-public.html; then break; fi
+            sleep 5
+          done
+          grep -F "data-jaios-news-release='${JAIOS_CONTENT_RELEASE}'" /tmp/jaios-public.html
+          test "$(grep -o 'data-jaios-news-card=' /tmp/jaios-public.html | wc -l)" -eq 12
+          test "$(grep -o '<img src=.https://jaios-governance.org/' /tmp/jaios-public.html | wc -l)" -eq 6
+          ! grep -Eqi 'images\.unsplash\.com|www\.undp\.org/sites/.+\.jpg' /tmp/jaios-public.html
+          ! grep -Fq "<svg viewBox='0 0 640 360'" /tmp/jaios-public.html
+          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
+          echo "shared_function_sha256=$shared_sha" >> "$GITHUB_OUTPUT"
+      - name: Accept JAIOS on desktop tablet and mobile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          options=webdriver.ChromeOptions(); options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage'); options.add_argument('--disable-gpu')
+          driver=webdriver.Chrome(options=options); records=[]
+          try:
+              for label,width,expected in [('desktop',1440,3),('tablet',820,2),('mobile',390,1)]:
+                  driver.set_window_size(width,1900)
+                  driver.get('https://jaios-governance.org/?same_domain_acceptance='+label)
+                  WebDriverWait(driver,60).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jaios-news-card]'))==6)
+                  WebDriverWait(driver,60).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jaios-news-card] .jaios-edge-news-media img'))==6 and all(d.execute_script('return arguments[0].complete && arguments[0].naturalWidth>100 && arguments[0].naturalHeight>60',p) for p in d.find_elements(By.CSS_SELECTOR,'[data-jaios-news-card] .jaios-edge-news-media img')))
+                  photos=driver.find_elements(By.CSS_SELECTOR,'[data-jaios-news-card] .jaios-edge-news-media img')
+                  vectors=driver.find_elements(By.CSS_SELECTOR,'[data-jaios-news-card] .jaios-edge-news-media svg')
+                  assert len(photos)==6 and len(vectors)==0
+                  assert all('jaios-governance.org/' in (p.get_attribute('currentSrc') or p.get_attribute('src')) for p in photos)
+                  grid=driver.find_element(By.CSS_SELECTOR,'.jaios-edge-news-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  assert columns==expected,(label,columns,expected)
+                  driver.save_screenshot(f'/tmp/jaios-final-{label}.png')
+                  records.append({'viewport':label,'cards':6,'photos':6,'same_domain':True,'svg':0,'columns':columns})
+              Path('/tmp/jaios-final-browser.json').write_text(json.dumps(records,indent=2)+'\n')
+              print('JAIOS_SAME_DOMAIN_BROWSER_ACCEPTANCE_PASS',records)
+          finally: driver.quit()
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-finalize-jaios-${{ github.run_id }}
+          path: |
+            /tmp/jaios-public.html
+            /tmp/jaios-final-browser.json
+            /tmp/jaios-final-*.png
+            /tmp/official-finalize/shared-function
+          if-no-files-found: error
+          retention-days: 90
+
+  activate_chain:
+    if: github.event_name != 'pull_request'
+    needs: publish_jaios
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 40
+    outputs:
+      distribution_domain: ${{ steps.activate.outputs.distribution_domain }}
+      route53_change_id: ${{ steps.activate.outputs.route53_change_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Acquire approved bootstrap identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" >/tmp/oidc-token
+          selected=''
+          for role in arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment; do
+            if aws sts assume-role-with-web-identity --role-arn "$role" --role-session-name "official-finalize-chain-${GITHUB_RUN_ID}" --web-identity-token "$(cat /tmp/oidc-token)" --duration-seconds 2400 >/tmp/assume.json 2>/tmp/assume.err; then selected="$role"; break; fi
+          done
+          test -n "$selected"
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "$GITHUB_ENV"
+      - name: Activate Chain Edge and authoritative DNS
+        id: activate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront get-distribution-config --id "$CHAIN_DISTRIBUTION_ID" >/tmp/chain-distribution.json
+          jq '.DistributionConfig' /tmp/chain-distribution.json >/tmp/chain-config.json
+          etag="$(jq -r '.ETag' /tmp/chain-distribution.json)"
+          domain="$(aws cloudfront get-distribution --id "$CHAIN_DISTRIBUTION_ID" --query Distribution.DomainName --output text)"
+          jq --arg arn "$SHARED_FUNCTION_ARN" '
+            .DefaultCacheBehavior.FunctionAssociations = (
+              (.DefaultCacheBehavior.FunctionAssociations // {"Quantity":0,"Items":[]})
+              | .Items = (((.Items // []) | map(select(.EventType != "viewer-request"))) + [{"FunctionARN":$arn,"EventType":"viewer-request"}])
+              | .Quantity=(.Items|length)
+            )
+            | .DefaultCacheBehavior.MinTTL=0
+            | .DefaultCacheBehavior.DefaultTTL=0
+            | .DefaultCacheBehavior.MaxTTL=0
+          ' /tmp/chain-config.json >/tmp/chain-config-after.json
+          aws cloudfront update-distribution --id "$CHAIN_DISTRIBUTION_ID" --if-match "$etag" --distribution-config file:///tmp/chain-config-after.json >/tmp/chain-update.json
+          aws cloudfront wait distribution-deployed --id "$CHAIN_DISTRIBUTION_ID"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$CHAIN_DISTRIBUTION_ID" --paths '/*' --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$CHAIN_DISTRIBUTION_ID" --id "$invalidation_id"
+          ip="$(python3 - <<PY
+          import socket
+          print(socket.gethostbyname('${domain}'))
+          PY
+          )"
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --resolve "${CHAIN_HOST}:443:${ip}" -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/chain-direct.html "https://${CHAIN_HOST}/?direct=${GITHUB_RUN_ID}"
+          grep -F "data-jsec-trust-release='${CHAIN_CONTENT_RELEASE}'" /tmp/chain-direct.html
+          cat >/tmp/chain-dns.json <<JSON
+          {"Comment":"Finalize Chain CloudFront convergence","Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"${CHAIN_HOST}","Type":"CNAME","TTL":60,"ResourceRecords":[{"Value":"${domain}"}]}}]}
+          JSON
+          change_id="$(aws route53 change-resource-record-sets --hosted-zone-id "$ROUTE53_ZONE_ID" --change-batch file:///tmp/chain-dns.json --query ChangeInfo.Id --output text)"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+          echo "distribution_domain=$domain" >> "$GITHUB_OUTPUT"
+          echo "route53_change_id=$change_id" >> "$GITHUB_OUTPUT"
+      - name: Wait DNS convergence and accept Chain on all viewports
+        env:
+          TARGET: ${{ steps.activate.outputs.distribution_domain }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet selenium dnspython
+          python3 - <<'PY'
+          import json,os,time
+          from pathlib import Path
+          import dns.resolver
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          host=os.environ['CHAIN_HOST']; target=os.environ['TARGET']; marker=os.environ['CHAIN_CONTENT_RELEASE']
+          state={}
+          for _ in range(96):
+              ok=True
+              for server in ('1.1.1.1','8.8.8.8'):
+                  resolver=dns.resolver.Resolver(configure=False); resolver.nameservers=[server]; resolver.lifetime=5
+                  try: value=str(next(iter(resolver.resolve(host,'CNAME'))).target).rstrip('.')
+                  except Exception as exc: value='ERROR:'+type(exc).__name__
+                  state[server]=value; ok=ok and value==target
+              if ok: break
+              time.sleep(5)
+          if not all(v==target for v in state.values()): raise SystemExit(f'DNS convergence failed: {state}')
+          options=webdriver.ChromeOptions(); options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage'); options.add_argument('--disable-gpu')
+          driver=webdriver.Chrome(options=options); records=[]
+          try:
+              for label,width in [('desktop',1440),('tablet',820),('mobile',390)]:
+                  driver.set_window_size(width,1900); driver.get('https://'+host+'/?public_acceptance='+label)
+                  WebDriverWait(driver,70).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,f'[data-jsec-trust-release="{marker}"]'))==1)
+                  trust=driver.find_element(By.CSS_SELECTOR,f'[data-jsec-trust-release="{marker}"]')
+                  assert 'Managed under JAIOS Institutional Governance' in trust.text
+                  driver.save_screenshot(f'/tmp/chain-final-{label}.png')
+                  records.append({'viewport':label,'marker':True,'dns_target':target})
+              Path('/tmp/chain-final-browser.json').write_text(json.dumps({'dns':state,'records':records},indent=2)+'\n')
+              print('CHAIN_PUBLIC_BROWSER_ACCEPTANCE_PASS',state)
+          finally: driver.quit()
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-finalize-chain-${{ github.run_id }}
+          path: |
+            /tmp/chain-direct.html
+            /tmp/chain-final-browser.json
+            /tmp/chain-final-*.png
+          if-no-files-found: error
+          retention-days: 90
+
+  verify_docs:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Accept Docs R37 current wording
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ready=false
+          for _ in $(seq 1 100); do
+            if curl --fail-with-body --silent --show-error --location --max-time 30 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output /tmp/docs-audit.json "https://docs.jaios-governance.org/current-runtime-audit.json?finalize=${GITHUB_RUN_ID}" \
+              && jq -e --arg marker "$DOCS_RELEASE" '.marker==$marker and .result=="PASS" and .explorer_height>1 and .finality.signed_power==3 and .finality.total_power==3 and .peer_count==2' /tmp/docs-audit.json >/dev/null; then ready=true; break; fi
+            sleep 5
+          done
+          test "$ready" = true
+          curl --fail-with-body --silent --show-error --location --max-time 30 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/docs-root.html "https://docs.jaios-governance.org/?finalize=${GITHUB_RUN_ID}"
+          grep -F "$DOCS_RELEASE" /tmp/docs-root.html
+          grep -Fi 'Runtime acceptance verified' /tmp/docs-root.html
+          ! grep -Fq 'Infrastructure binding and runtime acceptance remain open' /tmp/docs-root.html
+          ! grep -Eqi '\bPENDING\b|No Monetary Value|\bBLOCKED\b|保留中' /tmp/docs-root.html
+          echo 'DOCS_R37_PUBLIC_ACCEPTANCE_PASS'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-finalize-docs-${{ github.run_id }}
+          path: |
+            /tmp/docs-audit.json
+            /tmp/docs-root.html
+          if-no-files-found: error
+          retention-days: 90
+
+  persist:
+    if: github.event_name != 'pull_request'
+    needs: [publish_jaios, activate_chain, verify_docs]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Persist final production acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence/production
+          jq -n \
+            --arg observed_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg workflow_run_id "$GITHUB_RUN_ID" \
+            --arg jaios_invalidation "${{ needs.publish_jaios.outputs.invalidation_id }}" \
+            --arg shared_function_sha256 "${{ needs.publish_jaios.outputs.shared_function_sha256 }}" \
+            --arg chain_distribution_domain "${{ needs.activate_chain.outputs.distribution_domain }}" \
+            --arg chain_route53_change_id "${{ needs.activate_chain.outputs.route53_change_id }}" \
+            '{schema:"official-surface-final-acceptance/v1",observed_at:$observed_at,source_commit:$source_commit,workflow_run_id:$workflow_run_id,jaios:{url:"https://jaios-governance.org/",content_release:"20260805-six-card-photo-news",delivery_release:"20260805-six-card-local-photo-news-v2",cards:6,photos:6,same_domain_photos:6,external_photo_hotlinks:0,geometric_svg_images:0,desktop_columns:3,tablet_columns:2,mobile_columns:1,invalidation_id:$jaios_invalidation,result:"PRODUCTION_ACCEPTED"},chain:{url:"https://chain.jaios-governance.org/",distribution_domain:$chain_distribution_domain,route53_change_id:$chain_route53_change_id,dns_ttl:60,desktop:true,tablet:true,mobile:true,result:"PRODUCTION_ACCEPTED"},docs:{url:"https://docs.jaios-governance.org/",release:"2026.08.05 / R37",release_marker:"20260805-r37-current-runtime",runtime_acceptance:"VERIFIED",legacy_status_language:false,result:"PRODUCTION_ACCEPTED"},shared_function_sha256:$shared_function_sha256,mainnet_changed:false,assets_moved:false,bridge_activated:false,result:"PRODUCTION_ACCEPTED"}' \
+            > evidence/production/official-surface-convergence-latest.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/production/official-surface-convergence-latest.json
+          git commit -m "Record official surface final acceptance ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
