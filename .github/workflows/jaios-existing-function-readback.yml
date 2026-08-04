@@ -32,7 +32,7 @@ jobs:
           role-session-name: jaios-existing-function-readback-${{ github.run_id }}
           disable-retry: true
 
-      - name: Download exact development and live function code
+      - name: Download and print exact development and live function code
         shell: bash
         run: |
           set -euo pipefail
@@ -41,12 +41,19 @@ jobs:
           aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-live.js > /tmp/function-live-meta.json
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-development-meta.json)" = "$FUNCTION_ARN"
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-live-meta.json)" = "$FUNCTION_ARN"
-          aws cloudfront list-distributions > /tmp/distributions.json
+          echo 'JAIOS_EXISTING_FUNCTION_CODE_BEGIN'
+          sed -n '1,260p' /tmp/function-development.js
+          echo 'JAIOS_EXISTING_FUNCTION_CODE_END'
+          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_BEGIN'
+          sha256sum /tmp/function-development.js /tmp/function-live.js
+          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_END'
+          cmp /tmp/function-development.js /tmp/function-live.js
 
-      - name: Resolve every exact association and print bounded code
+      - name: Read and resolve every exact distribution association
         shell: bash
         run: |
           set -euo pipefail
+          aws cloudfront list-distributions > /tmp/distributions.json
           python3 - <<'PY'
           import json
           import os
@@ -80,13 +87,6 @@ jobs:
                   })
           Path('/tmp/function-associations.json').write_text(json.dumps(matches, indent=2) + '\n')
           PY
-          echo 'JAIOS_EXISTING_FUNCTION_CODE_BEGIN'
-          sed -n '1,260p' /tmp/function-development.js
-          echo 'JAIOS_EXISTING_FUNCTION_CODE_END'
           echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_BEGIN'
           cat /tmp/function-associations.json
           echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_END'
-          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_BEGIN'
-          sha256sum /tmp/function-development.js /tmp/function-live.js
-          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_END'
-          cmp /tmp/function-development.js /tmp/function-live.js
