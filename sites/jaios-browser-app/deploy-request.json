@@ -1,10 +1,12 @@
 {
   "schema": "jaios-browser-app-deployment-request/v1",
-  "nonce": "implementation-installed-20260804-clean",
+  "nonce": "activate-jaios-browser-app-063-20260804-1520-jst",
   "target": "https://jaios-governance.org/browser/app",
   "releaseMarker": "20260804-desktop-063-copy-paste-repair",
-  "execute": false,
+  "execute": true,
   "expectedSourceRuntimeMergeSha": "df797bc9f4ebf72405bbd3bb59ea355d500ff084",
+  "permissionRecoveryCommit": "4efd15d91acf0e14c0cc1c18eaf683750677467c",
+  "permissionRecoveryPolicy": "JAIOSRootNewsEdgeControl",
   "safety": {
     "dnsChanged": false,
     "tlsChanged": false,
