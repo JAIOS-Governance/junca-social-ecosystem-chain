@@ -191,7 +191,6 @@ def distribution_config(certificate_arn: str) -> dict[str, Any]:
             "MinTTL": 0,
             "DefaultTTL": 0,
             "MaxTTL": 0,
-            "GrpcConfig": {"Enabled": False},
         },
         "CacheBehaviors": {"Quantity": 0},
         "CustomErrorResponses": {"Quantity": 0},
