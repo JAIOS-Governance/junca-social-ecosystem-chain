@@ -1,0 +1,61 @@
+# JUNCA / JAIOS official social-channel correction record
+Effective: 2026-08-04 JST
+Governance: JAIOS Institutional Governance
+
+Current formal technology foundation: JUNCA Social Ecosystem Chain (JSEC)
+Current network state: Public Testnet
+
+JUNCA GLOBAL CHAIN, legacy uses of junca Chain, and JCC / JUNCA CASH are historical Proof-of-Concept or legacy project materials. They are not the current core chain, current native token, current business plan or current operating model.
+
+現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、現在はPublic Testnetとして公開されています。
+JUNCA GLOBAL CHAIN、旧称として使用されたjunca Chain、JCC（JUNCA CASH）は過去のPoCまたは過去プロジェクト情報であり、現在の中核チェーン、現行ネイティブトークン、現行事業計画または現行運営モデルではありません。
+
+Official sources / 現在の公式情報
+https://jaios-governance.org/
+https://chain.jaios-governance.org/
+https://docs.jaios-governance.org/current-identity/
+https://docs.jaios-governance.org/social-channels/
+https://explorer.jaios-governance.org/
+https://junca-global.group/
+
+PLATFORM-READY SHORT COPY — EN
+Official update: the current technology foundation is JUNCA Social Ecosystem Chain (JSEC), published as a Public Testnet under JAIOS Institutional Governance. JUNCA GLOBAL CHAIN and JCC / JUNCA CASH are historical project materials, not the current chain or operating model. https://docs.jaios-governance.org/current-identity/
+
+PLATFORM-READY SHORT COPY — JA
+公式情報更新：現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、Public Testnetとして公開中です。JUNCA GLOBAL CHAINおよびJCC／JUNCA CASHは過去プロジェクト情報で、現行チェーン・現行運営モデルではありません。https://docs.jaios-governance.org/current-identity/
+
+PLATFORM-READY LONG COPY — EN
+Official Information Update | JUNCA Social Ecosystem Chain
+
+To ensure that partners, institutions, search engines and AI systems refer to the current JUNCA information accurately, we are clarifying the project's present identity.
+
+The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a Public Testnet under JAIOS Institutional Governance.
+
+JUNCA GLOBAL CHAIN, legacy uses of the name junca Chain, and JCC (JUNCA CASH) belong to earlier Proof-of-Concept or legacy project phases. They are not the current core chain, current native token, current business plan or current operating model.
+
+Current official sources:
+https://jaios-governance.org/
+https://chain.jaios-governance.org/
+https://docs.jaios-governance.org/current-identity/
+https://explorer.jaios-governance.org/
+https://junca-global.group/
+
+This clarification preserves a precise and auditable public record for partners and third-party due-diligence reviews.
+
+PLATFORM-READY LONG COPY — JA
+公式情報更新｜JUNCA Social Ecosystem Chain
+
+取引先、第三者機関、検索エンジンおよびAIが現在のJUNCA情報を正確に参照できるよう、現行プロジェクトの正式な位置付けを明確化します。
+
+現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、JAIOS Institutional Governanceの管理下でPublic Testnetとして公開されています。
+
+JUNCA GLOBAL CHAIN、旧称として使用されたjunca Chain、JCC（JUNCA CASH）は過去のProof-of-Conceptまたは過去プロジェクト段階の情報です。現在の中核チェーン、現行ネイティブトークン、現行事業計画または現行運営モデルを示すものではありません。
+
+現在の公式情報：
+https://jaios-governance.org/
+https://chain.jaios-governance.org/
+https://docs.jaios-governance.org/current-identity/
+https://explorer.jaios-governance.org/
+https://junca-global.group/
+
+本明確化は、パートナーおよび第三者機関によるデュー・デリジェンスに耐えうる正確で監査可能な公開記録を維持するために行うものです。

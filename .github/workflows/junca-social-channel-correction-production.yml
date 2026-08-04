@@ -1,0 +1,164 @@
+name: JUNCA Social Channel Correction Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/technical-reference/snapshot/social-channels/**"
+      - "docs/technical-reference/snapshot/social-channels.json"
+      - "docs/technical-reference/snapshot/social-correction.txt"
+      - "docs/technical-reference/snapshot/sitemap.xml"
+      - ".github/workflows/junca-social-channel-correction-production.yml"
+  pull_request:
+    paths:
+      - "docs/technical-reference/snapshot/social-channels/**"
+      - "docs/technical-reference/snapshot/social-channels.json"
+      - "docs/technical-reference/snapshot/social-correction.txt"
+      - "docs/technical-reference/snapshot/sitemap.xml"
+      - ".github/workflows/junca-social-channel-correction-production.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-social-channel-correction-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate social correction artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          html="docs/technical-reference/snapshot/social-channels/index.html"
+          json="docs/technical-reference/snapshot/social-channels.json"
+          text="docs/technical-reference/snapshot/social-correction.txt"
+          sitemap="docs/technical-reference/snapshot/sitemap.xml"
+
+          test -s "${html}"
+          test -s "${json}"
+          test -s "${text}"
+          test -s "${sitemap}"
+          python -m json.tool "${json}" >/dev/null
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path("docs/technical-reference/snapshot/social-channels.json").read_text())
+          assert payload["schema"] == "junca-social-channel-correction/v1"
+          assert payload["current_identity"]["formal_name"] == "JUNCA Social Ecosystem Chain"
+          assert payload["current_identity"]["network_state"] == "Public Testnet"
+          platforms = {item["platform"] for item in payload["historical_social_channels"]}
+          assert platforms == {"LinkedIn", "X", "Instagram", "Facebook", "YouTube", "Telegram", "Reddit"}
+          assert payload["network_boundary"] == {
+              "mainnet_changed": False,
+              "assets_moved": False,
+              "bridge_activated": False,
+          }
+          PY
+
+          grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/social-channels/">' "${html}"
+          grep -F 'JUNCA Social Ecosystem Chain (JSEC)' "${html}"
+          grep -F 'junca-platform-project-jcc' "${html}"
+          grep -F 'JCC78549683' "${html}"
+          grep -F 'juncafangroup' "${html}"
+          grep -F 'juncacash_JCC' "${html}"
+          grep -F 'https://docs.jaios-governance.org/social-channels/' "${sitemap}"
+          grep -F 'https://docs.jaios-governance.org/social-channels.json' "${sitemap}"
+          grep -F 'https://docs.jaios-governance.org/social-correction.txt' "${sitemap}"
+
+          if grep -Eqi 'No Monetary Value|金銭価値なし' "${html}" "${json}" "${text}"; then
+            echo "Prohibited wording detected" >&2
+            exit 1
+          fi
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: junca-chain-docs-production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure publication-only AWS identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+          aws-region: us-east-1
+          role-session-name: junca-social-correction-${{ github.run_id }}
+      - name: Read back exact publication target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          test "${account_id}" = "595710543956"
+          bucket="junca-chain-docs-${account_id}"
+          distribution_id="$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" --output text)"
+          test -n "${distribution_id}"
+          test "${distribution_id}" != "None"
+          test "$(aws s3api get-bucket-versioning --bucket "${bucket}" --query Status --output text)" = "Enabled"
+          test "$(aws cloudfront get-distribution --id "${distribution_id}" --query Distribution.Status --output text)" = "Deployed"
+          printf 'bucket=%s\n' "${bucket}" >> "$GITHUB_OUTPUT"
+          printf 'distribution_id=%s\n' "${distribution_id}" >> "$GITHUB_OUTPUT"
+      - name: Publish social correction artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="docs/technical-reference/snapshot"
+          bucket="${{ steps.target.outputs.bucket }}"
+          cache_control="public,max-age=0,must-revalidate"
+          aws s3 cp "${source_root}/social-channels/index.html" "s3://${bucket}/social-channels/index.html" --content-type "text/html; charset=utf-8" --cache-control "${cache_control}"
+          aws s3 cp "${source_root}/social-channels.json" "s3://${bucket}/social-channels.json" --content-type "application/json; charset=utf-8" --cache-control "${cache_control}"
+          aws s3 cp "${source_root}/social-correction.txt" "s3://${bucket}/social-correction.txt" --content-type "text/plain; charset=utf-8" --cache-control "${cache_control}"
+          aws s3 cp "${source_root}/sitemap.xml" "s3://${bucket}/sitemap.xml" --content-type "application/xml; charset=utf-8" --cache-control "${cache_control}"
+      - name: Invalidate exact social correction paths
+        id: invalidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "${{ steps.target.outputs.distribution_id }}" --paths "/social-channels" "/social-channels/" "/social-channels/*" "/social-channels.json" "/social-correction.txt" "/sitemap.xml" --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "${{ steps.target.outputs.distribution_id }}" --id "${invalidation_id}"
+          status="$(aws cloudfront get-invalidation --distribution-id "${{ steps.target.outputs.distribution_id }}" --id "${invalidation_id}" --query Invalidation.Status --output text)"
+          test "${status}" = "Completed"
+          printf 'id=%s\n' "${invalidation_id}" >> "$GITHUB_OUTPUT"
+      - name: Public production readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="docs/technical-reference/snapshot"
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/social-channels.html https://docs.jaios-governance.org/social-channels/
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/social-channels.json https://docs.jaios-governance.org/social-channels.json
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/social-correction.txt https://docs.jaios-governance.org/social-correction.txt
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/sitemap.xml https://docs.jaios-governance.org/sitemap.xml
+
+          cmp "${source_root}/social-channels/index.html" /tmp/social-channels.html
+          cmp "${source_root}/social-channels.json" /tmp/social-channels.json
+          cmp "${source_root}/social-correction.txt" /tmp/social-correction.txt
+          cmp "${source_root}/sitemap.xml" /tmp/sitemap.xml
+
+          for url in https://docs.jaios-governance.org/social-channels/ https://docs.jaios-governance.org/social-channels.json https://docs.jaios-governance.org/social-correction.txt https://docs.jaios-governance.org/sitemap.xml; do
+            headers="$(curl --fail --silent --show-error --head --location "${url}")"
+            grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${headers}"
+          done
+
+          grep -F 'JUNCA Social Ecosystem Chain (JSEC)' /tmp/social-channels.html
+          grep -F 'HISTORICAL IDENTITY' /tmp/social-channels.html
+          jq -e '.schema == "junca-social-channel-correction/v1"' /tmp/social-channels.json
+          grep -F 'PLATFORM-READY SHORT COPY' /tmp/social-correction.txt
+          {
+            echo "### Social-channel correction production readback"
+            echo "- Invalidation: \`${{ steps.invalidate.outputs.id }}\`"
+            echo "- HTML: https://docs.jaios-governance.org/social-channels/"
+            echo "- JSON: https://docs.jaios-governance.org/social-channels.json"
+            echo "- TXT: https://docs.jaios-governance.org/social-correction.txt"
+            echo "- Exact content and cache readback: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,103 @@
+{
+  "schema": "junca-social-channel-correction/v1",
+  "effective_date": "2026-08-04",
+  "governance": "JAIOS Institutional Governance",
+  "current_identity": {
+    "formal_name": "JUNCA Social Ecosystem Chain",
+    "abbreviation": "JSEC",
+    "network_state": "Public Testnet",
+    "canonical_url": "https://docs.jaios-governance.org/current-identity/"
+  },
+  "interpretation_rule": {
+    "en": "JUNCA GLOBAL CHAIN, legacy uses of junca Chain, and JCC / JUNCA CASH are historical Proof-of-Concept or legacy project materials. Historical social profiles and posts are not authoritative for current project status unless updated to reference the current official sources.",
+    "ja": "JUNCA GLOBAL CHAIN、旧称として使用されたjunca Chain、JCC（JUNCA CASH）は過去のPoCまたは過去プロジェクト情報です。旧SNSプロフィールおよび投稿は、現行の公式情報へ更新されるまで現在のプロジェクト状態を示す正本ではありません。"
+  },
+  "historical_social_channels": [
+    {
+      "platform": "LinkedIn",
+      "type": "company_page",
+      "label": "junca Platform Project (JCC)",
+      "url": "https://www.linkedin.com/company/junca-platform-project-jcc",
+      "legacy_positioning": "JCC / JUNCA CASH / cross-border remittance",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "LinkedIn",
+      "type": "executive_profile",
+      "label": "HISAYUKI NAGATOME",
+      "url": "https://jp.linkedin.com/in/hisayuki-nagatome-29a01a1b4",
+      "legacy_positioning": "shared legacy junca Chain completion and JCC posts",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "X",
+      "type": "account",
+      "label": "@JCC78549683",
+      "url": "https://x.com/JCC78549683",
+      "legacy_positioning": "junca Platform / JCC",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "Instagram",
+      "type": "account",
+      "label": "@juncacash",
+      "url": "https://www.instagram.com/juncacash/",
+      "legacy_positioning": "JUNCA CASH",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "Facebook",
+      "type": "page",
+      "label": "junca Cash",
+      "url": "https://www.facebook.com/juncacash/",
+      "legacy_positioning": "JUNCA CASH / JCC",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "YouTube",
+      "type": "channel",
+      "label": "junca Group / juncajapan",
+      "urls": [
+        "https://www.youtube.com/channel/UClRRDJp0qKMtCT_ye3Zcctg",
+        "https://www.youtube.com/user/juncajapan"
+      ],
+      "legacy_positioning": "legacy corporate, JCC and platform video descriptions",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "Telegram",
+      "type": "group_and_channel",
+      "label": "junca Platform Fan Group / Announcement Channel",
+      "urls": [
+        "https://t.me/juncafangroup",
+        "https://t.me/juncaPlatformChannel"
+      ],
+      "legacy_positioning": "cross-border remittance / JCC / legacy website",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    },
+    {
+      "platform": "Reddit",
+      "type": "community",
+      "label": "r/juncacash_JCC",
+      "url": "https://www.reddit.com/r/juncacash_JCC/",
+      "legacy_positioning": "JUNCA CASH / JCC",
+      "correction_status": "AUTHORIZED_PROVIDER_WRITE_REQUIRED"
+    }
+  ],
+  "approved_correction_copy": {
+    "en": "The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a Public Testnet under JAIOS Institutional Governance. JUNCA GLOBAL CHAIN, legacy uses of junca Chain, and JCC (JUNCA CASH) are historical Proof-of-Concept or legacy project materials and are not the current core chain, current native token, current business plan or current operating model.",
+    "ja": "現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、JAIOS Institutional Governanceの管理下でPublic Testnetとして公開されています。JUNCA GLOBAL CHAIN、旧称として使用されたjunca Chain、JCC（JUNCA CASH）は過去のPoCまたは過去プロジェクト情報であり、現在の中核チェーン、現行ネイティブトークン、現行事業計画または現行運営モデルではありません。"
+  },
+  "authoritative_sources": [
+    "https://jaios-governance.org/",
+    "https://chain.jaios-governance.org/",
+    "https://docs.jaios-governance.org/current-identity/",
+    "https://explorer.jaios-governance.org/",
+    "https://junca-global.group/"
+  ],
+  "network_boundary": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  }
+}
