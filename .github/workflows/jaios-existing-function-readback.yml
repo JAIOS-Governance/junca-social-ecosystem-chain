@@ -32,58 +32,30 @@ jobs:
           role-session-name: jaios-existing-function-readback-${{ github.run_id }}
           disable-retry: true
 
-      - name: Download and normalize both exact function stages
+      - name: Download exact raw FunctionCode blobs
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage DEVELOPMENT /tmp/function-development.download > /tmp/function-development-meta.json
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-live.download > /tmp/function-live-meta.json
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage DEVELOPMENT /tmp/function-development.raw > /tmp/function-development-meta.json
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-live.raw > /tmp/function-live-meta.json
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-development-meta.json)" = "$FUNCTION_ARN"
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-live-meta.json)" = "$FUNCTION_ARN"
-          python3 - <<'PY'
-          from pathlib import Path
-          import gzip
-          import io
-          import json
-          import zipfile
-
-          def normalize(source, target, inventory_target):
-              raw = Path(source).read_bytes()
-              inventory = {
-                  'source': source,
-                  'bytes': len(raw),
-                  'magic_hex': raw[:16].hex(),
-                  'archive_entries': [],
-                  'selected_entry': None,
-                  'encoding': 'raw',
-              }
-              if zipfile.is_zipfile(io.BytesIO(raw)):
-                  inventory['encoding'] = 'zip'
-                  with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-                      names = [name for name in archive.namelist() if not name.endswith('/')]
-                      inventory['archive_entries'] = names
-                      candidates = [name for name in names if name.lower().endswith(('.js', '.mjs'))]
-                      selected = candidates[0] if candidates else names[0]
-                      inventory['selected_entry'] = selected
-                      raw = archive.read(selected)
-              elif raw.startswith(b'\x1f\x8b'):
-                  inventory['encoding'] = 'gzip'
-                  raw = gzip.decompress(raw)
-              Path(target).write_bytes(raw)
-              Path(inventory_target).write_text(json.dumps(inventory, indent=2) + '\n')
-
-          normalize('/tmp/function-development.download', '/tmp/function-development.js', '/tmp/function-development-inventory.json')
-          normalize('/tmp/function-live.download', '/tmp/function-live.js', '/tmp/function-live-inventory.json')
-          PY
-          test -s /tmp/function-development.js
-          test -s /tmp/function-live.js
-          sha256sum /tmp/function-development.js /tmp/function-live.js > /tmp/function-digests.txt
-          if cmp -s /tmp/function-development.js /tmp/function-live.js; then
+          test -s /tmp/function-development.raw
+          test -s /tmp/function-live.raw
+          {
+            echo "development_content_type=$(jq -r '.ContentType // "unknown"' /tmp/function-development-meta.json)"
+            echo "live_content_type=$(jq -r '.ContentType // "unknown"' /tmp/function-live-meta.json)"
+            echo "development_bytes=$(wc -c < /tmp/function-development.raw)"
+            echo "live_bytes=$(wc -c < /tmp/function-live.raw)"
+            echo "development_magic=$(xxd -p -l 32 /tmp/function-development.raw)"
+            echo "live_magic=$(xxd -p -l 32 /tmp/function-live.raw)"
+          } > /tmp/function-blob-inventory.txt
+          sha256sum /tmp/function-development.raw /tmp/function-live.raw > /tmp/function-digests.txt
+          if cmp -s /tmp/function-development.raw /tmp/function-live.raw; then
             echo 'IDENTICAL' > /tmp/stage-parity.txt
           else
             echo 'DIFFERENT' > /tmp/stage-parity.txt
-            diff -u /tmp/function-live.js /tmp/function-development.js > /tmp/stage-diff.patch || true
           fi
 
       - name: Read and resolve every exact distribution association
@@ -134,13 +106,13 @@ jobs:
             echo "- Function: \`${FUNCTION_NAME}\`"
             echo "- ARN: \`${FUNCTION_ARN}\`"
             echo "- Stage parity: \`$(cat /tmp/stage-parity.txt)\`"
+            echo '- Blob inventory:'
+            echo '```text'
+            cat /tmp/function-blob-inventory.txt
+            echo '```'
             echo '- Associations:'
             echo '```json'
             cat /tmp/function-associations.json
-            echo '```'
-            echo '- Digests:'
-            echo '```text'
-            cat /tmp/function-digests.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -148,15 +120,13 @@ jobs:
         with:
           name: jaios-existing-function-readback-${{ github.run_id }}
           path: |
-            /tmp/function-development.js
-            /tmp/function-live.js
+            /tmp/function-development.raw
+            /tmp/function-live.raw
             /tmp/function-development-meta.json
             /tmp/function-live-meta.json
-            /tmp/function-development-inventory.json
-            /tmp/function-live-inventory.json
+            /tmp/function-blob-inventory.txt
             /tmp/function-digests.txt
             /tmp/stage-parity.txt
-            /tmp/stage-diff.patch
             /tmp/function-associations.json
           if-no-files-found: error
           retention-days: 90
