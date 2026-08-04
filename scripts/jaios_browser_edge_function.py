@@ -125,15 +125,36 @@ def with_shared_association(config: dict[str, Any]) -> dict[str, Any]:
 
 def cmd_preflight(args: argparse.Namespace) -> None:
     cf = client()
-    live, _, _ = read_code(cf, "LIVE")
+    live, live_config, live_etag = read_code(cf, "LIVE")
+    distribution = cf.get_distribution_config(Id=args.distribution_id)
+    distribution_config = distribution["DistributionConfig"]
+    actual = sha256(live)
+    snapshot = {
+        "schema": "jaios-browser-shared-edge-live-snapshot/v1",
+        "function_arn": FUNCTION_ARN,
+        "function_name": FUNCTION_NAME,
+        "live_sha256": actual,
+        "live_etag": live_etag,
+        "live_config": live_config,
+        "live_code_utf8": live.decode("utf-8", errors="replace"),
+        "distribution_id": args.distribution_id,
+        "distribution_etag": distribution["ETag"],
+        "distribution_aliases": distribution_config.get("Aliases", {}),
+        "distribution_origins": distribution_config.get("Origins", {}),
+        "default_function_associations": distribution_config.get("DefaultCacheBehavior", {}).get(
+            "FunctionAssociations", {}
+        ),
+    }
+    print("JAIOS_BROWSER_SHARED_EDGE_LIVE_SNAPSHOT_BEGIN")
+    print(json.dumps(snapshot, indent=2, default=str))
+    print("JAIOS_BROWSER_SHARED_EDGE_LIVE_SNAPSHOT_END")
+
     baseline = Path(args.baseline).read_bytes()
     composite = Path(args.composite).read_bytes()
     allowed = {sha256(baseline), sha256(composite)}
-    actual = sha256(live)
     if actual not in allowed:
         raise RuntimeError(f"LIVE Function digest {actual} outside accepted set {sorted(allowed)}")
-    distribution = cf.get_distribution_config(Id=args.distribution_id)
-    validate_distribution(distribution["DistributionConfig"])
+    validate_distribution(distribution_config)
     print(
         json.dumps(
             {
