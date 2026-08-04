@@ -26,6 +26,8 @@ env:
   TARGET_POLICY_NAME: JAIOSRootNewsDistributionControl
   TARGET_DISTRIBUTION_ID: E2WIXG3DWW8OX1
   TARGET_DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E2WIXG3DWW8OX1
+  EXISTING_FUNCTION_NAME: junca-chain-docs-routes-595710543956
+  EXISTING_FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
 
 jobs:
   recover:
@@ -79,10 +81,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          aws cloudfront get-distribution-config --id "$TARGET_DISTRIBUTION_ID" > /tmp/distribution.json
-          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == "jaios-governance.org")' /tmp/distribution.json)" = "jaios-governance.org"
+          test "$(aws cloudfront get-distribution --id "$TARGET_DISTRIBUTION_ID" --query Distribution.ARN --output text)" = "$TARGET_DISTRIBUTION_ARN"
 
-      - name: Grant exact root distribution and read-only function inventory
+      - name: Grant exact distribution and existing-function operating permissions
         shell: bash
         run: |
           set -euo pipefail
@@ -103,9 +104,24 @@ jobs:
                 "Resource": "$TARGET_DISTRIBUTION_ARN"
               },
               {
-                "Sid": "CloudFrontFunctionInventoryReadOnly",
+                "Sid": "ExistingDocsFunctionLifecycle",
                 "Effect": "Allow",
-                "Action": "cloudfront:ListFunctions",
+                "Action": [
+                  "cloudfront:DescribeFunction",
+                  "cloudfront:GetFunction",
+                  "cloudfront:UpdateFunction",
+                  "cloudfront:TestFunction",
+                  "cloudfront:PublishFunction"
+                ],
+                "Resource": "$EXISTING_FUNCTION_ARN"
+              },
+              {
+                "Sid": "CloudFrontInventoryReadOnly",
+                "Effect": "Allow",
+                "Action": [
+                  "cloudfront:ListFunctions",
+                  "cloudfront:ListDistributions"
+                ],
                 "Resource": "*"
               }
             ]
@@ -117,16 +133,17 @@ jobs:
             --policy-document file:///tmp/policy.json
           aws iam get-role-policy \
             --role-name "$TARGET_ROLE_NAME" \
-            --policy-name "$TARGET_POLICY_NAME" \
-            > /tmp/policy-readback.json
+            --policy-name "$TARGET_POLICY_NAME" > /tmp/policy-readback.json
           jq -e \
-            --arg distribution "$TARGET_DISTRIBUTION_ARN" '
+            --arg distribution "$TARGET_DISTRIBUTION_ARN" \
+            --arg function "$EXISTING_FUNCTION_ARN" '
               .PolicyDocument.Version == "2012-10-17" and
-              (.PolicyDocument.Statement | length) == 2 and
+              (.PolicyDocument.Statement | length) == 3 and
               (.PolicyDocument.Statement[0].Resource == $distribution) and
-              (.PolicyDocument.Statement[1].Action == "cloudfront:ListFunctions") and
-              (.PolicyDocument.Statement[1].Resource == "*") and
+              (.PolicyDocument.Statement[1].Resource == $function) and
+              (.PolicyDocument.Statement[2].Resource == "*") and
               ((.PolicyDocument.Statement | tostring) | contains("cloudfront:CreateFunction") | not) and
+              ((.PolicyDocument.Statement | tostring) | contains("cloudfront:DeleteFunction") | not) and
               ((.PolicyDocument.Statement | tostring) | contains("cloudfront:DeleteDistribution") | not)
             ' /tmp/policy-readback.json
 
@@ -134,7 +151,7 @@ jobs:
     needs: recover
     runs-on: ubuntu-24.04
     environment: junca-chain-docs-production
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,23 +165,38 @@ jobs:
           role-session-name: jaios-news-edge-target-verify-${{ github.run_id }}
           disable-retry: true
 
-      - name: Verify target role and inventory existing functions
+      - name: Read exact existing function code and all associations
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          aws cloudfront get-distribution-config --id "$TARGET_DISTRIBUTION_ID" > /tmp/distribution.json
-          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == "jaios-governance.org")' /tmp/distribution.json)" = "jaios-governance.org"
-          test "$(aws cloudfront get-distribution --id "$TARGET_DISTRIBUTION_ID" --query Distribution.ARN --output text)" = "$TARGET_DISTRIBUTION_ARN"
-          aws cloudfront list-functions --stage DEVELOPMENT --max-items 100 > /tmp/functions-development.json
-          aws cloudfront list-functions --stage LIVE --max-items 100 > /tmp/functions-live.json
-          echo 'JAIOS_TARGET_ROLE_FUNCTION_INVENTORY_BEGIN'
-          jq '{development:[.FunctionList.Items[]? | {name:.Name,arn:.FunctionMetadata.FunctionARN,status:.Status,comment:.FunctionConfig.Comment}]}' /tmp/functions-development.json
-          jq '{live:[.FunctionList.Items[]? | {name:.Name,arn:.FunctionMetadata.FunctionARN,status:.Status,comment:.FunctionConfig.Comment}]}' /tmp/functions-live.json
-          jq '{default_function_associations:(.DistributionConfig.DefaultCacheBehavior.FunctionAssociations // {Quantity:0,Items:[]}),default_lambda_associations:(.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations // {Quantity:0,Items:[]}),cache_behaviors:[.DistributionConfig.CacheBehaviors.Items[]? | {path:.PathPattern,origin:.TargetOriginId,functions:(.FunctionAssociations // {Quantity:0,Items:[]}),lambdas:(.LambdaFunctionAssociations // {Quantity:0,Items:[]})}]}' /tmp/distribution.json
-          echo 'JAIOS_TARGET_ROLE_FUNCTION_INVENTORY_END'
+          aws cloudfront get-distribution-config --id "$TARGET_DISTRIBUTION_ID" > /tmp/root-distribution.json
+          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == "jaios-governance.org")' /tmp/root-distribution.json)" = "jaios-governance.org"
+          aws cloudfront get-function --name "$EXISTING_FUNCTION_NAME" --stage DEVELOPMENT /tmp/function-development.js > /tmp/function-development-meta.json
+          aws cloudfront get-function --name "$EXISTING_FUNCTION_NAME" --stage LIVE /tmp/function-live.js > /tmp/function-live-meta.json
+          test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-development-meta.json)" = "$EXISTING_FUNCTION_ARN"
+          test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-live-meta.json)" = "$EXISTING_FUNCTION_ARN"
+          aws cloudfront list-distributions > /tmp/distributions.json
+          jq --arg arn "$EXISTING_FUNCTION_ARN" '[.DistributionList.Items[]? | {
+            id:.Id,
+            domain:.DomainName,
+            aliases:(.Aliases.Items // []),
+            origins:[.Origins.Items[]?.DomainName],
+            default_functions:(.DefaultCacheBehavior.FunctionAssociations.Items // []),
+            cache_behaviors:[.CacheBehaviors.Items[]? | {path:.PathPattern,origin:.TargetOriginId,functions:(.FunctionAssociations.Items // [])}]
+          } | select(
+            ([.default_functions[]?.FunctionARN] | index($arn)) != null or
+            ([.cache_behaviors[].functions[]?.FunctionARN] | index($arn)) != null
+          )]' /tmp/distributions.json > /tmp/function-associations.json
+          echo 'JAIOS_EXISTING_FUNCTION_CODE_BEGIN'
+          sed -n '1,260p' /tmp/function-development.js
+          echo 'JAIOS_EXISTING_FUNCTION_CODE_END'
+          echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_BEGIN'
+          cat /tmp/function-associations.json
+          echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_END'
+          sha256sum /tmp/function-development.js /tmp/function-live.js
 
-      - name: Persist immutable distribution recovery evidence
+      - name: Persist exact readback evidence
         if: github.event_name != 'pull_request'
         env:
           SELECTED_BOOTSTRAP_ROLE: ${{ needs.recover.outputs.selected_bootstrap_role }}
@@ -175,33 +207,31 @@ jobs:
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg source_commit "$GITHUB_SHA" \
-            --arg account_id "$AWS_ACCOUNT_ID" \
             --arg selected_bootstrap_role "$SELECTED_BOOTSTRAP_ROLE" \
             --arg target_role_arn "$TARGET_ROLE_ARN" \
-            --arg policy_name "$TARGET_POLICY_NAME" \
             --arg distribution_arn "$TARGET_DISTRIBUTION_ARN" \
-            --argjson development_functions "$(jq '.FunctionList.Items // []' /tmp/functions-development.json)" \
-            --argjson live_functions "$(jq '.FunctionList.Items // []' /tmp/functions-live.json)" \
+            --arg function_arn "$EXISTING_FUNCTION_ARN" \
+            --arg development_sha256 "$(sha256sum /tmp/function-development.js | cut -d' ' -f1)" \
+            --arg live_sha256 "$(sha256sum /tmp/function-live.js | cut -d' ' -f1)" \
+            --argjson associations "$(cat /tmp/function-associations.json)" \
             '{
-              schema: "jaios-news-distribution-permission-recovery/v2",
+              schema: "jaios-news-existing-function-readback/v1",
               run_id: $run_id,
               source_commit: $source_commit,
-              account_id: $account_id,
               selected_bootstrap_role: $selected_bootstrap_role,
               target_role_arn: $target_role_arn,
-              policy_name: $policy_name,
               distribution_arn: $distribution_arn,
-              development_functions: $development_functions,
-              live_functions: $live_functions,
-              target_role_runtime_readback: "PASS",
-              list_functions_readback: "PASS",
+              function_arn: $function_arn,
+              development_sha256: $development_sha256,
+              live_sha256: $live_sha256,
+              associations: $associations,
               create_function_granted: false,
-              delete_distribution_granted: false,
-              result: "RECOVERED"
-            }' > evidence/production/jaios-news-distribution-permission-recovery-latest.json
+              delete_function_granted: false,
+              result: "READBACK_ACCEPTED"
+            }' > evidence/production/jaios-news-existing-function-readback-latest.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add evidence/production/jaios-news-distribution-permission-recovery-latest.json
-          git diff --cached --quiet || git commit -m "Record JAIOS News distribution permission recovery ${GITHUB_RUN_ID}"
+          git add evidence/production/jaios-news-existing-function-readback-latest.json
+          git diff --cached --quiet || git commit -m "Record JAIOS existing function readback ${GITHUB_RUN_ID}"
           git pull --rebase origin main
           git push origin HEAD:main
