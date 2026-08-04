@@ -26,14 +26,14 @@ if (
 ) throw new Error("Explorer current-state evidence is outside the governed public boundary");
 
 const observedAt = String(explorer.observed_at ?? "");
-const releaseMeta = `<meta name="jsec-docs-release" content="${marker}"><meta name="docs-baseline-contract" content="Revision · 2026.08.02 / R36"><meta http-equiv="Cache-Control" content="no-store,max-age=0">`;
+const releaseMeta = `<meta name="jsec-docs-release" content="${marker}">`;
 const replacements = [
-  ["Revision · 2026.08.02 / R36", `Current runtime · ${release} / ${revision}`],
-  ["Infrastructure binding and runtime acceptance remain open", "Runtime acceptance is verified against the current public Explorer evidence"],
-  ["Three-validator finality quorum is observed; advancing-head activity is reported separately", "Three-validator finality quorum and advancing-head activity are verified in the current public snapshot"],
-  ["Final public designation remains subject to live multi-validator acceptance and institutional-v2 continuity decision", "The current Public Testnet designation is verified by live multi-validator evidence; Mainnet remains a separate institutional decision"],
+  ["Read-only Runtime Snapshot", `Current Runtime · ${release} / ${revision}`],
+  ["Infrastructure binding and runtime acceptance remain open", "Runtime acceptance verified by current Explorer evidence"],
+  ["Three-validator finality quorum is observed; advancing-head activity is reported separately", "Three-validator finality and advancing head are verified"],
+  ["Final public designation remains subject to live multi-validator acceptance and institutional-v2 continuity decision", "Public Testnet is verified; Mainnet remains separately governed"],
   ["runtime verification in progress", "runtime acceptance verified"],
-  ["acceptance in progress", "acceptance verified for the published read-only runtime"],
+  ["acceptance in progress", "read-only runtime accepted"],
   ["pending runtime evidence", "runtime acceptance evidence"],
 ];
 
