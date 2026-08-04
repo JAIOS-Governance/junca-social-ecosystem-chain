@@ -70,6 +70,16 @@ for (const route of routes) {
     });
   }
 
+  // Remove non-rendered comments and indentation between block-level elements.
+  // This preserves the existing sub-100KB overview payload gate after longer,
+  // human-readable status labels replace legacy short codes.
+  html = html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(
+      /<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tr|ul|ol|li)>\s{2,}</g,
+      "</$1><",
+    );
+
   if (html !== source) {
     await writeFile(path, html, "utf8");
   }
