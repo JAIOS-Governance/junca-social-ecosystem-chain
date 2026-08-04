@@ -1,0 +1,115 @@
+name: Chain Brand Public Status Snapshot
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-brand-public-status-snapshot.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-brand-public-status-snapshot.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      AUDIT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+      PUBLIC_HOST: chain.jaios-governance.org
+      EXPECTED_MARKER: 20260805-chain-institutional-trust
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AUDIT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-brand-status-${{ github.run_id }}
+          disable-retry: true
+      - name: Read exact current publication state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/chain-status evidence/production
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws route53 list-resource-record-sets --hosted-zone-id "$ROUTE53_ZONE_ID" \
+            --query "ResourceRecordSets[?Name=='${PUBLIC_HOST}.']" --output json \
+            > /tmp/chain-status/dns.json
+          aws cloudfront list-distributions --output json > /tmp/chain-status/distributions.json
+          curl --silent --show-error --location --max-time 45 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --dump-header /tmp/chain-status/headers.txt \
+            --output /tmp/chain-status/root.html \
+            --write-out '%{http_code}' "https://${PUBLIC_HOST}/" > /tmp/chain-status/http-code.txt || true
+          openssl s_client -connect "${PUBLIC_HOST}:443" -servername "$PUBLIC_HOST" </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName \
+            > /tmp/chain-status/tls.txt || true
+          python3 - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+
+          root=Path('/tmp/chain-status')
+          dns=json.loads((root/'dns.json').read_text())
+          distributions=json.loads((root/'distributions.json').read_text())
+          html=(root/'root.html').read_text(encoding='utf-8',errors='replace') if (root/'root.html').exists() else ''
+          code=(root/'http-code.txt').read_text().strip() if (root/'http-code.txt').exists() else ''
+          host=os.environ['PUBLIC_HOST']; marker=os.environ['EXPECTED_MARKER']
+          matches=[]
+          for item in (distributions.get('DistributionList') or {}).get('Items') or []:
+              aliases=((item.get('Aliases') or {}).get('Items') or [])
+              if host in aliases:
+                  matches.append({
+                      'id':item.get('Id'),'domain_name':item.get('DomainName'),'status':item.get('Status'),
+                      'enabled':item.get('Enabled'),'aliases':aliases,'comment':item.get('Comment'),
+                  })
+          marker_present=marker in html
+          result='PRODUCTION_ACCEPTED' if code=='200' and marker_present and matches else 'NOT_ACCEPTED'
+          evidence={
+              'schema':'chain-brand-public-status-snapshot/v1',
+              'observed_at':datetime.now(timezone.utc).isoformat(),
+              'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+              'source_commit':os.environ['GITHUB_SHA'],
+              'public_url':f'https://{host}/',
+              'http_code':code,
+              'release_marker':marker,
+              'marker_present':marker_present,
+              'dns_records':dns,
+              'cloudfront_distributions':matches,
+              'tls_readback':(root/'tls.txt').read_text(errors='replace') if (root/'tls.txt').exists() else '',
+              'closed_information_absent':not any(v.lower() in html.lower() for v in ('JUNCA Point','Point交換','revenue model','収益モデル','収益配分')),
+              'result':result,
+          }
+          Path('evidence/production/chain-brand-public-status-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(evidence,ensure_ascii=False))
+          PY
+      - name: Persist status evidence
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/chain-brand-public-status-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain brand public status ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-brand-public-status-${{ github.run_id }}
+          path: |
+            /tmp/chain-status
+            evidence/production/chain-brand-public-status-latest.json
+          if-no-files-found: error
+          retention-days: 90
