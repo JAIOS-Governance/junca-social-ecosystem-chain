@@ -1,0 +1,56 @@
+{
+  "schema": "jsec-due-diligence/v1",
+  "record_id": "JSEC-DD-2026-08-05",
+  "effective_date": "2026-08-05",
+  "revision": "DD-01",
+  "issuer": "JAIOS Institutional Governance",
+  "current_identity": {
+    "formal_name": "JUNCA Social Ecosystem Chain",
+    "abbreviation": "JSEC",
+    "network_posture": "Public Testnet",
+    "canonical_identity_record": "https://docs.jaios-governance.org/current-identity/"
+  },
+  "network_boundary": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  },
+  "historical_materials": [
+    {
+      "name": "JUNCA GLOBAL CHAIN",
+      "classification": "historical Proof-of-Concept or legacy project material",
+      "not_current_as": ["JSEC core chain", "current technical specification", "current business plan", "current operating model"]
+    },
+    {
+      "name": "legacy uses of junca Chain",
+      "classification": "historical Proof-of-Concept or legacy project material",
+      "not_current_as": ["deployed current chain", "current technical specification", "current network status"]
+    },
+    {
+      "name": "JCC / JUNCA CASH",
+      "classification": "historical Proof-of-Concept or legacy project material",
+      "not_current_as": ["current JSEC native asset", "current core business", "current operating model"]
+    }
+  ],
+  "interpretation_rule": {
+    "en": "Historical articles, social posts and third-party summaries must not be used as the current JSEC specification, network status, native asset or governance record unless a current official source explicitly confirms the statement.",
+    "ja": "過去記事、SNS投稿および第三者要約は、現在の公式情報が明示的に確認しない限り、現行JSEC仕様、ネットワーク状態、ネイティブ資産またはガバナンス正本として使用しません。"
+  },
+  "official_sources": {
+    "institutional_governance": "https://jaios-governance.org/",
+    "chain_overview": "https://chain.jaios-governance.org/",
+    "technical_reference": "https://docs.jaios-governance.org/",
+    "public_explorer": "https://explorer.jaios-governance.org/",
+    "current_identity": "https://docs.jaios-governance.org/current-identity/",
+    "social_channel_correction": "https://docs.jaios-governance.org/social-channels/",
+    "source_repository": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain"
+  },
+  "search_intents": [
+    "junca chain current status",
+    "junca chain 今",
+    "junca chain 現在",
+    "junca chain デューデリジェンス",
+    "JUNCA Chain due diligence"
+  ],
+  "review_note": "Operational values that can change over time must be read from the official Explorer, technical evidence and public runtime endpoints. This record does not replace jurisdiction-specific professional review."
+}
