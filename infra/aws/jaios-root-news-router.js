@@ -1,5 +1,6 @@
 import cf from 'cloudfront';
 
+// Release trigger: Chain CloudFront SDK schema repair v2 (no routing change).
 const JAIOS_HOST = 'jaios-governance.org';
 const CHAIN_HOST = 'chain.jaios-governance.org';
 const GOVERNED_ORIGIN = 'docs.jaios-governance.org';
