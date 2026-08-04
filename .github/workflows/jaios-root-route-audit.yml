@@ -1,6 +1,9 @@
 name: JAIOS Root Route Audit
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/jaios-root-route-audit.yml"
   push:
     branches: [main]
     paths:
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: jaios-root-route-audit
+  group: jaios-root-route-audit-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -27,10 +30,9 @@ jobs:
       ROOT_DOMAIN: jaios-governance.org
       RECOVERY_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
     steps:
-      - name: Checkout exact main
+      - name: Checkout exact source
         uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
       - name: Configure verified AWS audit identity
@@ -97,7 +99,7 @@ jobs:
             --query "Roles[?contains(RoleName, 'Junca') || contains(RoleName, 'JAIOS')].[RoleName,Arn]" \
             --output json > /tmp/roles.json
 
-      - name: Build persistent audit evidence
+      - name: Build audit evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -153,51 +155,20 @@ jobs:
               },
               'result': 'PASS',
           }
-          out = Path('evidence/production/jaios-root-route-audit-latest.json')
-          out.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-
-          md = [
-              '# JAIOS Root Route Audit',
-              '',
-              f"Observed: {evidence['observed_at']}",
-              f"Domain: https://{evidence['domain']}/",
-              f"Workflow run: {evidence['workflow_run_id']}",
-              f"Source commit: `{evidence['source_commit']}`",
-              f"Current HTML SHA-256: `{evidence['http']['html_sha256']}`",
-              '',
-              '## Route 53',
-              '```json',
-              json.dumps(evidence['route53_records'], ensure_ascii=False, indent=2),
-              '```',
-              '',
-              '## CloudFront',
-              '```json',
-              json.dumps(evidence['aws_resources']['cloudfront'], ensure_ascii=False, indent=2),
-              '```',
-              '',
-              '## Native / Provider URLs',
-              '```text',
-              '\n'.join(evidence['http']['native_site_urls'] + evidence['http']['provider_urls']) or 'none found in HTML',
-              '```',
-              '',
-              '## TLS',
-              '```text',
-              evidence['tls'],
-              '```',
-              '',
-              'No DNS, hosting, certificate or IAM mutation was performed.',
-          ]
-          Path('evidence/production/jaios-root-route-audit-latest.md').write_text('\n'.join(md) + '\n', encoding='utf-8')
+          Path('evidence/production/jaios-root-route-audit-latest.json').write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(evidence, ensure_ascii=False, indent=2))
           PY
 
       - name: Persist audit evidence to main
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add evidence/production/jaios-root-route-audit-latest.json \
-                  evidence/production/jaios-root-route-audit-latest.md
+          git add evidence/production/jaios-root-route-audit-latest.json
           if git diff --cached --quiet; then
             echo "Audit evidence unchanged."
             exit 0
@@ -216,5 +187,17 @@ jobs:
             echo "- Route 53 mutation: false"
             echo "- CloudFront mutation: false"
             echo "- Current HTML SHA-256: $(cut -d' ' -f1 /tmp/home-sha256.txt)"
-            echo "- Persistent evidence: evidence/production/jaios-root-route-audit-latest.json"
+            echo ""
+            echo "#### Route 53"
+            echo '```json'
+            cat /tmp/route53-root-records.json
+            echo '```'
+            echo "#### CloudFront"
+            echo '```json'
+            cat /tmp/cloudfront.json
+            echo '```'
+            echo "#### Native/provider URLs"
+            echo '```text'
+            cat /tmp/native-site-urls.txt /tmp/provider-urls.txt 2>/dev/null || true
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
