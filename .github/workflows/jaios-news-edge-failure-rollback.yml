@@ -1,0 +1,113 @@
+name: JAIOS News Edge Failure Rollback
+
+on:
+  workflow_run:
+    workflows: ["JAIOS News Edge Production"]
+    types: [completed]
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: jaios-news-edge-production
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event != 'pull_request'
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      DISTRIBUTION_ID: E2WIXG3DWW8OX1
+      ROOT_DOMAIN: jaios-governance.org
+      FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/jaios-root-news-router
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure exact production identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-news-failure-rollback-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Remove only the governed root News association
+        id: rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" > /tmp/current.json
+          jq '.DistributionConfig' /tmp/current.json > /tmp/current-config.json
+          etag="$(jq -r '.ETag' /tmp/current.json)"
+          count="$(jq --arg arn "$FUNCTION_ARN" '[.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[]? | select(.FunctionARN==$arn and .EventType=="viewer-request")] | length' /tmp/current.json)"
+          if [[ "$count" -eq 0 ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq --arg arn "$FUNCTION_ARN" '
+            .DefaultCacheBehavior.FunctionAssociations = (
+              (.DefaultCacheBehavior.FunctionAssociations // {"Quantity":0,"Items":[]})
+              | .Items = ((.Items // []) | map(select(.FunctionARN != $arn or .EventType != "viewer-request")))
+              | .Quantity = (.Items | length)
+            )
+          ' /tmp/current-config.json > /tmp/rollback-config.json
+          aws cloudfront update-distribution --id "$DISTRIBUTION_ID" --if-match "$etag" \
+            --distribution-config file:///tmp/rollback-config.json > /tmp/rollback-result.json
+          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/' '/index.html' --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location --output /tmp/public-root.html "https://${ROOT_DOMAIN}/" \
+              && ! grep -Fq "data-jaios-news-release='20260804-six-card-news'" /tmp/public-root.html; then
+              break
+            fi
+            sleep 5
+          done
+          ! grep -Fq "data-jaios-news-release='20260804-six-card-news'" /tmp/public-root.html
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
+
+      - name: Persist rollback evidence
+        if: always()
+        env:
+          CHANGED: ${{ steps.rollback.outputs.changed }}
+          INVALIDATION_ID: ${{ steps.rollback.outputs.invalidation_id }}
+          FAILED_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          jq -n \
+            --arg failed_run_id "$FAILED_RUN_ID" \
+            --arg rollback_run_id "$GITHUB_RUN_ID" \
+            --arg distribution_id "$DISTRIBUTION_ID" \
+            --arg function_arn "$FUNCTION_ARN" \
+            --arg changed "${CHANGED:-false}" \
+            --arg invalidation_id "${INVALIDATION_ID:-none}" \
+            '{
+              schema: "jaios-news-edge-failure-rollback/v1",
+              failed_run_id: $failed_run_id,
+              rollback_run_id: $rollback_run_id,
+              distribution_id: $distribution_id,
+              function_arn: $function_arn,
+              association_removed: ($changed == "true"),
+              invalidation_id: $invalidation_id,
+              route53_changed: false,
+              tls_changed: false,
+              result: "ROLLBACK_ACCEPTED"
+            }' > evidence/production/jaios-news-edge-failure-rollback-latest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/jaios-news-edge-failure-rollback-latest.json
+          git diff --cached --quiet || git commit -m "Record JAIOS News edge rollback ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
