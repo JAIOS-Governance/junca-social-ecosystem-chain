@@ -1,0 +1,88 @@
+name: Institutional Trust Publication Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/technical-reference/snapshot/institutional-trust/**"
+      - "docs/technical-reference/snapshot/institutional-trust.json"
+      - "docs/technical-reference/snapshot/institutional-trust.txt"
+      - "docs/technical-reference/snapshot/current-identity.json"
+      - "docs/technical-reference/snapshot/current-identity.txt"
+      - "docs/technical-reference/snapshot/sitemap.xml"
+      - ".github/workflows/institutional-trust-publication-gate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/technical-reference/snapshot/institutional-trust/**"
+      - "docs/technical-reference/snapshot/institutional-trust.json"
+      - "docs/technical-reference/snapshot/institutional-trust.txt"
+      - "docs/technical-reference/snapshot/current-identity.json"
+      - "docs/technical-reference/snapshot/current-identity.txt"
+      - "docs/technical-reference/snapshot/sitemap.xml"
+      - ".github/workflows/institutional-trust-publication-gate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate institutional trust public records
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("docs/technical-reference/snapshot")
+          html = (root / "institutional-trust/index.html").read_text(encoding="utf-8")
+          record = json.loads((root / "institutional-trust.json").read_text(encoding="utf-8"))
+          text = (root / "institutional-trust.txt").read_text(encoding="utf-8")
+          identity = json.loads((root / "current-identity.json").read_text(encoding="utf-8"))
+          identity_text = (root / "current-identity.txt").read_text(encoding="utf-8")
+          sitemap = (root / "sitemap.xml").read_text(encoding="utf-8")
+
+          assert record["schema"] == "jaios-institutional-trust/v1"
+          assert record["authority"] == "JAIOS Institutional Governance"
+          assert identity["institutional_trust"]["canonical_record"] == "https://docs.jaios-governance.org/institutional-trust/"
+
+          required = (
+              "international legal developments",
+              "JUNCA HOLDINGS advances its business",
+              "JUNCA Social Ecosystem Chain is developed and operated under JAIOS management standards",
+              "capable of earning international trust",
+              "国際法令",
+              "JAIOSによる監査",
+              "JAIOSの管理基準",
+              "国際的な信頼に耐え得る運営環境",
+          )
+          combined = "\n".join((html, text, identity_text, json.dumps(record, ensure_ascii=False), json.dumps(identity, ensure_ascii=False)))
+          for value in required:
+              assert value in combined, value
+
+          prohibited_public = (
+              "JUNCA Point",
+              "Point conversion",
+              "Point交換",
+              "revenue model",
+              "revenue allocation",
+              "収益モデル",
+              "収益配分",
+          )
+          for value in prohibited_public:
+              assert value.lower() not in combined.lower(), value
+
+          for url in (
+              "https://docs.jaios-governance.org/institutional-trust/",
+              "https://docs.jaios-governance.org/institutional-trust.json",
+              "https://docs.jaios-governance.org/institutional-trust.txt",
+          ):
+              assert f"<loc>{url}</loc>" in sitemap, url
+          PY
