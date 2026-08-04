@@ -52,19 +52,12 @@
   ],
   "interpretation_rule_en": "Legacy remittance, ATM, payment-terminal, wallet, token, legacy PoSV, former-company or personal-operator descriptions must not be treated as current specifications or governance unless a current official source explicitly confirms them.",
   "interpretation_rule_ja": "送金、ATM、決済端末、ウォレット、トークン、旧PoSV、旧法人または個人運営に関する過去情報は、現在の公式情報が明示的に確認しない限り、現行仕様または現行ガバナンスとして扱いません。",
-  "public_disclosure_boundary": {
-    "excluded_from_public_web": [
-      "JUNCA Point information",
-      "Point conversion design",
-      "revenue models and allocation",
-      "token supply and allocation details"
-    ],
-    "managed_in": [
-      "controlled member materials",
-      "whitepaper materials",
-      "internal governance records"
-    ]
-  },
+  "public_information_scope": [
+    "institutional governance",
+    "audit relationships",
+    "network management",
+    "verifiable public evidence"
+  ],
   "official_sources": {
     "institutional_governance": "https://jaios-governance.org/",
     "chain_overview": "https://chain.jaios-governance.org/",
