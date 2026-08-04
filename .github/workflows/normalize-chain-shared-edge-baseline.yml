@@ -1,0 +1,48 @@
+name: Normalize Chain Shared Edge Baseline
+
+on:
+  push:
+    branches:
+      - repair/chain-shared-function-edge-20260805
+    paths:
+      - ".github/workflows/normalize-chain-shared-edge-baseline.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: repair/chain-shared-function-edge-20260805
+          fetch-depth: 0
+      - name: Preserve accepted LIVE baseline and synchronize router mirrors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          accepted_live_sha='f777880f9a7884589fe2db15c25976133219813b9bd2c473c23af6b174145e6e'
+          current_browser_sha="$(sha256sum infra/aws/jaios-browser-app-router.js | cut -d' ' -f1)"
+          test "$current_browser_sha" = "$accepted_live_sha"
+          cp infra/aws/jaios-browser-app-router.js infra/aws/junca-chain-docs-routes-baseline.js
+          cp infra/aws/jaios-root-news-router.js infra/aws/jaios-browser-app-router.js
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('.github/workflows/jaios-news-edge-production.yml')
+          text=path.read_text(encoding='utf-8')
+          old='BASELINE_FUNCTION_SHA256: 14951b9147b390582d82b153c190ce12e7d5fcfff98be2ac55cb1b99e8329b81'
+          new='BASELINE_FUNCTION_SHA256: f777880f9a7884589fe2db15c25976133219813b9bd2c473c23af6b174145e6e'
+          if text.count(old)!=1:
+              raise SystemExit(f'expected one legacy baseline digest, found {text.count(old)}')
+          path.write_text(text.replace(old,new,1),encoding='utf-8')
+          PY
+          test "$(sha256sum infra/aws/junca-chain-docs-routes-baseline.js | cut -d' ' -f1)" = "$accepted_live_sha"
+          cmp infra/aws/jaios-root-news-router.js infra/aws/jaios-browser-app-router.js
+          grep -F 'BASELINE_FUNCTION_SHA256: f777880f9a7884589fe2db15c25976133219813b9bd2c473c23af6b174145e6e' .github/workflows/jaios-news-edge-production.yml
+          rm .github/workflows/normalize-chain-shared-edge-baseline.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add infra/aws/junca-chain-docs-routes-baseline.js infra/aws/jaios-browser-app-router.js .github/workflows/jaios-news-edge-production.yml .github/workflows/normalize-chain-shared-edge-baseline.yml
+          git commit -m "Normalize accepted shared-edge baseline for Chain routing"
+          git push origin HEAD:repair/chain-shared-function-edge-20260805
