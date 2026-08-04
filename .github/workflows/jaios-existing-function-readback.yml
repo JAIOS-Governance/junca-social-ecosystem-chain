@@ -1,0 +1,92 @@
+name: JAIOS Existing Function Readback
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/jaios-existing-function-readback.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  readback:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 10
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      FUNCTION_NAME: junca-chain-docs-routes-595710543956
+      FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure exact deployment identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.TARGET_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-existing-function-readback-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Download exact development and live function code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage DEVELOPMENT /tmp/function-development.js > /tmp/function-development-meta.json
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-live.js > /tmp/function-live-meta.json
+          test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-development-meta.json)" = "$FUNCTION_ARN"
+          test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-live-meta.json)" = "$FUNCTION_ARN"
+          aws cloudfront list-distributions > /tmp/distributions.json
+
+      - name: Resolve every exact association and print bounded code
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          arn = os.environ['FUNCTION_ARN']
+          data = json.loads(Path('/tmp/distributions.json').read_text())
+          matches = []
+          for distribution in data.get('DistributionList', {}).get('Items', []) or []:
+              references = []
+              default = distribution.get('DefaultCacheBehavior', {})
+              for association in default.get('FunctionAssociations', {}).get('Items', []) or []:
+                  if association.get('FunctionARN') == arn:
+                      references.append({'scope': 'default', **association})
+              for behavior in distribution.get('CacheBehaviors', {}).get('Items', []) or []:
+                  for association in behavior.get('FunctionAssociations', {}).get('Items', []) or []:
+                      if association.get('FunctionARN') == arn:
+                          references.append({
+                              'scope': 'cache-behavior',
+                              'path_pattern': behavior.get('PathPattern'),
+                              'target_origin_id': behavior.get('TargetOriginId'),
+                              **association,
+                          })
+              if references:
+                  matches.append({
+                      'id': distribution.get('Id'),
+                      'domain': distribution.get('DomainName'),
+                      'aliases': distribution.get('Aliases', {}).get('Items', []) or [],
+                      'origins': [item.get('DomainName') for item in distribution.get('Origins', {}).get('Items', []) or []],
+                      'references': references,
+                  })
+          Path('/tmp/function-associations.json').write_text(json.dumps(matches, indent=2) + '\n')
+          PY
+          echo 'JAIOS_EXISTING_FUNCTION_CODE_BEGIN'
+          sed -n '1,260p' /tmp/function-development.js
+          echo 'JAIOS_EXISTING_FUNCTION_CODE_END'
+          echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_BEGIN'
+          cat /tmp/function-associations.json
+          echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_END'
+          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_BEGIN'
+          sha256sum /tmp/function-development.js /tmp/function-live.js
+          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_END'
+          cmp /tmp/function-development.js /tmp/function-live.js
