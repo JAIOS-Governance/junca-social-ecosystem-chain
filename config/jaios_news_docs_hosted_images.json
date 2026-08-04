@@ -1,0 +1,48 @@
+{
+  "schema": "jaios-news-docs-hosted-images/v1",
+  "delivery_release": "20260805-six-card-docs-photo-news-v3",
+  "items": [
+    {
+      "id": "digital-agency-priority-plan-2026",
+      "source_url": "https://jaios-governance.org/world-diagnostic.webp",
+      "s3_key": "jaios-news-photos/digital-public-infrastructure.webp",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/digital-public-infrastructure.webp",
+      "content_type": "image/webp"
+    },
+    {
+      "id": "un-ai-digital-public-goods-2026",
+      "source_url": "https://jaios-governance.org/news/eu-ai-transparency.jpg",
+      "s3_key": "jaios-news-photos/ai-governance.jpg",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/ai-governance.jpg",
+      "content_type": "image/jpeg"
+    },
+    {
+      "id": "oecd-digital-government-outlook-2026",
+      "source_url": "https://jaios-governance.org/news/oecd-government-ai.jpg",
+      "s3_key": "jaios-news-photos/digital-government.jpg",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/digital-government.jpg",
+      "content_type": "image/jpeg"
+    },
+    {
+      "id": "undp-blockchain-advisory-group-2026",
+      "source_url": "https://jaios-governance.org/social-cooperation.png",
+      "s3_key": "jaios-news-photos/blockchain-public-good.png",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/blockchain-public-good.png",
+      "content_type": "image/png"
+    },
+    {
+      "id": "eu-japan-digital-partnership-2026",
+      "source_url": "https://jaios-governance.org/news/escap-environment.jpg",
+      "s3_key": "jaios-news-photos/international-cooperation.jpg",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/international-cooperation.jpg",
+      "content_type": "image/jpeg"
+    },
+    {
+      "id": "boj-fin-sum-ai-blockchain-2026",
+      "source_url": "https://jaios-governance.org/news/bis-trusted-money.jpg",
+      "s3_key": "jaios-news-photos/financial-infrastructure.jpg",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/financial-infrastructure.jpg",
+      "content_type": "image/jpeg"
+    }
+  ]
+}
