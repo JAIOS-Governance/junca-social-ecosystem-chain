@@ -1,0 +1,35 @@
+JUNCA SOCIAL ECOSYSTEM CHAIN — OFFICIAL DUE-DILIGENCE RECORD
+Record ID: JSEC-DD-2026-08-05
+Revision: DD-01
+Effective date: 2026-08-05
+Issuer: JAIOS Institutional Governance
+
+CURRENT FORMAL IDENTITY
+JUNCA Social Ecosystem Chain (JSEC)
+Network posture: Public Testnet
+
+CURRENT SAFETY BOUNDARY
+Mainnet Changed=false
+Assets Moved=false
+Bridge Activated=false
+
+HISTORICAL INFORMATION SEPARATION
+JUNCA GLOBAL CHAIN, legacy uses of junca Chain, and JCC / JUNCA CASH are historical Proof-of-Concept or legacy project materials. They are not the current JSEC core chain, current technical specification, current native asset, current business plan or current operating model.
+
+JUNCA GLOBAL CHAIN、過去に使用されたjunca Chain、JCC / JUNCA CASHは、過去のProof-of-Concept（PoC）または過去プロジェクト段階の情報です。現在のJSEC中核チェーン、現行技術仕様、現行ネイティブ資産、現行事業計画または現行運営モデルを示すものではありません。
+
+INTERPRETATION RULE
+Historical articles, social posts and third-party summaries must not be used as the current JSEC specification, network status, native asset or governance record unless a current official source explicitly confirms the statement.
+
+過去記事、SNS投稿および第三者要約は、現在の公式情報が明示的に確認しない限り、現行JSEC仕様、ネットワーク状態、ネイティブ資産またはガバナンス正本として使用しません。
+
+OFFICIAL EVIDENCE ROUTES
+Institutional governance: https://jaios-governance.org/
+Chain overview: https://chain.jaios-governance.org/
+Technical reference: https://docs.jaios-governance.org/
+Public Explorer: https://explorer.jaios-governance.org/
+Current identity: https://docs.jaios-governance.org/current-identity/
+Social-channel correction: https://docs.jaios-governance.org/social-channels/
+Source repository: https://github.com/JAIOS-Governance/junca-social-ecosystem-chain
+
+Operational values that can change over time must be read from the official Explorer, technical evidence and public runtime endpoints. This record does not replace jurisdiction-specific professional review.
