@@ -1,0 +1,242 @@
+name: Institutional Trust Docs Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/technical-reference/snapshot/institutional-trust/**"
+      - "docs/technical-reference/snapshot/institutional-trust.json"
+      - "docs/technical-reference/snapshot/institutional-trust.txt"
+      - "docs/technical-reference/snapshot/current-identity.json"
+      - "docs/technical-reference/snapshot/current-identity.txt"
+      - "docs/technical-reference/snapshot/sitemap.xml"
+      - ".github/workflows/institutional-trust-docs-production.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/technical-reference/snapshot/institutional-trust/**"
+      - "docs/technical-reference/snapshot/institutional-trust.json"
+      - "docs/technical-reference/snapshot/institutional-trust.txt"
+      - "docs/technical-reference/snapshot/current-identity.json"
+      - "docs/technical-reference/snapshot/current-identity.txt"
+      - "docs/technical-reference/snapshot/sitemap.xml"
+      - ".github/workflows/institutional-trust-docs-production.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: institutional-trust-docs-production
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DOCS_DISTRIBUTION_ID: E22CXYZGWNT0AJ
+  DOCS_ORIGIN: https://docs.jaios-governance.org
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate exact public artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("docs/technical-reference/snapshot")
+          paths = [
+              root / "institutional-trust/index.html",
+              root / "institutional-trust.json",
+              root / "institutional-trust.txt",
+              root / "current-identity.json",
+              root / "current-identity.txt",
+              root / "sitemap.xml",
+          ]
+          for path in paths:
+              assert path.is_file() and path.stat().st_size > 0, path
+
+          record = json.loads((root / "institutional-trust.json").read_text(encoding="utf-8"))
+          identity = json.loads((root / "current-identity.json").read_text(encoding="utf-8"))
+          combined = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+          assert record["schema"] == "jaios-institutional-trust/v1"
+          assert identity["institutional_trust"]["canonical_record"] == "https://docs.jaios-governance.org/institutional-trust/"
+          required = (
+              "international legal developments",
+              "JAIOS review and evidence-based assessment",
+              "JAIOS management standards",
+              "capable of earning international trust",
+              "国際法令",
+              "JAIOSによる監査",
+              "JAIOSの管理基準",
+              "国際的な信頼に耐え得る運営環境",
+          )
+          for value in required:
+              assert value in combined, value
+          prohibited = (
+              "JUNCA Point",
+              "Point conversion",
+              "Point交換",
+              "revenue model",
+              "revenue allocation",
+              "収益モデル",
+              "収益配分",
+          )
+          for value in prohibited:
+              assert value.lower() not in combined.lower(), value
+          PY
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure exact Docs production identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: institutional-trust-docs-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Verify publication target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          test "$(aws s3api get-bucket-versioning --bucket "$DOCS_BUCKET" --query Status --output text)" = "Enabled"
+          test "$(aws cloudfront get-distribution --id "$DOCS_DISTRIBUTION_ID" --query Distribution.Status --output text)" = "Deployed"
+          aws cloudfront get-distribution --id "$DOCS_DISTRIBUTION_ID" \
+            --query "Distribution.DistributionConfig.Aliases.Items" --output json \
+            | jq -e 'index("docs.jaios-governance.org") != null'
+
+      - name: Publish exact institutional trust records
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="docs/technical-reference/snapshot"
+          cache="public,max-age=0,must-revalidate"
+          aws s3 cp "$root/institutional-trust/index.html" "s3://$DOCS_BUCKET/institutional-trust/index.html" --content-type "text/html; charset=utf-8" --cache-control "$cache"
+          aws s3 cp "$root/institutional-trust.json" "s3://$DOCS_BUCKET/institutional-trust.json" --content-type "application/json; charset=utf-8" --cache-control "$cache"
+          aws s3 cp "$root/institutional-trust.txt" "s3://$DOCS_BUCKET/institutional-trust.txt" --content-type "text/plain; charset=utf-8" --cache-control "$cache"
+          aws s3 cp "$root/current-identity.json" "s3://$DOCS_BUCKET/current-identity.json" --content-type "application/json; charset=utf-8" --cache-control "$cache"
+          aws s3 cp "$root/current-identity.txt" "s3://$DOCS_BUCKET/current-identity.txt" --content-type "text/plain; charset=utf-8" --cache-control "$cache"
+          aws s3 cp "$root/sitemap.xml" "s3://$DOCS_BUCKET/sitemap.xml" --content-type "application/xml; charset=utf-8" --cache-control "$cache"
+
+      - name: Invalidate exact public paths
+        id: invalidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(aws cloudfront create-invalidation --distribution-id "$DOCS_DISTRIBUTION_ID" --paths \
+            '/institutional-trust' '/institutional-trust/' '/institutional-trust/index.html' \
+            '/institutional-trust.json' '/institutional-trust.txt' \
+            '/current-identity.json' '/current-identity.txt' '/sitemap.xml' \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$DOCS_DISTRIBUTION_ID" --id "$id"
+          test "$(aws cloudfront get-invalidation --distribution-id "$DOCS_DISTRIBUTION_ID" --id "$id" --query Invalidation.Status --output text)" = "Completed"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Public exact-content readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="docs/technical-reference/snapshot"
+          declare -A sources=(
+            [institutional-trust.html]="$root/institutional-trust/index.html"
+            [institutional-trust.json]="$root/institutional-trust.json"
+            [institutional-trust.txt]="$root/institutional-trust.txt"
+            [current-identity.json]="$root/current-identity.json"
+            [current-identity.txt]="$root/current-identity.txt"
+            [sitemap.xml]="$root/sitemap.xml"
+          )
+          declare -A urls=(
+            [institutional-trust.html]="$DOCS_ORIGIN/institutional-trust/"
+            [institutional-trust.json]="$DOCS_ORIGIN/institutional-trust.json"
+            [institutional-trust.txt]="$DOCS_ORIGIN/institutional-trust.txt"
+            [current-identity.json]="$DOCS_ORIGIN/current-identity.json"
+            [current-identity.txt]="$DOCS_ORIGIN/current-identity.txt"
+            [sitemap.xml]="$DOCS_ORIGIN/sitemap.xml"
+          )
+          mkdir -p /tmp/institutional-trust-readback
+          for name in "${!sources[@]}"; do
+            ready=false
+            for attempt in $(seq 1 18); do
+              if curl --fail-with-body --silent --show-error --location \
+                --header 'Cache-Control: no-cache' \
+                --output "/tmp/institutional-trust-readback/$name" "${urls[$name]}" \
+                && cmp "${sources[$name]}" "/tmp/institutional-trust-readback/$name"; then
+                ready=true
+                break
+              fi
+              sleep 5
+            done
+            test "$ready" = true
+            curl --fail --silent --show-error --head --location "${urls[$name]}" \
+              | grep -i '^cache-control: public,max-age=0,must-revalidate'
+          done
+          combined="$(cat /tmp/institutional-trust-readback/*)"
+          grep -F 'JAIOSによる監査' <<<"$combined"
+          grep -F 'JAIOSの管理基準' <<<"$combined"
+          grep -F '国際的な信頼に耐え得る運営環境' <<<"$combined"
+          if grep -Eqi 'JUNCA Point|Point conversion|Point交換|revenue model|revenue allocation|収益モデル|収益配分' <<<"$combined"; then
+            echo "Closed or whitepaper-only information detected on public endpoints" >&2
+            exit 1
+          fi
+
+      - name: Persist production acceptance evidence
+        env:
+          INVALIDATION_ID: ${{ steps.invalidate.outputs.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/production
+          jq -n \
+            --arg observed_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg invalidation_id "$INVALIDATION_ID" \
+            '{
+              schema: "institutional-trust-docs-production-acceptance/v1",
+              observed_at: $observed_at,
+              source_commit: $source_commit,
+              workflow_run_id: $run_id,
+              public_endpoints: [
+                "https://docs.jaios-governance.org/institutional-trust/",
+                "https://docs.jaios-governance.org/institutional-trust.json",
+                "https://docs.jaios-governance.org/institutional-trust.txt",
+                "https://docs.jaios-governance.org/current-identity.json",
+                "https://docs.jaios-governance.org/current-identity.txt"
+              ],
+              invalidation_id: $invalidation_id,
+              exact_content_readback: "PASS",
+              cache_readback: "PASS",
+              closed_information_absent: true,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              result: "PRODUCTION_ACCEPTED"
+            }' > evidence/production/institutional-trust-docs-production-acceptance-latest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add evidence/production/institutional-trust-docs-production-acceptance-latest.json
+          git diff --cached --quiet || git commit -m "Record institutional trust Docs production acceptance ${GITHUB_RUN_ID}"
+          git push origin HEAD:main
