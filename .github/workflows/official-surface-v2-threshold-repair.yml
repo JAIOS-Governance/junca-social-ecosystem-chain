@@ -1,0 +1,41 @@
+name: Official Surface V2 Threshold Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "config/jaios_news_docs_hosted_images.json"
+      - "scripts/patch_official_surface_v2_threshold.py"
+      - ".github/workflows/official-surface-v2-threshold-repair.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: official-surface-v2-threshold-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch the two governed photo dimension gates
+        run: python3 scripts/patch_official_surface_v2_threshold.py
+      - name: Persist the repaired workflow source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- .github/workflows/official-surface-final-acceptance-v2.yml; then
+            echo 'V2 threshold source is already repaired.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/official-surface-final-acceptance-v2.yml
+          git commit -m "Repair official surface V2 controlled photo threshold"
+          git pull --rebase origin main
+          git push origin HEAD:main
