@@ -1,0 +1,53 @@
+name: JUNCA Social Channel Public Readback
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/junca-social-channel-public-readback.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-readback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public social correction artifacts byte-for-byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="docs/technical-reference/snapshot"
+          for attempt in $(seq 1 12); do
+            if curl --fail-with-body --silent --show-error --location --output /tmp/social-channels.html https://docs.jaios-governance.org/social-channels/ \
+              && curl --fail-with-body --silent --show-error --location --output /tmp/social-channels.json https://docs.jaios-governance.org/social-channels.json \
+              && curl --fail-with-body --silent --show-error --location --output /tmp/social-correction.txt https://docs.jaios-governance.org/social-correction.txt \
+              && curl --fail-with-body --silent --show-error --location --output /tmp/sitemap.xml https://docs.jaios-governance.org/sitemap.xml \
+              && cmp "${source_root}/social-channels/index.html" /tmp/social-channels.html \
+              && cmp "${source_root}/social-channels.json" /tmp/social-channels.json \
+              && cmp "${source_root}/social-correction.txt" /tmp/social-correction.txt \
+              && cmp "${source_root}/sitemap.xml" /tmp/sitemap.xml; then
+              break
+            fi
+            if [[ "${attempt}" -eq 12 ]]; then
+              echo "Public social correction artifacts did not converge to the governed source" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          for url in https://docs.jaios-governance.org/social-channels/ https://docs.jaios-governance.org/social-channels.json https://docs.jaios-governance.org/social-correction.txt https://docs.jaios-governance.org/sitemap.xml; do
+            headers="$(curl --fail --silent --show-error --head --location "${url}")"
+            grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${headers}"
+          done
+
+          grep -F 'JUNCA Social Ecosystem Chain (JSEC)' /tmp/social-channels.html
+          grep -F 'junca-platform-project-jcc' /tmp/social-channels.html
+          grep -F 'JCC78549683' /tmp/social-channels.html
+          grep -F 'juncafangroup' /tmp/social-channels.html
+          grep -F 'juncacash_JCC' /tmp/social-channels.html
+          jq -e '.schema == "junca-social-channel-correction/v1"' /tmp/social-channels.json
+          jq -e '.historical_social_channels | length == 8' /tmp/social-channels.json
+          grep -F 'PLATFORM-READY LONG COPY' /tmp/social-correction.txt
+          grep -F 'https://docs.jaios-governance.org/social-channels/' /tmp/sitemap.xml
