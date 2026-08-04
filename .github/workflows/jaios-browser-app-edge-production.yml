@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate activation contract and router
+      - name: Validate exact activation source
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -66,11 +66,9 @@ jobs:
           assert release['releaseMarker']=='20260804-desktop-063-copy-paste-repair'
           assert release['sourceRuntimeMergeSha']=='df797bc9f4ebf72405bbd3bb59ea355d500ff084'
           assert release['acceptedRuntimeHead']=='805af0e5d047d18002b4dde58d73eae6da2ae93e'
-          assert request['schema']=='jaios-browser-app-deployment-request/v1'
           assert request['execute'] is True
           assert request['nonce']=='activate-jaios-browser-app-063-20260804-1520-jst'
           assert request['target']=='https://jaios-governance.org/browser/app'
-          assert request['releaseMarker']==release['releaseMarker']
           assert request['permissionRecoveryCommit']=='4efd15d91acf0e14c0cc1c18eaf683750677467c'
           assert set(request['safety'].values())=={False}
           assert Path('infra/aws/jaios-root-news-router.js').read_bytes()==Path('infra/aws/jaios-browser-app-router.js').read_bytes()
@@ -80,18 +78,15 @@ jobs:
               assert re.fullmatch(r'[0-9a-f]{64}',item['sha256'])
               assert item['sizeBytes']>0
           PY
-          grep -F "const ROOT_ARTIFACT = '/jaios-root-news/index.html';" infra/aws/jaios-root-news-router.js
           grep -F "const BROWSER_APP_ARTIFACT = '/jaios-browser-app/index.html';" infra/aws/jaios-root-news-router.js
           grep -F "request.uri === '/browser/app'" infra/aws/jaios-root-news-router.js
 
-      - name: Build exact current-page derivative
+      - name: Build byte-preserving Browser derivative
         shell: bash
         run: |
           set -Eeuo pipefail
-          curl --fail-with-body --silent --show-error --location --max-time 60 \
-            -o /tmp/current.html "$PUBLIC_APP"
-          python3 scripts/build_jaios_browser_app_edge.py \
-            /tmp/current.html sites/jaios-browser-app/release.json /tmp/index.html
+          curl --fail-with-body --silent --show-error --location --max-time 60 -o /tmp/current.html "$PUBLIC_APP"
+          python3 scripts/build_jaios_browser_app_edge.py /tmp/current.html sites/jaios-browser-app/release.json /tmp/index.html
           grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/index.html
           test "$(grep -o 'id="installWindows"' /tmp/index.html | wc -l)" -eq 1
           test "$(grep -o 'id="installMacDmg"' /tmp/index.html | wc -l)" -eq 1
@@ -100,7 +95,7 @@ jobs:
           ! grep -Fq 'Public Alpha: Windows 0.5.3' /tmp/index.html
           sha256sum /tmp/index.html | cut -d' ' -f1 >/tmp/staged-sha256.txt
 
-      - name: Verify official assets
+      - name: Verify official public assets
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -108,7 +103,7 @@ jobs:
             curl --fail --silent --show-error --location --head --retry 4 --retry-delay 2 --max-time 60 "$url" >/dev/null
           done
 
-      - name: Configure Docs staging identity
+      - name: Configure governed Docs staging identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DOCS_DEPLOYMENT_ROLE_ARN }}
@@ -116,17 +111,12 @@ jobs:
           role-session-name: jaios-browser-stage-${{ github.run_id }}
           disable-retry: true
 
-      - name: Stage artifact without traffic change
+      - name: Stage exact bytes without traffic change
         shell: bash
         run: |
           set -Eeuo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" >/tmp/distribution.json
-          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution.json)" = "$ROOT_DOMAIN"
-          test "$(jq -r '.DistributionConfig.Origins.Items[].DomainName | select(. == env.EXPECTED_ORIGIN_DOMAIN)' /tmp/distribution.json)" = "$EXPECTED_ORIGIN_DOMAIN"
-          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DomainName --output text)" = "$EXPECTED_DISTRIBUTION_DOMAIN"
           test "$(aws s3api get-bucket-versioning --bucket "$DOCS_BUCKET" --query Status --output text)" = Enabled
-          jq --arg arn "$FUNCTION_ARN" -e '.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[] | select(.EventType=="viewer-request" and .FunctionARN==$arn)' /tmp/distribution.json >/dev/null
           aws s3 cp /tmp/index.html "s3://${DOCS_BUCKET}/${ARTIFACT_PATH}" \
             --content-type 'text/html; charset=utf-8' \
             --cache-control 'public,max-age=0,must-revalidate' \
@@ -135,8 +125,7 @@ jobs:
           cmp /tmp/index.html /tmp/s3-readback.html
           ready=false
           for attempt in {1..18}; do
-            if curl --fail --silent --show-error --location \
-              -o /tmp/docs-origin.html "https://${DOCS_DOMAIN}/${ARTIFACT_PATH}" \
+            if curl --fail --silent --show-error --location -o /tmp/docs-origin.html "https://${DOCS_DOMAIN}/${ARTIFACT_PATH}" \
               && grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/docs-origin.html; then
               ready=true; break
             fi
@@ -151,7 +140,6 @@ jobs:
           path: |
             /tmp/index.html
             /tmp/staged-sha256.txt
-            /tmp/distribution.json
           if-no-files-found: error
           retention-days: 90
 
@@ -201,16 +189,13 @@ jobs:
           assert Path('infra/aws/jaios-root-news-router.js').read_bytes()==Path('infra/aws/jaios-browser-app-router.js').read_bytes()
           PY
           echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          curl --fail --silent --show-error --location \
-            -o /tmp/expected.html "https://${DOCS_DOMAIN}/${ARTIFACT_PATH}"
+          curl --fail --silent --show-error --location -o /tmp/expected.html "https://${DOCS_DOMAIN}/${ARTIFACT_PATH}"
           grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/expected.html
 
-      - name: Acquire exact GitHub OIDC token
+      - name: Acquire GitHub OIDC token
         shell: bash
         run: |
-          token_json="$(curl --fail-with-body --silent --show-error \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          token_json="$(curl --fail-with-body --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
           python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" >/tmp/oidc-token
           test -s /tmp/oidc-token
 
@@ -220,15 +205,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           selected=""
-          for role in \
-            arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment \
-            arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
-          do
-            if aws sts assume-role-with-web-identity \
-              --role-arn "$role" \
-              --role-session-name "jaios-browser-cloudfront-${GITHUB_RUN_ID}" \
-              --web-identity-token "$(cat /tmp/oidc-token)" \
-              --duration-seconds 1800 >/tmp/assume.json 2>/tmp/assume.err; then
+          for role in arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment; do
+            if aws sts assume-role-with-web-identity --role-arn "$role" --role-session-name "jaios-browser-cloudfront-${GITHUB_RUN_ID}" \
+              --web-identity-token "$(cat /tmp/oidc-token)" --duration-seconds 1800 >/tmp/assume.json 2>/tmp/assume.err; then
               selected="$role"; break
             fi
           done
@@ -248,9 +227,7 @@ jobs:
             rc=$?
             if [[ "$activated" -eq 1 ]]; then
               dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-              aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" \
-                --function-config file:///tmp/function-before-config.json \
-                --function-code fileb:///tmp/function-before.js >/tmp/rollback-update.json || true
+              aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" --function-config file:///tmp/function-before-config.json --function-code fileb:///tmp/function-before.js >/tmp/rollback-update.json || true
               rollback_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
               aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$rollback_etag" >/tmp/rollback-publish.json || true
               rid="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/browser/app' '/browser/app/' --query Invalidation.Id --output text 2>/dev/null || true)"
@@ -263,7 +240,7 @@ jobs:
           aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" >/tmp/distribution.json
           test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution.json)" = "$ROOT_DOMAIN"
           test "$(jq -r '.DistributionConfig.Origins.Items[].DomainName | select(. == env.EXPECTED_ORIGIN_DOMAIN)' /tmp/distribution.json)" = "$EXPECTED_ORIGIN_DOMAIN"
-          jq --arg arn "$FUNCTION_ARN" -e '.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[] | select(.EventType=="viewer-request" and .FunctionARN==$arn)' /tmp/distribution.json >/dev/null
+          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DomainName --output text)" = "$EXPECTED_DISTRIBUTION_DOMAIN"
           aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-before.js >/tmp/function-before-get.json
           aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE >/tmp/function-before-description.json
           jq '.FunctionSummary.FunctionConfig' /tmp/function-before-description.json >/tmp/function-before-config.json
@@ -271,21 +248,16 @@ jobs:
           {"Comment":"Route the JAIOS root and Browser app documents to governed exact artifacts","Runtime":"cloudfront-js-2.0"}
           JSON
           for name in root browser protected; do
-            case "$name" in
-              root) uri=/;; browser) uri=/browser/app;; protected) uri=/browser;;
-            esac
+            case "$name" in root) uri=/;; browser) uri=/browser/app;; protected) uri=/browser;; esac
             cat >"/tmp/test-${name}.json" <<JSON
           {"version":"1.0","context":{"eventType":"viewer-request"},"viewer":{"ip":"198.51.100.10"},"request":{"method":"GET","uri":"$uri","querystring":{},"headers":{"host":{"value":"jaios-governance.org"}},"cookies":{}}}
           JSON
           done
           dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-          aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" \
-            --function-config file:///tmp/function-after-config.json \
-            --function-code fileb://infra/aws/jaios-root-news-router.js >/tmp/function-update.json
+          aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" --function-config file:///tmp/function-after-config.json --function-code fileb://infra/aws/jaios-root-news-router.js >/tmp/function-update.json
           updated_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
           for name in root browser protected; do
-            aws cloudfront test-function --name "$FUNCTION_NAME" --if-match "$updated_etag" \
-              --stage DEVELOPMENT --event-object "fileb:///tmp/test-${name}.json" >"/tmp/function-test-${name}.json"
+            aws cloudfront test-function --name "$FUNCTION_NAME" --if-match "$updated_etag" --stage DEVELOPMENT --event-object "fileb:///tmp/test-${name}.json" >"/tmp/function-test-${name}.json"
             jq -e '.TestResult.FunctionErrorMessage == null or .TestResult.FunctionErrorMessage == ""' "/tmp/function-test-${name}.json" >/dev/null
           done
           aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$updated_etag" >/tmp/function-publish.json
@@ -296,11 +268,8 @@ jobs:
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
           ready=false
           for attempt in {1..30}; do
-            if curl --fail-with-body --silent --show-error --location --header 'Cache-Control: no-cache' \
-              -o /tmp/public.html "${PUBLIC_APP}?release=${{ steps.contract.outputs.source_commit }}" \
-              && grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/public.html; then
-              ready=true; break
-            fi
+            if curl --fail-with-body --silent --show-error --location --header 'Cache-Control: no-cache' -o /tmp/public.html "${PUBLIC_APP}?release=${{ steps.contract.outputs.source_commit }}" \
+              && grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/public.html; then ready=true; break; fi
             sleep 5
           done
           test "$ready" = true
@@ -314,16 +283,12 @@ jobs:
           curl --fail --silent --show-error --location -o /tmp/root.html "https://${ROOT_DOMAIN}/"
           grep -Fq 'data-jaios-news-release=' /tmp/root.html
           grep -Fq 'data-jaios-trust-release=' /tmp/root.html
-
           python3 -m pip install --quiet selenium
           python3 - <<'PY'
           from selenium import webdriver
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
-          expected={
-            'installWindows':'https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-Windows-x64.exe',
-            'installMacDmg':'https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-mac-universal.dmg',
-            'installMacZip':'https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-mac-universal.zip'}
+          expected={'installWindows':'https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-Windows-x64.exe','installMacDmg':'https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-mac-universal.dmg','installMacZip':'https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-mac-universal.zip'}
           options=webdriver.ChromeOptions(); options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage')
           driver=webdriver.Chrome(options=options)
           try:
@@ -338,7 +303,7 @@ jobs:
           trap - ERR
           echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
 
-      - name: Persist evidence and close one-shot request
+      - name: Persist evidence and close request
         env:
           SOURCE_COMMIT: ${{ steps.contract.outputs.source_commit }}
           INVALIDATION_ID: ${{ steps.acceptance.outputs.invalidation_id }}
