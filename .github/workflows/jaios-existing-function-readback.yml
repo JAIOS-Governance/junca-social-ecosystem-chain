@@ -61,21 +61,25 @@ jobs:
           stage_records = {}
           stage_code = {}
           for stage in ('DEVELOPMENT', 'LIVE'):
-              response = client.get_function(Name=function_name, Stage=stage)
-              summary = response['FunctionSummary']
+              description = client.describe_function(Name=function_name, Stage=stage)
+              summary = description['FunctionSummary']
               actual_arn = summary['FunctionMetadata']['FunctionARN']
               if actual_arn != function_arn:
                   raise SystemExit(f'{stage}: unexpected Function ARN {actual_arn}')
+
+              response = client.get_function(Name=function_name, Stage=stage)
               body = response['FunctionCode']
               code = body.read() if hasattr(body, 'read') else bytes(body)
               if not code:
                   raise SystemExit(f'{stage}: empty FunctionCode')
+
               stage_lower = stage.lower()
               Path(f'/tmp/function-{stage_lower}.js').write_bytes(code)
               metadata = {
-                  'ETag': response.get('ETag'),
-                  'ContentType': response.get('ContentType'),
-                  'FunctionSummary': summary,
+                  'describe_etag': description.get('ETag'),
+                  'get_etag': response.get('ETag'),
+                  'content_type': response.get('ContentType'),
+                  'function_summary': summary,
                   'code_bytes': len(code),
                   'code_sha256': hashlib.sha256(code).hexdigest(),
                   'code_prefix_hex': code[:32].hex(),
