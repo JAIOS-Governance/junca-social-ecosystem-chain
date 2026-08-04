@@ -1,0 +1,187 @@
+name: JAIOS Existing Function Readback
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/jaios-existing-function-readback.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  readback:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 10
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      FUNCTION_NAME: junca-chain-docs-routes-595710543956
+      FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure exact deployment identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.TARGET_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-existing-function-readback-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Read exact FunctionCode and associations through AWS SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          python3 -m pip install --quiet boto3
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import date, datetime
+          from pathlib import Path
+
+          import boto3
+
+          client = boto3.client('cloudfront', region_name=os.environ['AWS_REGION'])
+          function_name = os.environ['FUNCTION_NAME']
+          function_arn = os.environ['FUNCTION_ARN']
+
+          def serializable(value):
+              if isinstance(value, (datetime, date)):
+                  return value.isoformat()
+              if isinstance(value, bytes):
+                  return {'bytes': len(value), 'sha256': hashlib.sha256(value).hexdigest()}
+              raise TypeError(f'Unsupported JSON type: {type(value)!r}')
+
+          stage_records = {}
+          stage_code = {}
+          for stage in ('DEVELOPMENT', 'LIVE'):
+              description = client.describe_function(Name=function_name, Stage=stage)
+              summary = description['FunctionSummary']
+              actual_arn = summary['FunctionMetadata']['FunctionARN']
+              if actual_arn != function_arn:
+                  raise SystemExit(f'{stage}: unexpected Function ARN {actual_arn}')
+
+              response = client.get_function(Name=function_name, Stage=stage)
+              body = response['FunctionCode']
+              code = body.read() if hasattr(body, 'read') else bytes(body)
+              if not code:
+                  raise SystemExit(f'{stage}: empty FunctionCode')
+
+              stage_lower = stage.lower()
+              Path(f'/tmp/function-{stage_lower}.js').write_bytes(code)
+              metadata = {
+                  'describe_etag': description.get('ETag'),
+                  'get_etag': response.get('ETag'),
+                  'content_type': response.get('ContentType'),
+                  'function_summary': summary,
+                  'code_bytes': len(code),
+                  'code_sha256': hashlib.sha256(code).hexdigest(),
+                  'code_prefix_hex': code[:32].hex(),
+              }
+              Path(f'/tmp/function-{stage_lower}-meta.json').write_text(
+                  json.dumps(metadata, default=serializable, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              stage_records[stage] = metadata
+              stage_code[stage] = code
+
+          parity = 'IDENTICAL' if stage_code['DEVELOPMENT'] == stage_code['LIVE'] else 'DIFFERENT'
+          Path('/tmp/stage-parity.txt').write_text(parity + '\n', encoding='utf-8')
+          if parity == 'DIFFERENT':
+              import difflib
+              live = stage_code['LIVE'].decode('utf-8', errors='replace').splitlines(keepends=True)
+              development = stage_code['DEVELOPMENT'].decode('utf-8', errors='replace').splitlines(keepends=True)
+              Path('/tmp/stage-diff.patch').write_text(
+                  ''.join(difflib.unified_diff(live, development, fromfile='LIVE', tofile='DEVELOPMENT')),
+                  encoding='utf-8',
+              )
+          else:
+              Path('/tmp/stage-diff.patch').write_text('', encoding='utf-8')
+
+          distributions = []
+          paginator = client.get_paginator('list_distributions')
+          for page in paginator.paginate():
+              distributions.extend(page.get('DistributionList', {}).get('Items', []) or [])
+
+          matches = []
+          for distribution in distributions:
+              references = []
+              default = distribution.get('DefaultCacheBehavior', {})
+              for association in default.get('FunctionAssociations', {}).get('Items', []) or []:
+                  if association.get('FunctionARN') == function_arn:
+                      references.append({'scope': 'default', **association})
+              for behavior in distribution.get('CacheBehaviors', {}).get('Items', []) or []:
+                  for association in behavior.get('FunctionAssociations', {}).get('Items', []) or []:
+                      if association.get('FunctionARN') == function_arn:
+                          references.append({
+                              'scope': 'cache-behavior',
+                              'path_pattern': behavior.get('PathPattern'),
+                              'target_origin_id': behavior.get('TargetOriginId'),
+                              **association,
+                          })
+              if references:
+                  matches.append({
+                      'id': distribution.get('Id'),
+                      'arn': distribution.get('ARN'),
+                      'domain': distribution.get('DomainName'),
+                      'aliases': distribution.get('Aliases', {}).get('Items', []) or [],
+                      'origins': [item.get('DomainName') for item in distribution.get('Origins', {}).get('Items', []) or []],
+                      'references': references,
+                  })
+
+          Path('/tmp/function-associations.json').write_text(
+              json.dumps(matches, default=serializable, indent=2) + '\n', encoding='utf-8'
+          )
+          Path('/tmp/readback-summary.json').write_text(
+              json.dumps({
+                  'function_name': function_name,
+                  'function_arn': function_arn,
+                  'stage_parity': parity,
+                  'stages': stage_records,
+                  'associations': matches,
+                  'result': 'READBACK_ACCEPTED',
+              }, default=serializable, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print('JAIOS_EXISTING_FUNCTION_SDK_READBACK_PASS')
+          print(json.dumps({'stage_parity': parity, 'associations': matches}, default=serializable, indent=2))
+          PY
+
+      - name: Publish bounded review summary
+        shell: bash
+        run: |
+          {
+            echo '### Existing CloudFront Function Readback'
+            echo "- Function: \`${FUNCTION_NAME}\`"
+            echo "- ARN: \`${FUNCTION_ARN}\`"
+            echo "- Stage parity: \`$(cat /tmp/stage-parity.txt)\`"
+            echo '- Associations:'
+            echo '```json'
+            cat /tmp/function-associations.json
+            echo '```'
+            echo '- Stage metadata:'
+            echo '```json'
+            cat /tmp/function-development-meta.json /tmp/function-live-meta.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-existing-function-readback-${{ github.run_id }}
+          path: |
+            /tmp/function-development.js
+            /tmp/function-live.js
+            /tmp/function-development-meta.json
+            /tmp/function-live-meta.json
+            /tmp/stage-parity.txt
+            /tmp/stage-diff.patch
+            /tmp/function-associations.json
+            /tmp/readback-summary.json
+          if-no-files-found: error
+          retention-days: 90
