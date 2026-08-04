@@ -1,0 +1,12 @@
+{
+  "schema": "jsec-chain-brand-institutional-trust-release/v1",
+  "release": "20260805-chain-institutional-trust",
+  "retry": 1,
+  "reason": "Re-run exact production after independent status proved that the prior attempt made no public mutation",
+  "public_url": "https://chain.jaios-governance.org/",
+  "native_origin": "https://junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site/",
+  "closed_information_excluded": true,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}
