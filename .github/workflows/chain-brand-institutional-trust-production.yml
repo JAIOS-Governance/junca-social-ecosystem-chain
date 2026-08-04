@@ -1,0 +1,372 @@
+name: Chain Brand Institutional Trust Production
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/build_chain_brand_institutional_trust.py"
+      - "scripts/deploy_chain_brand_edge.py"
+      - "infra/aws/chain-brand-institutional-trust-router.js"
+      - "sites/chain-brand-root/**"
+      - ".github/workflows/chain-brand-institutional-trust-production.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build_chain_brand_institutional_trust.py"
+      - "scripts/deploy_chain_brand_edge.py"
+      - "infra/aws/chain-brand-institutional-trust-router.js"
+      - "sites/chain-brand-root/**"
+      - ".github/workflows/chain-brand-institutional-trust-production.yml"
+  workflow_dispatch:
+    inputs:
+      production_confirmation:
+        description: "Type DEPLOY_CHAIN_INSTITUTIONAL_TRUST"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: chain-brand-institutional-trust-production
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+  CHAIN_PUBLIC_HOST: chain.jaios-governance.org
+  CHAIN_NATIVE_HOST: junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site
+  CHAIN_NATIVE_URL: https://junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site/
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DOCS_PUBLIC_URL: https://docs.jaios-governance.org/chain-brand-root/index.html
+  DOCS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  TEMPLATE_DISTRIBUTION_ID: E2WIXG3DWW8OX1
+  CHAIN_FUNCTION_NAME: junca-chain-brand-root-router
+  RELEASE_MARKER: 20260805-chain-institutional-trust
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate implementation sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/build_chain_brand_institutional_trust.py scripts/deploy_chain_brand_edge.py
+          grep -F "import cf from 'cloudfront';" infra/aws/chain-brand-institutional-trust-router.js
+          grep -F "host !== CHAIN_HOST" infra/aws/chain-brand-institutional-trust-router.js
+          grep -F "request.uri = '/chain-brand-root/index.html'" infra/aws/chain-brand-institutional-trust-router.js
+          grep -F "request.uri = '/chain-brand-root/robots.txt'" infra/aws/chain-brand-institutional-trust-router.js
+          grep -F "request.uri = '/chain-brand-root/sitemap.xml'" infra/aws/chain-brand-institutional-trust-router.js
+          grep -F 'Sitemap: https://chain.jaios-governance.org/sitemap.xml' sites/chain-brand-root/robots.txt
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          tree=ET.parse('sites/chain-brand-root/sitemap.xml')
+          urls=[node.text for node in tree.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc')]
+          assert len(urls)==10 and len(set(urls))==10
+          assert urls[0]=='https://chain.jaios-governance.org/'
+          PY
+      - name: Build current native brand root
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --output /tmp/native-root.html "$CHAIN_NATIVE_URL"
+          python3 scripts/build_chain_brand_institutional_trust.py /tmp/native-root.html /tmp/index.html
+          grep -F "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/index.html
+          grep -F 'Managed under JAIOS Institutional Governance' /tmp/index.html
+          grep -F 'JAIOS Institutional Governanceの管理基準' /tmp/index.html
+          grep -F 'International standards' /tmp/index.html
+          grep -F 'Controlled operation' /tmp/index.html
+          grep -F 'Publicly verifiable evidence' /tmp/index.html
+          if grep -Eqi 'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分' /tmp/index.html; then
+            echo 'Closed or whitepaper-only information detected' >&2
+            exit 1
+          fi
+          test "$(wc -c < /tmp/index.html)" -lt 1000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-brand-institutional-trust-${{ github.sha }}
+          path: |
+            /tmp/index.html
+            sites/chain-brand-root/robots.txt
+            sites/chain-brand-root/sitemap.xml
+          if-no-files-found: error
+          retention-days: 90
+
+  publish_artifact:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.production_confirmation == 'DEPLOY_CHAIN_INSTITUTIONAL_TRUST')
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: junca-chain-docs-production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure governed Docs publication identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-brand-artifact-${{ github.run_id }}
+          disable-retry: true
+      - name: Build and publish root, robots and sitemap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --output /tmp/native-root.html "$CHAIN_NATIVE_URL"
+          python3 scripts/build_chain_brand_institutional_trust.py /tmp/native-root.html /tmp/index.html
+          aws s3 cp /tmp/index.html "s3://${DOCS_BUCKET}/chain-brand-root/index.html" \
+            --content-type 'text/html; charset=utf-8' --cache-control 'public,max-age=0,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},release=${RELEASE_MARKER}"
+          aws s3 cp sites/chain-brand-root/robots.txt "s3://${DOCS_BUCKET}/chain-brand-root/robots.txt" \
+            --content-type 'text/plain; charset=utf-8' --cache-control 'public,max-age=300,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},release=${RELEASE_MARKER}"
+          aws s3 cp sites/chain-brand-root/sitemap.xml "s3://${DOCS_BUCKET}/chain-brand-root/sitemap.xml" \
+            --content-type 'application/xml; charset=utf-8' --cache-control 'public,max-age=300,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},release=${RELEASE_MARKER}"
+          for file in index.html robots.txt sitemap.xml; do
+            aws s3 cp "s3://${DOCS_BUCKET}/chain-brand-root/${file}" "/tmp/readback-${file}"
+            if [[ "$file" == index.html ]]; then cmp /tmp/index.html "/tmp/readback-${file}"; else cmp "sites/chain-brand-root/${file}" "/tmp/readback-${file}"; fi
+          done
+          for _ in $(seq 1 18); do
+            if curl --fail --silent --show-error --location --output /tmp/docs-root.html "$DOCS_PUBLIC_URL" \
+              && grep -Fq "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/docs-root.html; then break; fi
+            sleep 5
+          done
+          grep -F "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/docs-root.html
+
+  deploy_edge:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.production_confirmation == 'DEPLOY_CHAIN_INSTITUTIONAL_TRUST')
+    needs: publish_artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Acquire GitHub OIDC token
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" > /tmp/oidc-token
+          test -s /tmp/oidc-token
+      - name: Assume approved AWS bootstrap identity
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          selected=''
+          for role in \
+            arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment \
+            arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+          do
+            if aws sts assume-role-with-web-identity \
+              --role-arn "$role" \
+              --role-session-name "chain-brand-edge-${GITHUB_RUN_ID}" \
+              --web-identity-token "$(cat /tmp/oidc-token)" \
+              --duration-seconds 3600 > /tmp/assume.json 2>/tmp/assume.err; then
+              selected="$role"
+              break
+            fi
+          done
+          test -n "$selected"
+          echo "selected_role=$selected" >> "$GITHUB_OUTPUT"
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "$GITHUB_ENV"
+      - name: Create and activate dedicated Chain edge
+        id: edge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet boto3
+          mkdir -p /tmp/chain-edge-state
+          python3 scripts/deploy_chain_brand_edge.py \
+            --function-code infra/aws/chain-brand-institutional-trust-router.js \
+            --state-dir /tmp/chain-edge-state | tee /tmp/chain-edge-result.log
+          jq -e '.result=="EDGE_ACTIVATED"' /tmp/chain-edge-state/edge-result.json >/dev/null
+          echo "distribution_id=$(jq -r '.distribution_id' /tmp/chain-edge-state/edge-result.json)" >> "$GITHUB_OUTPUT"
+          echo "distribution_domain=$(jq -r '.distribution_domain' /tmp/chain-edge-state/edge-result.json)" >> "$GITHUB_OUTPUT"
+      - name: Public DNS, TLS and route acceptance
+        id: acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          distribution_domain="${{ steps.edge.outputs.distribution_domain }}"
+          for _ in $(seq 1 24); do
+            authoritative="$(dig +short @ns-128.awsdns-16.com "$CHAIN_PUBLIC_HOST" CNAME 2>/dev/null | sed 's/\.$//' | sort -u || true)"
+            [[ "$authoritative" == "$distribution_domain" ]] && break
+            authoritative="$(dig +short "$CHAIN_PUBLIC_HOST" CNAME | sed 's/\.$//' | sort -u || true)"
+            [[ "$authoritative" == "$distribution_domain" ]] && break
+            sleep 10
+          done
+          mkdir -p /tmp/chain-edge-acceptance
+          for _ in $(seq 1 60); do
+            if curl --fail-with-body --silent --show-error --location --max-time 45 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --dump-header /tmp/chain-edge-acceptance/root-headers.txt \
+              --output /tmp/chain-edge-acceptance/root.html "https://${CHAIN_PUBLIC_HOST}/" \
+              && grep -Fq "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/chain-edge-acceptance/root.html; then break; fi
+            sleep 10
+          done
+          grep -F "data-jsec-trust-release='${RELEASE_MARKER}'" /tmp/chain-edge-acceptance/root.html
+          grep -F 'Managed under JAIOS Institutional Governance' /tmp/chain-edge-acceptance/root.html
+          grep -F 'JAIOS Institutional Governanceの管理基準' /tmp/chain-edge-acceptance/root.html
+          ! grep -Eqi 'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分' /tmp/chain-edge-acceptance/root.html
+          curl --fail-with-body --silent --show-error --location --output /tmp/chain-edge-acceptance/robots.txt "https://${CHAIN_PUBLIC_HOST}/robots.txt"
+          curl --fail-with-body --silent --show-error --location --output /tmp/chain-edge-acceptance/sitemap.xml "https://${CHAIN_PUBLIC_HOST}/sitemap.xml"
+          grep -F 'Sitemap: https://chain.jaios-governance.org/sitemap.xml' /tmp/chain-edge-acceptance/robots.txt
+          grep -F '<loc>https://chain.jaios-governance.org/</loc>' /tmp/chain-edge-acceptance/sitemap.xml
+          for route in context foundation build possibilities ecosystem experience governance evidence contact; do
+            curl --fail-with-body --silent --show-error --location --max-time 45 \
+              --output "/tmp/chain-edge-acceptance/${route}.html" "https://${CHAIN_PUBLIC_HOST}/${route}"
+            ! grep -Fq "data-jsec-trust-release='${RELEASE_MARKER}'" "/tmp/chain-edge-acceptance/${route}.html"
+          done
+          openssl s_client -connect "${CHAIN_PUBLIC_HOST}:443" -servername "$CHAIN_PUBLIC_HOST" </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName \
+            > /tmp/chain-edge-acceptance/tls.txt
+          grep -F "DNS:${CHAIN_PUBLIC_HOST}" /tmp/chain-edge-acceptance/tls.txt
+      - name: Browser-rendered responsive acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          options=webdriver.ChromeOptions()
+          options.add_argument('--headless=new')
+          options.add_argument('--no-sandbox')
+          options.add_argument('--disable-dev-shm-usage')
+          options.add_argument('--disable-gpu')
+          options.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+          driver=webdriver.Chrome(options=options)
+          records=[]
+          try:
+              for label,width,expected in [('desktop',1440,3),('tablet',820,2),('mobile',390,1)]:
+                  driver.set_window_size(width,1800)
+                  driver.get('https://chain.jaios-governance.org/')
+                  WebDriverWait(driver,40).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]'))==1)
+                  trust=driver.find_element(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]')
+                  text=trust.text
+                  assert 'Managed under JAIOS Institutional Governance' in text
+                  assert 'JAIOS Institutional Governanceの管理基準' in text
+                  assert 'JUNCA Point' not in text and '収益モデル' not in text
+                  grid=driver.find_element(By.CSS_SELECTOR,'.jsec-institutional-trust-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  assert columns==expected,(label,columns,expected)
+                  links=driver.find_elements(By.CSS_SELECTOR,'a[href]')
+                  assert len(links)>=8,(label,len(links))
+                  images=driver.find_elements(By.CSS_SELECTOR,'img')
+                  broken=[img.get_attribute('src') for img in images if not driver.execute_script('return arguments[0].complete && (arguments[0].naturalWidth>0 || arguments[0].getAttribute("src")?.startsWith("data:"))',img)]
+                  assert not broken,(label,broken[:5])
+                  severe=[entry for entry in driver.get_log('browser') if entry.get('level')=='SEVERE' and 'favicon' not in entry.get('message','').lower()]
+                  assert len(severe)<=2,(label,severe[:4])
+                  driver.save_screenshot(f'/tmp/chain-edge-acceptance/chain-{label}.png')
+                  records.append({'viewport':label,'trust_columns':columns,'links':len(links),'images':len(images),'severe_console_entries':len(severe)})
+              Path('/tmp/chain-edge-acceptance/browser-results.json').write_text(json.dumps(records,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+              print('CHAIN_BRAND_BROWSER_ACCEPTANCE_PASS',records)
+          finally:
+              driver.quit()
+          PY
+      - name: Roll back Chain DNS if public acceptance failed
+        if: failure() && steps.edge.outcome == 'success'
+        shell: bash
+        run: |
+          set +e
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          import boto3
+          before=json.loads(Path('/tmp/chain-edge-state/dns-before.json').read_text())
+          r53=boto3.client('route53',region_name=os.environ['AWS_REGION'])
+          response=r53.change_resource_record_sets(
+              HostedZoneId=os.environ['ROUTE53_ZONE_ID'],
+              ChangeBatch={'Comment':'Automatic rollback after Chain public acceptance failure','Changes':[{'Action':'UPSERT','ResourceRecordSet':before}]},
+          )
+          change_id=response['ChangeInfo']['Id']
+          r53.get_waiter('resource_record_sets_changed').wait(Id=change_id)
+          Path('/tmp/chain-edge-state/public-acceptance-rollback.json').write_text(json.dumps({'change_id':change_id,'record':before},indent=2)+'\n')
+          print('CHAIN_PUBLIC_ACCEPTANCE_DNS_ROLLBACK',change_id)
+          PY
+          exit 1
+      - name: Persist immutable production acceptance
+        if: success()
+        env:
+          SELECTED_ROLE: ${{ steps.identity.outputs.selected_role }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import json,os,re
+          from datetime import datetime,timezone
+          from pathlib import Path
+          state=Path('/tmp/chain-edge-state')
+          public=Path('/tmp/chain-edge-acceptance')
+          edge=json.loads((state/'edge-result.json').read_text())
+          browser=json.loads((public/'browser-results.json').read_text())
+          html=(public/'root.html').read_text(encoding='utf-8',errors='replace')
+          evidence={
+              'schema':'jsec-chain-brand-institutional-trust-production/v1',
+              'observed_at':datetime.now(timezone.utc).isoformat(),
+              'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+              'source_commit':os.environ['GITHUB_SHA'],
+              'selected_aws_role':os.environ['SELECTED_ROLE'],
+              'public_url':'https://chain.jaios-governance.org/',
+              'native_origin':'https://junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site/',
+              'release_marker':'20260805-chain-institutional-trust',
+              'edge':edge,
+              'public_acceptance':{
+                  'institutional_trust_visible':True,
+                  'jaios_management_visible':True,
+                  'closed_information_absent':not bool(re.search(r'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分',html,re.I)),
+                  'robots_published':True,
+                  'sitemap_published':True,
+                  'protected_routes':['/context','/foundation','/build','/possibilities','/ecosystem','/experience','/governance','/evidence','/contact'],
+                  'browser_matrix':browser,
+              },
+              'boundaries':{
+                  'mainnet_changed':False,
+                  'assets_moved':False,
+                  'bridge_activated':False,
+                  'native_sites_origin_preserved':True,
+              },
+              'result':'PRODUCTION_ACCEPTED',
+          }
+          Path('evidence/production/jsec-chain-brand-institutional-trust-production-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/jsec-chain-brand-institutional-trust-production-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain brand institutional trust acceptance ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chain-brand-institutional-trust-production-${{ github.run_id }}
+          path: |
+            /tmp/chain-edge-state
+            /tmp/chain-edge-acceptance
+            evidence/production/jsec-chain-brand-institutional-trust-production-latest.json
+          if-no-files-found: warn
+          retention-days: 90
