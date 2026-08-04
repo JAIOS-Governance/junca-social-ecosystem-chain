@@ -190,7 +190,7 @@ jobs:
             echo "Production sitemap still exposes due-diligence" >&2
             exit 1
           fi
-          if grep -Eqi 'href=["'"'](?:https://docs\.jaios-governance\.org)?/due-diligence' /tmp/home.html; then
+          if grep -Fq '/due-diligence' /tmp/home.html; then
             echo "Production homepage exposes due-diligence" >&2
             exit 1
           fi
