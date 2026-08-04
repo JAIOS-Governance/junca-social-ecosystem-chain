@@ -1,0 +1,159 @@
+{
+  "schema": "jaios-shared-edge-live-snapshot/v1",
+  "observed_at": "2026-08-04T15:50:11Z",
+  "run_id": "30926137517",
+  "source_commit": "2fa558272bd95edfedbb6cee6403f9ae30e863f2",
+  "function_name": "junca-chain-docs-routes-595710543956",
+  "function_arn": "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956",
+  "function_sha256": "f777880f9a7884589fe2db15c25976133219813b9bd2c473c23af6b174145e6e",
+  "function_summary": {
+    "Name": "junca-chain-docs-routes-595710543956",
+    "Status": "DEPLOYED",
+    "FunctionConfig": {
+      "Comment": "Preserve Docs extensionless routes and route only the JAIOS root to the governed News artifact.",
+      "Runtime": "cloudfront-js-2.0"
+    },
+    "FunctionMetadata": {
+      "FunctionARN": "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956",
+      "Stage": "LIVE",
+      "CreatedTime": "2026-07-24T14:50:53.078000+00:00",
+      "LastModifiedTime": "2026-08-04T15:00:53.718000+00:00"
+    }
+  },
+  "distribution_id": "E2WIXG3DWW8OX1",
+  "distribution_config": {
+    "CallerReference": "jaios-institutional-30244990052",
+    "Aliases": {
+      "Quantity": 1,
+      "Items": [
+        "jaios-governance.org"
+      ]
+    },
+    "DefaultRootObject": "",
+    "Origins": {
+      "Quantity": 1,
+      "Items": [
+        {
+          "Id": "jaios-sites-origin",
+          "DomainName": "jaios-institutional-governance.juncajapan-inc.chatgpt.site",
+          "OriginPath": "",
+          "CustomHeaders": {
+            "Quantity": 0
+          },
+          "CustomOriginConfig": {
+            "HTTPPort": 80,
+            "HTTPSPort": 443,
+            "OriginProtocolPolicy": "https-only",
+            "OriginSslProtocols": {
+              "Quantity": 1,
+              "Items": [
+                "TLSv1.2"
+              ]
+            },
+            "OriginReadTimeout": 30,
+            "OriginKeepaliveTimeout": 5
+          },
+          "ConnectionAttempts": 3,
+          "ConnectionTimeout": 10,
+          "OriginShield": {
+            "Enabled": false
+          },
+          "OriginAccessControlId": ""
+        }
+      ]
+    },
+    "OriginGroups": {
+      "Quantity": 0
+    },
+    "DefaultCacheBehavior": {
+      "TargetOriginId": "jaios-sites-origin",
+      "TrustedSigners": {
+        "Enabled": false,
+        "Quantity": 0
+      },
+      "TrustedKeyGroups": {
+        "Enabled": false,
+        "Quantity": 0
+      },
+      "ViewerProtocolPolicy": "redirect-to-https",
+      "AllowedMethods": {
+        "Quantity": 3,
+        "Items": [
+          "HEAD",
+          "GET",
+          "OPTIONS"
+        ],
+        "CachedMethods": {
+          "Quantity": 3,
+          "Items": [
+            "HEAD",
+            "GET",
+            "OPTIONS"
+          ]
+        }
+      },
+      "SmoothStreaming": false,
+      "Compress": true,
+      "LambdaFunctionAssociations": {
+        "Quantity": 0
+      },
+      "FunctionAssociations": {
+        "Quantity": 0
+      },
+      "FieldLevelEncryptionId": "",
+      "GrpcConfig": {
+        "Enabled": false
+      },
+      "ForwardedValues": {
+        "QueryString": true,
+        "Cookies": {
+          "Forward": "all"
+        },
+        "Headers": {
+          "Quantity": 0
+        },
+        "QueryStringCacheKeys": {
+          "Quantity": 0
+        }
+      },
+      "MinTTL": 0,
+      "DefaultTTL": 0,
+      "MaxTTL": 0
+    },
+    "CacheBehaviors": {
+      "Quantity": 0
+    },
+    "CustomErrorResponses": {
+      "Quantity": 0
+    },
+    "Comment": "JAIOS Institutional Governance production apex",
+    "Logging": {
+      "Enabled": false,
+      "IncludeCookies": false,
+      "Bucket": "",
+      "Prefix": ""
+    },
+    "PriceClass": "PriceClass_200",
+    "Enabled": true,
+    "ViewerCertificate": {
+      "CloudFrontDefaultCertificate": false,
+      "ACMCertificateArn": "arn:aws:acm:us-east-1:595710543956:certificate/0833fc03-9e74-4b7a-ae06-e2a554e1f256",
+      "SSLSupportMethod": "sni-only",
+      "MinimumProtocolVersion": "TLSv1.2_2021",
+      "Certificate": "arn:aws:acm:us-east-1:595710543956:certificate/0833fc03-9e74-4b7a-ae06-e2a554e1f256",
+      "CertificateSource": "acm"
+    },
+    "Restrictions": {
+      "GeoRestriction": {
+        "RestrictionType": "none",
+        "Quantity": 0
+      }
+    },
+    "WebACLId": "",
+    "HttpVersion": "http2and3",
+    "IsIPV6Enabled": true,
+    "ContinuousDeploymentPolicyId": "",
+    "Staging": false
+  },
+  "mutation_performed": false
+}
