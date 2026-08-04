@@ -36,7 +36,9 @@ jobs:
           set -Eeuo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           mkdir -p /tmp/shared-edge
-          aws cloudfront get-distribution-config --id "$DOCS_DISTRIBUTION_ID" > /tmp/shared-edge/docs-distribution.json
+          # The accepted Docs role already has GetDistribution for the Docs edge;
+          # GetDistributionConfig is intentionally not granted.
+          aws cloudfront get-distribution --id "$DOCS_DISTRIBUTION_ID" > /tmp/shared-edge/docs-distribution.json
           aws cloudfront get-distribution-config --id "$JAIOS_DISTRIBUTION_ID" > /tmp/shared-edge/jaios-distribution.json
           aws cloudfront describe-function --name junca-chain-docs-routes-595710543956 --stage LIVE > /tmp/shared-edge/function.json
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/shared-edge/function.json)" = "$SHARED_FUNCTION_ARN"
@@ -44,7 +46,8 @@ jobs:
             | openssl x509 -noout -subject -issuer -dates -ext subjectAltName > /tmp/shared-edge/docs-tls.txt
           openssl s_client -connect jaios-governance.org:443 -servername jaios-governance.org </dev/null 2>/dev/null \
             | openssl x509 -noout -subject -issuer -dates -ext subjectAltName > /tmp/shared-edge/jaios-tls.txt
-          jq '{aliases:.DistributionConfig.Aliases,viewer_certificate:.DistributionConfig.ViewerCertificate,origins:.DistributionConfig.Origins,default_cache_behavior:.DistributionConfig.DefaultCacheBehavior}' /tmp/shared-edge/docs-distribution.json
+          jq '{aliases:.Distribution.DistributionConfig.Aliases,viewer_certificate:.Distribution.DistributionConfig.ViewerCertificate,origins:.Distribution.DistributionConfig.Origins,default_cache_behavior:.Distribution.DistributionConfig.DefaultCacheBehavior}' /tmp/shared-edge/docs-distribution.json
+          jq '{aliases:.DistributionConfig.Aliases,viewer_certificate:.DistributionConfig.ViewerCertificate,origins:.DistributionConfig.Origins,default_cache_behavior:.DistributionConfig.DefaultCacheBehavior}' /tmp/shared-edge/jaios-distribution.json
           cat /tmp/shared-edge/docs-tls.txt
           cat /tmp/shared-edge/jaios-tls.txt
       - uses: actions/upload-artifact@v4
