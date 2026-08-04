@@ -1,0 +1,98 @@
+name: JAIOS Shared Edge Live Snapshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jaios-shared-edge-live-snapshot.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: jaios-shared-edge-live-snapshot
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "595710543956"
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  FUNCTION_NAME: junca-chain-docs-routes-595710543956
+  FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+  DISTRIBUTION_ID: E2WIXG3DWW8OX1
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-shared-edge-snapshot-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Read exact LIVE Function and Distribution state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          mkdir -p evidence/production
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE \
+            evidence/production/jaios-shared-edge-live-function-latest.js \
+            > /tmp/function-get.json
+          aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE \
+            > /tmp/function-description.json
+          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" \
+            > /tmp/distribution.json
+          test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-description.json)" = "$FUNCTION_ARN"
+          function_sha="$(sha256sum evidence/production/jaios-shared-edge-live-function-latest.js | cut -d' ' -f1)"
+          jq -n \
+            --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg function_arn "$FUNCTION_ARN" \
+            --arg function_sha256 "$function_sha" \
+            --arg distribution_id "$DISTRIBUTION_ID" \
+            --argjson function_summary "$(jq '.FunctionSummary' /tmp/function-description.json)" \
+            --argjson distribution_config "$(jq '.DistributionConfig' /tmp/distribution.json)" \
+            '{
+              schema:"jaios-shared-edge-live-snapshot/v1",
+              observed_at:$observed_at,
+              run_id:$run_id,
+              source_commit:$source_commit,
+              function_name:$function_name,
+              function_arn:$function_arn,
+              function_sha256:$function_sha256,
+              function_summary:$function_summary,
+              distribution_id:$distribution_id,
+              distribution_config:$distribution_config,
+              mutation_performed:false
+            }' > evidence/production/jaios-shared-edge-live-snapshot-latest.json
+          jq -e --arg arn "$FUNCTION_ARN" '
+            .distribution_config.DefaultCacheBehavior.FunctionAssociations.Items // [] |
+            map(select(.EventType=="viewer-request" and .FunctionARN==$arn)) |
+            length >= 0
+          ' evidence/production/jaios-shared-edge-live-snapshot-latest.json >/dev/null
+
+      - name: Persist immutable snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/production/jaios-shared-edge-live-function-latest.js \
+            evidence/production/jaios-shared-edge-live-snapshot-latest.json
+          git diff --cached --quiet || git commit -m "Record JAIOS shared Edge LIVE snapshot ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
