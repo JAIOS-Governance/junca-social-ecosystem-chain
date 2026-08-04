@@ -57,8 +57,19 @@ jobs:
               --dump-header "/tmp/site-audit/${key}/headers.txt" \
               --output "/tmp/site-audit/${key}/home.html" "https://${domain}/"
             grep -Eo '<title>[^<]+' "/tmp/site-audit/${key}/home.html" | head -1 > "/tmp/site-audit/${key}/title.txt" || true
-            grep -Eo 'https://[^"'"' ]+\.chatgpt\.site[^"'"' ]*' "/tmp/site-audit/${key}/home.html" | sort -u > "/tmp/site-audit/${key}/native-site-urls.txt" || true
-            grep -Eo 'https://[^"'"' ]+\.(cloudfront\.net|run\.app|pages\.dev|vercel\.app|netlify\.app)[^"'"' ]*' "/tmp/site-audit/${key}/home.html" | sort -u > "/tmp/site-audit/${key}/provider-urls.txt" || true
+            python3 - "$key" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          key = sys.argv[1]
+          root = Path(f"/tmp/site-audit/{key}")
+          html = (root / "home.html").read_text(encoding="utf-8", errors="replace")
+          native = sorted(set(re.findall(r"https://[^\"'\s]+\.chatgpt\.site[^\"'\s]*", html)))
+          provider = sorted(set(re.findall(r"https://[^\"'\s]+\.(?:cloudfront\.net|run\.app|pages\.dev|vercel\.app|netlify\.app)[^\"'\s]*", html)))
+          (root / "native-site-urls.txt").write_text("\n".join(native) + ("\n" if native else ""), encoding="utf-8")
+          (root / "provider-urls.txt").write_text("\n".join(provider) + ("\n" if provider else ""), encoding="utf-8")
+          PY
             openssl s_client -connect "${domain}:443" -servername "$domain" </dev/null 2>/dev/null \
               | openssl x509 -noout -subject -issuer -serial -dates -ext subjectAltName \
               > "/tmp/site-audit/${key}/tls.txt" || true
