@@ -32,7 +32,7 @@ jobs:
           role-session-name: jaios-existing-function-readback-${{ github.run_id }}
           disable-retry: true
 
-      - name: Download, unpack and print both exact function stages
+      - name: Download, normalize and print both exact function stages
         shell: bash
         run: |
           set -euo pipefail
@@ -43,21 +43,42 @@ jobs:
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-live-meta.json)" = "$FUNCTION_ARN"
           python3 - <<'PY'
           from pathlib import Path
+          import gzip
+          import io
+          import json
           import zipfile
 
-          def unpack(source, target):
+          def normalize(source, target, inventory_target):
               raw = Path(source).read_bytes()
-              if raw.startswith(b'PK'):
-                  with zipfile.ZipFile(source) as archive:
+              inventory = {
+                  'source': source,
+                  'bytes': len(raw),
+                  'magic_hex': raw[:16].hex(),
+                  'archive_entries': [],
+                  'selected_entry': None,
+                  'encoding': 'raw',
+              }
+              if zipfile.is_zipfile(io.BytesIO(raw)):
+                  inventory['encoding'] = 'zip'
+                  with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                       names = [name for name in archive.namelist() if not name.endswith('/')]
-                      if len(names) != 1:
-                          raise SystemExit(f'unexpected function archive entries: {names}')
-                      raw = archive.read(names[0])
+                      inventory['archive_entries'] = names
+                      candidates = [name for name in names if name.lower().endswith(('.js', '.mjs'))]
+                      selected = candidates[0] if candidates else names[0]
+                      inventory['selected_entry'] = selected
+                      raw = archive.read(selected)
+              elif raw.startswith(b'\x1f\x8b'):
+                  inventory['encoding'] = 'gzip'
+                  raw = gzip.decompress(raw)
               Path(target).write_bytes(raw)
+              Path(inventory_target).write_text(json.dumps(inventory, indent=2) + '\n')
 
-          unpack('/tmp/function-development.download', '/tmp/function-development.js')
-          unpack('/tmp/function-live.download', '/tmp/function-live.js')
+          normalize('/tmp/function-development.download', '/tmp/function-development.js', '/tmp/function-development-inventory.json')
+          normalize('/tmp/function-live.download', '/tmp/function-live.js', '/tmp/function-live-inventory.json')
           PY
+          echo 'JAIOS_EXISTING_FUNCTION_BLOB_INVENTORY_BEGIN'
+          cat /tmp/function-development-inventory.json /tmp/function-live-inventory.json
+          echo 'JAIOS_EXISTING_FUNCTION_BLOB_INVENTORY_END'
           echo 'JAIOS_EXISTING_FUNCTION_DEVELOPMENT_CODE_BEGIN'
           sed -n '1,260p' /tmp/function-development.js
           echo 'JAIOS_EXISTING_FUNCTION_DEVELOPMENT_CODE_END'
@@ -73,6 +94,7 @@ jobs:
             echo 'JAIOS_EXISTING_FUNCTION_STAGE_PARITY=DIFFERENT'
             diff -u /tmp/function-live.js /tmp/function-development.js || true
           fi
+          grep -Eq 'function[[:space:]]+handler|handler[[:space:]]*=' /tmp/function-live.js
 
       - name: Read and resolve every exact distribution association
         shell: bash
