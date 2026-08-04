@@ -1,0 +1,119 @@
+name: JAIOS Root Route Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jaios-root-route-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: jaios-root-route-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 10
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      HOSTED_ZONE_ID: Z0336017285464TX0NT1G
+      ROOT_DOMAIN: jaios-governance.org
+      RECOVERY_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+    steps:
+      - name: Configure verified AWS audit identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.RECOVERY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-root-route-audit-${{ github.run_id }}
+          disable-retry: true
+
+      - name: Verify identity boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          case "$(aws sts get-caller-identity --query Arn --output text)" in
+            arn:aws:sts::595710543956:assumed-role/JuncaChainDocsProductionDeployment/*) ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Read Route 53 records and public resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$HOSTED_ZONE_ID" \
+            --query "ResourceRecordSets[?Name=='${ROOT_DOMAIN}.' || Name=='www.${ROOT_DOMAIN}.' || Name=='_cf-custom-hostname.${ROOT_DOMAIN}.']" \
+            --output json | tee /tmp/route53-root-records.json
+          dig +noall +answer "$ROOT_DOMAIN" A | tee /tmp/dns-a.txt
+          dig +noall +answer "$ROOT_DOMAIN" AAAA | tee /tmp/dns-aaaa.txt
+          dig +noall +answer "$ROOT_DOMAIN" CNAME | tee /tmp/dns-cname.txt
+          dig +noall +answer "$ROOT_DOMAIN" HTTPS | tee /tmp/dns-https.txt
+          dig +short NS "$ROOT_DOMAIN" | tee /tmp/dns-ns.txt
+
+      - name: Read HTTP identity, headers and TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --location \
+            --max-time 30 --dump-header /tmp/headers.txt \
+            --output /tmp/home.html "https://${ROOT_DOMAIN}/"
+          sed -n '1,120p' /tmp/headers.txt
+          grep -Eo '<title>[^<]+' /tmp/home.html | head -1 || true
+          grep -Eo 'https://[^"'"' ]+\.chatgpt\.site[^"'"' ]*' /tmp/home.html | sort -u | tee /tmp/native-site-urls.txt || true
+          grep -Eo 'https://[^"'"' ]+\.(cloudfront\.net|run\.app|pages\.dev|vercel\.app|netlify\.app)[^"'"' ]*' /tmp/home.html | sort -u | tee /tmp/provider-urls.txt || true
+          openssl s_client -connect "${ROOT_DOMAIN}:443" -servername "$ROOT_DOMAIN" </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -serial -dates -ext subjectAltName \
+            | tee /tmp/tls.txt
+          sha256sum /tmp/home.html | tee /tmp/home-sha256.txt
+
+      - name: Inventory existing AWS web resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '${ROOT_DOMAIN}')].[Id,DomainName,Status,Aliases.Items,Origins.Items[*].DomainName]" \
+            --output json | tee /tmp/cloudfront.json
+          aws s3api list-buckets \
+            --query "Buckets[?contains(Name, 'jaios') || contains(Name, 'junca')].[Name,CreationDate]" \
+            --output json | tee /tmp/buckets.json
+          aws acm list-certificates --region us-east-1 \
+            --query "CertificateSummaryList[?contains(DomainName, '${ROOT_DOMAIN}') || contains(DomainName, 'jaios-governance.org')].[CertificateArn,DomainName,Status]" \
+            --output json | tee /tmp/certificates.json
+          aws iam list-roles \
+            --query "Roles[?contains(RoleName, 'Junca') || contains(RoleName, 'JAIOS')].[RoleName,Arn]" \
+            --output json | tee /tmp/roles.json
+
+      - name: Publish bounded audit summary
+        shell: bash
+        run: |
+          {
+            echo "### JAIOS Root Route Audit"
+            echo "- Domain: https://${ROOT_DOMAIN}/"
+            echo "- AWS account: ${AWS_ACCOUNT_ID}"
+            echo "- Hosted zone: ${HOSTED_ZONE_ID}"
+            echo "- Route 53 mutation: false"
+            echo "- CloudFront mutation: false"
+            echo "- Current HTML SHA-256: $(cut -d' ' -f1 /tmp/home-sha256.txt)"
+            echo ""
+            echo "#### Route 53"
+            echo '```json'
+            cat /tmp/route53-root-records.json
+            echo '```'
+            echo "#### CloudFront"
+            echo '```json'
+            cat /tmp/cloudfront.json
+            echo '```'
+            echo "#### Native/provider URLs found"
+            echo '```text'
+            cat /tmp/native-site-urls.txt /tmp/provider-urls.txt 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
