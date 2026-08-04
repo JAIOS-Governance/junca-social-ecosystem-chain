@@ -1,0 +1,281 @@
+{
+  "schema": "junca-chain-docs-release/v2",
+  "release": "2026.08.02",
+  "revision": "R36",
+  "design_source": "Sites Version 15",
+  "chain_source_commit": "ea2e2a77b19627d1935958a9248a49a1954b0d12",
+  "development_source_commit": "ea2e2a77b19627d1935958a9248a49a1954b0d12",
+  "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
+  "runtime_artifact_commit_status": "VERIFIED",
+  "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
+  "runtime_node_artifact_sha256": "cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f",
+  "canonical_origin": "https://docs.jaios-governance.org",
+  "network_label": "Public Testnet / Read-only / Finalized / Protocol Validation Environment",
+  "runtime_status": "VERIFIED_READY_READ_ONLY",
+  "public_endpoint_status": "ACTIVE_READ_ONLY",
+  "runtime_evidence": {
+    "observed_at": "2026-08-04T12:57:00.120569+00:00",
+    "network": "VERIFIED",
+    "runtime": "READY_READ_ONLY",
+    "finality": "CERTIFICATE_OBSERVED",
+    "explorer_schema": "junca-public-explorer/v4",
+    "finalized_height": 9059,
+    "finalized_hash": "0xf3b370ba57114276c8a982a5abaa8e078e6f3bc032b4485cbba7809497c4f1d9",
+    "certificate_hash": "0x7c219d6fab6e799f25f71afea30452977a477fe186c9af8c8eab11e13dac118d",
+    "state_root": "0x4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "signed_power": 3,
+    "total_power": 3,
+    "chain_id": 20260723,
+    "client_version": "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1",
+    "transaction_count": 0,
+    "peer_count": 2,
+    "block_timestamp": "0x6a71e17e",
+    "block_timestamp_public_label": "2026-08-04T12:56:30.000Z",
+    "block_timestamp_public_label_ja": "公開時点の確定Block時刻",
+    "block_activity_conclusion": "PUBLICATION_SNAPSHOT_ONLY",
+    "source_evidence": {
+      "operational_api": "https://chain.jaios-governance.org/api/operational",
+      "explorer_json": "https://explorer.jaios-governance.org/explorer.json",
+      "documentation_source_commit": "ea2e2a77b19627d1935958a9248a49a1954b0d12",
+      "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
+      "runtime_artifact_commit_status": "VERIFIED",
+      "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
+      "runtime_node_artifact_sha256": "cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f"
+    },
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "mainnet_activation_authorized": false
+  },
+  "development_governance": {
+    "canonical_foundation": {
+      "pull_request": 237,
+      "state": "MERGED",
+      "commit": "6de0979b97254c5b4777ede8c82378fd4e143137",
+      "url": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/237"
+    },
+    "auxiliary_gateway": {
+      "pull_request": 236,
+      "state": "OPEN_DRAFT_UNMERGED_UNDEPLOYED",
+      "url": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/236"
+    }
+  },
+  "governance": "JAIOS Institutional Governance",
+  "routes": [
+    "/",
+    "/protocol",
+    "/assets",
+    "/interoperability",
+    "/implementation",
+    "/governance",
+    "/evidence",
+    "/glossary"
+  ],
+  "files": [
+    {
+      "path": "index.html",
+      "bytes": 104367,
+      "sha256": "e4d5545e0f934069957431eda9367079152dcf33633e676dd55cb95235f18422"
+    },
+    {
+      "path": "protocol/index.html",
+      "bytes": 106618,
+      "sha256": "7494fa4fcf2b502a368fe090b0eef3ecd6a1ac3099b0be49b75256bb91985606"
+    },
+    {
+      "path": "assets/index.html",
+      "bytes": 106468,
+      "sha256": "168bf247607e3ebde29c064d2b2a1ee4ee2ff5d61e49b3f0649a7d07abcda5a2"
+    },
+    {
+      "path": "interoperability/index.html",
+      "bytes": 106481,
+      "sha256": "aaf90ad4429a373ae502c15a3a5fd67b1633c24beba5f1e665f3a68cddebf18c"
+    },
+    {
+      "path": "implementation/index.html",
+      "bytes": 106695,
+      "sha256": "e464055ccac850f47ea36c47085ac70d6a15f9c0c01eca022396757943dec084"
+    },
+    {
+      "path": "governance/index.html",
+      "bytes": 106728,
+      "sha256": "5efa994af3b10a248097f24724b19470f0f69c4d17b1c92d35ac704bfaa87cb2"
+    },
+    {
+      "path": "evidence/index.html",
+      "bytes": 106682,
+      "sha256": "1b7a4943b1dd4d42b15de487d57386d94dbea7224e20c0d3e067a5a628bed873"
+    },
+    {
+      "path": "glossary/index.html",
+      "bytes": 106331,
+      "sha256": "71bf81d29fd48bf2282b7d6fe84491f66aa3031e47c54003d1215556b256aee1"
+    },
+    {
+      "path": "404.html",
+      "bytes": 104367,
+      "sha256": "2bb1da3b8ed7bd32bcbfffa343965ccbb36d094696930d414fb0eed72795e650"
+    },
+    {
+      "path": "apple-touch-icon.png",
+      "bytes": 16304,
+      "sha256": "1eb5fb801e45366beabf85cc724ac4686864f805b64540c23e8a36aeaf2903f5"
+    },
+    {
+      "path": "assets/framework-CXnKph_e.js",
+      "bytes": 189805,
+      "sha256": "73b45b606448e4dc310fbe851d8089ee752f3eb081980b3a6fec88988820ee12"
+    },
+    {
+      "path": "assets/index-BN5wI7AA.js",
+      "bytes": 81046,
+      "sha256": "5b4a1ecd56ea412d7f23a7a805e1536cb9310fe429562014861a64beedeb04aa"
+    },
+    {
+      "path": "assets/index-DNe79XHL.css",
+      "bytes": 42304,
+      "sha256": "d5b11f71a90b1f7d1596fcab5f9187ce1e55a7d822849db8e0135db89896def5"
+    },
+    {
+      "path": "assets/layout-segment-context-CtktzEw9.js",
+      "bytes": 288,
+      "sha256": "6444b042b56c031a2b0bc030d16abe022028b05ae3166623696aebd1cd5e55c2"
+    },
+    {
+      "path": "assets/reference-CQdZmGQx.js",
+      "bytes": 73540,
+      "sha256": "e919e89eccdef7a520fcb4bae86bcc39fab8ef76c242c0bc20b6110558088f6f"
+    },
+    {
+      "path": "assets/rolldown-runtime-S-ySWqyJ.js",
+      "bytes": 694,
+      "sha256": "5db5ba82eef00d1dee7e86e663098c9427d01183a88d357437daff295aec3e75"
+    },
+    {
+      "path": "current-identity/index.html",
+      "bytes": 10613,
+      "sha256": "642edde69b4ee9a14854f02f75fc7c83b7697bf6db3da76d59dd6b37cdde89a8"
+    },
+    {
+      "path": "current-identity.json",
+      "bytes": 2515,
+      "sha256": "6f0b3fbda4620457c85fefb675fd527de7c774967ee53907e01500c766a9def8"
+    },
+    {
+      "path": "current-identity.txt",
+      "bytes": 1778,
+      "sha256": "8170564c4c00a76e63b7ea21e03b3b0d2e04c2757880175430448e0e0d8a25fb"
+    },
+    {
+      "path": "docs-controls-r32.js",
+      "bytes": 940,
+      "sha256": "d3fcfa8a4a3a5bed48bc9d9d4a7294e0ccc71cb4dec3b26448e40042cc635299"
+    },
+    {
+      "path": "favicon.ico",
+      "bytes": 17433,
+      "sha256": "e0467b657d02d3be641056d53d922f83f7e557413b4d48b9450517012e4e5b3a"
+    },
+    {
+      "path": "favicon.svg",
+      "bytes": 110466,
+      "sha256": "792df82a0164aacfb707c80faa083a2cba7e4bdd4417f426d4ed3575c521c591"
+    },
+    {
+      "path": "googlebc356aae986ed066.html",
+      "bytes": 54,
+      "sha256": "e75341bd61022edd8d7aa5c158b7a07401a791f982d5ddc4a4d6b48d660b389a"
+    },
+    {
+      "path": "icon-192.png",
+      "bytes": 17433,
+      "sha256": "e0467b657d02d3be641056d53d922f83f7e557413b4d48b9450517012e4e5b3a"
+    },
+    {
+      "path": "icon-512.png",
+      "bytes": 51656,
+      "sha256": "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"
+    },
+    {
+      "path": "icon-maskable-512.png",
+      "bytes": 51656,
+      "sha256": "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"
+    },
+    {
+      "path": "junca-chain-official-wordmark.png",
+      "bytes": 34548,
+      "sha256": "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c89226e086049728ac"
+    },
+    {
+      "path": "live-runtime-r36.js",
+      "bytes": 3022,
+      "sha256": "7c1a0a3b7f986550b49381995fa142bc1fa53f669232db231295540b7ed72c40"
+    },
+    {
+      "path": "llms.txt",
+      "bytes": 1729,
+      "sha256": "aa0f5341ff87349bcc351f5c665e198dc87d12daaca6aacb57694dbe3f74206c"
+    },
+    {
+      "path": "manifest.webmanifest",
+      "bytes": 801,
+      "sha256": "4d946e02c7292acdb882d324b07ef74fa635c90872dc5778c57b50ee58371fab"
+    },
+    {
+      "path": "official-brand-lockup-r32.js",
+      "bytes": 2718,
+      "sha256": "7689ee7973301e7ef82243437203cd71d18df985e15d35f78c42f3e49e889f31"
+    },
+    {
+      "path": "official-junca-symbol.png",
+      "bytes": 51656,
+      "sha256": "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"
+    },
+    {
+      "path": "og-reference.png",
+      "bytes": 158529,
+      "sha256": "4bd566ec17c3bca8e87f36953af2c9f3a2a550f8258c2bf7b7196a774a7d5612"
+    },
+    {
+      "path": "og-reference.svg",
+      "bytes": 1899,
+      "sha256": "51f58d1c69a44fd9a4d21ed70e46d7cd931bad3bb132aacd41c2c8fa889cc24c"
+    },
+    {
+      "path": "robots.txt",
+      "bytes": 78,
+      "sha256": "ec6eed9c16711e0849f07c491128bc935506e0bd645ccc4ef0303cb10edbf26b"
+    },
+    {
+      "path": "secondary-language.js",
+      "bytes": 49707,
+      "sha256": "59c0ec94ccd84d687fe8d4ff7183448701f2e01bc22b23b4592351a586289c96"
+    },
+    {
+      "path": "sitemap.xml",
+      "bytes": 1206,
+      "sha256": "e20d000492e736a61e813822b71b4e08d7521bca28181e4ffce488a2e0626b92"
+    }
+  ],
+  "public_status_language_policy": {
+    "authority": "Latest CEO directive and Creative Constitution",
+    "effective_date": "2026-08-04",
+    "routes_audited": 8,
+    "prohibited_public_terms": [
+      "PENDING",
+      "BLOCKED",
+      "No Monetary Value",
+      "保留中"
+    ],
+    "approved_status_families": [
+      "Implemented / CI Verified",
+      "Verification in Progress",
+      "Not Yet Published",
+      "Not Activated",
+      "Read-only Evidence Available",
+      "Active"
+    ],
+    "result": "PASS"
+  }
+}
