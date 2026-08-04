@@ -1,0 +1,26 @@
+{
+  "schema": "jaios-institution-scale-trust-production/v1",
+  "observed_at": "2026-08-04T15:28:29.182330+00:00",
+  "source_commit": "75553fd9819d74ff914ddee25cbd311dd3f3d7b6",
+  "workflow_run_id": "30924212433",
+  "public_url": "https://jaios-governance.org/",
+  "invalidation_id": "I4T3ULU3ZWQHCQJ727UYM6BUUW",
+  "before_sha256": "ac398a9d0b82f6b3833eb6df586684e701e22e20d68a55cc0b5844e593865098",
+  "after_sha256": "e0fade12abf32d4bdfa174b5f83733061e89cfcb9fa99b5769de676122d9aecd",
+  "specific_corporate_reference_removed_from_trust_section": true,
+  "institutional_scope_not_limited_to_single_company_or_project": true,
+  "news_cards_preserved": 6,
+  "protected_routes_preserved": [
+    "/browser",
+    "/institution",
+    "/social-business",
+    "/observatory",
+    "/evidence"
+  ],
+  "route53_changed": false,
+  "tls_changed": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false,
+  "result": "PRODUCTION_ACCEPTED"
+}
