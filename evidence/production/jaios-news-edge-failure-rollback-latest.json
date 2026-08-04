@@ -1,11 +1,12 @@
 {
-  "schema": "jaios-news-edge-failure-rollback/v1",
-  "failed_run_id": "30920625291",
-  "rollback_run_id": "30920696210",
+  "schema": "jaios-news-edge-failure-rollback/v2",
+  "failed_run_id": "30924986874",
+  "rollback_run_id": "30925004852",
   "distribution_id": "E2WIXG3DWW8OX1",
-  "function_arn": "arn:aws:cloudfront::595710543956:function/jaios-root-news-router",
-  "association_removed": false,
-  "invalidation_id": "none",
+  "shared_function_arn": "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956",
+  "root_association_removed": true,
+  "docs_function_behavior_preserved": true,
+  "invalidation_id": "I73OUNBTCBLYARND83TEET8KFJ",
   "route53_changed": false,
   "tls_changed": false,
   "result": "ROLLBACK_ACCEPTED"
