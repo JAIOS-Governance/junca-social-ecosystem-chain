@@ -1,18 +1,27 @@
 import cf from 'cloudfront';
 
 const JAIOS_HOST = 'jaios-governance.org';
+const CHAIN_HOST = 'chain.jaios-governance.org';
 const GOVERNED_ORIGIN = 'docs.jaios-governance.org';
+const CHAIN_NATIVE_ORIGIN = 'junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site';
 const ROOT_ARTIFACT = '/jaios-root-news/index.html';
 const BROWSER_APP_ARTIFACT = '/jaios-browser-app/index.html';
+const CHAIN_ROOT_ARTIFACT = '/chain-brand-root/index.html';
+const CHAIN_ROBOTS_ARTIFACT = '/chain-brand-root/robots.txt';
+const CHAIN_SITEMAP_ARTIFACT = '/chain-brand-root/sitemap.xml';
+
+function routeToOrigin(request, domainName) {
+  cf.updateRequestOrigin({
+    domainName,
+    hostHeader: domainName,
+    sni: domainName,
+    allowedCertificateNames: [domainName]
+  });
+}
 
 function routeToGovernedArtifact(request, artifact) {
   request.uri = artifact;
-  cf.updateRequestOrigin({
-    domainName: GOVERNED_ORIGIN,
-    hostHeader: GOVERNED_ORIGIN,
-    sni: GOVERNED_ORIGIN,
-    allowedCertificateNames: [GOVERNED_ORIGIN]
-  });
+  routeToOrigin(request, GOVERNED_ORIGIN);
 }
 
 function handler(event) {
@@ -28,6 +37,19 @@ function handler(event) {
       routeToGovernedArtifact(request, ROOT_ARTIFACT);
     } else if (isBrowserApp && isReadableMethod) {
       routeToGovernedArtifact(request, BROWSER_APP_ARTIFACT);
+    }
+    return request;
+  }
+
+  if (host === CHAIN_HOST) {
+    if (isReadableMethod && isRoot) {
+      routeToGovernedArtifact(request, CHAIN_ROOT_ARTIFACT);
+    } else if (isReadableMethod && request.uri === '/robots.txt') {
+      routeToGovernedArtifact(request, CHAIN_ROBOTS_ARTIFACT);
+    } else if (isReadableMethod && request.uri === '/sitemap.xml') {
+      routeToGovernedArtifact(request, CHAIN_SITEMAP_ARTIFACT);
+    } else {
+      routeToOrigin(request, CHAIN_NATIVE_ORIGIN);
     }
     return request;
   }
