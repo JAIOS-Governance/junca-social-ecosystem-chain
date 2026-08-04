@@ -82,24 +82,7 @@ jobs:
           aws cloudfront get-distribution-config --id "$TARGET_DISTRIBUTION_ID" > /tmp/distribution.json
           test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == "jaios-governance.org")' /tmp/distribution.json)" = "jaios-governance.org"
 
-      - name: Inventory existing CloudFront functions and associations
-        shell: bash
-        run: |
-          set -u
-          aws cloudfront list-functions --stage DEVELOPMENT --max-items 100 \
-            > /tmp/functions-development.json 2>/tmp/functions-development.err || echo '{"FunctionList":{"Quantity":0,"Items":[]}}' > /tmp/functions-development.json
-          aws cloudfront list-functions --stage LIVE --max-items 100 \
-            > /tmp/functions-live.json 2>/tmp/functions-live.err || echo '{"FunctionList":{"Quantity":0,"Items":[]}}' > /tmp/functions-live.json
-          echo 'JAIOS_EXISTING_FUNCTIONS_BEGIN'
-          jq '{development:[.FunctionList.Items[]? | {name:.Name,arn:.FunctionMetadata.FunctionARN,status:.Status,comment:.FunctionConfig.Comment}]}' /tmp/functions-development.json
-          jq '{live:[.FunctionList.Items[]? | {name:.Name,arn:.FunctionMetadata.FunctionARN,status:.Status,comment:.FunctionConfig.Comment}]}' /tmp/functions-live.json
-          jq '{default_function_associations:(.DistributionConfig.DefaultCacheBehavior.FunctionAssociations // {Quantity:0,Items:[]}),cache_behaviors:[.DistributionConfig.CacheBehaviors.Items[]? | {path:.PathPattern,origin:.TargetOriginId,functions:(.FunctionAssociations // {Quantity:0,Items:[]})}]}' /tmp/distribution.json
-          echo 'JAIOS_EXISTING_FUNCTIONS_END'
-          echo 'JAIOS_FUNCTION_INVENTORY_ERRORS_BEGIN'
-          cat /tmp/functions-development.err /tmp/functions-live.err 2>/dev/null || true
-          echo 'JAIOS_FUNCTION_INVENTORY_ERRORS_END'
-
-      - name: Grant exact root distribution operating permissions
+      - name: Grant exact root distribution and read-only function inventory
         shell: bash
         run: |
           set -euo pipefail
@@ -118,6 +101,12 @@ jobs:
                   "cloudfront:GetInvalidation"
                 ],
                 "Resource": "$TARGET_DISTRIBUTION_ARN"
+              },
+              {
+                "Sid": "CloudFrontFunctionInventoryReadOnly",
+                "Effect": "Allow",
+                "Action": "cloudfront:ListFunctions",
+                "Resource": "*"
               }
             ]
           }
@@ -133,8 +122,10 @@ jobs:
           jq -e \
             --arg distribution "$TARGET_DISTRIBUTION_ARN" '
               .PolicyDocument.Version == "2012-10-17" and
-              (.PolicyDocument.Statement | length) == 1 and
+              (.PolicyDocument.Statement | length) == 2 and
               (.PolicyDocument.Statement[0].Resource == $distribution) and
+              (.PolicyDocument.Statement[1].Action == "cloudfront:ListFunctions") and
+              (.PolicyDocument.Statement[1].Resource == "*") and
               ((.PolicyDocument.Statement | tostring) | contains("cloudfront:CreateFunction") | not) and
               ((.PolicyDocument.Statement | tostring) | contains("cloudfront:DeleteDistribution") | not)
             ' /tmp/policy-readback.json
@@ -157,7 +148,7 @@ jobs:
           role-session-name: jaios-news-edge-target-verify-${{ github.run_id }}
           disable-retry: true
 
-      - name: Verify target role root distribution permissions
+      - name: Verify target role and inventory existing functions
         shell: bash
         run: |
           set -euo pipefail
@@ -165,6 +156,13 @@ jobs:
           aws cloudfront get-distribution-config --id "$TARGET_DISTRIBUTION_ID" > /tmp/distribution.json
           test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == "jaios-governance.org")' /tmp/distribution.json)" = "jaios-governance.org"
           test "$(aws cloudfront get-distribution --id "$TARGET_DISTRIBUTION_ID" --query Distribution.ARN --output text)" = "$TARGET_DISTRIBUTION_ARN"
+          aws cloudfront list-functions --stage DEVELOPMENT --max-items 100 > /tmp/functions-development.json
+          aws cloudfront list-functions --stage LIVE --max-items 100 > /tmp/functions-live.json
+          echo 'JAIOS_TARGET_ROLE_FUNCTION_INVENTORY_BEGIN'
+          jq '{development:[.FunctionList.Items[]? | {name:.Name,arn:.FunctionMetadata.FunctionARN,status:.Status,comment:.FunctionConfig.Comment}]}' /tmp/functions-development.json
+          jq '{live:[.FunctionList.Items[]? | {name:.Name,arn:.FunctionMetadata.FunctionARN,status:.Status,comment:.FunctionConfig.Comment}]}' /tmp/functions-live.json
+          jq '{default_function_associations:(.DistributionConfig.DefaultCacheBehavior.FunctionAssociations // {Quantity:0,Items:[]}),default_lambda_associations:(.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations // {Quantity:0,Items:[]}),cache_behaviors:[.DistributionConfig.CacheBehaviors.Items[]? | {path:.PathPattern,origin:.TargetOriginId,functions:(.FunctionAssociations // {Quantity:0,Items:[]}),lambdas:(.LambdaFunctionAssociations // {Quantity:0,Items:[]})}]}' /tmp/distribution.json
+          echo 'JAIOS_TARGET_ROLE_FUNCTION_INVENTORY_END'
 
       - name: Persist immutable distribution recovery evidence
         if: github.event_name != 'pull_request'
@@ -182,8 +180,10 @@ jobs:
             --arg target_role_arn "$TARGET_ROLE_ARN" \
             --arg policy_name "$TARGET_POLICY_NAME" \
             --arg distribution_arn "$TARGET_DISTRIBUTION_ARN" \
+            --argjson development_functions "$(jq '.FunctionList.Items // []' /tmp/functions-development.json)" \
+            --argjson live_functions "$(jq '.FunctionList.Items // []' /tmp/functions-live.json)" \
             '{
-              schema: "jaios-news-distribution-permission-recovery/v1",
+              schema: "jaios-news-distribution-permission-recovery/v2",
               run_id: $run_id,
               source_commit: $source_commit,
               account_id: $account_id,
@@ -191,7 +191,10 @@ jobs:
               target_role_arn: $target_role_arn,
               policy_name: $policy_name,
               distribution_arn: $distribution_arn,
+              development_functions: $development_functions,
+              live_functions: $live_functions,
               target_role_runtime_readback: "PASS",
+              list_functions_readback: "PASS",
               create_function_granted: false,
               delete_distribution_granted: false,
               result: "RECOVERED"
