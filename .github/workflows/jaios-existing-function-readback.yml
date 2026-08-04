@@ -32,7 +32,7 @@ jobs:
           role-session-name: jaios-existing-function-readback-${{ github.run_id }}
           disable-retry: true
 
-      - name: Download, normalize and print both exact function stages
+      - name: Download and normalize both exact function stages
         shell: bash
         run: |
           set -euo pipefail
@@ -76,25 +76,15 @@ jobs:
           normalize('/tmp/function-development.download', '/tmp/function-development.js', '/tmp/function-development-inventory.json')
           normalize('/tmp/function-live.download', '/tmp/function-live.js', '/tmp/function-live-inventory.json')
           PY
-          echo 'JAIOS_EXISTING_FUNCTION_BLOB_INVENTORY_BEGIN'
-          cat /tmp/function-development-inventory.json /tmp/function-live-inventory.json
-          echo 'JAIOS_EXISTING_FUNCTION_BLOB_INVENTORY_END'
-          echo 'JAIOS_EXISTING_FUNCTION_DEVELOPMENT_CODE_BEGIN'
-          sed -n '1,260p' /tmp/function-development.js
-          echo 'JAIOS_EXISTING_FUNCTION_DEVELOPMENT_CODE_END'
-          echo 'JAIOS_EXISTING_FUNCTION_LIVE_CODE_BEGIN'
-          sed -n '1,260p' /tmp/function-live.js
-          echo 'JAIOS_EXISTING_FUNCTION_LIVE_CODE_END'
-          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_BEGIN'
-          sha256sum /tmp/function-development.js /tmp/function-live.js
-          echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_END'
+          test -s /tmp/function-development.js
+          test -s /tmp/function-live.js
+          sha256sum /tmp/function-development.js /tmp/function-live.js > /tmp/function-digests.txt
           if cmp -s /tmp/function-development.js /tmp/function-live.js; then
-            echo 'JAIOS_EXISTING_FUNCTION_STAGE_PARITY=IDENTICAL'
+            echo 'IDENTICAL' > /tmp/stage-parity.txt
           else
-            echo 'JAIOS_EXISTING_FUNCTION_STAGE_PARITY=DIFFERENT'
-            diff -u /tmp/function-live.js /tmp/function-development.js || true
+            echo 'DIFFERENT' > /tmp/stage-parity.txt
+            diff -u /tmp/function-live.js /tmp/function-development.js > /tmp/stage-diff.patch || true
           fi
-          grep -Eq 'function[[:space:]]+handler|handler[[:space:]]*=' /tmp/function-live.js
 
       - name: Read and resolve every exact distribution association
         shell: bash
@@ -134,6 +124,39 @@ jobs:
                   })
           Path('/tmp/function-associations.json').write_text(json.dumps(matches, indent=2) + '\n')
           PY
-          echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_BEGIN'
-          cat /tmp/function-associations.json
-          echo 'JAIOS_EXISTING_FUNCTION_ASSOCIATIONS_END'
+          test -s /tmp/function-associations.json
+
+      - name: Publish bounded review summary
+        shell: bash
+        run: |
+          {
+            echo '### Existing CloudFront Function Readback'
+            echo "- Function: \`${FUNCTION_NAME}\`"
+            echo "- ARN: \`${FUNCTION_ARN}\`"
+            echo "- Stage parity: \`$(cat /tmp/stage-parity.txt)\`"
+            echo '- Associations:'
+            echo '```json'
+            cat /tmp/function-associations.json
+            echo '```'
+            echo '- Digests:'
+            echo '```text'
+            cat /tmp/function-digests.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-existing-function-readback-${{ github.run_id }}
+          path: |
+            /tmp/function-development.js
+            /tmp/function-live.js
+            /tmp/function-development-meta.json
+            /tmp/function-live-meta.json
+            /tmp/function-development-inventory.json
+            /tmp/function-live-inventory.json
+            /tmp/function-digests.txt
+            /tmp/stage-parity.txt
+            /tmp/stage-diff.patch
+            /tmp/function-associations.json
+          if-no-files-found: error
+          retention-days: 90
