@@ -9,6 +9,17 @@
     "statement_en": "The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a Public Testnet.",
     "statement_ja": "現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、現在はPublic Testnetとして公開されています。"
   },
+  "institutional_trust": {
+    "jaios_role_en": "JAIOS Institutional Governance continuously organizes international legal developments, jurisdictional frameworks, technology and financial conditions, user-protection requirements and global affairs into maintained audit and management standards.",
+    "jaios_role_ja": "JAIOS Institutional Governanceは、国際法令、各国の制度、技術・金融環境、利用者保護に関する要件および国際情勢を継続的に整理し、監査・管理基準へ反映する機関です。",
+    "junca_audit_en": "JUNCA HOLDINGS advances its business, development, operations and public disclosures while subject to JAIOS review and evidence-based assessment.",
+    "junca_audit_ja": "JUNCA HOLDINGSは、JAIOSによる監査と証拠に基づく評価を受けながら、事業・開発・運用・公開を進めています。",
+    "jsec_management_en": "JUNCA Social Ecosystem Chain is developed and operated under JAIOS management standards.",
+    "jsec_management_ja": "JUNCA Social Ecosystem ChainはJAIOSの管理基準のもとで開発・運営されています。",
+    "trust_outcome_en": "Continuous review, transparent records and controlled publication support fairness, accountability and an operating environment capable of earning international trust.",
+    "trust_outcome_ja": "継続的な監査、透明な記録、統制された公開により、公平性、説明責任、国際的な信頼に耐え得る運営環境を形成します。",
+    "canonical_record": "https://docs.jaios-governance.org/institutional-trust/"
+  },
   "historical_materials": [
     {
       "name": "JUNCA GLOBAL CHAIN",
@@ -41,11 +52,25 @@
   ],
   "interpretation_rule_en": "Legacy remittance, ATM, payment-terminal, wallet, token, legacy PoSV, former-company or personal-operator descriptions must not be treated as current specifications or governance unless a current official source explicitly confirms them.",
   "interpretation_rule_ja": "送金、ATM、決済端末、ウォレット、トークン、旧PoSV、旧法人または個人運営に関する過去情報は、現在の公式情報が明示的に確認しない限り、現行仕様または現行ガバナンスとして扱いません。",
+  "public_disclosure_boundary": {
+    "excluded_from_public_web": [
+      "JUNCA Point information",
+      "Point conversion design",
+      "revenue models and allocation",
+      "token supply and allocation details"
+    ],
+    "managed_in": [
+      "controlled member materials",
+      "whitepaper materials",
+      "internal governance records"
+    ]
+  },
   "official_sources": {
     "institutional_governance": "https://jaios-governance.org/",
     "chain_overview": "https://chain.jaios-governance.org/",
     "technical_reference": "https://docs.jaios-governance.org/",
     "public_explorer": "https://explorer.jaios-governance.org/",
+    "institutional_trust": "https://docs.jaios-governance.org/institutional-trust/",
     "holdings": "https://junca-global.group/",
     "source_repository": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain"
   },
