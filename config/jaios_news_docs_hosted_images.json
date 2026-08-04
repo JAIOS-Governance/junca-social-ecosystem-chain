@@ -4,10 +4,10 @@
   "items": [
     {
       "id": "digital-agency-priority-plan-2026",
-      "source_url": "https://jaios-governance.org/world-diagnostic.webp",
-      "s3_key": "jaios-news-photos/digital-public-infrastructure.webp",
-      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/digital-public-infrastructure.webp",
-      "content_type": "image/webp"
+      "source_url": "https://jaios-governance.org/hero-earth.png",
+      "s3_key": "jaios-news-photos/digital-public-infrastructure.png",
+      "public_url": "https://docs.jaios-governance.org/jaios-news-photos/digital-public-infrastructure.png",
+      "content_type": "image/png"
     },
     {
       "id": "un-ai-digital-public-goods-2026",
