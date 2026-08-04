@@ -15,6 +15,10 @@ import boto3
 FUNCTION_NAME = "junca-chain-docs-routes-595710543956"
 FUNCTION_ARN = "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956"
 RUNTIME = "cloudfront-js-2.0"
+# Exact previously accepted LIVE code that includes the governed JAIOS root and
+# Browser app routes. It is retained only as a bounded transition baseline while
+# the Chain host branch is introduced; arbitrary LIVE digests remain rejected.
+ACCEPTED_TRANSITION_LIVE_SHA256 = "f777880f9a7884589fe2db15c25976133219813b9bd2c473c23af6b174145e6e"
 
 
 def client():
@@ -87,6 +91,11 @@ def run_tests(cf, etag: str) -> list[dict[str, Any]]:
         test_case(cf, etag, "docs.jaios-governance.org", "/explorer.json", "/explorer.json"),
         test_case(cf, etag, "jaios-governance.org", "/", "/jaios-root-news/index.html"),
         test_case(cf, etag, "jaios-governance.org", "/browser", "/browser"),
+        test_case(cf, etag, "jaios-governance.org", "/browser/app", "/jaios-browser-app/index.html"),
+        test_case(cf, etag, "chain.jaios-governance.org", "/", "/chain-brand-root/index.html"),
+        test_case(cf, etag, "chain.jaios-governance.org", "/robots.txt", "/chain-brand-root/robots.txt"),
+        test_case(cf, etag, "chain.jaios-governance.org", "/sitemap.xml", "/chain-brand-root/sitemap.xml"),
+        test_case(cf, etag, "chain.jaios-governance.org", "/governance", "/governance"),
     ]
 
 
@@ -95,10 +104,14 @@ def cmd_preflight(args: argparse.Namespace) -> None:
     live, _, _ = read_code(cf, "LIVE")
     baseline = Path(args.baseline).read_bytes()
     composite = Path(args.composite).read_bytes()
-    allowed = {sha256(baseline), sha256(composite)}
+    allowed = {
+        sha256(baseline),
+        sha256(composite),
+        ACCEPTED_TRANSITION_LIVE_SHA256,
+    }
     actual = sha256(live)
     if actual not in allowed:
-        raise RuntimeError(f"Live function digest {actual} is outside the accepted baseline/composite set")
+        raise RuntimeError(f"Live function digest {actual} is outside the accepted baseline/composite/transition set")
     print(json.dumps({"live_sha256": actual, "accepted": sorted(allowed), "result": "PASS"}, indent=2))
 
 
@@ -119,7 +132,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
             Name=FUNCTION_NAME,
             IfMatch=development_etag,
             FunctionConfig={
-                "Comment": "Preserve Docs extensionless routes and route only the JAIOS root to the governed News artifact.",
+                "Comment": "Preserve Docs and JAIOS routes while adding governed Chain host routing.",
                 "Runtime": RUNTIME,
             },
             FunctionCode=composite,
@@ -158,6 +171,7 @@ def cmd_rollback(args: argparse.Namespace) -> None:
         )
     _, _, test_etag = read_code(cf, "DEVELOPMENT")
     test_case(cf, test_etag, "docs.jaios-governance.org", "/protocol", "/protocol/index.html")
+    test_case(cf, test_etag, "jaios-governance.org", "/", "/jaios-root-news/index.html")
     live, _, _ = read_code(cf, "LIVE")
     if live != old_code:
         cf.publish_function(Name=FUNCTION_NAME, IfMatch=test_etag)
