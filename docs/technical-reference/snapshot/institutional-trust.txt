@@ -20,11 +20,11 @@ JUNCA Social Ecosystem ChainはJAIOSの管理基準のもとで開発・運営�
 
 継続的な監査、透明な記録、統制された公開により、公平性、説明責任、国際的な信頼に耐え得る運営環境を形成します。
 
-PUBLIC DISCLOSURE BOUNDARY
-JUNCA Point information, Point conversion design, revenue models, revenue allocation, token supply and allocation details are not included in public web information. They are managed in controlled member, whitepaper or internal-governance materials.
+PUBLIC INFORMATION SCOPE
+This record is limited to institutional governance, audit relationships, network management and verifiable public evidence.
 
-公開情報の境界
-JUNCA Point、Point交換設計、収益モデル、収益配分、Token供給量・配分の詳細は公開Web情報へ掲載せず、限定メンバー資料、ホワイトペーパーまたは内部統制資料として管理します。
+公開情報の範囲
+本記録は、機構の統治、監査関係、ネットワーク管理および検証可能な公開証跡に限定しています。
 
 OFFICIAL SOURCES
 https://jaios-governance.org/
