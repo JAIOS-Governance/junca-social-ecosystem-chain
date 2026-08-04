@@ -1,6 +1,9 @@
 name: JAIOS News Edge Permission Recovery
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/jaios-news-edge-permission-recovery.yml"
   push:
     branches: [main]
     paths:
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: jaios-news-edge-permission-recovery
+  group: jaios-news-edge-permission-recovery-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -165,7 +168,31 @@ jobs:
           test "$(aws cloudfront describe-function --name "$TARGET_FUNCTION_NAME" --stage DEVELOPMENT \
             --query FunctionSummary.FunctionMetadata.FunctionARN --output text)" = "$TARGET_FUNCTION_ARN"
 
+      - name: Verify the deployment role can read exact distribution config
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json")"
+          aws sts assume-role-with-web-identity \
+            --role-arn "$TARGET_ROLE_ARN" \
+            --role-session-name "jaios-news-edge-target-verify-${GITHUB_RUN_ID}" \
+            --web-identity-token "$token" \
+            --duration-seconds 900 > /tmp/target-assume.json
+          export AWS_ACCESS_KEY_ID="$(jq -r '.Credentials.AccessKeyId' /tmp/target-assume.json)"
+          export AWS_SECRET_ACCESS_KEY="$(jq -r '.Credentials.SecretAccessKey' /tmp/target-assume.json)"
+          export AWS_SESSION_TOKEN="$(jq -r '.Credentials.SessionToken' /tmp/target-assume.json)"
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          test "$(aws cloudfront get-distribution-config --id "$TARGET_DISTRIBUTION_ID" \
+            --query DistributionConfig.Aliases.Items[0] --output text)" = "jaios-governance.org"
+          test "$(aws cloudfront describe-function --name "$TARGET_FUNCTION_NAME" --stage DEVELOPMENT \
+            --query FunctionSummary.FunctionMetadata.FunctionARN --output text)" = "$TARGET_FUNCTION_ARN"
+
       - name: Persist immutable recovery evidence
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           SELECTED_BOOTSTRAP_ROLE: ${{ steps.bootstrap.outputs.selected }}
@@ -191,6 +218,7 @@ jobs:
               policy_name: $policy_name,
               distribution_arn: $distribution_arn,
               function_arn: $function_arn,
+              target_role_runtime_readback: "PASS",
               create_function_granted_to_target_role: false,
               delete_distribution_granted: false,
               delete_function_granted: false,
