@@ -1,4 +1,4 @@
-name: JSEC Due Diligence Production
+name: JSEC Restricted Due-Diligence Publication
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - "docs/technical-reference/snapshot/sitemap.xml"
       - ".github/workflows/jsec-due-diligence-production.yml"
   pull_request:
+    branches: [main]
     paths:
       - "docs/technical-reference/snapshot/due-diligence/**"
       - "docs/technical-reference/snapshot/due-diligence.json"
@@ -22,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jsec-due-diligence-production
+  group: jsec-restricted-due-diligence-publication
   cancel-in-progress: false
 
 jobs:
@@ -33,51 +34,66 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Validate due-diligence artifacts
+      - name: Validate direct-link-only visibility policy
         shell: bash
         run: |
           set -euo pipefail
-          html="docs/technical-reference/snapshot/due-diligence/index.html"
-          json="docs/technical-reference/snapshot/due-diligence.json"
-          text="docs/technical-reference/snapshot/due-diligence.txt"
-          sitemap="docs/technical-reference/snapshot/sitemap.xml"
+          root="docs/technical-reference/snapshot"
+          html="${root}/due-diligence/index.html"
+          json="${root}/due-diligence.json"
+          text="${root}/due-diligence.txt"
+          sitemap="${root}/sitemap.xml"
 
           test -s "${html}"
           test -s "${json}"
           test -s "${text}"
           test -s "${sitemap}"
           python -m json.tool "${json}" >/dev/null
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          payload = json.loads(Path("docs/technical-reference/snapshot/due-diligence.json").read_text())
-          assert payload["schema"] == "jsec-due-diligence/v1"
-          assert payload["issuer"] == "JAIOS Institutional Governance"
-          assert payload["current_identity"] == {
-              "formal_name": "JUNCA Social Ecosystem Chain",
-              "abbreviation": "JSEC",
-              "network_posture": "Public Testnet",
-              "canonical_identity_record": "https://docs.jaios-governance.org/current-identity/",
-          }
-          assert payload["network_boundary"] == {
-              "mainnet_changed": False,
-              "assets_moved": False,
-              "bridge_activated": False,
-          }
-          historical = {item["name"] for item in payload["historical_materials"]}
-          assert historical == {"JUNCA GLOBAL CHAIN", "legacy uses of junca Chain", "JCC / JUNCA CASH"}
-          PY
 
-          grep -F '<link rel="canonical" href="https://docs.jaios-governance.org/due-diligence/">' "${html}"
+          grep -F '<meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">' "${html}"
+          grep -F '<meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex">' "${html}"
+          grep -F 'Direct-link review record' "${html}"
+          grep -F '通常のウェブサイト導線、ホームページおよび公開サイトマップには掲載しません' "${html}"
           grep -F 'JUNCA Social Ecosystem Chain (JSEC)' "${html}"
           grep -F 'Mainnet Changed' "${html}"
           grep -F 'Assets Moved' "${html}"
           grep -F 'Bridge Activated' "${html}"
           grep -F 'JUNCA GLOBAL CHAIN' "${html}" "${json}" "${text}"
           grep -F 'JCC / JUNCA CASH' "${html}" "${json}" "${text}"
-          grep -F 'https://docs.jaios-governance.org/due-diligence/' "${sitemap}"
-          grep -F 'https://docs.jaios-governance.org/due-diligence.json' "${sitemap}"
-          grep -F 'https://docs.jaios-governance.org/due-diligence.txt' "${sitemap}"
+
+          if grep -Fq 'due-diligence' "${sitemap}"; then
+            echo "Due-diligence must not appear in the public sitemap" >&2
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          root = Path("docs/technical-reference/snapshot")
+          payload = json.loads((root / "due-diligence.json").read_text())
+          assert payload["schema"] == "jsec-due-diligence/v1"
+          assert payload["issuer"] == "JAIOS Institutional Governance"
+          assert payload["network_boundary"] == {
+              "mainnet_changed": False,
+              "assets_moved": False,
+              "bridge_activated": False,
+          }
+
+          link_pattern = re.compile(
+              r'href=["\'](?:https://docs\.jaios-governance\.org)?/due-diligence(?:/|\.|["\'])',
+              re.IGNORECASE,
+          )
+          violations = []
+          for path in root.rglob("*.html"):
+              if "due-diligence" in path.parts:
+                  continue
+              if link_pattern.search(path.read_text(errors="ignore")):
+                  violations.append(str(path))
+          if violations:
+              raise SystemExit("Ordinary public pages link to due-diligence: " + ", ".join(violations))
+          PY
 
           if grep -Eqi 'No Monetary Value|金銭価値なし|\bPENDING\b' "${html}" "${json}" "${text}"; then
             echo "Prohibited wording detected" >&2
@@ -99,7 +115,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
           aws-region: us-east-1
-          role-session-name: jsec-due-diligence-${{ github.run_id }}
+          role-session-name: jsec-restricted-dd-${{ github.run_id }}
       - name: Read back exact publication target
         id: target
         shell: bash
@@ -115,54 +131,83 @@ jobs:
           test "$(aws cloudfront get-distribution --id "${distribution_id}" --query Distribution.Status --output text)" = "Deployed"
           printf 'bucket=%s\n' "${bucket}" >> "$GITHUB_OUTPUT"
           printf 'distribution_id=%s\n' "${distribution_id}" >> "$GITHUB_OUTPUT"
-      - name: Publish due-diligence artifacts
+      - name: Publish restricted review records and public sitemap
         shell: bash
         run: |
           set -euo pipefail
-          source_root="docs/technical-reference/snapshot"
+          root="docs/technical-reference/snapshot"
           bucket="${{ steps.target.outputs.bucket }}"
-          cache_control="public,max-age=0,must-revalidate"
-          aws s3 cp "${source_root}/due-diligence/index.html" "s3://${bucket}/due-diligence/index.html" --content-type "text/html; charset=utf-8" --cache-control "${cache_control}"
-          aws s3 cp "${source_root}/due-diligence.json" "s3://${bucket}/due-diligence.json" --content-type "application/json; charset=utf-8" --cache-control "${cache_control}"
-          aws s3 cp "${source_root}/due-diligence.txt" "s3://${bucket}/due-diligence.txt" --content-type "text/plain; charset=utf-8" --cache-control "${cache_control}"
-          aws s3 cp "${source_root}/sitemap.xml" "s3://${bucket}/sitemap.xml" --content-type "application/xml; charset=utf-8" --cache-control "${cache_control}"
-      - name: Invalidate exact due-diligence paths
+          restricted_cache="private,no-store,max-age=0,must-revalidate"
+          public_cache="public,max-age=0,must-revalidate"
+
+          aws s3 cp "${root}/due-diligence/index.html" "s3://${bucket}/due-diligence/index.html" \
+            --content-type "text/html; charset=utf-8" --cache-control "${restricted_cache}"
+          aws s3 cp "${root}/due-diligence.json" "s3://${bucket}/due-diligence.json" \
+            --content-type "application/json; charset=utf-8" --cache-control "${restricted_cache}"
+          aws s3 cp "${root}/due-diligence.txt" "s3://${bucket}/due-diligence.txt" \
+            --content-type "text/plain; charset=utf-8" --cache-control "${restricted_cache}"
+          aws s3 cp "${root}/sitemap.xml" "s3://${bucket}/sitemap.xml" \
+            --content-type "application/xml; charset=utf-8" --cache-control "${public_cache}"
+      - name: Invalidate exact visibility-policy paths
         id: invalidate
         shell: bash
         run: |
           set -euo pipefail
-          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "${{ steps.target.outputs.distribution_id }}" --paths "/due-diligence" "/due-diligence/" "/due-diligence/*" "/due-diligence.json" "/due-diligence.txt" "/sitemap.xml" --query Invalidation.Id --output text)"
-          aws cloudfront wait invalidation-completed --distribution-id "${{ steps.target.outputs.distribution_id }}" --id "${invalidation_id}"
-          test "$(aws cloudfront get-invalidation --distribution-id "${{ steps.target.outputs.distribution_id }}" --id "${invalidation_id}" --query Invalidation.Status --output text)" = "Completed"
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.target.outputs.distribution_id }}" \
+            --paths "/" "/due-diligence" "/due-diligence/" "/due-diligence/*" "/due-diligence.json" "/due-diligence.txt" "/sitemap.xml" \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ steps.target.outputs.distribution_id }}" --id "${invalidation_id}"
+          test "$(aws cloudfront get-invalidation \
+            --distribution-id "${{ steps.target.outputs.distribution_id }}" --id "${invalidation_id}" \
+            --query Invalidation.Status --output text)" = "Completed"
           printf 'id=%s\n' "${invalidation_id}" >> "$GITHUB_OUTPUT"
-      - name: Public production readback
+      - name: Production visibility readback
         shell: bash
         run: |
           set -euo pipefail
-          source_root="docs/technical-reference/snapshot"
-          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/due-diligence.html https://docs.jaios-governance.org/due-diligence/
-          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/due-diligence.json https://docs.jaios-governance.org/due-diligence.json
-          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/due-diligence.txt https://docs.jaios-governance.org/due-diligence.txt
-          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors --output /tmp/sitemap.xml https://docs.jaios-governance.org/sitemap.xml
+          root="docs/technical-reference/snapshot"
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/home.html https://docs.jaios-governance.org/
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/due-diligence.html https://docs.jaios-governance.org/due-diligence/
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/due-diligence.json https://docs.jaios-governance.org/due-diligence.json
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/due-diligence.txt https://docs.jaios-governance.org/due-diligence.txt
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 10 --retry-all-errors \
+            --output /tmp/sitemap.xml https://docs.jaios-governance.org/sitemap.xml
 
-          cmp "${source_root}/due-diligence/index.html" /tmp/due-diligence.html
-          cmp "${source_root}/due-diligence.json" /tmp/due-diligence.json
-          cmp "${source_root}/due-diligence.txt" /tmp/due-diligence.txt
-          cmp "${source_root}/sitemap.xml" /tmp/sitemap.xml
+          cmp "${root}/due-diligence/index.html" /tmp/due-diligence.html
+          cmp "${root}/due-diligence.json" /tmp/due-diligence.json
+          cmp "${root}/due-diligence.txt" /tmp/due-diligence.txt
+          cmp "${root}/sitemap.xml" /tmp/sitemap.xml
 
-          for url in https://docs.jaios-governance.org/due-diligence/ https://docs.jaios-governance.org/due-diligence.json https://docs.jaios-governance.org/due-diligence.txt https://docs.jaios-governance.org/sitemap.xml; do
-            headers="$(curl --fail --silent --show-error --head --location "${url}")"
-            grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${headers}"
-          done
+          grep -F '<meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">' /tmp/due-diligence.html
+          grep -F 'Direct-link review record' /tmp/due-diligence.html
+          if grep -Fq 'due-diligence' /tmp/sitemap.xml; then
+            echo "Production sitemap still exposes due-diligence" >&2
+            exit 1
+          fi
+          if grep -Eqi 'href=["'"'](?:https://docs\.jaios-governance\.org)?/due-diligence' /tmp/home.html; then
+            echo "Production homepage exposes due-diligence" >&2
+            exit 1
+          fi
 
-          grep -F 'Official due-diligence record' /tmp/due-diligence.html
-          jq -e '.schema == "jsec-due-diligence/v1"' /tmp/due-diligence.json
-          grep -F 'JSEC-DD-2026-08-05' /tmp/due-diligence.txt
+          restricted_headers="$(curl --fail --silent --show-error --head --location https://docs.jaios-governance.org/due-diligence/)"
+          grep -Eqi '^cache-control:.*private' <<< "${restricted_headers}"
+          grep -Eqi '^cache-control:.*no-store' <<< "${restricted_headers}"
+          sitemap_headers="$(curl --fail --silent --show-error --head --location https://docs.jaios-governance.org/sitemap.xml)"
+          grep -Eqi '^cache-control:.*public' <<< "${sitemap_headers}"
+
           {
-            echo "### JSEC due-diligence production readback"
+            echo "### JSEC restricted due-diligence visibility readback"
             echo "- Invalidation: \`${{ steps.invalidate.outputs.id }}\`"
-            echo "- HTML: https://docs.jaios-governance.org/due-diligence/"
-            echo "- JSON: https://docs.jaios-governance.org/due-diligence.json"
-            echo "- TXT: https://docs.jaios-governance.org/due-diligence.txt"
-            echo "- Exact content and cache readback: PASS"
+            echo "- Direct URL: HTTP 200 and exact content"
+            echo "- Robots policy: noindex / nofollow / noarchive / nosnippet"
+            echo "- Homepage link: absent"
+            echo "- Public sitemap entries: absent"
+            echo "- Restricted cache policy: private / no-store"
+            echo "- Mainnet Changed=false; Assets Moved=false; Bridge Activated=false"
           } >> "$GITHUB_STEP_SUMMARY"
