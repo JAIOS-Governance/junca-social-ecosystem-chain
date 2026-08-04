@@ -1,0 +1,48 @@
+{
+  "schema": "jaios-browser-web-release/v1",
+  "releaseMarker": "20260804-desktop-063-copy-paste-repair",
+  "entryUrl": "https://jaios-governance.org/browser",
+  "publicUrl": "https://jaios-governance.org/browser/app",
+  "sourceRuntimeMergeSha": "df797bc9f4ebf72405bbd3bb59ea355d500ff084",
+  "acceptedRuntimeHead": "805af0e5d047d18002b4dde58d73eae6da2ae93e",
+  "publisherDisplay": "JUNCA GLOBAL PARTNER INC.",
+  "governanceIssuer": "JAIOS Institutional Governance",
+  "downloads": {
+    "windows": {
+      "label": "DOWNLOAD WINDOWS 0.6.3",
+      "url": "https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-Windows-x64.exe",
+      "fileName": "JAIOS-Browser-0.6.3-Windows-x64.exe",
+      "sizeBytes": 98944505,
+      "sha256": "9abbb74e932fa230cdb4659b7f2562e5c7aa799933ed252034edd2b770634c15",
+      "acceptanceRun": "https://github.com/JUNCA-intelligence/jaios-runtime/actions/runs/30914368529",
+      "publicReadbackRun": "https://github.com/juncaGlobal/junca-Project/actions/runs/30917173514"
+    },
+    "macosDmg": {
+      "label": "MACOS UNIVERSAL DMG",
+      "url": "https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-mac-universal.dmg",
+      "fileName": "JAIOS-Browser-0.6.3-mac-universal.dmg",
+      "sizeBytes": 216610421,
+      "sha256": "75325c403ca7f55cd15ec86705f8312ce02b30c021c627e14e8d48d2f20eae1e",
+      "acceptanceRun": "https://github.com/JUNCA-intelligence/jaios-runtime/actions/runs/30914368556",
+      "publicReadbackRun": "https://github.com/juncaGlobal/junca-Project/actions/runs/30917753085"
+    },
+    "macosZip": {
+      "label": "MACOS UNIVERSAL ZIP",
+      "url": "https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/JAIOS-Browser-0.6.3-mac-universal.zip",
+      "fileName": "JAIOS-Browser-0.6.3-mac-universal.zip",
+      "sizeBytes": 216569207,
+      "sha256": "01d64f7559a4ebbe992bb8c203d922fdcb8a8b11b0661468f188dfba0aacfea1",
+      "acceptanceRun": "https://github.com/JUNCA-intelligence/jaios-runtime/actions/runs/30914368556",
+      "publicReadbackRun": "https://github.com/juncaGlobal/junca-Project/actions/runs/30917753085"
+    }
+  },
+  "legacy": {
+    "windowsHref": "/browser/download/JAIOS-Browser-0.5.3-Windows-x64-Bootstrap.zip",
+    "windowsLabel": "DOWNLOAD WINDOWS PACKAGE",
+    "releaseCopy": "Public Alpha: Windows 0.5.3"
+  },
+  "distributionBoundary": {
+    "windowsSigning": "UNSIGNED_DIRECT_DISTRIBUTION",
+    "macosSigning": "UNSIGNED_NOT_NOTARIZED"
+  }
+}
