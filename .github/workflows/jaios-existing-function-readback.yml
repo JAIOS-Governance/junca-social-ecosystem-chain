@@ -32,22 +32,47 @@ jobs:
           role-session-name: jaios-existing-function-readback-${{ github.run_id }}
           disable-retry: true
 
-      - name: Download and print exact development and live function code
+      - name: Download, unpack and print both exact function stages
         shell: bash
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage DEVELOPMENT /tmp/function-development.js > /tmp/function-development-meta.json
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-live.js > /tmp/function-live-meta.json
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage DEVELOPMENT /tmp/function-development.download > /tmp/function-development-meta.json
+          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-live.download > /tmp/function-live-meta.json
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-development-meta.json)" = "$FUNCTION_ARN"
           test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/function-live-meta.json)" = "$FUNCTION_ARN"
-          echo 'JAIOS_EXISTING_FUNCTION_CODE_BEGIN'
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          def unpack(source, target):
+              raw = Path(source).read_bytes()
+              if raw.startswith(b'PK'):
+                  with zipfile.ZipFile(source) as archive:
+                      names = [name for name in archive.namelist() if not name.endswith('/')]
+                      if len(names) != 1:
+                          raise SystemExit(f'unexpected function archive entries: {names}')
+                      raw = archive.read(names[0])
+              Path(target).write_bytes(raw)
+
+          unpack('/tmp/function-development.download', '/tmp/function-development.js')
+          unpack('/tmp/function-live.download', '/tmp/function-live.js')
+          PY
+          echo 'JAIOS_EXISTING_FUNCTION_DEVELOPMENT_CODE_BEGIN'
           sed -n '1,260p' /tmp/function-development.js
-          echo 'JAIOS_EXISTING_FUNCTION_CODE_END'
+          echo 'JAIOS_EXISTING_FUNCTION_DEVELOPMENT_CODE_END'
+          echo 'JAIOS_EXISTING_FUNCTION_LIVE_CODE_BEGIN'
+          sed -n '1,260p' /tmp/function-live.js
+          echo 'JAIOS_EXISTING_FUNCTION_LIVE_CODE_END'
           echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_BEGIN'
           sha256sum /tmp/function-development.js /tmp/function-live.js
           echo 'JAIOS_EXISTING_FUNCTION_DIGESTS_END'
-          cmp /tmp/function-development.js /tmp/function-live.js
+          if cmp -s /tmp/function-development.js /tmp/function-live.js; then
+            echo 'JAIOS_EXISTING_FUNCTION_STAGE_PARITY=IDENTICAL'
+          else
+            echo 'JAIOS_EXISTING_FUNCTION_STAGE_PARITY=DIFFERENT'
+            diff -u /tmp/function-live.js /tmp/function-development.js || true
+          fi
 
       - name: Read and resolve every exact distribution association
         shell: bash
