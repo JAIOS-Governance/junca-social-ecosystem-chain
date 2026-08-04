@@ -12,17 +12,32 @@ JAPANESE
 現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、現在はPublic Testnetとして公開されています。
 JUNCA GLOBAL CHAIN、過去に使用されたjunca Chainの名称、JCC（JUNCA CASH）は過去のProof-of-Concept（PoC）または過去プロジェクト段階の情報です。これらは現在の中核チェーン、現行ネイティブトークン、現行事業計画または現行運営モデルではありません。
 
+JAIOS INSTITUTIONAL TRUST
+JAIOS Institutional Governanceは、国際法令、各国の制度、技術・金融環境、利用者保護に関する要件および国際情勢を継続的に整理し、監査・管理基準へ反映する機関です。
+JUNCA HOLDINGSは、JAIOSによる監査と証拠に基づく評価を受けながら、事業・開発・運用・公開を進めています。
+JUNCA Social Ecosystem ChainはJAIOSの管理基準のもとで開発・運営されています。
+継続的な監査、透明な記録、統制された公開により、公平性、説明責任、国際的な信頼に耐え得る運営環境を形成します。
+
 ENGLISH
 The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a Public Testnet.
 JUNCA GLOBAL CHAIN, legacy uses of the name junca Chain, and JCC (JUNCA CASH) are historical Proof-of-Concept or legacy project materials. They are not the current core chain, current native token, current business plan or current operating model.
+
+JAIOS Institutional Governance continuously organizes international legal developments, jurisdictional frameworks, technology and financial conditions, user-protection requirements and global affairs into maintained audit and management standards.
+JUNCA HOLDINGS advances its business, development, operations and public disclosures while subject to JAIOS review and evidence-based assessment.
+JUNCA Social Ecosystem Chain is developed and operated under JAIOS management standards.
+Continuous review, transparent records and controlled publication support fairness, accountability and an operating environment capable of earning international trust.
 
 OFFICIAL SOURCES
 Institutional governance: https://jaios-governance.org/
 Chain overview: https://chain.jaios-governance.org/
 Technical reference: https://docs.jaios-governance.org/
 Public Explorer: https://explorer.jaios-governance.org/
+Institutional trust: https://docs.jaios-governance.org/institutional-trust/
 JUNCA Holdings: https://junca-global.group/
 Source repository: https://github.com/JAIOS-Governance/junca-social-ecosystem-chain
+
+PUBLIC DISCLOSURE BOUNDARY
+JUNCA Point information, Point conversion design, revenue models, revenue allocation, token supply and allocation details are not included in public web information. They are managed in controlled member, whitepaper or internal-governance materials.
 
 NETWORK BOUNDARY
 Mainnet Changed: false
