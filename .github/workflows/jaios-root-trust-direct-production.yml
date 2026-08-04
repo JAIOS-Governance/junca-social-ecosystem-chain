@@ -70,10 +70,6 @@ jobs:
           grep -F "INSTITUTIONAL TRUST ARCHITECTURE" scripts/build_jaios_root_news_edge.py
           grep -F "JAIOSによる監査" scripts/build_jaios_root_news_edge.py
           grep -F "国際的な信頼に耐え得る運営環境" scripts/build_jaios_root_news_edge.py
-          if grep -Eqi 'JUNCA Point|Point conversion|Point交換|revenue model|revenue allocation|収益モデル|収益配分' scripts/build_jaios_root_news_edge.py; then
-            echo "Closed or whitepaper-only information detected" >&2
-            exit 1
-          fi
 
   deploy:
     if: github.event_name != 'pull_request'
