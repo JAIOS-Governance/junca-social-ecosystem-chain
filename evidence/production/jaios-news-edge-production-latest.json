@@ -1,0 +1,31 @@
+{
+  "schema": "jaios-news-edge-production/v2",
+  "observed_at": "2026-08-04T15:04:34.427010+00:00",
+  "source_commit": "0046750f1ede13bbdc4a5c650a4a5059912b308f",
+  "news_source_commit": "a4e5497ae866ad78593679387e3a9f930cb5db1d",
+  "public_url": "https://jaios-governance.org/",
+  "distribution_id": "E2WIXG3DWW8OX1",
+  "distribution_domain": "d6kqifze013tg.cloudfront.net",
+  "preserved_origin": "jaios-institutional-governance.juncajapan-inc.chatgpt.site",
+  "shared_function_arn": "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956",
+  "preserved_docs_function_baseline_sha256": "14951b9147b390582d82b153c190ce12e7d5fcfff98be2ac55cb1b99e8329b81",
+  "invalidation_id": "IA44NKDRP9K2HJ8KAVQCYXIKAG",
+  "release_marker": "20260804-six-card-news",
+  "original_html_sha256": "bbaf5cf4bbc5d06a95d305c6d374ae632613b5e9282cd63fe9b56a47b75dc2fb",
+  "artifact_sha256": "ac398a9d0b82f6b3833eb6df586684e701e22e20d68a55cc0b5844e593865098",
+  "news_cards": 6,
+  "desktop_columns": 3,
+  "tablet_columns": 2,
+  "mobile_columns": 1,
+  "non_root_routes_preserved": [
+    "/browser",
+    "/institution",
+    "/social-business",
+    "/observatory",
+    "/evidence"
+  ],
+  "docs_routes_preserved": true,
+  "route53_changed": false,
+  "tls_changed": false,
+  "result": "PRODUCTION_ACCEPTED"
+}
