@@ -1,0 +1,26 @@
+{
+  "schema": "chain-brand-public-status-snapshot/v1",
+  "observed_at": "2026-08-04T16:17:10.041125+00:00",
+  "workflow_run_id": "30928355688",
+  "source_commit": "903e3f80589302441263a097b15364f0ed6c640a",
+  "public_url": "https://chain.jaios-governance.org/",
+  "http_code": "200",
+  "release_marker": "20260805-chain-institutional-trust",
+  "marker_present": false,
+  "dns_records": [
+    {
+      "Name": "chain.jaios-governance.org.",
+      "Type": "CNAME",
+      "TTL": 300,
+      "ResourceRecords": [
+        {
+          "Value": "custom-domains.chatgpt.site."
+        }
+      ]
+    }
+  ],
+  "cloudfront_distributions": [],
+  "tls_readback": "subject=CN = chain.jaios-governance.org\nissuer=C = US, O = Google Trust Services, CN = WE1\nnotBefore=Jul 25 17:50:02 2026 GMT\nnotAfter=Oct 23 18:49:54 2026 GMT\nX509v3 Subject Alternative Name: \n    DNS:chain.jaios-governance.org\n",
+  "closed_information_absent": true,
+  "result": "NOT_ACCEPTED"
+}
