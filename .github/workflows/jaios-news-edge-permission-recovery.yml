@@ -21,6 +21,7 @@ jobs:
     environment: public-testnet
     timeout-minutes: 15
     env:
+      RECOVERY_TRIGGER: "20260804-2350-JST"
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: "595710543956"
       TARGET_ROLE_NAME: JuncaChainDocsProductionDeployment
