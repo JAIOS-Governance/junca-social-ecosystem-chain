@@ -74,9 +74,28 @@ jobs:
           curl --fail-with-body --silent --show-error --location \
             --max-time 30 --dump-header /tmp/headers.txt \
             --output /tmp/home.html "https://${ROOT_DOMAIN}/"
-          grep -Eo '<title>[^<]+' /tmp/home.html | head -1 > /tmp/title.txt || true
-          grep -Eo 'https://[^"'"' ]+\.chatgpt\.site[^"'"' ]*' /tmp/home.html | sort -u > /tmp/native-site-urls.txt || true
-          grep -Eo 'https://[^"'"' ]+\.(cloudfront\.net|run\.app|pages\.dev|vercel\.app|netlify\.app)[^"'"' ]*' /tmp/home.html | sort -u > /tmp/provider-urls.txt || true
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          html = Path('/tmp/home.html').read_text(encoding='utf-8', errors='replace')
+          title = re.search(r'<title>([^<]*)', html, flags=re.IGNORECASE)
+          Path('/tmp/title.txt').write_text(
+              f"<title>{title.group(1)}\n" if title else '', encoding='utf-8'
+          )
+          urls = sorted(set(re.findall(r'https://[^\s"\'<>]+', html)))
+          native = [url for url in urls if '.chatgpt.site' in url]
+          provider_markers = (
+              '.cloudfront.net', '.run.app', '.pages.dev', '.vercel.app', '.netlify.app'
+          )
+          providers = [url for url in urls if any(marker in url for marker in provider_markers)]
+          Path('/tmp/native-site-urls.txt').write_text(
+              ('\n'.join(native) + '\n') if native else '', encoding='utf-8'
+          )
+          Path('/tmp/provider-urls.txt').write_text(
+              ('\n'.join(providers) + '\n') if providers else '', encoding='utf-8'
+          )
+          PY
           openssl s_client -connect "${ROOT_DOMAIN}:443" -servername "$ROOT_DOMAIN" </dev/null 2>/dev/null \
             | openssl x509 -noout -subject -issuer -serial -dates -ext subjectAltName \
             > /tmp/tls.txt
@@ -177,6 +196,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Publish bounded audit summary
+        if: always()
         shell: bash
         run: |
           {
@@ -186,15 +206,17 @@ jobs:
             echo "- Hosted zone: ${HOSTED_ZONE_ID}"
             echo "- Route 53 mutation: false"
             echo "- CloudFront mutation: false"
-            echo "- Current HTML SHA-256: $(cut -d' ' -f1 /tmp/home-sha256.txt)"
+            if [[ -s /tmp/home-sha256.txt ]]; then
+              echo "- Current HTML SHA-256: $(cut -d' ' -f1 /tmp/home-sha256.txt)"
+            fi
             echo ""
             echo "#### Route 53"
             echo '```json'
-            cat /tmp/route53-root-records.json
+            cat /tmp/route53-root-records.json 2>/dev/null || true
             echo '```'
             echo "#### CloudFront"
             echo '```json'
-            cat /tmp/cloudfront.json
+            cat /tmp/cloudfront.json 2>/dev/null || true
             echo '```'
             echo "#### Native/provider URLs"
             echo '```text'
