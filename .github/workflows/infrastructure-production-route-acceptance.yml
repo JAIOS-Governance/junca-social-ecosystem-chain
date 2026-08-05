@@ -88,14 +88,19 @@ jobs:
             http_code="$(curl --silent --show-error --location --max-time 45 \
               --retry 2 --retry-delay 2 --output /dev/null --write-out '%{http_code}' \
               "https://${host}${route}")"
+            access_boundary="public"
             case "${http_code}" in
               2??|3??) ;;
+              403)
+                test "${host}" = "platform.junca-global.group"
+                access_boundary="protected"
+                ;;
               *) echo "Unexpected HTTP status for ${host}${route}: ${http_code}" >&2; exit 1 ;;
             esac
 
             not_after="$(openssl x509 -in "route-acceptance/${host}.pem" -noout -enddate | cut -d= -f2-)"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "${host}" "${route}" "${cf_cname}" "${gg_cname}" "${cf_address}" "${gg_address}" "${http_code}" "${not_after}" \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "${host}" "${route}" "${cf_cname}" "${gg_cname}" "${cf_address}" "${gg_address}" "${http_code}" "${access_boundary}" "${not_after}" \
               >> route-acceptance/public-routes.tsv
           done
 
@@ -115,7 +120,8 @@ jobs:
                       "cloudflare_resolver_addresses": row[4],
                       "google_resolver_addresses": row[5],
                       "http_status": int(row[6]),
-                      "certificate_not_after": row[7],
+                      "access_boundary": row[7],
+                      "certificate_not_after": row[8],
                   })
           evidence = {
               "status": "PASS",
