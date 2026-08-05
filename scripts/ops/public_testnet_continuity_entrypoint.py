@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Runtime compatibility entrypoint for Public Testnet continuity evidence.
 
-Only timestamp-labelled fields receive compatibility normalization. All other
-continuity fields remain subject to the canonical strict contract.
+Only timestamp-labelled fields receive compatibility normalization. Explicit
+publication sentinels are treated as absent so canonical fallback paths remain
+usable. All other continuity fields retain the canonical strict contract.
 """
 
 from __future__ import annotations
@@ -16,6 +17,14 @@ import public_testnet_continuity as continuity
 
 
 _original_integer = continuity._integer
+_original_path = continuity._path
+_UNPUBLISHED_SENTINELS = {
+    "NOT CURRENTLY PUBLISHED",
+    "NOT PUBLISHED",
+    "UNPUBLISHED",
+    "NOT AVAILABLE",
+    "N/A",
+}
 _TIMESTAMP_KEYS = (
     "timestamp",
     "finalized_timestamp",
@@ -35,10 +44,16 @@ _TIMESTAMP_KEYS = (
 )
 
 
+def _published_path(value: Mapping[str, Any], path: str) -> Any:
+    found = _original_path(value, path)
+    if isinstance(found, str) and found.strip().upper() in _UNPUBLISHED_SENTINELS:
+        return None
+    return found
+
+
 def _normalize_epoch(value: float, label: str) -> int:
     if value < 0:
         raise continuity.ContinuityError(f"{label} must not be negative")
-    # Accept seconds, milliseconds, microseconds, or nanoseconds from public APIs.
     while value >= 100_000_000_000:
         value /= 1000
     return int(value)
@@ -47,10 +62,11 @@ def _normalize_epoch(value: float, label: str) -> int:
 def _parse_timestamp_text(value: str, label: str) -> int:
     candidate = value.strip()
 
+    if candidate.upper() in _UNPUBLISHED_SENTINELS:
+        raise continuity.ContinuityError(f"{label} is not currently published")
     if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", candidate):
         return _normalize_epoch(float(candidate), label)
 
-    # Common wrappers emitted by serializers and dashboards.
     wrapper = re.fullmatch(
         r"(?:Timestamp|Date|datetime)\(['\"]?(.+?)['\"]?\)", candidate, re.IGNORECASE
     )
@@ -146,6 +162,7 @@ def _compatible_integer(value: Any, label: str) -> int:
     return result
 
 
+continuity._path = _published_path
 continuity._integer = _compatible_integer
 
 
