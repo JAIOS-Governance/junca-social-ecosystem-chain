@@ -1,0 +1,209 @@
+{
+  "schema": "official-surface-final-acceptance/v7",
+  "observed_at": "2026-08-05T02:26:45.568699+00:00",
+  "workflow_run_id": "30969180351",
+  "source_commit": "bf87b4d14a12c7e81ab56f13ba4508d0ddf9dc76",
+  "selected_role": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "public_url": "https://chain.jaios-governance.org/",
+  "distribution_id": "E19R4RMVAZRYHJ",
+  "distribution_domain": "d3kfivmi9y9cmp.cloudfront.net",
+  "content_marker": "20260805-chain-institutional-trust",
+  "delivery_marker": "20260805-chain-institutional-trust-v2",
+  "checks": {
+    "distribution": {
+      "passed": true
+    },
+    "function_association": {
+      "passed": true,
+      "items": [
+        {
+          "FunctionARN": "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956",
+          "EventType": "viewer-request"
+        }
+      ]
+    },
+    "zero_ttl": {
+      "passed": true
+    },
+    "route53": {
+      "passed": true,
+      "record": {
+        "Name": "chain.jaios-governance.org.",
+        "Type": "CNAME",
+        "TTL": 60,
+        "ResourceRecords": [
+          {
+            "Value": "d3kfivmi9y9cmp.cloudfront.net"
+          }
+        ]
+      }
+    },
+    "resolver_cname": {
+      "passed": true,
+      "values": {
+        "1.1.1.1": "d3kfivmi9y9cmp.cloudfront.net",
+        "8.8.8.8": "d3kfivmi9y9cmp.cloudfront.net"
+      }
+    },
+    "public_http": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "content_markers": {
+      "passed": true
+    },
+    "closed_information": {
+      "passed": true
+    },
+    "tls": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "tls_san": {
+      "passed": true,
+      "readback": "subject=CN = chain.jaios-governance.org\nissuer=C = US, O = Amazon, CN = Amazon RSA 2048 M04\nnotBefore=Aug  4 00:00:00 2026 GMT\nnotAfter=Feb 17 23:59:59 2027 GMT\nX509v3 Subject Alternative Name: \n    DNS:chain.jaios-governance.org\n"
+    },
+    "robots_http": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "robots_content": {
+      "passed": true
+    },
+    "sitemap_http": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "sitemap_content": {
+      "passed": true
+    },
+    "jaios_http": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "jaios_content": {
+      "passed": true
+    },
+    "docs_http": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "docs_content": {
+      "passed": true
+    },
+    "route_context": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_foundation": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_build": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_possibilities": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_ecosystem": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_experience": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_governance": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_evidence": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "route_contact": {
+      "passed": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "protected_routes": {
+      "passed": true,
+      "routes": {
+        "context": true,
+        "foundation": true,
+        "build": true,
+        "possibilities": true,
+        "ecosystem": true,
+        "experience": true,
+        "governance": true,
+        "evidence": true,
+        "contact": true
+      }
+    },
+    "browser_matrix": {
+      "passed": false,
+      "profiles": [
+        {
+          "profile": "desktop",
+          "expected_columns": 3,
+          "passed": false,
+          "error": "TimeoutException()",
+          "traceback": "Traceback (most recent call last):\n  File \"<stdin>\", line 21, in <module>\n  File \"/home/runner/.local/lib/python3.12/site-packages/selenium/webdriver/support/wait.py\", line 121, in until\n    raise TimeoutException(message, screen, stacktrace)\nselenium.common.exceptions.TimeoutException: Message: \n\n"
+        },
+        {
+          "profile": "android-tablet",
+          "expected_columns": 2,
+          "passed": false,
+          "error": "TimeoutException()",
+          "traceback": "Traceback (most recent call last):\n  File \"<stdin>\", line 21, in <module>\n  File \"/home/runner/.local/lib/python3.12/site-packages/selenium/webdriver/support/wait.py\", line 121, in until\n    raise TimeoutException(message, screen, stacktrace)\nselenium.common.exceptions.TimeoutException: Message: \n\n"
+        },
+        {
+          "profile": "iphone",
+          "expected_columns": 1,
+          "passed": false,
+          "error": "TimeoutException()",
+          "traceback": "Traceback (most recent call last):\n  File \"<stdin>\", line 21, in <module>\n  File \"/home/runner/.local/lib/python3.12/site-packages/selenium/webdriver/support/wait.py\", line 121, in until\n    raise TimeoutException(message, screen, stacktrace)\nselenium.common.exceptions.TimeoutException: Message: \n\n"
+        }
+      ]
+    }
+  },
+  "protected_boundaries": {
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "validator_changed": false,
+    "native_sites_origin_preserved": true
+  },
+  "result": "NOT_ACCEPTED"
+}
