@@ -94,7 +94,6 @@ jobs:
           test -n "$domain" && test "$domain" != null
           aws cloudfront describe-function --name "$SHARED_FUNCTION_NAME" --stage LIVE >/tmp/chain-direct-diagnostic/function-description.json
           aws cloudfront get-function --name "$SHARED_FUNCTION_NAME" --stage LIVE /tmp/chain-direct-diagnostic/function-live.js >/tmp/chain-direct-diagnostic/function-get.json
-          association_count="$(jq --arg arn "$SHARED_FUNCTION_ARN" '[.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[]? | select(.FunctionARN==$arn and .EventType=="viewer-request")] | length' /tmp/chain-direct-diagnostic/distribution-config.json)"
           python3 - "$domain" <<'PY' >/tmp/chain-direct-diagnostic/cloudfront-ips.txt
           import socket,sys
           seen=[]
@@ -129,6 +128,9 @@ jobs:
           function=json.loads((root/'function-description.json').read_text())
           attempts=json.loads((root/'attempts.json').read_text())
           code=(root/'function-live.js').read_bytes()
+          associations=config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get('FunctionAssociations',{})
+          expected=os.environ['SHARED_FUNCTION_ARN']
+          accepted_count=sum(1 for item in associations.get('Items',[]) if item.get('FunctionARN')==expected and item.get('EventType')=='viewer-request')
           evidence={
             'schema':'chain-direct-target-diagnostic/v1',
             'observed_at':datetime.now(timezone.utc).isoformat(),
@@ -139,9 +141,9 @@ jobs:
               'id':distribution.get('Id'),'arn':distribution.get('ARN'),'domain':distribution.get('DomainName'),
               'status':distribution.get('Status'),'enabled':distribution.get('DistributionConfig',{}).get('Enabled'),
               'aliases':distribution.get('DistributionConfig',{}).get('Aliases'),
-              'function_associations':config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get('FunctionAssociations'),
+              'function_associations':associations,
               'ttls':{k:config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get(k) for k in ('MinTTL','DefaultTTL','MaxTTL')},
-              'accepted_association_count':int(os.environ.get('ASSOCIATION_COUNT','0')),
+              'accepted_association_count':accepted_count,
             },
             'function':{
               'arn':function.get('FunctionSummary',{}).get('FunctionMetadata',{}).get('FunctionARN'),
@@ -154,8 +156,6 @@ jobs:
           Path('evidence/production/chain-direct-target-diagnostic-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
           print(json.dumps(evidence,ensure_ascii=False))
           PY
-        env:
-          ASSOCIATION_COUNT: ${{ env.ASSOCIATION_COUNT }}
       - name: Persist diagnostic evidence
         shell: bash
         run: |
