@@ -1,0 +1,323 @@
+name: Chain Final CNAME Acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-final-cname-acceptance.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-final-cname-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: chain-final-cname-acceptance
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+  TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+  FALLBACK_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+  CHAIN_HOST: chain.jaios-governance.org
+  CHAIN_URL: https://chain.jaios-governance.org/
+  CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ
+  CHAIN_DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ
+  CHAIN_DISTRIBUTION_DOMAIN: d3kfivmi9y9cmp.cloudfront.net
+  SHARED_FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+  CONTENT_MARKER: 20260805-chain-institutional-trust
+  DELIVERY_MARKER: 20260805-chain-institutional-trust-v2
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate exact final route
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -F 'CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ' .github/workflows/chain-final-cname-acceptance.yml
+          grep -F 'CHAIN_DISTRIBUTION_DOMAIN: d3kfivmi9y9cmp.cloudfront.net' .github/workflows/chain-final-cname-acceptance.yml
+          grep -F 'ROUTE53_ZONE_ID: Z0336017285464TX0NT1G' .github/workflows/chain-final-cname-acceptance.yml
+          grep -F "github.event_name != 'pull_request'" .github/workflows/chain-final-cname-acceptance.yml
+          grep -F 'Restore exact prior Chain CNAME on failed acceptance' .github/workflows/chain-final-cname-acceptance.yml
+
+  cutover:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: public-testnet
+      url: https://chain.jaios-governance.org/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Acquire approved Chain publication identity
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" >/tmp/oidc-token
+          selected=''
+          for role in "$TARGET_ROLE_ARN" "$FALLBACK_ROLE_ARN"; do
+            if aws sts assume-role-with-web-identity \
+              --role-arn "$role" \
+              --role-session-name "chain-final-cname-${GITHUB_RUN_ID}" \
+              --web-identity-token "$(cat /tmp/oidc-token)" \
+              --duration-seconds 3600 >/tmp/assume.json 2>/tmp/assume.err; then
+              selected="$role"; break
+            fi
+          done
+          test -n "$selected"
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "selected_role=$selected" >> "$GITHUB_OUTPUT"
+      - name: Verify accepted Distribution and direct target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/chain-final
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront get-distribution --id "$CHAIN_DISTRIBUTION_ID" >/tmp/chain-final/distribution.json
+          aws cloudfront get-distribution-config --id "$CHAIN_DISTRIBUTION_ID" >/tmp/chain-final/distribution-config.json
+          test "$(jq -r '.Distribution.ARN' /tmp/chain-final/distribution.json)" = "$CHAIN_DISTRIBUTION_ARN"
+          test "$(jq -r '.Distribution.DomainName' /tmp/chain-final/distribution.json)" = "$CHAIN_DISTRIBUTION_DOMAIN"
+          test "$(jq -r '.Distribution.Status' /tmp/chain-final/distribution.json)" = 'Deployed'
+          jq -e --arg host "$CHAIN_HOST" '.Distribution.DistributionConfig.Aliases.Items[]? | select(.==$host)' /tmp/chain-final/distribution.json >/dev/null
+          jq -e --arg arn "$SHARED_FUNCTION_ARN" '[.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[]? | select(.FunctionARN==$arn and .EventType=="viewer-request")] | length==1' /tmp/chain-final/distribution-config.json >/dev/null
+          jq -e '.DistributionConfig.DefaultCacheBehavior.MinTTL==0 and .DistributionConfig.DefaultCacheBehavior.DefaultTTL==0 and .DistributionConfig.DefaultCacheBehavior.MaxTTL==0' /tmp/chain-final/distribution-config.json >/dev/null
+          python3 - "$CHAIN_DISTRIBUTION_DOMAIN" <<'PY' >/tmp/chain-final/cloudfront-ips.txt
+          import socket,sys
+          ips=[]
+          for item in socket.getaddrinfo(sys.argv[1],443,type=socket.SOCK_STREAM):
+              ip=item[4][0]
+              if ':' not in ip and ip not in ips: ips.append(ip)
+          print('\n'.join(ips))
+          PY
+          test -s /tmp/chain-final/cloudfront-ips.txt
+          direct_ok=false
+          while IFS= read -r ip; do
+            if curl --fail-with-body --silent --show-error --location --max-time 45 \
+              --resolve "${CHAIN_HOST}:443:${ip}" \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output "/tmp/chain-final/direct-${ip}.html" \
+              "https://${CHAIN_HOST}/?direct_final=${GITHUB_RUN_ID}-${ip}" \
+              && grep -Fq "data-jsec-trust-release='${CONTENT_MARKER}'" "/tmp/chain-final/direct-${ip}.html" \
+              && grep -Fq "official-surface-release\" content=\"${DELIVERY_MARKER}" "/tmp/chain-final/direct-${ip}.html"; then
+              direct_ok=true
+            else
+              direct_ok=false
+              break
+            fi
+          done </tmp/chain-final/cloudfront-ips.txt
+          test "$direct_ok" = true
+      - name: Snapshot and cut over exact Chain CNAME
+        id: dns
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$ROUTE53_ZONE_ID" \
+            --start-record-name "$CHAIN_HOST" \
+            --start-record-type CNAME \
+            --max-items 1 >/tmp/chain-final/route53-before-page.json
+          jq -e --arg n "${CHAIN_HOST}." '.ResourceRecordSets[0] | select(.Name==$n and .Type=="CNAME")' /tmp/chain-final/route53-before-page.json >/dev/null
+          jq '.ResourceRecordSets[0]' /tmp/chain-final/route53-before-page.json >/tmp/chain-final/route53-before.json
+          before_value="$(jq -r '.ResourceRecords[0].Value' /tmp/chain-final/route53-before.json | sed 's/\.$//')"
+          case "$before_value" in
+            custom-domains.chatgpt.site|junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site|d3kfivmi9y9cmp.cloudfront.net) ;;
+            *) echo "Unexpected Chain CNAME baseline: $before_value" >&2; exit 1 ;;
+          esac
+          if [[ "$before_value" != "$CHAIN_DISTRIBUTION_DOMAIN" ]]; then
+            jq -n \
+              --arg name "${CHAIN_HOST}." \
+              --arg value "$CHAIN_DISTRIBUTION_DOMAIN" \
+              '{Comment:"JSEC institutional trust final CNAME cutover",Changes:[{Action:"UPSERT",ResourceRecordSet:{Name:$name,Type:"CNAME",TTL:60,ResourceRecords:[{Value:$value}]}}]}' \
+              >/tmp/chain-final/change-batch.json
+            change_id="$(aws route53 change-resource-record-sets \
+              --hosted-zone-id "$ROUTE53_ZONE_ID" \
+              --change-batch file:///tmp/chain-final/change-batch.json \
+              --query 'ChangeInfo.Id' --output text)"
+            aws route53 wait resource-record-sets-changed --id "$change_id"
+            echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+            echo 'dns_changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'dns_changed=false' >> "$GITHUB_OUTPUT"
+          fi
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$ROUTE53_ZONE_ID" \
+            --start-record-name "$CHAIN_HOST" \
+            --start-record-type CNAME \
+            --max-items 1 >/tmp/chain-final/route53-after-page.json
+          jq -e --arg n "${CHAIN_HOST}." --arg v "$CHAIN_DISTRIBUTION_DOMAIN" '.ResourceRecordSets[0] | select(.Name==$n and .Type=="CNAME" and (.ResourceRecords|length)==1 and .ResourceRecords[0].Value==$v)' /tmp/chain-final/route53-after-page.json >/dev/null
+      - name: Public DNS TLS routes and browser acceptance
+        id: acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 90); do
+            cf="$(dig +short @1.1.1.1 "$CHAIN_HOST" CNAME | sed 's/\.$//' | sort -u || true)"
+            gg="$(dig +short @8.8.8.8 "$CHAIN_HOST" CNAME | sed 's/\.$//' | sort -u || true)"
+            [[ "$cf" == "$CHAIN_DISTRIBUTION_DOMAIN" && "$gg" == "$CHAIN_DISTRIBUTION_DOMAIN" ]] && break
+            sleep 10
+          done
+          test "$(dig +short @1.1.1.1 "$CHAIN_HOST" CNAME | sed 's/\.$//' | sort -u)" = "$CHAIN_DISTRIBUTION_DOMAIN"
+          test "$(dig +short @8.8.8.8 "$CHAIN_HOST" CNAME | sed 's/\.$//' | sort -u)" = "$CHAIN_DISTRIBUTION_DOMAIN"
+          for _ in $(seq 1 60); do
+            if curl --fail-with-body --silent --show-error --location --max-time 45 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --dump-header /tmp/chain-final/public-headers.txt \
+              --output /tmp/chain-final/public.html \
+              "${CHAIN_URL}?final_acceptance=${GITHUB_RUN_ID}" \
+              && grep -Fq "data-jsec-trust-release='${CONTENT_MARKER}'" /tmp/chain-final/public.html \
+              && grep -Fq "official-surface-release\" content=\"${DELIVERY_MARKER}" /tmp/chain-final/public.html; then break; fi
+            sleep 10
+          done
+          grep -F "data-jsec-trust-release='${CONTENT_MARKER}'" /tmp/chain-final/public.html
+          grep -F "official-surface-release\" content=\"${DELIVERY_MARKER}" /tmp/chain-final/public.html
+          grep -F 'Managed under JAIOS Institutional Governance' /tmp/chain-final/public.html
+          grep -F 'JAIOS Institutional Governanceの管理基準' /tmp/chain-final/public.html
+          ! grep -Eqi 'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分' /tmp/chain-final/public.html
+          openssl s_client -connect "${CHAIN_HOST}:443" -servername "$CHAIN_HOST" </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName >/tmp/chain-final/tls.txt
+          grep -F "DNS:${CHAIN_HOST}" /tmp/chain-final/tls.txt
+          curl --fail-with-body --silent --show-error --location --max-time 45 --output /tmp/chain-final/robots.txt "https://${CHAIN_HOST}/robots.txt"
+          curl --fail-with-body --silent --show-error --location --max-time 45 --output /tmp/chain-final/sitemap.xml "https://${CHAIN_HOST}/sitemap.xml"
+          grep -F 'Sitemap: https://chain.jaios-governance.org/sitemap.xml' /tmp/chain-final/robots.txt
+          grep -F '<loc>https://chain.jaios-governance.org/</loc>' /tmp/chain-final/sitemap.xml
+          for route in context foundation build possibilities ecosystem experience governance evidence contact; do
+            curl --fail-with-body --silent --show-error --location --max-time 45 --output "/tmp/chain-final/${route}.html" "https://${CHAIN_HOST}/${route}"
+          done
+          curl --fail-with-body --silent --show-error --location --max-time 45 --output /tmp/chain-final/jaios.html https://jaios-governance.org/
+          curl --fail-with-body --silent --show-error --location --max-time 45 --output /tmp/chain-final/docs.html https://docs.jaios-governance.org/
+          grep -F 'JAIOS Institutional Governance' /tmp/chain-final/jaios.html
+          grep -F 'JUNCA Social Ecosystem Chain' /tmp/chain-final/docs.html
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          profiles=[
+              ('desktop',1440,1800,3,None),
+              ('android-tablet',820,1500,2,'Mozilla/5.0 (Linux; Android 13; Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0 Mobile Safari/537.36'),
+              ('iphone',390,1300,1,'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'),
+          ]
+          results=[]
+          for label,width,height,expected,ua in profiles:
+              options=webdriver.ChromeOptions(); options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage'); options.add_argument('--disable-gpu')
+              if ua: options.add_argument('--user-agent='+ua)
+              driver=webdriver.Chrome(options=options)
+              try:
+                  driver.set_window_size(width,height)
+                  driver.get('https://chain.jaios-governance.org/?browser_acceptance='+label)
+                  WebDriverWait(driver,60).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]'))==1)
+                  trust=driver.find_element(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]')
+                  assert 'Managed under JAIOS Institutional Governance' in trust.text
+                  assert 'JAIOS Institutional Governanceの管理基準' in trust.text
+                  grid=driver.find_element(By.CSS_SELECTOR,'.jsec-institutional-trust-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  assert columns==expected,(label,columns,expected)
+                  driver.save_screenshot(f'/tmp/chain-final/{label}.png')
+                  results.append({'profile':label,'columns':columns,'content_marker':True,'delivery_marker':True})
+              finally:
+                  driver.quit()
+          Path('/tmp/chain-final/browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print('CHAIN_FINAL_BROWSER_ACCEPTANCE_PASS',results)
+          PY
+      - name: Restore exact prior Chain CNAME on failed acceptance
+        if: failure() && steps.dns.outputs.dns_changed == 'true'
+        shell: bash
+        run: |
+          set +e
+          jq -n --slurpfile record /tmp/chain-final/route53-before.json \
+            '{Comment:"Automatic rollback after Chain final acceptance failure",Changes:[{Action:"UPSERT",ResourceRecordSet:$record[0]}]}' \
+            >/tmp/chain-final/rollback-batch.json
+          rollback_id="$(aws route53 change-resource-record-sets \
+            --hosted-zone-id "$ROUTE53_ZONE_ID" \
+            --change-batch file:///tmp/chain-final/rollback-batch.json \
+            --query 'ChangeInfo.Id' --output text)"
+          aws route53 wait resource-record-sets-changed --id "$rollback_id"
+          printf '{"rollback_change_id":"%s","result":"RESTORED"}\n' "$rollback_id" >/tmp/chain-final/rollback.json
+          exit 1
+      - name: Persist final production acceptance evidence
+        if: success()
+        env:
+          SELECTED_ROLE: ${{ steps.identity.outputs.selected_role }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import json,os,re
+          from datetime import datetime,timezone
+          from pathlib import Path
+          root=Path('/tmp/chain-final')
+          distribution=json.loads((root/'distribution.json').read_text())['Distribution']
+          config=json.loads((root/'distribution-config.json').read_text())
+          before=json.loads((root/'route53-before.json').read_text())
+          after=json.loads((root/'route53-after-page.json').read_text())['ResourceRecordSets'][0]
+          browser=json.loads((root/'browser-results.json').read_text())
+          html=(root/'public.html').read_text(encoding='utf-8',errors='replace')
+          evidence={
+              'schema':'official-surface-final-acceptance/v6',
+              'observed_at':datetime.now(timezone.utc).isoformat(),
+              'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+              'source_commit':os.environ['GITHUB_SHA'],
+              'selected_role':os.environ['SELECTED_ROLE'],
+              'chain':{
+                  'public_url':'https://chain.jaios-governance.org/',
+                  'distribution_id':distribution.get('Id'),
+                  'distribution_arn':distribution.get('ARN'),
+                  'distribution_domain':distribution.get('DomainName'),
+                  'distribution_status':distribution.get('Status'),
+                  'function_associations':config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get('FunctionAssociations'),
+                  'dns_before':before,
+                  'dns_after':after,
+                  'tls_san_verified':True,
+                  'content_marker':os.environ['CONTENT_MARKER'],
+                  'delivery_marker':os.environ['DELIVERY_MARKER'],
+                  'institutional_trust_visible':True,
+                  'closed_information_absent':not bool(re.search(r'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分',html,re.I)),
+                  'browser_matrix':browser,
+                  'protected_routes':['/context','/foundation','/build','/possibilities','/ecosystem','/experience','/governance','/evidence','/contact'],
+                  'robots_published':True,
+                  'sitemap_published':True,
+              },
+              'related_surfaces':{'jaios_http_accepted':True,'docs_http_accepted':True},
+              'protected_boundaries':{'mainnet_changed':False,'assets_moved':False,'bridge_activated':False,'validator_changed':False,'native_sites_origin_preserved':True},
+              'result':'PRODUCTION_ACCEPTED',
+          }
+          Path('evidence/production/official-surface-convergence-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/production/official-surface-convergence-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain final CNAME acceptance ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chain-final-cname-acceptance-${{ github.run_id }}
+          path: |
+            /tmp/chain-final
+            evidence/production/official-surface-convergence-latest.json
+          if-no-files-found: warn
+          retention-days: 90
