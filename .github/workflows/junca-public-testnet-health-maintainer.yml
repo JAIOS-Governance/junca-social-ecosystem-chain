@@ -1,0 +1,156 @@
+name: JUNCA Public Testnet Health Maintainer
+
+on:
+  workflow_run:
+    workflows:
+      - "JUNCA Public Testnet Continuity Evidence"
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: junca-public-testnet-health-maintainer
+  cancel-in-progress: false
+
+env:
+  INCIDENT_TITLE: "[AUTO] JUNCA Public Testnet continuity health incident"
+
+jobs:
+  maintain-health:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event != 'pull_request')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Resolve target run
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            run_id="${EVENT_RUN_ID}"
+          else
+            run_id="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/junca-public-testnet-continuity.yml/runs?branch=main&per_page=1" --jq '.workflow_runs[0].id')"
+          fi
+          test -n "${run_id}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > /tmp/run.json
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "status=$(jq -r '.status' /tmp/run.json)" >> "${GITHUB_OUTPUT}"
+          echo "conclusion=$(jq -r '.conclusion // ""' /tmp/run.json)" >> "${GITHUB_OUTPUT}"
+          echo "attempt=$(jq -r '.run_attempt' /tmp/run.json)" >> "${GITHUB_OUTPUT}"
+          echo "run_url=$(jq -r '.html_url' /tmp/run.json)" >> "${GITHUB_OUTPUT}"
+          echo "head_sha=$(jq -r '.head_sha' /tmp/run.json)" >> "${GITHUB_OUTPUT}"
+          echo "trigger=$(jq -r '.event' /tmp/run.json)" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for manually selected run to finish
+        if: github.event_name == 'workflow_dispatch' && steps.target.outputs.status != 'completed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.target.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            status="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.status')"
+            if [ "${status}" = "completed" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Target continuity run did not complete within 5 minutes" >&2
+          exit 1
+
+      - name: Refresh run state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.target.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > /tmp/run-final.json
+          echo "conclusion=$(jq -r '.conclusion // ""' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
+          echo "attempt=$(jq -r '.run_attempt' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
+          echo "run_url=$(jq -r '.html_url' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
+          echo "head_sha=$(jq -r '.head_sha' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
+          echo "trigger=$(jq -r '.event' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
+          echo "updated_at=$(jq -r '.updated_at' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
+
+      - name: Perform one bounded recovery rerun
+        id: recovery
+        if: steps.state.outputs.conclusion != 'success' && steps.state.outputs.attempt == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.target.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun-failed-jobs"
+          echo "requested=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Open or update persistent incident
+        if: steps.state.outputs.conclusion != 'success' && steps.state.outputs.attempt != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ steps.state.outputs.run_url }}
+          HEAD_SHA: ${{ steps.state.outputs.head_sha }}
+          RUN_ATTEMPT: ${{ steps.state.outputs.attempt }}
+          RUN_TRIGGER: ${{ steps.state.outputs.trigger }}
+          UPDATED_AT: ${{ steps.state.outputs.updated_at }}
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          Automated continuity health maintenance detected a persistent failure after the bounded recovery attempt.
+
+          - Run: ${RUN_URL}
+          - SHA: ${HEAD_SHA}
+          - Attempt: ${RUN_ATTEMPT}
+          - Trigger: ${RUN_TRIGGER}
+          - Observed: ${UPDATED_AT}
+
+          Safety boundary remains unchanged: Mainnet state, assets, bridge activation, validator commands, and transaction submission are not modified by this maintainer.
+
+          Required handling: inspect the failed job and artifact, apply a causal code/configuration repair, merge through review, and verify a subsequent green continuity run.
+          EOF
+          )
+          issue_number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "${INCIDENT_TITLE} in:title" --json number,title --jq '.[] | select(.title == env.INCIDENT_TITLE) | .number' | head -n1)"
+          if [ -n "${issue_number}" ]; then
+            gh issue comment "${issue_number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${INCIDENT_TITLE}" --body "${body}"
+          fi
+
+      - name: Close recovered incident
+        if: steps.state.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ steps.state.outputs.run_url }}
+          HEAD_SHA: ${{ steps.state.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          issue_number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "${INCIDENT_TITLE} in:title" --json number,title --jq '.[] | select(.title == env.INCIDENT_TITLE) | .number' | head -n1)"
+          if [ -n "${issue_number}" ]; then
+            gh issue comment "${issue_number}" --repo "${GITHUB_REPOSITORY}" --body "Recovered and verified by ${RUN_URL} at SHA ${HEAD_SHA}."
+            gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" --reason completed
+          fi
+
+      - name: Publish maintenance summary
+        if: always()
+        run: |
+          {
+            echo "## Public Testnet Health Maintainer"
+            echo "- Continuity run: ${{ steps.state.outputs.run_url || steps.target.outputs.run_url }}"
+            echo "- Conclusion: ${{ steps.state.outputs.conclusion || steps.target.outputs.conclusion }}"
+            echo "- Attempt: ${{ steps.state.outputs.attempt || steps.target.outputs.attempt }}"
+            echo "- Bounded rerun requested: ${{ steps.recovery.outputs.requested || 'false' }}"
+            echo "- Mainnet changed: false"
+            echo "- Assets moved: false"
+            echo "- Bridge activated: false"
+          } >> "${GITHUB_STEP_SUMMARY}"
