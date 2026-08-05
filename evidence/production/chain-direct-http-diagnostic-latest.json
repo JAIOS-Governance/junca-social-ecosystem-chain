@@ -1,0 +1,98 @@
+{
+  "schema": "chain-direct-http-diagnostic/v1",
+  "observed_at": "2026-08-05T02:10:11.439713+00:00",
+  "workflow_run_id": "30968541401",
+  "source_commit": "7bb945d65ef7d397e7b664b2cd0342a4be83ae87",
+  "selected_role": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "distribution": {
+    "id": "E19R4RMVAZRYHJ",
+    "arn": "arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ",
+    "domain": "d3kfivmi9y9cmp.cloudfront.net",
+    "status": "Deployed",
+    "enabled": true,
+    "aliases": {
+      "Quantity": 1,
+      "Items": [
+        "chain.jaios-governance.org"
+      ]
+    },
+    "origins": {
+      "Quantity": 1,
+      "Items": [
+        {
+          "Id": "chain-native-sites",
+          "DomainName": "junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site",
+          "OriginPath": "",
+          "CustomHeaders": {
+            "Quantity": 0
+          },
+          "CustomOriginConfig": {
+            "HTTPPort": 80,
+            "HTTPSPort": 443,
+            "OriginProtocolPolicy": "https-only",
+            "OriginSslProtocols": {
+              "Quantity": 1,
+              "Items": [
+                "TLSv1.2"
+              ]
+            },
+            "OriginReadTimeout": 30,
+            "OriginKeepaliveTimeout": 5
+          },
+          "ConnectionAttempts": 3,
+          "ConnectionTimeout": 10,
+          "OriginShield": {
+            "Enabled": false
+          },
+          "OriginAccessControlId": ""
+        }
+      ]
+    },
+    "function_associations": {
+      "Quantity": 1,
+      "Items": [
+        {
+          "FunctionARN": "arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956",
+          "EventType": "viewer-request"
+        }
+      ]
+    },
+    "ttls": {
+      "MinTTL": 0,
+      "DefaultTTL": 0,
+      "MaxTTL": 0
+    },
+    "accepted_association_count": 1
+  },
+  "direct_attempts": [
+    {
+      "ip": "3.167.163.101",
+      "http_code": "200",
+      "title": "JUNCA Social Ecosystem Chain | JAIOS Institutional Governance",
+      "content_marker": true,
+      "delivery_marker": true
+    },
+    {
+      "ip": "3.167.163.73",
+      "http_code": "200",
+      "title": "JUNCA Social Ecosystem Chain | JAIOS Institutional Governance",
+      "content_marker": true,
+      "delivery_marker": true
+    },
+    {
+      "ip": "3.167.163.77",
+      "http_code": "200",
+      "title": "JUNCA Social Ecosystem Chain | JAIOS Institutional Governance",
+      "content_marker": true,
+      "delivery_marker": true
+    },
+    {
+      "ip": "3.167.163.115",
+      "http_code": "200",
+      "title": "JUNCA Social Ecosystem Chain | JAIOS Institutional Governance",
+      "content_marker": true,
+      "delivery_marker": true
+    }
+  ],
+  "result": "MARKERS_ACCEPTED"
+}
