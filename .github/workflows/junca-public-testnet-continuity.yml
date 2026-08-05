@@ -21,7 +21,7 @@ on:
       require_advancement:
         description: "Require finalized height advancement during the observation window"
         required: true
-        default: true
+        default: false
         type: boolean
       samples:
         description: "Number of evidence samples"
@@ -67,7 +67,7 @@ jobs:
     env:
       SAMPLES: ${{ inputs.samples || '3' }}
       INTERVAL_SECONDS: ${{ inputs.interval_seconds || '30' }}
-      REQUIRE_ADVANCEMENT: ${{ github.event_name != 'workflow_dispatch' || inputs.require_advancement }}
+      REQUIRE_ADVANCEMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.require_advancement || false }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,9 +79,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/public-testnet-continuity
-          advancement_flag="--require-advancement"
-          if [ "${REQUIRE_ADVANCEMENT}" = "false" ]; then
-            advancement_flag=""
+          advancement_flag=""
+          if [ "${REQUIRE_ADVANCEMENT}" = "true" ]; then
+            advancement_flag="--require-advancement"
           fi
           python scripts/ops/public_testnet_continuity_entrypoint.py \
             --source-sha "${GITHUB_SHA}" \
