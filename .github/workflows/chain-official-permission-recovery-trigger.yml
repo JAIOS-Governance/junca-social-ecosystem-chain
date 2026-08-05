@@ -26,7 +26,6 @@ jobs:
       AWS_REGION: us-east-1
       TARGET_ROLE_NAME: JuncaChainPublicTestnetDeployment
       TARGET_POLICY_NAME: ChainOfficialDistributionUpdate
-      TARGET_ACTION: cloudfront:UpdateDistribution
       TARGET_RESOURCE: arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ
     steps:
       - name: Acquire GitHub OIDC token
@@ -39,7 +38,7 @@ jobs:
           python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" >/tmp/oidc-token
           test -s /tmp/oidc-token
 
-      - name: Install and verify exact Chain distribution permission
+      - name: Install and verify exact Chain distribution permissions
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -68,7 +67,10 @@ jobs:
             "Statement":[{
               "Sid":"ChainOfficialDistributionUpdate",
               "Effect":"Allow",
-              "Action":"${TARGET_ACTION}",
+              "Action":[
+                "cloudfront:UpdateDistribution",
+                "cloudfront:CreateInvalidation"
+              ],
               "Resource":"${TARGET_RESOURCE}"
             }]
           }
@@ -81,20 +83,21 @@ jobs:
             --role-name "$TARGET_ROLE_NAME" \
             --policy-name "$TARGET_POLICY_NAME" >/tmp/readback.json
           jq -e \
-            --arg action "$TARGET_ACTION" \
             --arg resource "$TARGET_RESOURCE" \
             '.PolicyDocument.Version=="2012-10-17" and
              (.PolicyDocument.Statement|length)==1 and
              .PolicyDocument.Statement[0].Sid=="ChainOfficialDistributionUpdate" and
              .PolicyDocument.Statement[0].Effect=="Allow" and
-             .PolicyDocument.Statement[0].Action==$action and
+             (.PolicyDocument.Statement[0].Action|type)=="array" and
+             (.PolicyDocument.Statement[0].Action|length)==2 and
+             (.PolicyDocument.Statement[0].Action|sort)==(["cloudfront:CreateInvalidation","cloudfront:UpdateDistribution"]|sort) and
              .PolicyDocument.Statement[0].Resource==$resource and
              (.PolicyDocument.Statement[0]|has("Condition")|not)' /tmp/readback.json
           {
             echo '### Exact Chain permission recovery'
             echo "- Bootstrap identity: ${selected}"
             echo "- Target role: ${TARGET_ROLE_NAME}"
-            echo "- Action: ${TARGET_ACTION}"
+            echo '- Actions: cloudfront:UpdateDistribution, cloudfront:CreateInvalidation'
             echo "- Resource: ${TARGET_RESOURCE}"
             echo '- Exact readback: PASS'
             echo '- Broad IAM grant: false'
@@ -120,4 +123,4 @@ jobs:
             --data '{"ref":"main"}')"
           test "$status" = '204'
 
-# execution-marker: 2026-08-05T10:47+09:00
+# execution-marker: 2026-08-05T10:50+09:00
