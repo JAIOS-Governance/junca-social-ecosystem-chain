@@ -1,0 +1,173 @@
+name: Chain Direct Target Diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-direct-target-diagnostic.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-direct-target-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: chain-direct-target-diagnostic
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+  FALLBACK_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+  CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ
+  CHAIN_DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ
+  CHAIN_HOST: chain.jaios-governance.org
+  SHARED_FUNCTION_NAME: junca-chain-docs-routes-595710543956
+  SHARED_FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+  CONTENT_MARKER: 20260805-chain-institutional-trust
+  DELIVERY_MARKER: 20260805-chain-institutional-trust-v2
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate diagnostic scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -F 'CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ' .github/workflows/chain-direct-target-diagnostic.yml
+          grep -F 'CHAIN_DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ' .github/workflows/chain-direct-target-diagnostic.yml
+          ! grep -E 'update-distribution|change-resource-record-sets|create-invalidation|publish-function' .github/workflows/chain-direct-target-diagnostic.yml
+
+  diagnose:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Acquire approved readback identity
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" >/tmp/oidc-token
+          selected=''
+          for role in "$TARGET_ROLE_ARN" "$FALLBACK_ROLE_ARN"; do
+            if aws sts assume-role-with-web-identity \
+              --role-arn "$role" \
+              --role-session-name "chain-direct-diag-${GITHUB_RUN_ID}" \
+              --web-identity-token "$(cat /tmp/oidc-token)" \
+              --duration-seconds 1800 >/tmp/assume.json 2>/tmp/assume.err; then
+              selected="$role"; break
+            fi
+          done
+          test -n "$selected"
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "$GITHUB_ENV"
+          echo "selected_role=$selected" >> "$GITHUB_OUTPUT"
+      - name: Read exact Distribution, Function and direct target state
+        env:
+          SELECTED_ROLE: ${{ steps.identity.outputs.selected_role }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/chain-direct-diagnostic evidence/production
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws cloudfront get-distribution --id "$CHAIN_DISTRIBUTION_ID" >/tmp/chain-direct-diagnostic/distribution.json
+          aws cloudfront get-distribution-config --id "$CHAIN_DISTRIBUTION_ID" >/tmp/chain-direct-diagnostic/distribution-config.json
+          test "$(jq -r '.Distribution.ARN' /tmp/chain-direct-diagnostic/distribution.json)" = "$CHAIN_DISTRIBUTION_ARN"
+          domain="$(jq -r '.Distribution.DomainName' /tmp/chain-direct-diagnostic/distribution.json)"
+          test -n "$domain" && test "$domain" != null
+          aws cloudfront describe-function --name "$SHARED_FUNCTION_NAME" --stage LIVE >/tmp/chain-direct-diagnostic/function-description.json
+          aws cloudfront get-function --name "$SHARED_FUNCTION_NAME" --stage LIVE /tmp/chain-direct-diagnostic/function-live.js >/tmp/chain-direct-diagnostic/function-get.json
+          association_count="$(jq --arg arn "$SHARED_FUNCTION_ARN" '[.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.Items[]? | select(.FunctionARN==$arn and .EventType=="viewer-request")] | length' /tmp/chain-direct-diagnostic/distribution-config.json)"
+          python3 - "$domain" <<'PY' >/tmp/chain-direct-diagnostic/cloudfront-ips.txt
+          import socket,sys
+          seen=[]
+          for item in socket.getaddrinfo(sys.argv[1],443,type=socket.SOCK_STREAM):
+              ip=item[4][0]
+              if ':' not in ip and ip not in seen: seen.append(ip)
+          print('\n'.join(seen))
+          PY
+          test -s /tmp/chain-direct-diagnostic/cloudfront-ips.txt
+          : > /tmp/chain-direct-diagnostic/attempts.jsonl
+          while IFS= read -r ip; do
+            code="$(curl --silent --show-error --location --max-time 45 \
+              --resolve "${CHAIN_HOST}:443:${ip}" \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --dump-header "/tmp/chain-direct-diagnostic/headers-${ip}.txt" \
+              --output "/tmp/chain-direct-diagnostic/body-${ip}.html" \
+              --write-out '%{http_code}' "https://${CHAIN_HOST}/?direct_diagnostic=${GITHUB_RUN_ID}-${ip}" || true)"
+            content=false; delivery=false
+            grep -Fq "data-jsec-trust-release='${CONTENT_MARKER}'" "/tmp/chain-direct-diagnostic/body-${ip}.html" && content=true || true
+            grep -Fq "official-surface-release\" content=\"${DELIVERY_MARKER}" "/tmp/chain-direct-diagnostic/body-${ip}.html" && delivery=true || true
+            jq -cn --arg ip "$ip" --arg code "$code" --argjson content "$content" --argjson delivery "$delivery" \
+              '{ip:$ip,http_code:$code,content_marker:$content,delivery_marker:$delivery}' >> /tmp/chain-direct-diagnostic/attempts.jsonl
+          done </tmp/chain-direct-diagnostic/cloudfront-ips.txt
+          jq -s '.' /tmp/chain-direct-diagnostic/attempts.jsonl >/tmp/chain-direct-diagnostic/attempts.json
+          python3 - <<'PY'
+          import hashlib,json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          root=Path('/tmp/chain-direct-diagnostic')
+          distribution=json.loads((root/'distribution.json').read_text())['Distribution']
+          config=json.loads((root/'distribution-config.json').read_text())
+          function=json.loads((root/'function-description.json').read_text())
+          attempts=json.loads((root/'attempts.json').read_text())
+          code=(root/'function-live.js').read_bytes()
+          evidence={
+            'schema':'chain-direct-target-diagnostic/v1',
+            'observed_at':datetime.now(timezone.utc).isoformat(),
+            'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+            'source_commit':os.environ['GITHUB_SHA'],
+            'selected_role':os.environ['SELECTED_ROLE'],
+            'distribution':{
+              'id':distribution.get('Id'),'arn':distribution.get('ARN'),'domain':distribution.get('DomainName'),
+              'status':distribution.get('Status'),'enabled':distribution.get('DistributionConfig',{}).get('Enabled'),
+              'aliases':distribution.get('DistributionConfig',{}).get('Aliases'),
+              'function_associations':config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get('FunctionAssociations'),
+              'ttls':{k:config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get(k) for k in ('MinTTL','DefaultTTL','MaxTTL')},
+            },
+            'function':{
+              'arn':function.get('FunctionSummary',{}).get('FunctionMetadata',{}).get('FunctionARN'),
+              'status':function.get('FunctionSummary',{}).get('Status'),
+              'sha256':hashlib.sha256(code).hexdigest(),
+            },
+            'direct_attempts':attempts,
+            'result':'MARKERS_ACCEPTED' if any(a['http_code']=='200' and a['content_marker'] and a['delivery_marker'] for a in attempts) else 'MARKERS_NOT_ACCEPTED',
+          }
+          Path('evidence/production/chain-direct-target-diagnostic-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
+          print(json.dumps(evidence,ensure_ascii=False))
+          PY
+      - name: Persist diagnostic evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/production/chain-direct-target-diagnostic-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain direct target diagnostic ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-direct-target-diagnostic-${{ github.run_id }}
+          path: |
+            /tmp/chain-direct-diagnostic
+            evidence/production/chain-direct-target-diagnostic-latest.json
+          if-no-files-found: error
+          retention-days: 90
