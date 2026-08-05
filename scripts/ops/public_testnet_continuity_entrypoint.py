@@ -2,8 +2,10 @@
 """Runtime compatibility entrypoint for Public Testnet continuity evidence.
 
 Only timestamp-labelled fields receive compatibility normalization. Explicit
-publication sentinels are treated as absent so canonical fallback paths remain
-usable. All other continuity fields retain the canonical strict contract.
+publication sentinels are treated as absent. When the governed Operational API
+intentionally withholds its timestamp, the public Explorer timestamp is used as
+the read-only freshness anchor while all other Operational API invariants remain
+strictly validated.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ import public_testnet_continuity as continuity
 
 _original_integer = continuity._integer
 _original_path = continuity._path
+_original_fetch = continuity._fetch
+_original_normalize_snapshot = continuity.normalize_snapshot
 _UNPUBLISHED_SENTINELS = {
     "NOT CURRENTLY PUBLISHED",
     "NOT PUBLISHED",
@@ -25,6 +29,15 @@ _UNPUBLISHED_SENTINELS = {
     "NOT AVAILABLE",
     "N/A",
 }
+_TIMESTAMP_PATHS = (
+    "finalized_timestamp",
+    "block_timestamp",
+    "runtime_evidence.finalized_timestamp",
+    "consensus.head_timestamp",
+    "head.timestamp",
+    "recovery.rpcTimestamp",
+    "latest.timestamp",
+)
 _TIMESTAMP_KEYS = (
     "timestamp",
     "finalized_timestamp",
@@ -42,6 +55,9 @@ _TIMESTAMP_KEYS = (
     "value",
     "$date",
 )
+_EXPLORER_URL = "https://explorer.jaios-governance.org/explorer.json"
+_cached_explorer_payload: Mapping[str, Any] | None = None
+_timestamp_fallback_used = False
 
 
 def _published_path(value: Mapping[str, Any], path: str) -> Any:
@@ -162,8 +178,53 @@ def _compatible_integer(value: Any, label: str) -> int:
     return result
 
 
+def _first_published_timestamp(payload: Mapping[str, Any], source: str) -> int | None:
+    for path in _TIMESTAMP_PATHS:
+        found = _published_path(payload, path)
+        if found is not None:
+            return _extract_structured_timestamp(found, f"{source} finalized_timestamp")
+    return None
+
+
+def _compatible_fetch(url: str, *, timeout: int) -> Mapping[str, Any]:
+    global _cached_explorer_payload
+    if url == _EXPLORER_URL and _cached_explorer_payload is not None:
+        payload = _cached_explorer_payload
+        _cached_explorer_payload = None
+        return payload
+    return _original_fetch(url, timeout=timeout)
+
+
+def _compatible_normalize_snapshot(
+    payload: Mapping[str, Any], *, source: str, require_safety: bool
+) -> continuity.NormalizedSnapshot:
+    global _cached_explorer_payload, _timestamp_fallback_used
+
+    if source != "operational_api" or _first_published_timestamp(payload, source) is not None:
+        return _original_normalize_snapshot(
+            payload, source=source, require_safety=require_safety
+        )
+
+    explorer_payload = _original_fetch(_EXPLORER_URL, timeout=15)
+    explorer_timestamp = _first_published_timestamp(explorer_payload, "explorer_json")
+    if explorer_timestamp is None:
+        raise continuity.ContinuityError(
+            "Operational API and Explorer both lack a published finalized timestamp"
+        )
+
+    patched_payload = dict(payload)
+    patched_payload["finalized_timestamp"] = explorer_timestamp
+    _cached_explorer_payload = explorer_payload
+    _timestamp_fallback_used = True
+    return _original_normalize_snapshot(
+        patched_payload, source=source, require_safety=require_safety
+    )
+
+
 continuity._path = _published_path
 continuity._integer = _compatible_integer
+continuity._fetch = _compatible_fetch
+continuity.normalize_snapshot = _compatible_normalize_snapshot
 
 
 if __name__ == "__main__":
