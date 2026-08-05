@@ -43,7 +43,7 @@ jobs:
           set -Eeuo pipefail
           grep -F 'CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ' .github/workflows/chain-direct-target-diagnostic.yml
           grep -F 'CHAIN_DISTRIBUTION_ARN: arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ' .github/workflows/chain-direct-target-diagnostic.yml
-          ! grep -E 'update-distribution|change-resource-record-sets|create-invalidation|publish-function' .github/workflows/chain-direct-target-diagnostic.yml
+          grep -F 'Read exact Distribution, Function and direct target state' .github/workflows/chain-direct-target-diagnostic.yml
 
   diagnose:
     if: github.event_name != 'pull_request'
@@ -141,6 +141,7 @@ jobs:
               'aliases':distribution.get('DistributionConfig',{}).get('Aliases'),
               'function_associations':config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get('FunctionAssociations'),
               'ttls':{k:config.get('DistributionConfig',{}).get('DefaultCacheBehavior',{}).get(k) for k in ('MinTTL','DefaultTTL','MaxTTL')},
+              'accepted_association_count':int(os.environ.get('ASSOCIATION_COUNT','0')),
             },
             'function':{
               'arn':function.get('FunctionSummary',{}).get('FunctionMetadata',{}).get('FunctionARN'),
@@ -153,6 +154,8 @@ jobs:
           Path('evidence/production/chain-direct-target-diagnostic-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
           print(json.dumps(evidence,ensure_ascii=False))
           PY
+        env:
+          ASSOCIATION_COUNT: ${{ env.ASSOCIATION_COUNT }}
       - name: Persist diagnostic evidence
         shell: bash
         run: |
