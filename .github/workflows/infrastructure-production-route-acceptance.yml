@@ -87,7 +87,7 @@ jobs:
             esac
             http_code="$(curl --silent --show-error --location --max-time 45 \
               --retry 2 --retry-delay 2 --output /dev/null --write-out '%{http_code}' \
-              "https://${host}${route}?route_acceptance=${GITHUB_RUN_ID}")"
+              "https://${host}${route}")"
             case "${http_code}" in
               2??|3??) ;;
               *) echo "Unexpected HTTP status for ${host}${route}: ${http_code}" >&2; exit 1 ;;
