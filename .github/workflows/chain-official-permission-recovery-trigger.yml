@@ -69,7 +69,8 @@ jobs:
               "Effect":"Allow",
               "Action":[
                 "cloudfront:UpdateDistribution",
-                "cloudfront:CreateInvalidation"
+                "cloudfront:CreateInvalidation",
+                "cloudfront:GetInvalidation"
               ],
               "Resource":"${TARGET_RESOURCE}"
             }]
@@ -89,15 +90,15 @@ jobs:
              .PolicyDocument.Statement[0].Sid=="ChainOfficialDistributionUpdate" and
              .PolicyDocument.Statement[0].Effect=="Allow" and
              (.PolicyDocument.Statement[0].Action|type)=="array" and
-             (.PolicyDocument.Statement[0].Action|length)==2 and
-             (.PolicyDocument.Statement[0].Action|sort)==(["cloudfront:CreateInvalidation","cloudfront:UpdateDistribution"]|sort) and
+             (.PolicyDocument.Statement[0].Action|length)==3 and
+             (.PolicyDocument.Statement[0].Action|sort)==(["cloudfront:CreateInvalidation","cloudfront:GetInvalidation","cloudfront:UpdateDistribution"]|sort) and
              .PolicyDocument.Statement[0].Resource==$resource and
              (.PolicyDocument.Statement[0]|has("Condition")|not)' /tmp/readback.json
           {
             echo '### Exact Chain permission recovery'
             echo "- Bootstrap identity: ${selected}"
             echo "- Target role: ${TARGET_ROLE_NAME}"
-            echo '- Actions: cloudfront:UpdateDistribution, cloudfront:CreateInvalidation'
+            echo '- Actions: cloudfront:UpdateDistribution, cloudfront:CreateInvalidation, cloudfront:GetInvalidation'
             echo "- Resource: ${TARGET_RESOURCE}"
             echo '- Exact readback: PASS'
             echo '- Broad IAM grant: false'
@@ -123,4 +124,4 @@ jobs:
             --data '{"ref":"main"}')"
           test "$status" = '204'
 
-# execution-marker: 2026-08-05T10:50+09:00
+# execution-marker: 2026-08-05T10:53+09:00
