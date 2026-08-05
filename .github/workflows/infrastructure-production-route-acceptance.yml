@@ -81,17 +81,21 @@ jobs:
               > "route-acceptance/${host}-tls.txt"
             grep -Fq "DNS:${host}" "route-acceptance/${host}-tls.txt"
 
+            route="/"
+            case "${host}" in
+              explorer.jaios-governance.org) route="/explorer.json" ;;
+            esac
             http_code="$(curl --silent --show-error --location --max-time 45 \
               --retry 2 --retry-delay 2 --output /dev/null --write-out '%{http_code}' \
-              "https://${host}/?route_acceptance=${GITHUB_RUN_ID}")"
+              "https://${host}${route}?route_acceptance=${GITHUB_RUN_ID}")"
             case "${http_code}" in
               2??|3??) ;;
-              *) echo "Unexpected HTTP status for ${host}: ${http_code}" >&2; exit 1 ;;
+              *) echo "Unexpected HTTP status for ${host}${route}: ${http_code}" >&2; exit 1 ;;
             esac
 
             not_after="$(openssl x509 -in "route-acceptance/${host}.pem" -noout -enddate | cut -d= -f2-)"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "${host}" "${cf_cname}" "${gg_cname}" "${cf_address}" "${gg_address}" "${http_code}" "${not_after}" \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "${host}" "${route}" "${cf_cname}" "${gg_cname}" "${cf_address}" "${gg_address}" "${http_code}" "${not_after}" \
               >> route-acceptance/public-routes.tsv
           done
 
@@ -105,12 +109,13 @@ jobs:
               for row in csv.reader(handle, delimiter="\t"):
                   rows.append({
                       "host": row[0],
-                      "cloudflare_resolver_cname": row[1],
-                      "google_resolver_cname": row[2],
-                      "cloudflare_resolver_addresses": row[3],
-                      "google_resolver_addresses": row[4],
-                      "http_status": int(row[5]),
-                      "certificate_not_after": row[6],
+                      "route": row[1],
+                      "cloudflare_resolver_cname": row[2],
+                      "google_resolver_cname": row[3],
+                      "cloudflare_resolver_addresses": row[4],
+                      "google_resolver_addresses": row[5],
+                      "http_status": int(row[6]),
+                      "certificate_not_after": row[7],
                   })
           evidence = {
               "status": "PASS",
