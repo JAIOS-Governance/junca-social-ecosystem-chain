@@ -80,6 +80,8 @@ def _parse_timestamp_text(value: str, label: str) -> int:
 
     if candidate.upper() in _UNPUBLISHED_SENTINELS:
         raise continuity.ContinuityError(f"{label} is not currently published")
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", candidate):
+        return _normalize_epoch(float(int(candidate, 16)), label)
     if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", candidate):
         return _normalize_epoch(float(candidate), label)
 
