@@ -119,3 +119,5 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/official-chain-final-acceptance.yml/dispatches" \
             --data '{"ref":"main"}')"
           test "$status" = '204'
+
+# execution-marker: 2026-08-05T10:47+09:00
