@@ -1,0 +1,242 @@
+name: Chain Trust Browser Runtime V3 Production
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/build_chain_brand_institutional_trust_v3.py"
+      - ".github/workflows/chain-trust-browser-runtime-v3-production.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build_chain_brand_institutional_trust_v3.py"
+      - ".github/workflows/chain-trust-browser-runtime-v3-production.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+concurrency:
+  group: chain-trust-browser-runtime-v3-production
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DOCS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  CHAIN_NATIVE_URL: https://junca-social-ecosystem-chain.juncajapan-inc.chatgpt.site/
+  CHAIN_PUBLIC_URL: https://chain.jaios-governance.org/
+  CONTENT_MARKER: 20260805-chain-institutional-trust
+  DELIVERY_MARKER: 20260805-chain-institutional-trust-v3
+  RUNTIME_URL: https://docs.jaios-governance.org/chain-brand-root/trust-runtime-v3.js
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate browser-safe artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/build_chain_brand_institutional_trust_v3.py
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --output /tmp/native.html "$CHAIN_NATIVE_URL"
+          python3 scripts/build_chain_brand_institutional_trust_v3.py \
+            /tmp/native.html /tmp/index.html /tmp/trust-runtime-v3.js
+          node --check /tmp/trust-runtime-v3.js
+          grep -F "data-jsec-trust-release=\"${CONTENT_MARKER}\"" /tmp/index.html
+          grep -F "official-surface-release\" content=\"${DELIVERY_MARKER}" /tmp/index.html
+          grep -F "$RUNTIME_URL" /tmp/index.html
+          grep -F "const markupB64=" /tmp/trust-runtime-v3.js
+          grep -F "new TextDecoder()" /tmp/trust-runtime-v3.js
+          grep -F "main > .live-status-board" /tmp/trust-runtime-v3.js
+          if grep -F 'const markup="<section' /tmp/trust-runtime-v3.js; then
+            echo 'Unescaped inline markup remains in runtime' >&2
+            exit 1
+          fi
+          if grep -Eqi 'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分' /tmp/index.html; then
+            echo 'Closed information detected' >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-trust-browser-runtime-v3-${{ github.sha }}
+          path: |
+            /tmp/index.html
+            /tmp/trust-runtime-v3.js
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: junca-chain-docs-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-trust-v3-${{ github.run_id }}
+          disable-retry: true
+      - name: Publish exact root and external runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/chain-trust-v3
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            --output /tmp/chain-trust-v3/native.html "$CHAIN_NATIVE_URL"
+          python3 scripts/build_chain_brand_institutional_trust_v3.py \
+            /tmp/chain-trust-v3/native.html \
+            /tmp/chain-trust-v3/index.html \
+            /tmp/chain-trust-v3/trust-runtime-v3.js
+          node --check /tmp/chain-trust-v3/trust-runtime-v3.js
+          aws s3 cp /tmp/chain-trust-v3/trust-runtime-v3.js \
+            "s3://${DOCS_BUCKET}/chain-brand-root/trust-runtime-v3.js" \
+            --content-type 'application/javascript; charset=utf-8' \
+            --cache-control 'public,max-age=0,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},release=${DELIVERY_MARKER}"
+          aws s3 cp /tmp/chain-trust-v3/index.html \
+            "s3://${DOCS_BUCKET}/chain-brand-root/index.html" \
+            --content-type 'text/html; charset=utf-8' \
+            --cache-control 'public,max-age=0,must-revalidate' \
+            --metadata "source-commit=${GITHUB_SHA},release=${DELIVERY_MARKER}"
+          aws s3 cp "s3://${DOCS_BUCKET}/chain-brand-root/index.html" /tmp/chain-trust-v3/s3-index.html
+          aws s3 cp "s3://${DOCS_BUCKET}/chain-brand-root/trust-runtime-v3.js" /tmp/chain-trust-v3/s3-runtime.js
+          cmp /tmp/chain-trust-v3/index.html /tmp/chain-trust-v3/s3-index.html
+          cmp /tmp/chain-trust-v3/trust-runtime-v3.js /tmp/chain-trust-v3/s3-runtime.js
+      - name: Verify public static artifacts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 30); do
+            if curl --fail-with-body --silent --show-error --location --max-time 45 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output /tmp/chain-trust-v3/public.html \
+              "${CHAIN_PUBLIC_URL}?runtime_v3=${GITHUB_RUN_ID}" \
+              && grep -Fq "official-surface-release\" content=\"${DELIVERY_MARKER}" /tmp/chain-trust-v3/public.html \
+              && grep -Fq "$RUNTIME_URL" /tmp/chain-trust-v3/public.html; then break; fi
+            sleep 5
+          done
+          grep -F "data-jsec-trust-release=\"${CONTENT_MARKER}\"" /tmp/chain-trust-v3/public.html
+          grep -F "official-surface-release\" content=\"${DELIVERY_MARKER}" /tmp/chain-trust-v3/public.html
+          curl --fail-with-body --silent --show-error --location --max-time 45 \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/chain-trust-v3/public-runtime.js \
+            "${RUNTIME_URL}?run=${GITHUB_RUN_ID}"
+          cmp /tmp/chain-trust-v3/trust-runtime-v3.js /tmp/chain-trust-v3/public-runtime.js
+          node --check /tmp/chain-trust-v3/public-runtime.js
+      - name: Browser acceptance on desktop Android tablet and iPhone
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --quiet selenium
+          python3 - <<'PY'
+          import json,traceback
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          root=Path('/tmp/chain-trust-v3')
+          profiles=[
+              ('desktop',1440,1800,3,None),
+              ('android-tablet',820,1500,2,'Mozilla/5.0 (Linux; Android 13; Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0 Mobile Safari/537.36'),
+              ('iphone',390,1300,1,'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'),
+          ]
+          records=[]
+          for label,width,height,expected,ua in profiles:
+              record={'profile':label,'expected_columns':expected,'passed':False}
+              options=webdriver.ChromeOptions(); options.add_argument('--headless=new'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage'); options.add_argument('--disable-gpu')
+              options.set_capability('goog:loggingPrefs',{'browser':'ALL'})
+              if ua: options.add_argument('--user-agent='+ua)
+              driver=None
+              try:
+                  driver=webdriver.Chrome(options=options); driver.set_window_size(width,height)
+                  driver.get('https://chain.jaios-governance.org/?runtime_v3_browser='+label)
+                  WebDriverWait(driver,60).until(lambda d: len(d.find_elements(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]'))==1)
+                  trust=driver.find_element(By.CSS_SELECTOR,'[data-jsec-trust-release="20260805-chain-institutional-trust"]')
+                  grid=driver.find_element(By.CSS_SELECTOR,'.jsec-institutional-trust-grid')
+                  columns=driver.execute_script("return getComputedStyle(arguments[0]).gridTemplateColumns.split(' ').filter(Boolean).length",grid)
+                  logs=driver.get_log('browser')
+                  syntax=[x for x in logs if x.get('level')=='SEVERE' and ('SyntaxError' in x.get('message','') or 'trust-runtime-v3' in x.get('message',''))]
+                  record.update({'actual_columns':columns,'english':'Managed under JAIOS Institutional Governance' in trust.text,'japanese':'JAIOS Institutional Governanceの管理基準' in trust.text,'runtime_syntax_errors':syntax})
+                  record['passed']=columns==expected and record['english'] and record['japanese'] and not syntax
+                  driver.save_screenshot(str(root/(label+'.png')))
+              except Exception as exc:
+                  record['error']=repr(exc); record['traceback']=traceback.format_exc()[-3000:]
+              finally:
+                  if driver: driver.quit()
+              records.append(record)
+          (root/'browser-results.json').write_text(json.dumps(records,ensure_ascii=False,indent=2)+'\n')
+          if not all(x['passed'] for x in records):
+              raise SystemExit(json.dumps(records,ensure_ascii=False))
+          print('CHAIN_TRUST_RUNTIME_V3_BROWSER_ACCEPTANCE_PASS',records)
+          PY
+      - name: Persist final accepted evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence/production
+          python3 - <<'PY'
+          import json,os,re
+          from datetime import datetime,timezone
+          from pathlib import Path
+          root=Path('/tmp/chain-trust-v3')
+          browser=json.loads((root/'browser-results.json').read_text())
+          html=(root/'public.html').read_text(encoding='utf-8',errors='replace')
+          evidence={
+              'schema':'official-surface-final-acceptance/v8',
+              'observed_at':datetime.now(timezone.utc).isoformat(),
+              'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+              'source_commit':os.environ['GITHUB_SHA'],
+              'public_url':'https://chain.jaios-governance.org/',
+              'distribution_id':'E19R4RMVAZRYHJ',
+              'distribution_domain':'d3kfivmi9y9cmp.cloudfront.net',
+              'content_marker':os.environ['CONTENT_MARKER'],
+              'delivery_marker':os.environ['DELIVERY_MARKER'],
+              'browser_runtime':{
+                  'url':os.environ['RUNTIME_URL'],
+                  'external_script':True,
+                  'base64_utf8_decode':True,
+                  'hydration_reinsertion':True,
+              },
+              'public_acceptance':{
+                  'static_markers':True,
+                  'runtime_javascript_valid':True,
+                  'institutional_trust_visible':True,
+                  'jaios_management_visible':True,
+                  'closed_information_absent':not bool(re.search(r'JUNCA Point|Point交換|revenue model|revenue allocation|収益モデル|収益配分',html,re.I)),
+                  'browser_matrix':browser,
+              },
+              'protected_boundaries':{'mainnet_changed':False,'assets_moved':False,'bridge_activated':False,'validator_changed':False,'native_sites_origin_preserved':True},
+              'result':'PRODUCTION_ACCEPTED',
+          }
+          Path('evidence/production/official-surface-convergence-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
+          Path('evidence/production/chain-trust-browser-runtime-v3-latest.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/production/official-surface-convergence-latest.json evidence/production/chain-trust-browser-runtime-v3-latest.json
+          git diff --cached --quiet || git commit -m "Record Chain browser-visible trust acceptance ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chain-trust-browser-runtime-v3-production-${{ github.run_id }}
+          path: |
+            /tmp/chain-trust-v3
+            evidence/production/official-surface-convergence-latest.json
+            evidence/production/chain-trust-browser-runtime-v3-latest.json
+          if-no-files-found: warn
+          retention-days: 90
