@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "scripts/ops/public_testnet_continuity.py"
+      - "scripts/ops/public_testnet_continuity_entrypoint.py"
       - "tests/test_public_testnet_continuity.py"
       - ".github/workflows/junca-public-testnet-continuity.yml"
   push:
     branches: [main]
     paths:
       - "scripts/ops/public_testnet_continuity.py"
+      - "scripts/ops/public_testnet_continuity_entrypoint.py"
       - "tests/test_public_testnet_continuity.py"
       - ".github/workflows/junca-public-testnet-continuity.yml"
   schedule:
@@ -54,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile scripts/ops/public_testnet_continuity.py
+          python -m py_compile scripts/ops/public_testnet_continuity_entrypoint.py
           python -m unittest tests.test_public_testnet_continuity -v
 
   live-continuity-readback:
@@ -80,7 +83,7 @@ jobs:
           if [ "${REQUIRE_ADVANCEMENT}" = "false" ]; then
             advancement_flag=""
           fi
-          python scripts/ops/public_testnet_continuity.py \
+          python scripts/ops/public_testnet_continuity_entrypoint.py \
             --source-sha "${GITHUB_SHA}" \
             --expected-chain-id 20260723 \
             --expected-peer-count 2 \
