@@ -1,0 +1,42 @@
+name: Chain Shared Edge Dispatch Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-shared-edge-dispatch-once.yml"
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Dispatch repaired Chain production workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh workflow run chain-brand-shared-edge-repair.yml --ref main
+          sleep 3
+          gh run list --workflow chain-brand-shared-edge-repair.yml --branch main --limit 5 \
+            --json databaseId,status,conclusion,headSha,event,url > /tmp/chain-dispatched-runs.json
+          jq -e 'map(select(.event=="workflow_dispatch")) | length >= 1' /tmp/chain-dispatched-runs.json >/dev/null
+      - name: Remove one-time dispatcher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/chain-shared-edge-dispatch-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/chain-shared-edge-dispatch-once.yml
+          git commit -m "Remove one-time Chain shared-edge dispatcher"
+          git pull --rebase origin main
+          git push origin HEAD:main
