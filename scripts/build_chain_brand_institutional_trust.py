@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 RELEASE = "20260805-chain-institutional-trust"
+DELIVERY_RELEASE = "20260805-chain-institutional-trust-v2"
 
 
 def trust_markup() -> str:
@@ -31,6 +32,12 @@ def build(source: str) -> str:
     if RELEASE in source:
         raise SystemExit("Brand root already contains this release")
 
+    source = re.sub(
+        r"<meta\b[^>]*\bname\s*=\s*(['\"])official-surface-release\1[^>]*>\s*",
+        "",
+        source,
+        flags=re.I,
+    )
     markup = trust_markup()
     prohibited = (
         "JUNCA Point",
@@ -56,16 +63,25 @@ def build(source: str) -> str:
         if value not in markup:
             raise SystemExit(f"Required trust copy missing: {value}")
 
+    delivery_meta = (
+        f'<meta name="official-surface-release" content="{DELIVERY_RELEASE}">'
+    )
     css = """<style id='jsec-institutional-trust-style'>
     .jsec-institutional-trust{position:relative;background:#071827;color:#f4ead1;border-top:1px solid rgba(215,189,120,.34);border-bottom:1px solid rgba(215,189,120,.22);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}.jsec-institutional-trust-shell{width:min(1240px,calc(100% - 2rem));margin:0 auto;padding:clamp(3rem,7vw,6rem) 0}.jsec-institutional-trust header{max-width:1000px}.jsec-institutional-trust header small{color:#d7bd78;font-size:.72rem;font-weight:800;letter-spacing:.15em}.jsec-institutional-trust h2{max-width:1000px;margin:.75rem 0 1.3rem;color:#f4ead1;font-family:Georgia,"Times New Roman",serif;font-size:clamp(2.3rem,5vw,4.8rem);font-weight:500;line-height:1.02}.jsec-institutional-trust header p{max-width:930px;margin:.65rem 0;color:#c6d0d9;font-size:1rem;line-height:1.75}.jsec-institutional-trust-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-top:2.4rem;background:rgba(215,189,120,.22)}.jsec-institutional-trust-grid article{min-width:0;padding:clamp(1.25rem,2.7vw,2rem);background:#0b2236}.jsec-institutional-trust-grid span{color:#d7bd78;font-size:.72rem;letter-spacing:.13em}.jsec-institutional-trust-grid h3{margin:.8rem 0;color:#f4ead1;font-family:Georgia,"Times New Roman",serif;font-size:1.42rem;font-weight:500}.jsec-institutional-trust-grid p{margin:.55rem 0 0;color:#b9c5cf;font-size:.9rem;line-height:1.67}.jsec-institutional-trust-links{display:flex;flex-wrap:wrap;gap:1.15rem;margin-top:1.8rem}.jsec-institutional-trust-links a{color:#ead49e;font-size:.78rem;font-weight:800;text-decoration:none}.jsec-institutional-trust-links a:hover{text-decoration:underline}.jsec-institutional-trust-links a:focus-visible{outline:2px solid #ead49e;outline-offset:4px}@media(max-width:960px){.jsec-institutional-trust-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.jsec-institutional-trust-grid article:last-child{grid-column:1/-1}}@media(max-width:640px){.jsec-institutional-trust-shell{width:min(100% - 1.5rem,1240px)}.jsec-institutional-trust-grid{grid-template-columns:1fr}.jsec-institutional-trust-grid article:last-child{grid-column:auto}}
     </style>"""
     encoded = json.dumps(markup, ensure_ascii=False)
     runtime = f"""<template id='jsec-institutional-trust-template'>{markup}</template><script id='jsec-institutional-trust-runtime'>(function(){{"use strict";const release={json.dumps(RELEASE)};const markup={encoded};function existing(){{return document.querySelector('[data-jsec-trust-release="'+release+'"]');}}function target(){{const sections=Array.from(document.querySelectorAll('main section,section'));return sections.find(function(s){{const t=(s.textContent||'').toUpperCase();return t.includes('GOVERNANCE')||t.includes('EVIDENCE')||t.includes('NETWORK');}})||sections[1]||sections[0]||document.querySelector('main');}}function apply(){{if(existing())return true;const node=target();if(!node)return false;node.insertAdjacentHTML('beforebegin',markup);return true;}}function start(){{apply();const observer=new MutationObserver(function(){{apply();}});observer.observe(document.documentElement,{{childList:true,subtree:true}});setTimeout(function(){{apply();observer.disconnect();}},30000);}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{{once:true}});else start();}})();</script>"""
 
-    output = re.sub(r"</head>", css + "</head>", source, count=1, flags=re.I)
+    output = re.sub(
+        r"</head>", delivery_meta + css + "</head>", source, count=1, flags=re.I
+    )
     output = re.sub(r"</body>", runtime + "</body>", output, count=1, flags=re.I)
     if output.count(f"data-jsec-trust-release='{RELEASE}'") != 2:
         raise SystemExit("Trust release dual representation is incomplete")
+    if output.count(
+        f'<meta name="official-surface-release" content="{DELIVERY_RELEASE}">'
+    ) != 1:
+        raise SystemExit("Delivery release marker is not singular and canonical")
     return output
 
 
@@ -75,7 +91,7 @@ def main() -> None:
     source = Path(sys.argv[1]).read_text(encoding="utf-8")
     output = build(source)
     Path(sys.argv[2]).write_text(output, encoding="utf-8")
-    print(f"Built {sys.argv[2]} with {RELEASE}")
+    print(f"Built {sys.argv[2]} with {RELEASE} / {DELIVERY_RELEASE}")
 
 
 if __name__ == "__main__":
