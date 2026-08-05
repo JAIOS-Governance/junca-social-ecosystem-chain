@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Compatibility entrypoint for Public Testnet continuity evidence.
+"""Runtime compatibility entrypoint for Public Testnet continuity evidence.
 
-The governed Operational API may expose timestamps as RFC 3339 / ISO 8601 text,
-while the continuity contract internally compares Unix epoch seconds. This
-entrypoint preserves the existing strict integer contract for every non-time
-field and normalizes only timestamp-labelled values before invoking the
-canonical sampler.
+Only timestamp-labelled fields receive compatibility normalization. All other
+continuity fields remain subject to the canonical strict contract.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import re
 from typing import Any
 
 import public_testnet_continuity as continuity
@@ -19,30 +18,76 @@ import public_testnet_continuity as continuity
 _original_integer = continuity._integer
 
 
+def _normalize_epoch(value: float, label: str) -> int:
+    if value < 0:
+        raise continuity.ContinuityError(f"{label} must not be negative")
+    # Accept seconds, milliseconds, microseconds, or nanoseconds from public APIs.
+    while value >= 100_000_000_000:
+        value /= 1000
+    return int(value)
+
+
+def _parse_timestamp_text(value: str, label: str) -> int:
+    candidate = value.strip()
+
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", candidate):
+        return _normalize_epoch(float(candidate), label)
+
+    normalized = re.sub(r"\s+(UTC|GMT)$", "+00:00", candidate, flags=re.IGNORECASE)
+    if normalized.endswith(("Z", "z")):
+        normalized = normalized[:-1] + "+00:00"
+    # Python accepts microseconds; trim longer RFC3339 fractions deterministically.
+    normalized = re.sub(r"(\.\d{6})\d+(?=Z|[+-]\d\d:?\d\d$)", r"\1", normalized)
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(candidate)
+        except (TypeError, ValueError):
+            parsed = None
+
+    if parsed is None:
+        for pattern in (
+            "%Y-%m-%d %H:%M:%S %z",
+            "%Y/%m/%d %H:%M:%S %z",
+            "%Y-%m-%d %H:%M:%S UTC",
+            "%Y/%m/%d %H:%M:%S UTC",
+        ):
+            try:
+                parsed = datetime.strptime(candidate, pattern)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                break
+            except ValueError:
+                continue
+
+    if parsed is None:
+        raise continuity.ContinuityError(
+            f"{label} has an unsupported timestamp representation"
+        )
+    if parsed.tzinfo is None:
+        raise continuity.ContinuityError(
+            f"{label} timestamp must include a timezone"
+        )
+    return _normalize_epoch(parsed.timestamp(), label)
+
+
 def _compatible_integer(value: Any, label: str) -> int:
     try:
-        return _original_integer(value, label)
+        result = _original_integer(value, label)
     except continuity.ContinuityError:
-        if "timestamp" not in label or not isinstance(value, str):
+        if "timestamp" not in label:
             raise
+        if isinstance(value, float):
+            return _normalize_epoch(value, label)
+        if isinstance(value, str):
+            return _parse_timestamp_text(value, label)
+        raise
 
-        candidate = value.strip()
-        if candidate.endswith("Z"):
-            candidate = candidate[:-1] + "+00:00"
-        try:
-            parsed = datetime.fromisoformat(candidate)
-        except ValueError:
-            raise continuity.ContinuityError(
-                f"{label} must be an integer or ISO 8601 timestamp"
-            ) from None
-        if parsed.tzinfo is None:
-            raise continuity.ContinuityError(
-                f"{label} ISO 8601 timestamp must include a timezone"
-            )
-        epoch_seconds = int(parsed.timestamp())
-        if epoch_seconds < 0:
-            raise continuity.ContinuityError(f"{label} must not be negative")
-        return epoch_seconds
+    if "timestamp" in label:
+        return _normalize_epoch(float(result), label)
+    return result
 
 
 continuity._integer = _compatible_integer
