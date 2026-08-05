@@ -6,6 +6,11 @@ on:
       - "JUNCA Public Testnet Continuity Evidence"
     types:
       - completed
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/junca-public-testnet-health-maintainer.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +29,7 @@ jobs:
   maintain-health:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event != 'pull_request')
     runs-on: ubuntu-24.04
@@ -40,7 +46,7 @@ jobs:
           if [ "${EVENT_NAME}" = "workflow_run" ]; then
             run_id="${EVENT_RUN_ID}"
           else
-            run_id="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/junca-public-testnet-continuity.yml/runs?branch=main&per_page=1" --jq '.workflow_runs[0].id')"
+            run_id="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/junca-public-testnet-continuity.yml/runs?branch=main&status=completed&per_page=1" --jq '.workflow_runs[0].id')"
           fi
           test -n "${run_id}"
           gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > /tmp/run.json
