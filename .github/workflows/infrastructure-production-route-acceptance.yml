@@ -1,0 +1,229 @@
+name: Infrastructure | Production Route Acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/infrastructure-production-route-acceptance.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/infrastructure-production-route-acceptance.yml"
+  schedule:
+    - cron: "37 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infrastructure-route-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  ROUTE53_ZONE_ID: Z0336017285464TX0NT1G
+  CHAIN_HOST: chain.jaios-governance.org
+  CHAIN_CNAME: d3kfivmi9y9cmp.cloudfront.net
+  CHAIN_DISTRIBUTION_ID: E19R4RMVAZRYHJ
+
+jobs:
+  public-route:
+    name: Public DNS TLS and route readback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install DNS client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dnsutils
+
+      - name: Accept public production routes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p route-acceptance
+          : > route-acceptance/public-routes.tsv
+
+          hosts=(
+            chain.jaios-governance.org
+            docs.jaios-governance.org
+            explorer.jaios-governance.org
+            jaios-governance.org
+            junca-global.group
+            platform.junca-global.group
+          )
+
+          for host in "${hosts[@]}"; do
+            cf_cname="$(dig +short @1.1.1.1 "${host}" CNAME | sed 's/\.$//' | sort -u | paste -sd, -)"
+            gg_cname="$(dig +short @8.8.8.8 "${host}" CNAME | sed 's/\.$//' | sort -u | paste -sd, -)"
+            cf_address="$( { dig +short @1.1.1.1 "${host}" A; dig +short @1.1.1.1 "${host}" AAAA; } | sort -u | paste -sd, -)"
+            gg_address="$( { dig +short @8.8.8.8 "${host}" A; dig +short @8.8.8.8 "${host}" AAAA; } | sort -u | paste -sd, -)"
+
+            test -n "${cf_cname}${cf_address}"
+            test -n "${gg_cname}${gg_address}"
+            if [ -n "${cf_cname}" ] || [ -n "${gg_cname}" ]; then
+              test "${cf_cname}" = "${gg_cname}"
+            fi
+            if [ "${host}" = "${CHAIN_HOST}" ]; then
+              test "${cf_cname}" = "${CHAIN_CNAME}"
+              test "${gg_cname}" = "${CHAIN_CNAME}"
+            fi
+
+            timeout 30 openssl s_client -connect "${host}:443" -servername "${host}" </dev/null 2>/dev/null \
+              | openssl x509 -outform PEM > "route-acceptance/${host}.pem"
+            openssl x509 -in "route-acceptance/${host}.pem" -checkend 2592000 -noout
+            openssl x509 -in "route-acceptance/${host}.pem" -noout -subject -issuer -dates -ext subjectAltName \
+              > "route-acceptance/${host}-tls.txt"
+            grep -Fq "DNS:${host}" "route-acceptance/${host}-tls.txt"
+
+            route="/"
+            case "${host}" in
+              explorer.jaios-governance.org) route="/explorer.json" ;;
+            esac
+            http_code="$(curl --silent --show-error --location --max-time 45 \
+              --retry 2 --retry-delay 2 --output /dev/null --write-out '%{http_code}' \
+              "https://${host}${route}")"
+            access_boundary="public"
+            case "${http_code}" in
+              2??|3??) ;;
+              403)
+                test "${host}" = "platform.junca-global.group"
+                access_boundary="protected"
+                ;;
+              *) echo "Unexpected HTTP status for ${host}${route}: ${http_code}" >&2; exit 1 ;;
+            esac
+
+            not_after="$(openssl x509 -in "route-acceptance/${host}.pem" -noout -enddate | cut -d= -f2-)"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "${host}" "${route}" "${cf_cname}" "${gg_cname}" "${cf_address}" "${gg_address}" "${http_code}" "${access_boundary}" "${not_after}" \
+              >> route-acceptance/public-routes.tsv
+          done
+
+          python3 - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          rows = []
+          with Path("route-acceptance/public-routes.tsv").open(encoding="utf-8") as handle:
+              for row in csv.reader(handle, delimiter="\t"):
+                  rows.append({
+                      "host": row[0],
+                      "route": row[1],
+                      "cloudflare_resolver_cname": row[2],
+                      "google_resolver_cname": row[3],
+                      "cloudflare_resolver_addresses": row[4],
+                      "google_resolver_addresses": row[5],
+                      "http_status": int(row[6]),
+                      "access_boundary": row[7],
+                      "certificate_not_after": row[8],
+                  })
+          evidence = {
+              "status": "PASS",
+              "mode": "public-read-only",
+              "chain_cname_expected": "d3kfivmi9y9cmp.cloudfront.net",
+              "resolver_convergence": True,
+              "tls_minimum_remaining_days": 30,
+              "routes": rows,
+          }
+          Path("route-acceptance/public-route-acceptance.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+
+      - name: Preserve public route evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-route-acceptance-${{ github.run_id }}
+          path: route-acceptance
+          if-no-files-found: error
+          retention-days: 90
+
+  aws-control-plane:
+    name: AWS Route53 and CloudFront readback
+    if: github.event_name != 'pull_request'
+    needs: public-route
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Acquire approved readback identity
+        shell: bash
+        env:
+          TARGET_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+          FALLBACK_ROLE_ARN: arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment
+        run: |
+          set -Eeuo pipefail
+          token_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")"
+          token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"${token_json}")"
+          selected=''
+          for role in "${TARGET_ROLE_ARN}" "${FALLBACK_ROLE_ARN}"; do
+            if aws sts assume-role-with-web-identity \
+              --role-arn "${role}" \
+              --role-session-name "route-readback-${GITHUB_RUN_ID}" \
+              --web-identity-token "${token}" \
+              --duration-seconds 1800 > /tmp/assume.json 2>/tmp/assume.err; then
+              selected="${role}"
+              break
+            fi
+          done
+          test -n "${selected}"
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "${GITHUB_ENV}"
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "${GITHUB_ENV}"
+          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "${GITHUB_ENV}"
+          echo "SELECTED_ROLE=${selected}" >> "${GITHUB_ENV}"
+
+      - name: Accept Route53 and CloudFront state without mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p route-acceptance
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          test "${account}" = "${AWS_ACCOUNT_ID}"
+
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "${ROUTE53_ZONE_ID}" \
+            --start-record-name "${CHAIN_HOST}" \
+            --start-record-type CNAME \
+            --max-items 1 > route-acceptance/route53-chain.json
+          jq -e --arg name "${CHAIN_HOST}." --arg value "${CHAIN_CNAME}" \
+            '.ResourceRecordSets[0] | select(.Name==$name and .Type=="CNAME" and (.ResourceRecords|length)==1 and (.ResourceRecords[0].Value|rtrimstr("."))==$value)' \
+            route-acceptance/route53-chain.json >/dev/null
+
+          aws cloudfront get-distribution --id "${CHAIN_DISTRIBUTION_ID}" \
+            > route-acceptance/cloudfront-chain.json
+          jq -e --arg host "${CHAIN_HOST}" --arg domain "${CHAIN_CNAME}" \
+            '.Distribution | select(.Status=="Deployed" and .DomainName==$domain) | .DistributionConfig.Aliases.Items[]? | select(.==$host)' \
+            route-acceptance/cloudfront-chain.json >/dev/null
+
+          jq -n \
+            --arg status PASS \
+            --arg mode aws-read-only \
+            --arg account "${account}" \
+            --arg role "${SELECTED_ROLE}" \
+            --arg zone "${ROUTE53_ZONE_ID}" \
+            --arg host "${CHAIN_HOST}" \
+            --arg cname "${CHAIN_CNAME}" \
+            --arg distribution "${CHAIN_DISTRIBUTION_ID}" \
+            '{status:$status,mode:$mode,aws_account:$account,assumed_role:$role,route53_zone_id:$zone,host:$host,cname:$cname,cloudfront_distribution_id:$distribution,mutation:false}' \
+            > route-acceptance/aws-route-acceptance.json
+          cat route-acceptance/aws-route-acceptance.json
+
+      - name: Preserve AWS control-plane evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-route-acceptance-${{ github.run_id }}
+          path: route-acceptance
+          if-no-files-found: error
+          retention-days: 90
