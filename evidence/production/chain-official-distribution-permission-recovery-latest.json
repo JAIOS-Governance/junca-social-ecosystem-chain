@@ -1,0 +1,20 @@
+{
+  "schema": "chain-official-distribution-permission-recovery/v1",
+  "observed_at": "2026-08-05T01:52:21Z",
+  "run_id": "30967663627",
+  "commit": "6d96d9c84d44f7384b4f940b7bc7301d587ff197",
+  "account_id": "595710543956",
+  "selected_bootstrap_role": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "target_role_arn": "arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment",
+  "policy_name": "ChainOfficialDistributionUpdate",
+  "action": "cloudfront:UpdateDistribution",
+  "resource": "arn:aws:cloudfront::595710543956:distribution/E19R4RMVAZRYHJ",
+  "put_role_policy_rc": "0",
+  "get_role_policy_rc": "0",
+  "exact_policy_verification_rc": "0",
+  "verification": "PASS",
+  "broad_iam_grant": false,
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}
