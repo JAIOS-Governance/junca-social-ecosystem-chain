@@ -49,6 +49,34 @@ jobs:
           [[ "$OBSERVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$OBSERVED_RUN_URL" == "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}" ]]
 
+          # workflow_run events for an earlier failed attempt may be delivered
+          # after an automatic re-run has already succeeded. Resolve the current
+          # authoritative run state before publishing any operational evidence.
+          live_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}")"
+          live_status="$(jq -er '.status' <<<"$live_run")"
+          live_conclusion="$(jq -r '.conclusion // ""' <<<"$live_run")"
+          live_updated_at="$(jq -er '.updated_at' <<<"$live_run")"
+          live_attempt="$(jq -er '.run_attempt' <<<"$live_run")"
+          case "$live_status" in
+            queued|requested|pending|waiting)
+              OBSERVED_ACTION="requested"
+              OBSERVED_CONCLUSION=""
+              ;;
+            in_progress)
+              OBSERVED_ACTION="in_progress"
+              OBSERVED_CONCLUSION=""
+              ;;
+            completed)
+              OBSERVED_ACTION="completed"
+              OBSERVED_CONCLUSION="$live_conclusion"
+              ;;
+            *)
+              echo "Unsupported authoritative workflow status: $live_status" >&2
+              exit 1
+              ;;
+          esac
+          OBSERVED_UPDATED_AT="$live_updated_at"
+
           case "$OBSERVED_ACTION" in
             requested) result="RUN_REQUESTED" ;;
             in_progress) result="RUNNING" ;;
@@ -216,6 +244,7 @@ jobs:
           - Workflow action: \`${OBSERVED_ACTION}\`
           - Workflow: \`${OBSERVED_NAME}\`
           - Run ID: \`${OBSERVED_RUN_ID}\`
+          - Run attempt: \`${live_attempt}\`
           - Run: ${OBSERVED_RUN_URL}
           - Trigger event: \`${OBSERVED_EVENT}\`
           - Source SHA: \`${OBSERVED_HEAD_SHA}\`
@@ -225,11 +254,11 @@ jobs:
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the observed workflow completes successfully. Historical non-current release runs may be cancelled only when an allowlisted workflow is requested for the exact current-main SHA. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the authoritative current attempt completes successfully. Historical non-current release runs may be cancelled only when an allowlisted workflow is requested for the exact current-main SHA. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
 
           ## Safety boundary
 
-          - Public Testnet / No Monetary Value
+          - Public Testnet
           - Transaction submission disabled
           - Mainnet Changed: false
           - Assets Moved: false
