@@ -1,30 +1,56 @@
 {
-  "networks": [
+  "schema": "jsec-network-registry/v2",
+  "effective_date": "2026-08-06",
+  "authority": "JAIOS Institutional Governance",
+  "current_network": {
+    "formal_name": "JUNCA Social Ecosystem Chain Public Testnet",
+    "abbreviation": "JSEC",
+    "chain_id": 20260723,
+    "chain_id_hex": "0x1352773",
+    "status": "governed-read-only-operations",
+    "rpc_url": "https://rpc.jaios-governance.org/",
+    "explorer_url": "https://explorer.jaios-governance.org/",
+    "health_url": "https://health.jaios-governance.org/health",
+    "governance_url": "https://jaios-governance.org/",
+    "mainnet": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  },
+  "historical_networks": [
     {
-      "name": "mainnet",
+      "name": "JuncaChain",
       "chain_id": 668,
-      "rpc_urls": [
-        "https://rpc.juncachain.com"
-      ],
-      "websocket_urls": [
-        "wss://ws.juncachain.com"
-      ],
-      "explorer_url": "https://scan.juncachain.com",
-      "governance_url": "https://master.juncachain.com",
-      "max_block_age_seconds": 300
+      "former_native_symbol": "JGC",
+      "former_rpc_url": "https://rpc.juncachain.com",
+      "former_explorer_url": "https://scan.juncachain.com",
+      "classification": "retired legacy network identity",
+      "current": false,
+      "must_not_be_presented_as": [
+        "current JUNCA Social Ecosystem Chain",
+        "current JSEC Mainnet",
+        "current JSEC native asset",
+        "current bridge destination"
+      ]
     },
     {
-      "name": "testnet",
+      "name": "JuncaChain testnet",
       "chain_id": 669,
-      "rpc_urls": [
-        "https://rpc-testnet.juncachain.com"
-      ],
-      "websocket_urls": [
-        "wss://ws-testnet.juncachain.com"
-      ],
-      "explorer_url": "https://scan-testnet.juncachain.com",
-      "governance_url": "https://master-testnet.juncachain.com",
-      "max_block_age_seconds": 300
+      "former_native_symbol": "JGCT",
+      "former_rpc_url": "https://rpc-testnet.juncachain.com",
+      "former_explorer_url": "https://scan-testnet.juncachain.com",
+      "classification": "retired legacy network identity",
+      "current": false,
+      "must_not_be_presented_as": [
+        "current JUNCA Social Ecosystem Chain Public Testnet",
+        "current JSEC test asset",
+        "current faucet or bridge route"
+      ]
     }
-  ]
+  ],
+  "external_registry_rule": {
+    "en": "Third-party listings for chain IDs 668 or 669 are historical registry records. They are not current JSEC network metadata and must not be used for wallet, bridge, asset or due-diligence decisions.",
+    "ja": "Chain ID 668または669を示す第三者登録は過去のレジストリ情報です。現行JSECのネットワーク情報ではなく、ウォレット、Bridge、資産またはデュー・デリジェンス判断に使用しません。"
+  },
+  "canonical_identity": "https://docs.jaios-governance.org/current-identity/",
+  "canonical_registry": "https://docs.jaios-governance.org/network-registry/"
 }
