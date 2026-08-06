@@ -1,0 +1,128 @@
+name: GitHub Actions Provider Recovery - Public Testnet
+
+on:
+  schedule:
+    - cron: "47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: github-actions-provider-recovery-public-testnet-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_WORKFLOW: junca-public-testnet-continuity.yml
+    steps:
+      - name: Require operational GitHub Actions provider
+        id: provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=""
+          for attempt in 1 2 3; do
+            if summary="$(curl --fail --silent --show-error --max-time 10 \
+              https://www.githubstatus.com/api/v2/summary.json)"; then
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+          if [ -z "$summary" ]; then
+            echo "operational=false" >> "$GITHUB_OUTPUT"
+            echo "status=STATUS_API_UNAVAILABLE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          status="$(jq -r '.components[] | select(.name == "Actions") | .status' <<<"$summary")"
+          test -n "$status"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" = "operational" ]; then
+            echo "operational=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "operational=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reconcile current-main continuity execution
+        id: recovery
+        if: steps.provider.outputs.operational == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${TARGET_WORKFLOW}/runs?branch=main&per_page=30")"
+
+          current_success="$(jq -r --arg sha "$main_sha" '
+            [.workflow_runs[] |
+              select(.head_sha == $sha and .status == "completed" and .conclusion == "success")][0].id // empty
+          ' <<<"$runs")"
+          current_active="$(jq -r --arg sha "$main_sha" '
+            [.workflow_runs[] |
+              select(.head_sha == $sha and
+                (.status == "queued" or .status == "requested" or
+                 .status == "pending" or .status == "waiting" or
+                 .status == "in_progress"))][0].id // empty
+          ' <<<"$runs")"
+
+          if [ -n "$current_success" ]; then
+            echo "decision=current_main_already_verified" >> "$GITHUB_OUTPUT"
+            echo "reference_run_id=$current_success" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$current_active" ]; then
+            echo "decision=current_main_execution_active" >> "$GITHUB_OUTPUT"
+            echo "reference_run_id=$current_active" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_id="$(jq -r '.workflow_runs[0].id // empty' <<<"$runs")"
+          latest_conclusion="$(jq -r '.workflow_runs[0].conclusion // empty' <<<"$runs")"
+          provider_signature=false
+          if [ -n "$latest_id" ] && [[ "$latest_conclusion" =~ ^(failure|cancelled|timed_out|startup_failure)$ ]]; then
+            jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${latest_id}/jobs?per_page=100")"
+            cancelled_count="$(jq '[.jobs[] | select(.conclusion == "cancelled")] | length' <<<"$jobs")"
+            executable_failure_count="$(jq '[.jobs[] | select(
+              .conclusion != "cancelled" and .conclusion != "skipped" and
+              .conclusion != "neutral" and .conclusion != null)] | length' <<<"$jobs")"
+            if [ "$cancelled_count" -gt 0 ] && [ "$executable_failure_count" -eq 0 ]; then
+              provider_signature=true
+            fi
+          fi
+
+          if [ "$provider_signature" != true ]; then
+            echo "decision=no_provider_cancellation_to_recover" >> "$GITHUB_OUTPUT"
+            echo "reference_run_id=${latest_id:-}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -n '{
+            ref: "main",
+            inputs: {
+              require_advancement: "false",
+              samples: "3",
+              interval_seconds: "30"
+            }
+          }' | gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${TARGET_WORKFLOW}/dispatches" \
+            --input -
+          echo "decision=dispatched_current_main_after_provider_recovery" >> "$GITHUB_OUTPUT"
+          echo "reference_run_id=$latest_id" >> "$GITHUB_OUTPUT"
+
+      - name: Publish recovery summary
+        if: always()
+        run: |
+          {
+            echo "## GitHub Actions Provider Recovery"
+            echo "- Provider status: `${{ steps.provider.outputs.status || 'UNKNOWN' }}`"
+            echo "- Decision: `${{ steps.recovery.outputs.decision || 'provider_not_operational' }}`"
+            echo "- Reference run: `${{ steps.recovery.outputs.reference_run_id || 'none' }}`"
+            echo "- Target workflow: `${TARGET_WORKFLOW}`"
+            echo "- Mainnet changed: `false`"
+            echo "- Assets moved: `false`"
+            echo "- Bridge activated: `false`"
+          } >> "$GITHUB_STEP_SUMMARY"
