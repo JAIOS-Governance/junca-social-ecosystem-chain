@@ -1,0 +1,531 @@
+name: Repair Validator Live Prefix Convergence
+
+on:
+  push:
+    branches:
+      - repair/validator-live-prefix-convergence-20260806
+    paths:
+      - '.github/workflows/repair-validator-live-prefix-convergence-20260806.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-validator-live-prefix-convergence-20260806
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: repair/validator-live-prefix-convergence-20260806
+          fetch-depth: 0
+
+      - name: Patch bounded convergence retry without weakening the gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          gate_path = Path('scripts/junca_live_rollout_prefix_gate.py')
+          gate = gate_path.read_text(encoding='utf-8')
+          gate = gate.replace('import json\nfrom pathlib import Path\n', 'import json\nfrom pathlib import Path\nimport time\n', 1)
+          prefix, separator, _tail = gate.partition('\ndef _read(')
+          if not separator:
+              raise SystemExit('LIVE_PREFIX_GATE_TAIL_MARKER_NOT_FOUND')
+          new_tail = r'''
+
+RETRYABLE_HEAD_REASON = "validators disagree on finalized head or certificate"
+MAX_LIVE_PREFIX_CONVERGENCE_ATTEMPTS = 5
+
+
+def _retryable_one_block_skew(evidence: Mapping[str, Any]) -> bool:
+    validators = evidence.get("validators")
+    if (
+        not isinstance(validators, Sequence)
+        or isinstance(validators, (str, bytes))
+        or len(validators) != 3
+        or any(not isinstance(item, Mapping) for item in validators)
+    ):
+        return False
+    try:
+        heads = [canonical._head(item) for item in validators]
+    except canonical.RollingCompatibilityError:
+        return False
+    if len(set(heads)) != 2:
+        return False
+    heights = [item[0] for item in heads]
+    if max(heights) - min(heights) != 1:
+        return False
+    by_height: dict[int, set[tuple[str, str]]] = {}
+    for height, head_hash, certificate_hash in heads:
+        by_height.setdefault(height, set()).add((head_hash, certificate_hash))
+    return len(by_height) == 2 and all(len(values) == 1 for values in by_height.values())
+
+
+def classify_live_prefix_convergence(
+    evidence: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int = MAX_LIVE_PREFIX_CONVERGENCE_ATTEMPTS,
+    now: int | None = None,
+) -> Mapping[str, Any]:
+    _require(
+        isinstance(attempt, int)
+        and not isinstance(attempt, bool)
+        and isinstance(max_attempts, int)
+        and not isinstance(max_attempts, bool)
+        and 1 <= attempt <= max_attempts <= 10,
+        "convergence attempt bounds are invalid",
+    )
+    for source_name, source in (("evidence", evidence), ("decision", decision)):
+        for boundary in canonical.BOUNDARIES:
+            _require(
+                source.get(boundary) is False,
+                f"{source_name} {boundary} must be false",
+            )
+
+    state = decision.get("state")
+    if state == "EVIDENCE_BOUND_PREFIX_ACCEPTED":
+        action = "ACCEPT"
+        reason = "exact_head_convergence_proven"
+        retryable = False
+        wait_seconds = 0
+    elif state == "EVIDENCE_BOUND_PREFIX_REJECTED":
+        gate_reason = str(decision.get("reason", ""))
+        retryable = gate_reason == RETRYABLE_HEAD_REASON and _retryable_one_block_skew(evidence)
+        if not retryable:
+            action = "REJECT"
+            reason = "unsafe_or_non_transient_head_divergence"
+            wait_seconds = 0
+        elif attempt >= max_attempts:
+            action = "REJECT"
+            reason = "retry_budget_exhausted"
+            wait_seconds = 0
+        else:
+            positive_intervals = {
+                item.get("block_interval_seconds")
+                for item in evidence.get("validators", [])
+                if isinstance(item, Mapping)
+                and isinstance(item.get("block_interval_seconds"), int)
+                and not isinstance(item.get("block_interval_seconds"), bool)
+                and item.get("block_interval_seconds") > 0
+            }
+            interval = positive_intervals.pop() if len(positive_intervals) == 1 else 30
+            current = int(time.time()) if now is None else now
+            _require(
+                isinstance(current, int) and not isinstance(current, bool) and current >= 0,
+                "convergence clock is invalid",
+            )
+            wait_seconds = ((-current) % interval) + 2
+            action = "RETRY"
+            reason = "single_slot_observation_race"
+    else:
+        action = "REJECT"
+        reason = "non_retryable_gate_state"
+        retryable = False
+        wait_seconds = 0
+
+    return {
+        "schema_version": "junca-validator-live-prefix-convergence/v1",
+        "action": action,
+        "reason": reason,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "retryable_one_block_skew": retryable,
+        "retry_wait_seconds": wait_seconds,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
+
+
+def _read(path: str | Path) -> dict[str, Any]:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise EvidenceBoundPrefixError("evidence must be a JSON object")
+    return value
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=("live-prefix", "rolling", "convergence"),
+        default="live-prefix",
+    )
+    parser.add_argument("--evidence", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--decision")
+    parser.add_argument("--attempt", type=int, default=1)
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=MAX_LIVE_PREFIX_CONVERGENCE_ATTEMPTS,
+    )
+    args = parser.parse_args(argv)
+
+    if args.mode == "convergence":
+        try:
+            _require(bool(args.decision), "convergence decision path is required")
+            result = classify_live_prefix_convergence(
+                _read(args.evidence),
+                _read(args.decision),
+                attempt=args.attempt,
+                max_attempts=args.max_attempts,
+            )
+        except (
+            OSError,
+            json.JSONDecodeError,
+            EvidenceBoundPrefixError,
+            canonical.RollingCompatibilityError,
+        ) as exc:
+            result = {
+                "schema_version": "junca-validator-live-prefix-convergence/v1",
+                "action": "REJECT",
+                "reason": str(exc),
+                "attempt": args.attempt,
+                "max_attempts": args.max_attempts,
+                "retryable_one_block_skew": False,
+                "retry_wait_seconds": 0,
+                "mainnet_changed": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+            }
+        Path(args.output).write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
+
+    try:
+        evidence = _read(args.evidence)
+        if args.mode == "rolling":
+            decision = evaluate_evidence_bound_rolling_compatibility(evidence)
+        else:
+            decision = evaluate_live_rollout_prefix_v2(evidence)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        EvidenceBoundPrefixError,
+        canonical.RollingCompatibilityError,
+    ) as exc:
+        result = {
+            "schema_version": (
+                "junca-validator-rolling-compatibility/v1"
+                if args.mode == "rolling"
+                else "junca-validator-live-prefix/v2"
+            ),
+            "state": (
+                "EVIDENCE_BOUND_ROLLING_REJECTED"
+                if args.mode == "rolling"
+                else "EVIDENCE_BOUND_PREFIX_REJECTED"
+            ),
+            "reason": str(exc),
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+        Path(args.output).write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 1
+    Path(args.output).write_text(
+        json.dumps(decision, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(decision, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+          gate_path.write_text(prefix + new_tail, encoding='utf-8')
+
+          foundation_path = Path('scripts/junca_public_testnet_foundation.sh')
+          foundation = foundation_path.read_text(encoding='utf-8')
+          old = '''  python scripts/junca_live_rollout_prefix_gate.py \\
+    --evidence artifacts/live-prefix-readback.json \\
+    --output artifacts/live-prefix-decision.json
+}'''
+          new = '''  local live_prefix_attempt
+  local live_prefix_gate_exit
+  local live_prefix_action
+  local live_prefix_wait_seconds
+  local live_prefix_converged=false
+  local live_prefix_capture_failed
+  local live_prefix_pid
+  local -a live_prefix_capture_pids
+  : > artifacts/live-prefix-convergence-attempts.jsonl
+  # LIVE_PREFIX_CONVERGENCE_RETRY_START
+  for live_prefix_attempt in 1 2 3 4 5; do
+    set +e
+    python scripts/junca_live_rollout_prefix_gate.py \\
+      --evidence artifacts/live-prefix-readback.json \\
+      --output artifacts/live-prefix-decision.json
+    live_prefix_gate_exit=$?
+    set -e
+    python scripts/junca_live_rollout_prefix_gate.py \\
+      --mode convergence \\
+      --evidence artifacts/live-prefix-readback.json \\
+      --decision artifacts/live-prefix-decision.json \\
+      --attempt "$live_prefix_attempt" \\
+      --max-attempts 5 \\
+      --output artifacts/live-prefix-convergence-classification.json
+    jq -c \\
+      --argjson gate_exit "$live_prefix_gate_exit" \\
+      '. + {gate_exit: $gate_exit}' \\
+      artifacts/live-prefix-convergence-classification.json \\
+      >> artifacts/live-prefix-convergence-attempts.jsonl
+    live_prefix_action="$(
+      jq -er '.action | select(. == "ACCEPT" or . == "RETRY" or . == "REJECT")' \\
+        artifacts/live-prefix-convergence-classification.json
+    )"
+    case "$live_prefix_action" in
+      ACCEPT)
+        test "$live_prefix_gate_exit" = 0
+        live_prefix_converged=true
+        break
+        ;;
+      REJECT)
+        jq -s '.' artifacts/live-prefix-convergence-attempts.jsonl \\
+          > artifacts/live-prefix-convergence-attempts.json
+        return 1
+        ;;
+      RETRY)
+        test "$live_prefix_gate_exit" != 0
+        live_prefix_wait_seconds="$(
+          jq -er '
+            .retry_wait_seconds
+            | select(type == "number" and . >= 1 and . <= 32)
+          ' artifacts/live-prefix-convergence-classification.json
+        )"
+        sleep "$live_prefix_wait_seconds"
+        live_prefix_capture_pids=()
+        live_prefix_capture_failed=false
+        for index in 0 1 2; do
+          observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
+          state_volume_id="$(
+            jq -er \\
+              ".[$index].volume_id |
+                select(type == \\"string\\" and
+                  test(\\"^vol-[0-9a-f]{8,17}$\\"))" \\
+              <<<"$validator_state_rollback"
+          )"
+          (
+            capture_validator_observation \\
+              "validator-0$((index + 1))" \\
+              "${current_instances[$index]}" \\
+              "$observation_path"
+            enriched_observation_path="${observation_path%.json}.enriched.json"
+            jq --arg volume_id "$state_volume_id" \\
+              '. + {volume_id: $volume_id}' \\
+              "$observation_path" >"$enriched_observation_path"
+            mv "$enriched_observation_path" "$observation_path"
+          ) &
+          live_prefix_capture_pids+=("$!")
+        done
+        for live_prefix_pid in "${live_prefix_capture_pids[@]}"; do
+          if ! wait "$live_prefix_pid"; then
+            live_prefix_capture_failed=true
+          fi
+        done
+        if [[ "$live_prefix_capture_failed" == true ]]; then
+          jq -s '.' artifacts/live-prefix-convergence-attempts.jsonl \\
+            > artifacts/live-prefix-convergence-attempts.json
+          return 1
+        fi
+        jq -s '.' artifacts/live-prefix-validator-{1,2,3}.json \\
+          > artifacts/live-prefix-validators.json
+        jq \\
+          --argjson observed_unix_time "$(date +%s)" \\
+          --slurpfile validators artifacts/live-prefix-validators.json \\
+          '.validators = $validators[0] |
+            .observed_unix_time = $observed_unix_time' \\
+          artifacts/live-prefix-readback.json \\
+          > artifacts/live-prefix-readback.retry.json
+        mv artifacts/live-prefix-readback.retry.json \\
+          artifacts/live-prefix-readback.json
+        ;;
+      *) return 2 ;;
+    esac
+  done
+  # LIVE_PREFIX_CONVERGENCE_RETRY_END
+  jq -s '.' artifacts/live-prefix-convergence-attempts.jsonl \\
+    > artifacts/live-prefix-convergence-attempts.json
+  test "$live_prefix_converged" = true
+}'''
+          if foundation.count(old) != 1:
+              raise SystemExit(f'LIVE_PREFIX_GATE_INVOCATION_COUNT={foundation.count(old)}')
+          foundation_path.write_text(foundation.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('tests/test_junca_live_rollout_prefix_gate.py')
+          tests = test_path.read_text(encoding='utf-8')
+          tests = tests.replace('import copy\nimport unittest\n', 'import copy\nfrom pathlib import Path\nimport unittest\n', 1)
+          tests = tests.replace(
+              '    EvidenceBoundPrefixError,\n    evaluate_evidence_bound_rolling_compatibility,\n    evaluate_live_rollout_prefix_v2,\n)',
+              '    EvidenceBoundPrefixError,\n    RETRYABLE_HEAD_REASON,\n    classify_live_prefix_convergence,\n    evaluate_evidence_bound_rolling_compatibility,\n    evaluate_live_rollout_prefix_v2,\n)',
+              1,
+          )
+          marker = '\n\nif __name__ == "__main__":\n    unittest.main()\n'
+          if tests.count(marker) != 1:
+              raise SystemExit('LIVE_PREFIX_TEST_TAIL_MARKER_NOT_FOUND')
+          additions = r'''
+
+class LivePrefixConvergenceTests(unittest.TestCase):
+    @staticmethod
+    def fixture():
+        return EvidenceBoundLivePrefixTests().fixture()
+
+    @staticmethod
+    def rejected_decision():
+        return {
+            "state": "EVIDENCE_BOUND_PREFIX_REJECTED",
+            "reason": RETRYABLE_HEAD_REASON,
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+
+    @staticmethod
+    def accepted_decision():
+        return {
+            "state": "EVIDENCE_BOUND_PREFIX_ACCEPTED",
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+
+    @staticmethod
+    def advance_head(validator, *, delta: int, head_digit: str = "d", certificate_digit: str = "e"):
+        validator["head_height"] += delta
+        validator["head_hash"] = "0x" + head_digit * 64
+        validator["certificate_height"] = validator["head_height"]
+        validator["certificate_block_hash"] = validator["head_hash"]
+        validator["certificate_hash"] = "0x" + certificate_digit * 64
+
+    def test_one_block_sampling_race_retries_then_accepts_fresh_convergence(self):
+        raced = self.fixture()
+        self.advance_head(raced["validators"][2], delta=1)
+        first = classify_live_prefix_convergence(
+            raced,
+            self.rejected_decision(),
+            attempt=1,
+            now=60,
+        )
+        self.assertEqual(first["action"], "RETRY")
+        self.assertEqual(first["reason"], "single_slot_observation_race")
+        self.assertTrue(first["retryable_one_block_skew"])
+        self.assertGreaterEqual(first["retry_wait_seconds"], 1)
+        self.assertLessEqual(first["retry_wait_seconds"], 32)
+
+        fresh = classify_live_prefix_convergence(
+            self.fixture(),
+            self.accepted_decision(),
+            attempt=2,
+            now=62,
+        )
+        self.assertEqual(fresh["action"], "ACCEPT")
+
+    def test_same_height_different_hash_is_not_retryable(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=0)
+        result = classify_live_prefix_convergence(
+            value, self.rejected_decision(), attempt=1, now=60
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertFalse(result["retryable_one_block_skew"])
+
+    def test_more_than_one_block_skew_is_not_retryable(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=2)
+        result = classify_live_prefix_convergence(
+            value, self.rejected_decision(), attempt=1, now=60
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertFalse(result["retryable_one_block_skew"])
+
+    def test_invalid_certificate_is_not_retryable(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=1)
+        value["validators"][2]["certificate_block_hash"] = "0x" + "f" * 64
+        result = classify_live_prefix_convergence(
+            value, self.rejected_decision(), attempt=1, now=60
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertFalse(result["retryable_one_block_skew"])
+
+    def test_retry_budget_exhaustion_remains_fail_closed(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=1)
+        result = classify_live_prefix_convergence(
+            value,
+            self.rejected_decision(),
+            attempt=5,
+            max_attempts=5,
+            now=60,
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertEqual(result["reason"], "retry_budget_exhausted")
+
+    def test_safety_boundaries_cannot_be_reclassified(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=1)
+        value["mainnet_changed"] = True
+        with self.assertRaisesRegex(EvidenceBoundPrefixError, "must be false"):
+            classify_live_prefix_convergence(
+                value, self.rejected_decision(), attempt=1, now=60
+            )
+
+    def test_retry_segment_is_read_only_and_concurrent(self):
+        script = Path("scripts/junca_public_testnet_foundation.sh").read_text(encoding="utf-8")
+        segment = script.split("# LIVE_PREFIX_CONVERGENCE_RETRY_START", 1)[1].split(
+            "# LIVE_PREFIX_CONVERGENCE_RETRY_END", 1
+        )[0]
+        self.assertIn("--mode convergence", segment)
+        self.assertIn("live_prefix_capture_pids", segment)
+        self.assertIn("capture_validator_observation", segment)
+        self.assertIn(") &", segment)
+        self.assertIn("for live_prefix_attempt in 1 2 3 4 5", segment)
+        for forbidden in (
+            "terraform apply",
+            "terraform -chdir=infra/aws/public-testnet apply",
+            "ensure_validator_service_available",
+            "aws ec2 modify",
+            "aws ec2 terminate",
+        ):
+            self.assertNotIn(forbidden, segment)
+'''
+          test_path.write_text(tests.replace(marker, additions + marker, 1), encoding='utf-8')
+          PY
+
+      - name: Validate syntax and focused safety suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/junca_public_testnet_foundation.sh
+          python -m py_compile scripts/junca_live_rollout_prefix_gate.py
+          python -m unittest tests/test_junca_live_rollout_prefix_gate.py -v
+          python -m unittest tests/test_junca_social_ecosystem_chain_aws_foundation.py -v
+
+      - name: Commit verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/junca_live_rollout_prefix_gate.py \
+            scripts/junca_public_testnet_foundation.sh \
+            tests/test_junca_live_rollout_prefix_gate.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'repair: retry only proven one-block validator observation races'
+          git push origin HEAD:repair/validator-live-prefix-convergence-20260806
