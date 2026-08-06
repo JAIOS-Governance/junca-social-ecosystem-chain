@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import time
 import sys
 from typing import Any, Mapping, Sequence
 
@@ -718,6 +719,113 @@ def evaluate_evidence_bound_rolling_compatibility(
     }
 
 
+
+RETRYABLE_HEAD_REASON = "validators disagree on finalized head or certificate"
+MAX_LIVE_PREFIX_CONVERGENCE_ATTEMPTS = 5
+
+
+def _retryable_one_block_skew(evidence: Mapping[str, Any]) -> bool:
+    validators = evidence.get("validators")
+    if (
+        not isinstance(validators, Sequence)
+        or isinstance(validators, (str, bytes))
+        or len(validators) != 3
+        or any(not isinstance(item, Mapping) for item in validators)
+    ):
+        return False
+    try:
+        heads = [canonical._head(item) for item in validators]
+    except canonical.RollingCompatibilityError:
+        return False
+    if len(set(heads)) != 2:
+        return False
+    heights = [item[0] for item in heads]
+    if max(heights) - min(heights) != 1:
+        return False
+    by_height: dict[int, set[tuple[str, str]]] = {}
+    for height, head_hash, certificate_hash in heads:
+        by_height.setdefault(height, set()).add((head_hash, certificate_hash))
+    return len(by_height) == 2 and all(len(values) == 1 for values in by_height.values())
+
+
+def classify_live_prefix_convergence(
+    evidence: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int = MAX_LIVE_PREFIX_CONVERGENCE_ATTEMPTS,
+    now: int | None = None,
+) -> Mapping[str, Any]:
+    _require(
+        isinstance(attempt, int)
+        and not isinstance(attempt, bool)
+        and isinstance(max_attempts, int)
+        and not isinstance(max_attempts, bool)
+        and 1 <= attempt <= max_attempts <= 10,
+        "convergence attempt bounds are invalid",
+    )
+    for source_name, source in (("evidence", evidence), ("decision", decision)):
+        for boundary in canonical.BOUNDARIES:
+            _require(
+                source.get(boundary) is False,
+                f"{source_name} {boundary} must be false",
+            )
+
+    state = decision.get("state")
+    if state == "EVIDENCE_BOUND_PREFIX_ACCEPTED":
+        action = "ACCEPT"
+        reason = "exact_head_convergence_proven"
+        retryable = False
+        wait_seconds = 0
+    elif state == "EVIDENCE_BOUND_PREFIX_REJECTED":
+        gate_reason = str(decision.get("reason", ""))
+        retryable = gate_reason == RETRYABLE_HEAD_REASON and _retryable_one_block_skew(evidence)
+        if not retryable:
+            action = "REJECT"
+            reason = "unsafe_or_non_transient_head_divergence"
+            wait_seconds = 0
+        elif attempt >= max_attempts:
+            action = "REJECT"
+            reason = "retry_budget_exhausted"
+            wait_seconds = 0
+        else:
+            positive_intervals = {
+                item.get("block_interval_seconds")
+                for item in evidence.get("validators", [])
+                if isinstance(item, Mapping)
+                and isinstance(item.get("block_interval_seconds"), int)
+                and not isinstance(item.get("block_interval_seconds"), bool)
+                and item.get("block_interval_seconds") > 0
+            }
+            interval = positive_intervals.pop() if len(positive_intervals) == 1 else 30
+            current = int(time.time()) if now is None else now
+            _require(
+                isinstance(current, int) and not isinstance(current, bool) and current >= 0,
+                "convergence clock is invalid",
+            )
+            wait_seconds = ((-current) % interval) + 2
+            action = "RETRY"
+            reason = "single_slot_observation_race"
+    else:
+        action = "REJECT"
+        reason = "non_retryable_gate_state"
+        retryable = False
+        wait_seconds = 0
+
+    return {
+        "schema_version": "junca-validator-live-prefix-convergence/v1",
+        "action": action,
+        "reason": reason,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "retryable_one_block_skew": retryable,
+        "retry_wait_seconds": wait_seconds,
+        "mainnet_changed": False,
+        "assets_moved": False,
+        "bridge_activated": False,
+    }
+
+
 def _read(path: str | Path) -> dict[str, Any]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -729,12 +837,54 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("live-prefix", "rolling"),
+        choices=("live-prefix", "rolling", "convergence"),
         default="live-prefix",
     )
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--decision")
+    parser.add_argument("--attempt", type=int, default=1)
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=MAX_LIVE_PREFIX_CONVERGENCE_ATTEMPTS,
+    )
     args = parser.parse_args(argv)
+
+    if args.mode == "convergence":
+        try:
+            _require(bool(args.decision), "convergence decision path is required")
+            result = classify_live_prefix_convergence(
+                _read(args.evidence),
+                _read(args.decision),
+                attempt=args.attempt,
+                max_attempts=args.max_attempts,
+            )
+        except (
+            OSError,
+            json.JSONDecodeError,
+            EvidenceBoundPrefixError,
+            canonical.RollingCompatibilityError,
+        ) as exc:
+            result = {
+                "schema_version": "junca-validator-live-prefix-convergence/v1",
+                "action": "REJECT",
+                "reason": str(exc),
+                "attempt": args.attempt,
+                "max_attempts": args.max_attempts,
+                "retryable_one_block_skew": False,
+                "retry_wait_seconds": 0,
+                "mainnet_changed": False,
+                "assets_moved": False,
+                "bridge_activated": False,
+            }
+        Path(args.output).write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
+
     try:
         evidence = _read(args.evidence)
         if args.mode == "rolling":

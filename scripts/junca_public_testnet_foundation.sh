@@ -3738,9 +3738,112 @@ write_live_rollout_prefix_readback() {
       assets_moved: false,
       bridge_activated: false
     }' > artifacts/live-prefix-readback.json
-  python scripts/junca_live_rollout_prefix_gate.py \
-    --evidence artifacts/live-prefix-readback.json \
-    --output artifacts/live-prefix-decision.json
+  local live_prefix_attempt
+  local live_prefix_gate_exit
+  local live_prefix_action
+  local live_prefix_wait_seconds
+  local live_prefix_converged=false
+  local live_prefix_capture_failed
+  local live_prefix_pid
+  local -a live_prefix_capture_pids
+  : > artifacts/live-prefix-convergence-attempts.jsonl
+  # LIVE_PREFIX_CONVERGENCE_RETRY_START
+  for live_prefix_attempt in 1 2 3 4 5; do
+    set +e
+    python scripts/junca_live_rollout_prefix_gate.py \
+      --evidence artifacts/live-prefix-readback.json \
+      --output artifacts/live-prefix-decision.json
+    live_prefix_gate_exit=$?
+    set -e
+    python scripts/junca_live_rollout_prefix_gate.py \
+      --mode convergence \
+      --evidence artifacts/live-prefix-readback.json \
+      --decision artifacts/live-prefix-decision.json \
+      --attempt "$live_prefix_attempt" \
+      --max-attempts 5 \
+      --output artifacts/live-prefix-convergence-classification.json
+    jq -c \
+      --argjson gate_exit "$live_prefix_gate_exit" \
+      '. + {gate_exit: $gate_exit}' \
+      artifacts/live-prefix-convergence-classification.json \
+      >> artifacts/live-prefix-convergence-attempts.jsonl
+    live_prefix_action="$(
+      jq -er '.action | select(. == "ACCEPT" or . == "RETRY" or . == "REJECT")' \
+        artifacts/live-prefix-convergence-classification.json
+    )"
+    case "$live_prefix_action" in
+      ACCEPT)
+        test "$live_prefix_gate_exit" = 0
+        live_prefix_converged=true
+        break
+        ;;
+      REJECT)
+        jq -s '.' artifacts/live-prefix-convergence-attempts.jsonl \
+          > artifacts/live-prefix-convergence-attempts.json
+        return 1
+        ;;
+      RETRY)
+        test "$live_prefix_gate_exit" != 0
+        live_prefix_wait_seconds="$(
+          jq -er '
+            .retry_wait_seconds
+            | select(type == "number" and . >= 1 and . <= 32)
+          ' artifacts/live-prefix-convergence-classification.json
+        )"
+        sleep "$live_prefix_wait_seconds"
+        live_prefix_capture_pids=()
+        live_prefix_capture_failed=false
+        for index in 0 1 2; do
+          observation_path="artifacts/live-prefix-validator-$((index + 1)).json"
+          state_volume_id="$(
+            jq -er \
+              ".[$index].volume_id |
+                select(type == \"string\" and
+                  test(\"^vol-[0-9a-f]{8,17}$\"))" \
+              <<<"$validator_state_rollback"
+          )"
+          (
+            capture_validator_observation \
+              "validator-0$((index + 1))" \
+              "${current_instances[$index]}" \
+              "$observation_path"
+            enriched_observation_path="${observation_path%.json}.enriched.json"
+            jq --arg volume_id "$state_volume_id" \
+              '. + {volume_id: $volume_id}' \
+              "$observation_path" >"$enriched_observation_path"
+            mv "$enriched_observation_path" "$observation_path"
+          ) &
+          live_prefix_capture_pids+=("$!")
+        done
+        for live_prefix_pid in "${live_prefix_capture_pids[@]}"; do
+          if ! wait "$live_prefix_pid"; then
+            live_prefix_capture_failed=true
+          fi
+        done
+        if [[ "$live_prefix_capture_failed" == true ]]; then
+          jq -s '.' artifacts/live-prefix-convergence-attempts.jsonl \
+            > artifacts/live-prefix-convergence-attempts.json
+          return 1
+        fi
+        jq -s '.' artifacts/live-prefix-validator-{1,2,3}.json \
+          > artifacts/live-prefix-validators.json
+        jq \
+          --argjson observed_unix_time "$(date +%s)" \
+          --slurpfile validators artifacts/live-prefix-validators.json \
+          '.validators = $validators[0] |
+            .observed_unix_time = $observed_unix_time' \
+          artifacts/live-prefix-readback.json \
+          > artifacts/live-prefix-readback.retry.json
+        mv artifacts/live-prefix-readback.retry.json \
+          artifacts/live-prefix-readback.json
+        ;;
+      *) return 2 ;;
+    esac
+  done
+  # LIVE_PREFIX_CONVERGENCE_RETRY_END
+  jq -s '.' artifacts/live-prefix-convergence-attempts.jsonl \
+    > artifacts/live-prefix-convergence-attempts.json
+  test "$live_prefix_converged" = true
 }
 
 write_rolling_compatibility_evidence() {
