@@ -1,0 +1,297 @@
+name: JUNCA Validator Runtime Environment Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-runtime-environment-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-runtime-environment-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover-and-accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: public-testnet
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-runtime-env-recovery-${{ github.run_id }}
+
+      - name: Resolve current three-validator fleet
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account == $account and
+            (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[] | {
+              instance_id: .InstanceId,
+              validator: (.Tags[] | select(.Key == "Validator") | .Value),
+              private_ip: .PrivateIpAddress,
+              state: .State.Name
+            }] | sort_by(.validator) |
+            select(
+              length == 3 and
+              map(.validator) == ["01","02","03"] and
+              (map(.instance_id) | unique | length) == 3 and
+              all(.[]; .state == "running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
+          jq -e --argjson expected "$(jq '[.[].instance_id] | sort' artifacts/validators.json)" '
+            [.InstanceInformationList[] | select(.PingStatus == "Online") | .InstanceId] |
+            sort | . == $expected
+          ' artifacts/ssm-instances.json >/dev/null
+
+      - name: Restore exact launch-bound runtime environment serially
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/recover-runtime-env.sh <<'REMOTE'
+          set -Eeuo pipefail
+          trap 'rc=$?; echo "JUNCA_RUNTIME_ENV_RECOVERY_FAILED rc=${rc}"; systemctl status junca-validator-state.service junca-validator.service junca-public-rpc.service junca-public-explorer.service --no-pager -l || true; journalctl -u junca-validator.service -u junca-public-rpc.service -u junca-public-explorer.service -n 160 --no-pager || true; exit "$rc"' ERR
+
+          token="$(curl -fsS --max-time 10 -X PUT \
+            -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+            http://169.254.169.254/latest/api/token)"
+          curl -fsS --max-time 15 \
+            -H "X-aws-ec2-metadata-token: ${token}" \
+            http://169.254.169.254/latest/user-data \
+            > /tmp/junca-launch-user-data.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('/tmp/junca-launch-user-data.sh').read_text(encoding='utf-8')
+          marker = "cat >/etc/junca/runtime.env <<'EOF'\n"
+          if marker not in source:
+              raise SystemExit('RUNTIME_ENV_BLOCK_NOT_FOUND_IN_LAUNCH_USER_DATA')
+          body = source.split(marker, 1)[1].split('\nEOF\n', 1)[0] + '\n'
+          Path('/tmp/runtime.env.expected').write_text(body, encoding='utf-8')
+          PY
+
+          grep -Fx 'CHAIN_ID=20260723' /tmp/runtime.env.expected >/dev/null
+          grep -Eq '^VALIDATOR_ID=validator-0[123]$' /tmp/runtime.env.expected
+          grep -Eq '^SIGNER_RESOURCE_ARN=arn:aws:kms:us-east-1:595710543956:key/[0-9a-f-]+$' /tmp/runtime.env.expected
+          grep -Eq '^VALIDATOR_SIGNER_BINDINGS=validator-01=arn:aws:kms:.*validator-02=arn:aws:kms:.*validator-03=arn:aws:kms:' /tmp/runtime.env.expected
+          grep -Eq '^VALIDATOR_PEER_ENDPOINTS=validator-01=.*:30303,validator-02=.*:30303,validator-03=.*:30303$' /tmp/runtime.env.expected
+          grep -Eq '^AUTOMATIC_FINALITY_ENABLED=(true|false)$' /tmp/runtime.env.expected
+          grep -Eq '^TESTNET_BLOCK_INTERVAL_SECONDS=[0-9]+$' /tmp/runtime.env.expected
+          grep -Eq '^TESTNET_SLOT_EPOCH_SECONDS=[0-9]+$' /tmp/runtime.env.expected
+          grep -Fx 'BRIDGE_ACTIVATED=false' /tmp/runtime.env.expected >/dev/null
+          ! grep -Eq '\$\{|REPLACE_ME|CHANGEME' /tmp/runtime.env.expected
+
+          install -o root -g junca -m 0640 \
+            /tmp/runtime.env.expected /etc/junca/runtime.env
+          cmp /tmp/runtime.env.expected /etc/junca/runtime.env
+
+          systemctl daemon-reload
+          if systemctl cat junca-validator-state.service >/dev/null 2>&1; then
+            systemctl reset-failed junca-validator-state.service || true
+            systemctl enable junca-validator-state.service
+            systemctl start junca-validator-state.service
+            systemctl is-active --quiet junca-validator-state.service
+            mountpoint -q /var/lib/junca
+            test -f /var/lib/junca/state.sqlite
+            test ! -L /var/lib/junca/state.sqlite
+          fi
+
+          systemctl reset-failed junca-validator.service || true
+          systemctl enable junca-validator.service
+          systemctl restart junca-validator.service
+          validator_ready=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/validator-health.json \
+              && jq -e '
+                .status == "healthy" and
+                .chain_id == 20260723 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' /tmp/validator-health.json >/dev/null; then
+              validator_ready=true
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          test "$validator_ready" = true
+          systemctl is-active --quiet junca-validator.service
+
+          systemctl reset-failed junca-public-rpc.service junca-public-explorer.service || true
+          systemctl enable junca-public-rpc.service junca-public-explorer.service
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          gateway_ready=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8546/health >/tmp/rpc-health.json \
+              && curl -fsS http://127.0.0.1:3000/health >/tmp/explorer-health.json \
+              && jq -e '.status == "healthy" and .read_only == true' /tmp/rpc-health.json >/dev/null \
+              && jq -e '.status == "healthy" and .read_only == true' /tmp/explorer-health.json >/dev/null; then
+              gateway_ready=true
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          test "$gateway_ready" = true
+          systemctl is-active --quiet junca-public-rpc.service
+          systemctl is-active --quiet junca-public-explorer.service
+
+          jq -n \
+            --arg validator_id "$(grep '^VALIDATOR_ID=' /etc/junca/runtime.env | cut -d= -f2-)" \
+            --arg automatic_finality "$(grep '^AUTOMATIC_FINALITY_ENABLED=' /etc/junca/runtime.env | cut -d= -f2-)" \
+            --arg block_interval "$(grep '^TESTNET_BLOCK_INTERVAL_SECONDS=' /etc/junca/runtime.env | cut -d= -f2-)" \
+            --arg slot_epoch "$(grep '^TESTNET_SLOT_EPOCH_SECONDS=' /etc/junca/runtime.env | cut -d= -f2-)" \
+            --slurpfile validator /tmp/validator-health.json \
+            --slurpfile rpc /tmp/rpc-health.json \
+            --slurpfile explorer /tmp/explorer-health.json '{
+              schema_version: "junca-validator-runtime-environment-recovery/v1",
+              accepted: true,
+              validator_id: $validator_id,
+              automatic_finality_enabled: $automatic_finality,
+              block_interval_seconds: $block_interval,
+              slot_epoch_seconds: $slot_epoch,
+              validator: $validator[0],
+              rpc: $rpc[0],
+              explorer: $explorer[0],
+              runtime_environment_source: "exact_instance_launch_user_data",
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }'
+          echo 'JUNCA_RUNTIME_ENV_RECOVERY_ACCEPTED'
+          REMOTE
+
+          jq -Rs '{commands: [.]}' /tmp/recover-runtime-env.sh > /tmp/ssm-runtime-env.json
+          failures=0
+          while IFS=$'\t' read -r validator instance; do
+            echo "Recovering validator-${validator} on ${instance}"
+            command_id="$(aws ssm send-command \
+              --instance-ids "$instance" \
+              --document-name AWS-RunShellScript \
+              --parameters file:///tmp/ssm-runtime-env.json \
+              --comment "JUNCA validator-${validator} runtime environment recovery" \
+              --query Command.CommandId --output text)"
+            echo "$command_id" > "artifacts/runtime-env-command-${validator}.txt"
+            status=""
+            for attempt in $(seq 1 150); do
+              status="$(aws ssm get-command-invocation \
+                --command-id "$command_id" --instance-id "$instance" \
+                --query Status --output text 2>/dev/null || true)"
+              case "$status" in
+                Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+              esac
+              test "$attempt" -lt 150
+              sleep 2
+            done
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/runtime-env-${validator}-${instance}.json"
+            jq -r '.Status, .StandardOutputContent, .StandardErrorContent' \
+              "artifacts/runtime-env-${validator}-${instance}.json"
+            if ! jq -e '
+              .Status == "Success" and
+              (.ResponseCode // -1) == 0 and
+              (.StandardOutputContent | contains("junca-validator-runtime-environment-recovery/v1")) and
+              (.StandardOutputContent | contains("JUNCA_RUNTIME_ENV_RECOVERY_ACCEPTED"))
+            ' "artifacts/runtime-env-${validator}-${instance}.json" >/dev/null; then
+              failures=$((failures + 1))
+              break
+            fi
+          done < <(jq -r '.[] | [.validator,.instance_id] | @tsv' artifacts/validators.json)
+          test "$failures" -eq 0
+
+      - name: Require public Testnet, Explorer and RPC recovery
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          accepted=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS https://health.jaios-governance.org/health > artifacts/public-health.json \
+              && curl -fsS https://explorer.jaios-governance.org/explorer.json > artifacts/public-explorer.json \
+              && curl -fsS -H 'content-type: application/json' \
+                --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+                https://rpc.jaios-governance.org/ > artifacts/public-chain-id.json \
+              && curl -fsS -H 'content-type: application/json' \
+                --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' \
+                https://rpc.jaios-governance.org/ > artifacts/public-block-number.json \
+              && jq -e '
+                .status == "healthy" and .read_only == true and
+                .validator.head_height >= 1 and
+                .mainnet_changed == false and .assets_moved == false and .bridge_activated == false
+              ' artifacts/public-health.json >/dev/null \
+              && jq -e '
+                .status == "ready" and .read_only == true and .finalized_only == true and
+                .head.height >= 1 and .head.signed_power == 3 and .head.total_power == 3 and
+                .mainnet_changed == false and .assets_moved == false and .bridge_activated == false
+              ' artifacts/public-explorer.json >/dev/null \
+              && jq -e '.result == "0x1352773"' artifacts/public-chain-id.json >/dev/null \
+              && jq -e '(.result | test("^0x[0-9a-f]+$"))' artifacts/public-block-number.json >/dev/null; then
+              accepted=true
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 5
+          done
+          test "$accepted" = true
+          jq -n \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --slurpfile validators artifacts/validators.json \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile chain_id artifacts/public-chain-id.json \
+            --slurpfile block artifacts/public-block-number.json '{
+              schema_version: "junca-public-testnet-runtime-recovery/v1",
+              result: "PUBLIC_TESTNET_RECOVERED",
+              workflow_run_url: $run_url,
+              validators: $validators[0],
+              public_readback: {
+                health: $health[0],
+                explorer: $explorer[0],
+                rpc_chain_id: $chain_id[0],
+                rpc_block_number: $block[0]
+              },
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              mainnet_activation_authorized: false
+            }' > artifacts/public-testnet-runtime-recovery.json
+          sha256sum artifacts/public-testnet-runtime-recovery.json \
+            > artifacts/public-testnet-runtime-recovery.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-runtime-environment-recovery-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
