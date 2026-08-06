@@ -1,0 +1,37 @@
+{
+  "schema": "jsec-network-registry/v2",
+  "record_id": "JSEC-NETWORK-REGISTRY-2026-08-06",
+  "effective_date": "2026-08-06",
+  "authority": "JAIOS Institutional Governance",
+  "current": {
+    "formal_name": "JUNCA Social Ecosystem Chain Public Testnet",
+    "abbreviation": "JSEC",
+    "chain_id": 20260723,
+    "chain_id_hex": "0x1352773",
+    "status": "governed-read-only-operations",
+    "rpc": "https://rpc.jaios-governance.org/",
+    "explorer": "https://explorer.jaios-governance.org/",
+    "health": "https://health.jaios-governance.org/health",
+    "mainnet_changed": false,
+    "assets_moved": false,
+    "bridge_activated": false
+  },
+  "retired_legacy": [
+    {
+      "name": "JuncaChain",
+      "chain_id": 668,
+      "former_symbol": "JGC",
+      "current_jsec": false,
+      "registry_action": "deprecate and remove bridge, purchase and add-to-wallet instructions"
+    },
+    {
+      "name": "JuncaChain testnet",
+      "chain_id": 669,
+      "former_symbol": "JGCT",
+      "current_jsec": false,
+      "registry_action": "deprecate and remove faucet, bridge and add-to-wallet instructions"
+    }
+  ],
+  "canonical_identity": "https://docs.jaios-governance.org/current-identity/",
+  "human_readable": "https://docs.jaios-governance.org/network-registry/"
+}
