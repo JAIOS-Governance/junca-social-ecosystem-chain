@@ -1,0 +1,329 @@
+name: JUNCA Validator State Ownership Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-state-ownership-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-state-ownership-recovery
+  cancel-in-progress: false
+
+jobs:
+  repair-and-accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: public-testnet
+    env:
+      AWS_ACCOUNT_ID: "595710543956"
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-state-owner-recovery-${{ github.run_id }}
+
+      - name: Resolve exact validator-01 and current fleet
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account == $account and
+            (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[] | {
+              instance_id: .InstanceId,
+              validator: (.Tags[] | select(.Key == "Validator") | .Value),
+              private_ip: .PrivateIpAddress,
+              state: .State.Name
+            }] | sort_by(.validator) |
+            select(
+              length == 3 and
+              map(.validator) == ["01","02","03"] and
+              (map(.instance_id) | unique | length) == 3 and
+              all(.[]; .state == "running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          validator01="$(jq -er '.[] | select(.validator == "01") | .instance_id' artifacts/validators.json)"
+          echo "$validator01" > artifacts/validator-01-instance-id.txt
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$validator01" \
+            > artifacts/validator-01-ssm.json
+          jq -e --arg instance "$validator01" '
+            [.InstanceInformationList[] |
+              select(.InstanceId == $instance and .PingStatus == "Online")] |
+            length == 1
+          ' artifacts/validator-01-ssm.json >/dev/null
+
+      - name: Reconcile durable-state ownership and recover validator-01
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          validator01="$(cat artifacts/validator-01-instance-id.txt)"
+          cat > /tmp/repair-validator-01-state.sh <<'REMOTE'
+          set -Eeuo pipefail
+          diagnostics() {
+            echo '=== CURRENT USER ==='
+            id junca || true
+            echo '=== STATE MOUNT ==='
+            findmnt /var/lib/junca || true
+            ls -lan /var/lib/junca || true
+            echo '=== SERVICES ==='
+            systemctl status \
+              junca-validator-state.service \
+              junca-validator.service \
+              junca-public-rpc.service \
+              junca-public-explorer.service \
+              --no-pager -l || true
+            echo '=== JOURNAL ==='
+            journalctl \
+              -u junca-validator.service \
+              -u junca-public-rpc.service \
+              -u junca-public-explorer.service \
+              -n 180 --no-pager || true
+          }
+          trap 'rc=$?; echo "JUNCA_STATE_OWNERSHIP_RECOVERY_FAILED rc=${rc}"; diagnostics; exit "$rc"' ERR
+
+          systemctl stop junca-public-rpc.service junca-public-explorer.service || true
+          systemctl stop junca-validator.service || true
+          systemctl reset-failed junca-validator.service junca-public-rpc.service junca-public-explorer.service || true
+
+          systemctl is-active --quiet junca-validator-state.service
+          mountpoint -q /var/lib/junca
+          test -f /var/lib/junca/state.sqlite
+          test ! -L /var/lib/junca/state.sqlite
+          test "$(findmnt -n -o FSTYPE --target /var/lib/junca)" = ext4
+          if find /var/lib/junca -xdev -type l -print -quit | grep -q .; then
+            echo 'SYMLINK_FOUND_IN_VALIDATOR_STATE' >&2
+            exit 1
+          fi
+
+          current_uid="$(id -u junca)"
+          current_gid="$(id -g junca)"
+          test "$current_uid" -gt 0
+          test "$current_gid" -gt 0
+          before_uid="$(stat -c '%u' /var/lib/junca/state.sqlite)"
+          before_gid="$(stat -c '%g' /var/lib/junca/state.sqlite)"
+
+          chown "$current_uid:$current_gid" /var/lib/junca
+          for state_file in \
+            /var/lib/junca/state.sqlite \
+            /var/lib/junca/state.sqlite-wal \
+            /var/lib/junca/state.sqlite-shm \
+            /var/lib/junca/consensus-signing.sqlite \
+            /var/lib/junca/consensus-signing.sqlite-wal \
+            /var/lib/junca/consensus-signing.sqlite-shm; do
+            if [ -e "$state_file" ]; then
+              test ! -L "$state_file"
+              chown "$current_uid:$current_gid" "$state_file"
+              chmod 0640 "$state_file"
+            fi
+          done
+          chmod 0750 /var/lib/junca
+          if command -v restorecon >/dev/null 2>&1; then
+            restorecon -RF /var/lib/junca || true
+          fi
+
+          test "$(stat -c '%u' /var/lib/junca/state.sqlite)" = "$current_uid"
+          test "$(stat -c '%g' /var/lib/junca/state.sqlite)" = "$current_gid"
+          runuser -u junca -- test -r /var/lib/junca/state.sqlite
+          runuser -u junca -- test -w /var/lib/junca
+          runuser -u junca -- python3 - <<'PY'
+          import sqlite3
+          connection = sqlite3.connect('file:/var/lib/junca/state.sqlite?mode=ro', uri=True)
+          result = connection.execute('PRAGMA quick_check').fetchone()
+          connection.close()
+          if not result or result[0] != 'ok':
+              raise SystemExit(f'SQLITE_QUICK_CHECK_FAILED: {result!r}')
+          PY
+
+          test -s /etc/junca/runtime.env
+          grep -Fx 'CHAIN_ID=20260723' /etc/junca/runtime.env >/dev/null
+          grep -Fx 'VALIDATOR_ID=validator-01' /etc/junca/runtime.env >/dev/null
+          grep -Eq '^SIGNER_RESOURCE_ARN=arn:aws:kms:us-east-1:595710543956:key/[0-9a-f-]+$' /etc/junca/runtime.env
+          grep -Fx 'BRIDGE_ACTIVATED=false' /etc/junca/runtime.env >/dev/null
+
+          systemctl daemon-reload
+          systemctl enable junca-validator.service
+          systemctl restart junca-validator.service
+          validator_ready=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/validator-health.json \
+              && jq -e '
+                .status == "healthy" and
+                .chain_id == 20260723 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' /tmp/validator-health.json >/dev/null; then
+              validator_ready=true
+              break
+            fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          test "$validator_ready" = true
+          systemctl is-active --quiet junca-validator.service
+
+          systemctl enable junca-public-rpc.service junca-public-explorer.service
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          gateways_ready=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8546/health >/tmp/rpc-health.json \
+              && curl -fsS http://127.0.0.1:3000/health >/tmp/explorer-health.json \
+              && jq -e '.status == "healthy" and .read_only == true' /tmp/rpc-health.json >/dev/null \
+              && jq -e '.status == "healthy" and .read_only == true' /tmp/explorer-health.json >/dev/null; then
+              gateways_ready=true
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          test "$gateways_ready" = true
+          systemctl is-active --quiet junca-public-rpc.service
+          systemctl is-active --quiet junca-public-explorer.service
+
+          jq -n \
+            --arg before_uid "$before_uid" \
+            --arg before_gid "$before_gid" \
+            --arg current_uid "$current_uid" \
+            --arg current_gid "$current_gid" \
+            --slurpfile validator /tmp/validator-health.json \
+            --slurpfile rpc /tmp/rpc-health.json \
+            --slurpfile explorer /tmp/explorer-health.json '{
+              schema_version: "junca-validator-state-ownership-recovery/v1",
+              accepted: true,
+              ownership: {
+                before_uid: $before_uid,
+                before_gid: $before_gid,
+                restored_uid: $current_uid,
+                restored_gid: $current_gid
+              },
+              sqlite_quick_check: "ok",
+              validator: $validator[0],
+              rpc: $rpc[0],
+              explorer: $explorer[0],
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }'
+          echo 'JUNCA_STATE_OWNERSHIP_RECOVERY_ACCEPTED'
+          REMOTE
+
+          jq -Rs '{commands: [.]}' /tmp/repair-validator-01-state.sh \
+            > /tmp/ssm-validator-01-state.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "$validator01" \
+            --document-name AWS-RunShellScript \
+            --parameters file:///tmp/ssm-validator-01-state.json \
+            --comment "JUNCA validator-01 durable state ownership recovery" \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/validator-01-state-command-id.txt
+          status=""
+          for attempt in $(seq 1 180); do
+            status="$(aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$validator01" \
+              --query Status --output text 2>/dev/null || true)"
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+            esac
+            test "$attempt" -lt 180
+            sleep 2
+          done
+          aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$validator01" \
+            > artifacts/validator-01-state-recovery.json
+          jq -r '.Status, .StandardOutputContent, .StandardErrorContent' \
+            artifacts/validator-01-state-recovery.json
+          jq -e '
+            .Status == "Success" and
+            (.ResponseCode // -1) == 0 and
+            (.StandardOutputContent | contains("junca-validator-state-ownership-recovery/v1")) and
+            (.StandardOutputContent | contains("JUNCA_STATE_OWNERSHIP_RECOVERY_ACCEPTED"))
+          ' artifacts/validator-01-state-recovery.json >/dev/null
+
+      - name: Require public Testnet, Explorer and RPC recovery
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          accepted=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS https://health.jaios-governance.org/health > artifacts/public-health.json \
+              && curl -fsS https://explorer.jaios-governance.org/explorer.json > artifacts/public-explorer.json \
+              && curl -fsS -H 'content-type: application/json' \
+                --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+                https://rpc.jaios-governance.org/ > artifacts/public-chain-id.json \
+              && curl -fsS -H 'content-type: application/json' \
+                --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' \
+                https://rpc.jaios-governance.org/ > artifacts/public-block-number.json \
+              && jq -e '
+                .status == "healthy" and .read_only == true and
+                .validator.head_height >= 1 and
+                .mainnet_changed == false and .assets_moved == false and .bridge_activated == false
+              ' artifacts/public-health.json >/dev/null \
+              && jq -e '
+                .status == "ready" and .read_only == true and .finalized_only == true and
+                .head.height >= 1 and .head.signed_power == 3 and .head.total_power == 3 and
+                .mainnet_changed == false and .assets_moved == false and .bridge_activated == false
+              ' artifacts/public-explorer.json >/dev/null \
+              && jq -e '.result == "0x1352773"' artifacts/public-chain-id.json >/dev/null \
+              && jq -e '(.result | test("^0x[0-9a-f]+$"))' artifacts/public-block-number.json >/dev/null; then
+              accepted=true
+              break
+            fi
+            test "$attempt" -lt 120
+            sleep 5
+          done
+          test "$accepted" = true
+          jq -n \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile chain_id artifacts/public-chain-id.json \
+            --slurpfile block artifacts/public-block-number.json '{
+              schema_version: "junca-public-testnet-recovery-acceptance/v1",
+              result: "PUBLIC_TESTNET_RECOVERED",
+              workflow_run_url: $run_url,
+              public_readback: {
+                health: $health[0],
+                explorer: $explorer[0],
+                rpc_chain_id: $chain_id[0],
+                rpc_block_number: $block[0]
+              },
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false,
+              mainnet_activation_authorized: false
+            }' > artifacts/public-testnet-recovery-acceptance.json
+          sha256sum artifacts/public-testnet-recovery-acceptance.json \
+            > artifacts/public-testnet-recovery-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-state-ownership-recovery-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
