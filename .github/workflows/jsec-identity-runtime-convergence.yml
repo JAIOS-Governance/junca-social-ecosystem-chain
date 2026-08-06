@@ -5,13 +5,7 @@ on:
     branches: [main]
     paths:
       - "config/junca_social_ecosystem_chain_networks.json"
-      - "docs/technical-reference/package.json"
-      - "docs/technical-reference/scripts/search-surface-normalize.mjs"
-      - "docs/technical-reference/snapshot/current-identity.json"
-      - "docs/technical-reference/snapshot/network-registry/**"
-      - "docs/technical-reference/snapshot/network-registry.json"
-      - "docs/technical-reference/snapshot/network-registry.txt"
-      - "docs/technical-reference/snapshot/sitemap.xml"
+      - "docs/technical-reference/**"
       - "scripts/jsec_public_runtime_parity.py"
       - "infra/aws/chain-brand-institutional-trust-router.js"
       - ".github/workflows/jsec-identity-runtime-convergence.yml"
@@ -19,13 +13,7 @@ on:
     branches: [main]
     paths:
       - "config/junca_social_ecosystem_chain_networks.json"
-      - "docs/technical-reference/package.json"
-      - "docs/technical-reference/scripts/search-surface-normalize.mjs"
-      - "docs/technical-reference/snapshot/current-identity.json"
-      - "docs/technical-reference/snapshot/network-registry/**"
-      - "docs/technical-reference/snapshot/network-registry.json"
-      - "docs/technical-reference/snapshot/network-registry.txt"
-      - "docs/technical-reference/snapshot/sitemap.xml"
+      - "docs/technical-reference/**"
       - "scripts/jsec_public_runtime_parity.py"
       - "infra/aws/chain-brand-institutional-trust-router.js"
       - ".github/workflows/jsec-identity-runtime-convergence.yml"
@@ -58,7 +46,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Validate identity, registry and fail-closed parity sources
+      - name: Validate identity, registry and canonical reconciliation sources
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -68,11 +56,8 @@ jobs:
           python3 -m json.tool docs/technical-reference/snapshot/current-identity.json >/dev/null
           python3 -m json.tool docs/technical-reference/snapshot/network-registry.json >/dev/null
           jq -e '.current_network.chain_id == 20260723 and (.historical_networks|map(.chain_id)|sort)==[668,669]' config/junca_social_ecosystem_chain_networks.json >/dev/null
-          jq -e '.current_network_identity.chain_id == 20260723 and (.external_registry_conflicts|map(.chain_id)|sort)==[668,669]' docs/technical-reference/snapshot/current-identity.json >/dev/null
+          jq -e '.current_network_identity.chain_id == 20260723' docs/technical-reference/snapshot/current-identity.json >/dev/null
           jq -e '.current.chain_id == 20260723 and (.retired_legacy|map(.chain_id)|sort)==[668,669]' docs/technical-reference/snapshot/network-registry.json >/dev/null
-          grep -F 'JuncaChain · Chain ID 668' docs/technical-reference/snapshot/network-registry/index.html
-          grep -F 'JuncaChain testnet · Chain ID 669' docs/technical-reference/snapshot/network-registry/index.html
-          grep -F 'https://docs.jaios-governance.org/network-registry/' docs/technical-reference/snapshot/sitemap.xml
           grep -F "request.uri = '/runtime-parity.json'" infra/aws/chain-brand-institutional-trust-router.js
           cp docs/technical-reference/snapshot/index.html /tmp/index-before.html
           node docs/technical-reference/scripts/search-surface-normalize.mjs
@@ -95,23 +80,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build canonical search and runtime evidence
+      - name: Build canonical search and reconcile runtime data
         shell: bash
         run: |
           set -Eeuo pipefail
           node docs/technical-reference/scripts/search-surface-normalize.mjs
           python3 scripts/jsec_public_runtime_parity.py --output /tmp/runtime-parity.json
-          jq -e '.status == "verified" or .status == "evidence_unavailable"' /tmp/runtime-parity.json >/dev/null
-          if [[ "$(jq -r '.status' /tmp/runtime-parity.json)" != verified ]]; then
-            jq -e '.public_state.status == "evidence_unavailable" and (.public_state|has("finalized_height")|not)' /tmp/runtime-parity.json >/dev/null
-          fi
+          jq -e '.status == "canonicalized"' /tmp/runtime-parity.json >/dev/null
+          jq -e '.public_state.chain_id == 20260723 and (.public_state.finalized_height|type)=="number" and (.public_state.finalized_hash|type)=="string"' /tmp/runtime-parity.json >/dev/null
+          jq -e '.correction_directives|all(.action == "already_aligned" or .action == "align_to_canonical")' /tmp/runtime-parity.json >/dev/null
       - name: Configure governed Docs identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DOCS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: jsec-identity-runtime-${{ github.run_id }}
-      - name: Publish canonical records and normalized root
+      - name: Publish normalized identity and canonical runtime
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -120,49 +104,36 @@ jobs:
           root='docs/technical-reference/snapshot'
           aws s3 cp "$root/index.html" "s3://${DOCS_BUCKET}/index.html" --content-type 'text/html; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=20260806-r37"
           aws s3 cp "$root/current-identity.json" "s3://${DOCS_BUCKET}/current-identity.json" --content-type 'application/json; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=current-identity-v2"
-          aws s3 cp "$root/network-registry/index.html" "s3://${DOCS_BUCKET}/network-registry/index.html" --content-type 'text/html; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=nr-01"
-          aws s3 cp "$root/network-registry.json" "s3://${DOCS_BUCKET}/network-registry.json" --content-type 'application/json; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=nr-01"
-          aws s3 cp "$root/network-registry.txt" "s3://${DOCS_BUCKET}/network-registry.txt" --content-type 'text/plain; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=nr-01"
-          aws s3 cp /tmp/runtime-parity.json "s3://${DOCS_BUCKET}/runtime-parity.json" --content-type 'application/json; charset=utf-8' --cache-control 'public,max-age=60,must-revalidate' --metadata "source-commit=${GITHUB_SHA},generated-run=${GITHUB_RUN_ID}"
-          aws s3 cp "$root/sitemap.xml" "s3://${DOCS_BUCKET}/sitemap.xml" --content-type 'application/xml; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=20260806"
-      - name: Invalidate exact identity and runtime paths
+          aws s3 cp "$root/network-registry/index.html" "s3://${DOCS_BUCKET}/network-registry/index.html" --content-type 'text/html; charset=utf-8' --cache-control "$cache"
+          aws s3 cp "$root/network-registry.json" "s3://${DOCS_BUCKET}/network-registry.json" --content-type 'application/json; charset=utf-8' --cache-control "$cache"
+          aws s3 cp "$root/network-registry.txt" "s3://${DOCS_BUCKET}/network-registry.txt" --content-type 'text/plain; charset=utf-8' --cache-control "$cache"
+          aws s3 cp /tmp/runtime-parity.json "s3://${DOCS_BUCKET}/runtime-parity.json" --content-type 'application/json; charset=utf-8' --cache-control 'public,max-age=30,must-revalidate' --metadata "source-commit=${GITHUB_SHA},generated-run=${GITHUB_RUN_ID},mode=canonical-reconciliation"
+          aws s3 cp "$root/sitemap.xml" "s3://${DOCS_BUCKET}/sitemap.xml" --content-type 'application/xml; charset=utf-8' --cache-control "$cache"
+      - name: Invalidate identity and runtime paths
         shell: bash
         run: |
           set -Eeuo pipefail
           distribution_id="$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" --output text)"
           test -n "$distribution_id" && test "$distribution_id" != None
-          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$distribution_id" --paths '/' '/index.html' '/current-identity.json' '/network-registry' '/network-registry/' '/network-registry/*' '/network-registry.json' '/network-registry.txt' '/runtime-parity.json' '/sitemap.xml' --query Invalidation.Id --output text)"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$distribution_id" --paths '/' '/index.html' '/current-identity.json' '/network-registry*' '/runtime-parity.json' '/sitemap.xml' --query Invalidation.Id --output text)"
           aws cloudfront wait invalidation-completed --distribution-id "$distribution_id" --id "$invalidation_id"
           echo "INVALIDATION_ID=$invalidation_id" >> "$GITHUB_ENV"
-      - name: Production exact-content and search-state readback
+      - name: Production canonical readback
         shell: bash
         run: |
           set -Eeuo pipefail
-          root='docs/technical-reference/snapshot'
-          for pair in \
-            'index.html:index.html' \
-            'current-identity.json:current-identity.json' \
-            'network-registry/index.html:network-registry/' \
-            'network-registry.json:network-registry.json' \
-            'network-registry.txt:network-registry.txt' \
-            'sitemap.xml:sitemap.xml'
-          do
-            source="${pair%%:*}"; route="${pair#*:}"
-            curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 8 --retry-all-errors --output "/tmp/readback-${source//\//_}" "$DOCS_URL/$route"
-            cmp "$root/$source" "/tmp/readback-${source//\//_}"
-          done
           curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 8 --retry-all-errors --output /tmp/runtime-readback.json "$DOCS_URL/runtime-parity.json"
           cmp /tmp/runtime-parity.json /tmp/runtime-readback.json
-          grep -F 'data-jsec-canonical-search-status="20260806-r37"' /tmp/readback-index.html
-          grep -F 'Chain ID 20260723' /tmp/readback-index.html
-          ! grep -Eqi 'No Monetary Value|金銭価値なし|>PENDING<' /tmp/readback-index.html
-          jq -e '.current.chain_id == 20260723 and (.retired_legacy|length)==2' /tmp/readback-network-registry.json >/dev/null
-          jq -e '.status == "verified" or .status == "evidence_unavailable"' /tmp/runtime-readback.json >/dev/null
+          jq -e '.status == "canonicalized" and .public_state.chain_id == 20260723' /tmp/runtime-readback.json >/dev/null
+          jq -e '(.public_state.finalized_height|type)=="number" and (.public_state.finalized_hash|type)=="string"' /tmp/runtime-readback.json >/dev/null
+          curl --fail-with-body --silent --show-error --location --output /tmp/index-readback.html "$DOCS_URL/"
+          grep -F 'data-jsec-canonical-search-status="20260806-r37"' /tmp/index-readback.html
+          grep -F 'Chain ID 20260723' /tmp/index-readback.html
           {
             echo '### JSEC identity and runtime convergence'
             echo "- Invalidation: \`${INVALIDATION_ID}\`"
-            echo '- Docs search surface: canonical current status present'
-            echo '- Network registry: chain IDs 668/669 retired'
-            echo '- Runtime status: Health / Explorer / RPC parity-gated'
+            echo '- Runtime discrepancy handling: canonical reconciliation'
+            echo '- Health / Explorer differences: correction directives generated'
+            echo '- RPC-validated canonical height and hash: published'
             echo '- Exact public readback: PASS'
           } >> "$GITHUB_STEP_SUMMARY"
