@@ -147,3 +147,5 @@ jobs:
             /tmp/public-runtime.js
           if-no-files-found: warn
           retention-days: 90
+
+# Re-triggered after workflow registration so the push event can execute the restore.
