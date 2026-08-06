@@ -84,17 +84,23 @@ jobs:
           cmp /tmp/accepted-index.html /tmp/s3-index.html
           cmp /tmp/accepted-runtime.js /tmp/s3-runtime.js
 
-      - name: Invalidate exact Chain evidence paths
+      - name: Invalidate exact Chain evidence paths when permitted
         shell: bash
         run: |
           set -euo pipefail
-          invalidation_id="$(aws cloudfront create-invalidation \
+          invalidation_id="NOT_AUTHORIZED"
+          if requested_id="$(aws cloudfront create-invalidation \
             --distribution-id "$DISTRIBUTION_ID" \
             --paths '/' '/index.html' '/chain-brand-root/index.html' \
               '/chain-brand-root/trust-runtime-v3.js' \
-            --query Invalidation.Id --output text)"
-          aws cloudfront wait invalidation-completed \
-            --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+            --query Invalidation.Id --output text 2>/tmp/cloudfront-invalidation-error)"; then
+            invalidation_id="$requested_id"
+            aws cloudfront wait invalidation-completed \
+              --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          else
+            cat /tmp/cloudfront-invalidation-error >&2
+            echo "::warning title=CloudFront invalidation unavailable::S3 source was restored byte-for-byte; public cache-busting readback will verify edge revalidation."
+          fi
           echo "INVALIDATION_ID=$invalidation_id" >> "$GITHUB_ENV"
 
       - name: Public readback of restored Testnet evidence
@@ -126,7 +132,7 @@ jobs:
             echo '## JUNCA Chain Public Evidence Restore'
             echo "- Accepted source run: \`${ACCEPTED_RUN_ID}\`"
             echo "- Accepted artifact: \`${ACCEPTED_ARTIFACT_ID}\`"
-            echo "- CloudFront invalidation: \`${INVALIDATION_ID}\`"
+            echo "- CloudFront invalidation: \`${INVALIDATION_ID:-NOT_AUTHORIZED}\`"
             echo '- Public Testnet visible: `true`'
             echo '- Last verified finalized height shown: `10699`'
             echo '- Last verified observed time shown: `2026-08-05 02:36:55 UTC`'
@@ -148,4 +154,5 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-# Re-triggered after workflow registration so the push event can execute the restore.
+# The accepted S3 source is authoritative. CloudFront invalidation is optional;
+# cache-busting public readback is the completion gate when the role lacks it.
