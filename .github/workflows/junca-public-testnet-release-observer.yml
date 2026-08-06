@@ -11,7 +11,7 @@ on:
       - "JUNCA Runtime Release Manifest Gate"
       - "JUNCA Validator Foundation Release"
       - "JUNCA Public Testnet Continuity Evidence"
-    types: [requested, in_progress, completed]
+    types: [requested, completed]
 
 permissions:
   actions: write
@@ -43,15 +43,20 @@ jobs:
       - name: Record and authorize governed workflow evidence
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           [[ "$OBSERVED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$OBSERVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$OBSERVED_RUN_URL" == "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}" ]]
 
-          # workflow_run events for an earlier failed attempt may be delivered
-          # after an automatic re-run has already succeeded. Resolve the current
-          # authoritative run state before publishing any operational evidence.
+          provider_status="unknown"
+          if summary="$(curl --fail --silent --show-error --max-time 10 \
+            https://www.githubstatus.com/api/v2/summary.json 2>/dev/null)"; then
+            provider_status="$(jq -r '.components[] | select(.name == "Actions") | .status' <<<"$summary")"
+          fi
+          test -n "$provider_status"
+
           live_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}")"
           live_status="$(jq -er '.status' <<<"$live_run")"
           live_conclusion="$(jq -r '.conclusion // ""' <<<"$live_run")"
@@ -77,23 +82,49 @@ jobs:
           esac
           OBSERVED_UPDATED_AT="$live_updated_at"
 
-          case "$OBSERVED_ACTION" in
-            requested) result="RUN_REQUESTED" ;;
-            in_progress) result="RUNNING" ;;
-            completed)
-              case "$OBSERVED_CONCLUSION" in
-                success) result="VERIFIED" ;;
-                failure) result="REJECTED" ;;
-                cancelled) result="CANCELLED" ;;
-                timed_out) result="TIMED_OUT" ;;
-                action_required) result="ACTION_REQUIRED" ;;
-                skipped) result="SKIPPED" ;;
-                neutral) result="NEUTRAL" ;;
-                *) echo "Unsupported workflow conclusion: $OBSERVED_CONCLUSION" >&2; exit 1 ;;
-              esac
-              ;;
-            *) echo "Unsupported workflow action: $OBSERVED_ACTION" >&2; exit 1 ;;
-          esac
+          provider_interruption=false
+          job_total=0
+          cancelled_jobs=0
+          executable_failures=0
+          if [ "$OBSERVED_ACTION" = "completed" ]; then
+            jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/jobs?per_page=100")"
+            job_total="$(jq '.total_count' <<<"$jobs")"
+            cancelled_jobs="$(jq '[.jobs[] | select(.conclusion == "cancelled")] | length' <<<"$jobs")"
+            executable_failures="$(jq '[.jobs[] | select(
+              .conclusion == "failure" or
+              .conclusion == "timed_out" or
+              .conclusion == "action_required"
+            )] | length' <<<"$jobs")"
+            if [[ "$OBSERVED_CONCLUSION" =~ ^(failure|cancelled|timed_out|startup_failure)$ ]] && \
+               [ "$executable_failures" -eq 0 ] && \
+               { [ "$cancelled_jobs" -gt 0 ] || [ "$job_total" -eq 0 ]; } && \
+               [ "$provider_status" != "operational" ]; then
+              provider_interruption=true
+            fi
+          fi
+
+          if [ "$provider_interruption" = true ]; then
+            result="EXTERNAL_PROVIDER_INTERRUPTION"
+          else
+            case "$OBSERVED_ACTION" in
+              requested) result="RUN_REQUESTED" ;;
+              in_progress) result="RUNNING" ;;
+              completed)
+                case "$OBSERVED_CONCLUSION" in
+                  success) result="VERIFIED" ;;
+                  failure) result="REJECTED" ;;
+                  cancelled) result="CANCELLED" ;;
+                  timed_out) result="TIMED_OUT" ;;
+                  startup_failure) result="STARTUP_FAILURE" ;;
+                  action_required) result="ACTION_REQUIRED" ;;
+                  skipped) result="SKIPPED" ;;
+                  neutral) result="NEUTRAL" ;;
+                  *) echo "Unsupported workflow conclusion: $OBSERVED_CONCLUSION" >&2; exit 1 ;;
+                esac
+                ;;
+              *) echo "Unsupported workflow action: $OBSERVED_ACTION" >&2; exit 1 ;;
+            esac
+          fi
 
           case "$OBSERVED_NAME" in
             "JUNCA Validator Runtime Artifacts")
@@ -152,7 +183,6 @@ jobs:
           esac
 
           issues="266 ${issues}"
-
           main_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           if [ "$main_head" = "$OBSERVED_HEAD_SHA" ]; then
             source_binding="EXACT_CURRENT_MAIN"
@@ -161,7 +191,8 @@ jobs:
           fi
 
           stale_run_cancellations=0
-          if [ "$OBSERVED_ACTION" = "requested" ] && \
+          if [ "$provider_status" = "operational" ] && \
+             [ "$OBSERVED_ACTION" = "requested" ] && \
              [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
              [ -n "$workflow_path" ]; then
             runs="$(gh api --paginate \
@@ -199,16 +230,15 @@ jobs:
           fi
 
           approval_state="$environment_review"
-          if [ "$OBSERVED_ACTION" = "requested" ] && \
+          if [ "$provider_status" = "operational" ] && \
+             [ "$OBSERVED_ACTION" = "requested" ] && \
              [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
              [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
             approval_state="NO_REVIEW_DISCOVERED"
             for attempt in $(seq 1 60); do
-              if deployments="$(
-                gh api \
-                  "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
-                  2>/dev/null
-              )"; then
+              if deployments="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
+                2>/dev/null)"; then
                 count="$(jq 'length' <<<"$deployments")"
                 if [ "$count" -eq 0 ]; then
                   sleep 2
@@ -234,6 +264,9 @@ jobs:
               fi
               sleep 2
             done
+          elif [ "$provider_status" != "operational" ] && \
+               [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
+            approval_state="DEFERRED_PROVIDER_OUTAGE"
           fi
 
           body="$(cat <<EOF
@@ -249,12 +282,16 @@ jobs:
           - Trigger event: \`${OBSERVED_EVENT}\`
           - Source SHA: \`${OBSERVED_HEAD_SHA}\`
           - Source binding: \`${source_binding}\`
+          - GitHub Actions provider: \`${provider_status}\`
+          - Job total: \`${job_total}\`
+          - Cancelled jobs: \`${cancelled_jobs}\`
+          - Executable failures: \`${executable_failures}\`
           - Stale release runs cancelled: \`${stale_run_cancellations}\`
           - Environment review: \`${approval_state}\`
           - Created: \`${OBSERVED_CREATED_AT}\`
           - Updated: \`${OBSERVED_UPDATED_AT}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the authoritative current attempt completes successfully. Historical non-current release runs may be cancelled only when an allowlisted workflow is requested for the exact current-main SHA. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
+          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the authoritative current attempt completes successfully. EXTERNAL_PROVIDER_INTERRUPTION means repository or chain code did not establish a rejection; current-main recovery is delegated to the provider-recovery workflow after GitHub Actions returns to operational status. Historical non-current release runs may be cancelled only when an allowlisted workflow is requested for the exact current-main SHA. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows.
 
           ## Safety boundary
 
@@ -267,8 +304,6 @@ jobs:
           EOF
           )"
 
-          # Historical runs remain append-only in Issue #266. Only the exact
-          # current-main source may replace the single current-state Issue #269.
           if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
             gh api --method PATCH \
               "repos/${GITHUB_REPOSITORY}/issues/269" \
