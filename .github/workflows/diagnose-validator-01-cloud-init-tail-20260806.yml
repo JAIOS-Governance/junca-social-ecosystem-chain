@@ -1,0 +1,59 @@
+name: Diagnose Validator 01 Cloud Init Tail
+
+on:
+  push:
+    branches:
+      - diagnose/validator-01-bootstrap-20260806
+    paths:
+      - '.github/workflows/diagnose-validator-01-cloud-init-tail-20260806.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      INSTANCE_ID: i-0fab97065e4736eaa
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-cloud-init-diagnostic-${{ github.run_id }}
+
+      - name: Capture bounded redacted failure tail
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          jq -n '{commands:[
+            "set -euo pipefail",
+            "{ echo CLOUD_INIT_OUTPUT; tail -n 220 /var/log/cloud-init-output.log 2>/dev/null || true; echo CLOUD_FINAL_JOURNAL; journalctl -u cloud-final.service --no-pager -n 160 2>/dev/null || true; } | sed -E \"s/arn:aws:kms:[^[:space:]]+/[KMS_ARN]/g; s/[0-9a-f]{64}/[SHA256]/g; s/i-[0-9a-f]{8,17}/[INSTANCE_ID]/g; s/vol-[0-9a-f]{8,17}/[VOLUME_ID]/g\""
+          ]}' > artifacts/command.json
+          command_id="$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript --parameters file://artifacts/command.json \
+            --comment 'JUNCA validator cloud-init read-only diagnostic' \
+            --query Command.CommandId --output text)"
+          for attempt in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" --query Status --output text)"
+            case "$status" in Success|Failed|Cancelled|TimedOut|Cancelling) break;; esac
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" > artifacts/invocation.json
+          jq -e '.Status == "Success" and .ResponseCode == 0' artifacts/invocation.json >/dev/null
+          jq -r .StandardOutputContent artifacts/invocation.json > artifacts/cloud-init-tail.txt
+          test -s artifacts/cloud-init-tail.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validator-01-cloud-init-tail-${{ github.run_id }}
+          path: artifacts/cloud-init-tail.txt
+          if-no-files-found: error
+          retention-days: 7
