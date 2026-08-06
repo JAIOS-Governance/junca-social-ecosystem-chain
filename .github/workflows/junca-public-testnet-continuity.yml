@@ -15,7 +15,7 @@ on:
       - "tests/test_public_testnet_continuity.py"
       - ".github/workflows/junca-public-testnet-continuity.yml"
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "11 * * * *"
   workflow_dispatch:
     inputs:
       require_advancement:
@@ -38,11 +38,73 @@ permissions:
   contents: read
 
 concurrency:
-  group: junca-public-testnet-continuity-${{ github.ref }}
+  group: junca-public-testnet-continuity-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
+  provider-gate:
+    name: GitHub Actions provider gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      operational: ${{ steps.status.outputs.operational }}
+      provider_status: ${{ steps.status.outputs.provider_status }}
+    steps:
+      - name: Classify GitHub Actions provider state
+        id: status
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "operational=true" >> "$GITHUB_OUTPUT"
+            echo "provider_status=CI_EVENT_NOT_DEFERRED" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          summary=""
+          for attempt in 1 2 3; do
+            if summary="$(curl --fail --silent --show-error --max-time 10 \
+              https://www.githubstatus.com/api/v2/summary.json)"; then
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+
+          if [ -z "$summary" ]; then
+            echo "operational=false" >> "$GITHUB_OUTPUT"
+            echo "provider_status=STATUS_API_UNAVAILABLE" >> "$GITHUB_OUTPUT"
+            echo "::warning title=GitHub Actions provider gate::Status API unavailable; scheduled continuity run deferred without changing chain state."
+            exit 0
+          fi
+
+          provider_status="$(jq -r '.components[] | select(.name == "Actions") | .status' <<<"$summary")"
+          test -n "$provider_status"
+          echo "provider_status=$provider_status" >> "$GITHUB_OUTPUT"
+          if [ "$provider_status" = "operational" ]; then
+            echo "operational=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "operational=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=GitHub Actions provider incident::Scheduled continuity run deferred while Actions status is $provider_status."
+          fi
+
+      - name: Publish provider-gate summary
+        if: always()
+        run: |
+          {
+            echo "## GitHub Actions Provider Gate"
+            echo "- Event: `${{ github.event_name }}`"
+            echo "- Provider status: `${{ steps.status.outputs.provider_status || 'UNKNOWN' }}`"
+            echo "- Continuity execution authorized: `${{ steps.status.outputs.operational || 'false' }}`"
+            echo "- Mainnet changed: `false`"
+            echo "- Assets moved: `false`"
+            echo "- Bridge activated: `false`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   contract-tests:
+    needs: provider-gate
+    if: needs.provider-gate.outputs.operational == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -60,8 +122,10 @@ jobs:
           python -m unittest tests.test_public_testnet_continuity -v
 
   live-continuity-readback:
-    if: github.event_name != 'pull_request'
-    needs: contract-tests
+    if: github.event_name != 'pull_request' && needs.provider-gate.outputs.operational == 'true'
+    needs:
+      - provider-gate
+      - contract-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
