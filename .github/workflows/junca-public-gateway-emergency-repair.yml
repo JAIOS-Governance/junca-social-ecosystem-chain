@@ -25,7 +25,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: junca-public-testnet-gateway-repair
+  group: junca-public-testnet-gateway-repair-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
       inputs.authorize_repair == 'PUBLIC_TESTNET_GATEWAY_REPAIR'
     runs-on: ubuntu-24.04
     environment: public-testnet
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       AWS_ACCOUNT_ID: "595710543956"
       AWS_REGION: us-east-1
@@ -82,15 +82,19 @@ jobs:
             .Account == $account and
             (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
           ' artifacts/aws-identity.json >/dev/null
-          aws ec2 describe-instances             --filters               "Name=instance-state-name,Values=running"               "Name=tag:Project,Values=JUNCA Social Ecosystem Chain"               "Name=tag:Network,Values=Public Testnet"               "Name=tag:Validator,Values=01,02,03"             > artifacts/ec2-instances.json
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
           jq -e '
             [
               .Reservations[].Instances[] |
               {
                 instance_id: .InstanceId,
-                validator: (
-                  .Tags[] | select(.Key == "Validator") | .Value
-                ),
+                validator: (.Tags[] | select(.Key == "Validator") | .Value),
                 private_ip: .PrivateIpAddress,
                 state: .State.Name
               }
@@ -105,105 +109,289 @@ jobs:
           ' artifacts/ec2-instances.json > artifacts/validators.json
           mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
           printf '%s\n' "${instances[@]}" > artifacts/validator-instance-ids.txt
-          aws ssm describe-instance-information             --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")"             > artifacts/ssm-instances.json
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,; echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
           jq -e --argjson expected "$(jq '[.[].instance_id] | sort' artifacts/validators.json)" '
             [.InstanceInformationList[] | select(.PingStatus == "Online") | .InstanceId] |
             sort |
             . == $expected
           ' artifacts/ssm-instances.json >/dev/null
 
-      - name: Repair gateway services without changing validator state
+      - name: Recover validator runtime and public gateway services
         run: |
           set -euo pipefail
           mapfile -t instances < artifacts/validator-instance-ids.txt
-          remote_command="$(cat <<'REMOTE'
-          set -euo pipefail
-          systemctl is-active --quiet junca-validator.service
-          curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json
-          jq -e '.status == "healthy" and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-validator-health.json >/dev/null
+          cat > /tmp/junca-runtime-recovery.sh <<'REMOTE'
+          set -Eeuo pipefail
+
+          diagnostics() {
+            echo '=== JUNCA SERVICE INVENTORY ==='
+            systemctl list-unit-files --type=service --no-pager | grep -E 'junca|jaios' || true
+            echo '=== JUNCA SERVICE STATUS ==='
+            systemctl status \
+              junca-validator-state.service \
+              junca-validator.service \
+              junca-public-rpc.service \
+              junca-public-explorer.service \
+              --no-pager -l || true
+            echo '=== JUNCA SERVICE JOURNAL ==='
+            journalctl \
+              -u junca-validator-state.service \
+              -u junca-validator.service \
+              -u junca-public-rpc.service \
+              -u junca-public-explorer.service \
+              -n 160 --no-pager || true
+            echo '=== NETWORK LISTENERS ==='
+            ss -lntp || true
+            echo '=== DURABLE STATE ==='
+            findmnt /var/lib/junca || true
+            ls -la /var/lib/junca || true
+            test -f /var/lib/junca/state.sqlite && sha256sum /var/lib/junca/state.sqlite || true
+          }
+
+          trap 'rc=$?; echo "JUNCA_RUNTIME_RECOVERY_FAILED rc=${rc}"; diagnostics; exit "$rc"' ERR
+          echo 'JUNCA_RUNTIME_RECOVERY_BEGIN'
           systemctl daemon-reload
-          systemctl enable junca-public-rpc.service junca-public-explorer.service
-          systemctl restart junca-public-rpc.service junca-public-explorer.service
-          for attempt in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8546/health >/tmp/junca-public-rpc-health.json &&
-               curl -fsS http://127.0.0.1:3000/health >/tmp/junca-public-explorer-health.json; then
+
+          if systemctl cat junca-validator-state.service >/dev/null 2>&1; then
+            systemctl reset-failed junca-validator-state.service || true
+            systemctl enable junca-validator-state.service
+            if ! systemctl is-active --quiet junca-validator-state.service; then
+              systemctl start junca-validator-state.service
+            fi
+            systemctl is-active --quiet junca-validator-state.service
+            mountpoint -q /var/lib/junca
+            test -f /var/lib/junca/state.sqlite
+            test ! -L /var/lib/junca/state.sqlite
+          fi
+
+          systemctl cat junca-validator.service >/dev/null
+          test -x /usr/local/bin/junca-chain-node
+          systemctl reset-failed junca-validator.service || true
+          systemctl enable junca-validator.service
+          if ! systemctl is-active --quiet junca-validator.service; then
+            systemctl start junca-validator.service
+          fi
+
+          validator_ready=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/junca-validator-health.json \
+              && jq -e '
+                .status == "healthy" and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' /tmp/junca-validator-health.json >/dev/null; then
+              validator_ready=true
               break
             fi
-            test "$attempt" -lt 60
+            test "$attempt" -lt 90
             sleep 2
           done
+          test "$validator_ready" = true
+          systemctl is-active --quiet junca-validator.service
+          test -x /usr/local/bin/junca-public-gateway
+
+          if ! systemctl cat junca-public-rpc.service >/dev/null 2>&1; then
+            cat > /etc/systemd/system/junca-public-rpc.service <<'EOF_RPC'
+          [Unit]
+          Description=JUNCA Public Testnet Read-only RPC Gateway
+          After=junca-validator.service
+          Requires=junca-validator.service
+
+          [Service]
+          Type=simple
+          User=junca
+          Group=junca
+          ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 8546
+          Restart=on-failure
+          RestartSec=5
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectSystem=strict
+          ProtectHome=true
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF_RPC
+          fi
+
+          if ! systemctl cat junca-public-explorer.service >/dev/null 2>&1; then
+            cat > /etc/systemd/system/junca-public-explorer.service <<'EOF_EXPLORER'
+          [Unit]
+          Description=JUNCA Public Testnet Finalized-only Explorer
+          After=junca-validator.service
+          Requires=junca-validator.service
+
+          [Service]
+          Type=simple
+          User=junca
+          Group=junca
+          ExecStart=/usr/local/bin/junca-public-gateway --upstream http://127.0.0.1:8545/ --http.addr 0.0.0.0 --http.port 3000
+          Restart=on-failure
+          RestartSec=5
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectSystem=strict
+          ProtectHome=true
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF_EXPLORER
+          fi
+
+          systemctl daemon-reload
+          systemctl reset-failed junca-public-rpc.service junca-public-explorer.service || true
+          systemctl enable junca-public-rpc.service junca-public-explorer.service
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+
+          gateways_ready=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8546/health >/tmp/junca-public-rpc-health.json \
+              && curl -fsS http://127.0.0.1:3000/health >/tmp/junca-public-explorer-health.json \
+              && jq -e '
+                .status == "healthy" and
+                .read_only == true and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' /tmp/junca-public-rpc-health.json >/dev/null \
+              && jq -e '
+                .status == "healthy" and
+                .read_only == true and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' /tmp/junca-public-explorer-health.json >/dev/null; then
+              gateways_ready=true
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          test "$gateways_ready" = true
           systemctl is-active --quiet junca-public-rpc.service
           systemctl is-active --quiet junca-public-explorer.service
-          jq -e '.status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-public-rpc-health.json >/dev/null
-          jq -e '.status == "healthy" and .read_only == true and .mainnet_changed == false and .assets_moved == false and .bridge_activated == false' /tmp/junca-public-explorer-health.json >/dev/null
-          printf '%s\n' '{"schema_version":"junca-public-gateway-local-repair/v1","accepted":true,"mainnet_changed":false,"assets_moved":false,"bridge_activated":false}'
+
+          validator_height="$(jq -r '.validator.head_height // .head.height // .height // "unknown"' /tmp/junca-validator-health.json)"
+          jq -n \
+            --arg validator_height "$validator_height" \
+            --slurpfile validator /tmp/junca-validator-health.json \
+            --slurpfile rpc /tmp/junca-public-rpc-health.json \
+            --slurpfile explorer /tmp/junca-public-explorer-health.json '{
+              schema_version: "junca-public-gateway-local-repair/v2",
+              accepted: true,
+              validator_height: $validator_height,
+              validator: $validator[0],
+              rpc: $rpc[0],
+              explorer: $explorer[0],
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }'
+          echo 'JUNCA_RUNTIME_RECOVERY_ACCEPTED'
           REMOTE
-          )"
-          jq -n --arg command "$remote_command" '{commands: [$command]}'             > artifacts/ssm-gateway-repair.json
-          command_id="$(aws ssm send-command             --instance-ids "${instances[@]}"             --document-name AWS-RunShellScript             --parameters file://artifacts/ssm-gateway-repair.json             --comment "JUNCA Public Testnet gateway HTTP 502 repair"             --query Command.CommandId --output text)"
+
+          jq -Rs '{commands: [.]}' /tmp/junca-runtime-recovery.sh \
+            > artifacts/ssm-gateway-repair.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-gateway-repair.json \
+            --comment "JUNCA Public Testnet validator and gateway recovery" \
+            --query Command.CommandId --output text)"
           echo "$command_id" > artifacts/ssm-command-id.txt
+
+          failures=0
           for instance in "${instances[@]}"; do
             status=""
-            for attempt in $(seq 1 90); do
-              status="$(aws ssm get-command-invocation                 --command-id "$command_id"                 --instance-id "$instance"                 --query Status --output text)"
+            for attempt in $(seq 1 120); do
+              status="$(aws ssm get-command-invocation \
+                --command-id "$command_id" \
+                --instance-id "$instance" \
+                --query Status --output text 2>/dev/null || true)"
               case "$status" in
-                Success) break ;;
-                Failed|Cancelled|TimedOut|Cancelling) break ;;
+                Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
               esac
-              test "$attempt" -lt 90
+              test "$attempt" -lt 120
               sleep 2
             done
-            aws ssm get-command-invocation               --command-id "$command_id"               --instance-id "$instance"               > "artifacts/gateway-repair-${instance}.json"
-            jq -e '
+            aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$instance" \
+              > "artifacts/gateway-repair-${instance}.json"
+            echo "===== ${instance} ====="
+            jq -r '.Status, .StandardOutputContent, .StandardErrorContent' \
+              "artifacts/gateway-repair-${instance}.json"
+            if ! jq -e '
               .Status == "Success" and
               (.ResponseCode // -1) == 0 and
-              (.StandardOutputContent | contains(
-                "junca-public-gateway-local-repair/v1"
-              )) and
-              (.StandardOutputContent | contains("\"accepted\":true"))
-            ' "artifacts/gateway-repair-${instance}.json" >/dev/null
+              (.StandardOutputContent | contains("junca-public-gateway-local-repair/v2")) and
+              (.StandardOutputContent | contains("JUNCA_RUNTIME_RECOVERY_ACCEPTED"))
+            ' "artifacts/gateway-repair-${instance}.json" >/dev/null; then
+              failures=$((failures + 1))
+            fi
           done
+          test "$failures" -eq 0
 
       - name: Verify public ALB recovery and safety boundary
         run: |
           set -euo pipefail
           accepted=false
-          for attempt in $(seq 1 24); do
-            if curl -fsS https://health.jaios-governance.org/health                  > artifacts/public-health.json &&
-               curl -fsS https://explorer.jaios-governance.org/explorer.json                  > artifacts/public-explorer.json &&
-               curl -fsS -H 'content-type: application/json'                  --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'                  https://rpc.jaios-governance.org/                  > artifacts/public-rpc-chain-id.json &&
-               curl -fsS -H 'content-type: application/json'                  --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}'                  https://rpc.jaios-governance.org/                  > artifacts/public-rpc-block-number.json &&
-               jq -e '
-                 .status == "healthy" and
-                 .read_only == true and
-                 .validator.head_height >= 1 and
-                 .mainnet_changed == false and
-                 .assets_moved == false and
-                 .bridge_activated == false
-               ' artifacts/public-health.json >/dev/null &&
-               jq -e '
-                 .status == "ready" and
-                 .read_only == true and
-                 .finalized_only == true and
-                 .head.height >= 1 and
-                 .head.signed_power == 3 and
-                 .head.total_power == 3 and
-                 .mainnet_changed == false and
-                 .assets_moved == false and
-                 .bridge_activated == false
-               ' artifacts/public-explorer.json >/dev/null &&
-               jq -e '.jsonrpc == "2.0" and .id == 1 and .result == "0x1352773"'                  artifacts/public-rpc-chain-id.json >/dev/null &&
-               jq -e '.jsonrpc == "2.0" and .id == 2 and (.result | test("^0x[0-9a-f]+$"))'                  artifacts/public-rpc-block-number.json >/dev/null; then
+          for attempt in $(seq 1 72); do
+            if curl -fsS https://health.jaios-governance.org/health \
+                 > artifacts/public-health.json \
+              && curl -fsS https://explorer.jaios-governance.org/explorer.json \
+                 > artifacts/public-explorer.json \
+              && curl -fsS -H 'content-type: application/json' \
+                 --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+                 https://rpc.jaios-governance.org/ \
+                 > artifacts/public-rpc-chain-id.json \
+              && curl -fsS -H 'content-type: application/json' \
+                 --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' \
+                 https://rpc.jaios-governance.org/ \
+                 > artifacts/public-rpc-block-number.json \
+              && jq -e '
+                .status == "healthy" and
+                .read_only == true and
+                .validator.head_height >= 1 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' artifacts/public-health.json >/dev/null \
+              && jq -e '
+                .status == "ready" and
+                .read_only == true and
+                .finalized_only == true and
+                .head.height >= 1 and
+                .head.signed_power == 3 and
+                .head.total_power == 3 and
+                .mainnet_changed == false and
+                .assets_moved == false and
+                .bridge_activated == false
+              ' artifacts/public-explorer.json >/dev/null \
+              && jq -e '.jsonrpc == "2.0" and .id == 1 and .result == "0x1352773"' \
+                 artifacts/public-rpc-chain-id.json >/dev/null \
+              && jq -e '.jsonrpc == "2.0" and .id == 2 and (.result | test("^0x[0-9a-f]+$"))' \
+                 artifacts/public-rpc-block-number.json >/dev/null; then
               accepted=true
               break
             fi
-            test "$attempt" -lt 24
+            test "$attempt" -lt 72
             sleep 5
           done
-          test "$accepted" = "true"
-          jq -n             --arg workflow_run_url               "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"             --argjson validators "$(cat artifacts/validators.json)"             --slurpfile health artifacts/public-health.json             --slurpfile explorer artifacts/public-explorer.json             --slurpfile chain_id artifacts/public-rpc-chain-id.json             --slurpfile block_number artifacts/public-rpc-block-number.json '{
-              schema_version: "junca-public-gateway-emergency-repair/v1",
-              result: "PUBLIC_GATEWAYS_RECOVERED",
+          test "$accepted" = true
+          jq -n \
+            --arg workflow_run_url \
+              "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --argjson validators "$(cat artifacts/validators.json)" \
+            --slurpfile health artifacts/public-health.json \
+            --slurpfile explorer artifacts/public-explorer.json \
+            --slurpfile chain_id artifacts/public-rpc-chain-id.json \
+            --slurpfile block_number artifacts/public-rpc-block-number.json '{
+              schema_version: "junca-public-gateway-emergency-repair/v2",
+              result: "PUBLIC_TESTNET_AND_GATEWAYS_RECOVERED",
               workflow_run_url: $workflow_run_url,
               validators: $validators,
               public_readback: {
@@ -217,7 +405,8 @@ jobs:
               bridge_activated: false,
               mainnet_activation_authorized: false
             }' > artifacts/public-gateway-repair-evidence.json
-          sha256sum artifacts/public-gateway-repair-evidence.json             > artifacts/public-gateway-repair-evidence.json.sha256
+          sha256sum artifacts/public-gateway-repair-evidence.json \
+            > artifacts/public-gateway-repair-evidence.json.sha256
 
       - uses: actions/upload-artifact@v4
         if: always()
