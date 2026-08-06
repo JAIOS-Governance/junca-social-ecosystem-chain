@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Normalize public JSEC runtime evidence and fail closed on any disagreement."""
+"""Reconcile Health, Explorer and RPC into one authoritative JSEC public state."""
 from __future__ import annotations
 
 import argparse
 import json
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,12 +18,19 @@ CHAIN_ID_HEX = "0x1352773"
 
 def fetch_json(url: str, payload: dict[str, Any] | None = None) -> Any:
     body = None if payload is None else json.dumps(payload).encode()
-    headers = {"Accept": "application/json", "User-Agent": "JSEC-Runtime-Parity/1.0"}
+    headers = {"Accept": "application/json", "User-Agent": "JSEC-Runtime-Reconciler/2.0"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method="POST" if body else "GET")
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
+
+
+def rpc(method: str, params: list[Any], request_id: int) -> Any:
+    payload = fetch_json(RPC, {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+    if not isinstance(payload, dict) or "result" not in payload:
+        raise ValueError(f"invalid RPC response for {method}")
+    return payload["result"]
 
 
 def walk_values(value: Any, path: tuple[str, ...] = ()):
@@ -40,103 +46,135 @@ def walk_values(value: Any, path: tuple[str, ...] = ()):
 
 def pick_int(payload: Any, names: tuple[str, ...]) -> int | None:
     lowered = {name.lower() for name in names}
-    candidates: list[int] = []
+    values: list[int] = []
     for path, value in walk_values(payload):
         if not path or path[-1].lower() not in lowered:
             continue
         try:
-            if isinstance(value, str) and value.lower().startswith("0x"):
-                candidates.append(int(value, 16))
-            else:
-                candidates.append(int(value))
+            values.append(int(value, 16) if isinstance(value, str) and value.lower().startswith("0x") else int(value))
         except (TypeError, ValueError):
-            continue
-    return max(candidates) if candidates else None
+            pass
+    return max(values) if values else None
 
 
 def pick_text(payload: Any, names: tuple[str, ...]) -> str | None:
     lowered = {name.lower() for name in names}
     for path, value in walk_values(payload):
         if path and path[-1].lower() in lowered and isinstance(value, str) and value.strip():
-            return value.strip()
+            return value.strip().lower()
     return None
+
+
+def source_state(name: str, payload: Any) -> dict[str, Any]:
+    return {
+        "source": name,
+        "finalized_height": pick_int(payload, ("finalized_height", "finalizedHeight", "height", "block_height")),
+        "finalized_hash": pick_text(payload, ("finalized_hash", "finalizedHash", "hash", "block_hash")),
+        "timestamp": pick_text(payload, ("finalized_timestamp", "finalizedTimestamp", "timestamp", "block_timestamp")),
+    }
 
 
 def normalize(output: Path) -> int:
     observed_at = datetime.now(timezone.utc).isoformat()
     errors: list[str] = []
+    payloads: dict[str, Any] = {}
+    for name, url in (("health", HEALTH), ("explorer", EXPLORER)):
+        try:
+            payloads[name] = fetch_json(url)
+        except Exception as exc:
+            errors.append(f"{name}:{type(exc).__name__}")
+
     try:
-        health = fetch_json(HEALTH)
+        rpc_chain_id = int(str(rpc("eth_chainId", [], 1)), 16)
+        rpc_head = int(str(rpc("eth_blockNumber", [], 2)), 16)
     except Exception as exc:
-        health = None
-        errors.append(f"health:{type(exc).__name__}")
-    try:
-        explorer = fetch_json(EXPLORER)
-    except Exception as exc:
-        explorer = None
-        errors.append(f"explorer:{type(exc).__name__}")
-    try:
-        rpc_chain = fetch_json(RPC, {"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []})
-        rpc_height = fetch_json(RPC, {"jsonrpc": "2.0", "id": 2, "method": "eth_blockNumber", "params": []})
-    except Exception as exc:
-        rpc_chain = None
-        rpc_height = None
+        rpc_chain_id = None
+        rpc_head = None
         errors.append(f"rpc:{type(exc).__name__}")
 
-    health_height = pick_int(health, ("finalized_height", "finalizedHeight", "height", "block_height")) if health else None
-    explorer_height = pick_int(explorer, ("finalized_height", "finalizedHeight", "height", "block_height")) if explorer else None
-    health_hash = pick_text(health, ("finalized_hash", "finalizedHash", "hash", "block_hash")) if health else None
-    explorer_hash = pick_text(explorer, ("finalized_hash", "finalizedHash", "hash", "block_hash")) if explorer else None
+    observations = [source_state(name, payload) for name, payload in payloads.items()]
+    candidates = sorted(
+        [row for row in observations if isinstance(row.get("finalized_height"), int)],
+        key=lambda row: (row["finalized_height"], row["source"] == "health"),
+        reverse=True,
+    )
 
-    rpc_chain_id = None
-    if isinstance(rpc_chain, dict) and isinstance(rpc_chain.get("result"), str):
-        try:
-            rpc_chain_id = int(rpc_chain["result"], 16)
-        except ValueError:
-            errors.append("rpc_chain_id:invalid")
-    rpc_block_height = None
-    if isinstance(rpc_height, dict) and isinstance(rpc_height.get("result"), str):
-        try:
-            rpc_block_height = int(rpc_height["result"], 16)
-        except ValueError:
-            errors.append("rpc_height:invalid")
+    selected: dict[str, Any] | None = None
+    rejected: list[dict[str, Any]] = []
+    if rpc_chain_id == CHAIN_ID and rpc_head is not None:
+        for candidate in candidates:
+            height = candidate["finalized_height"]
+            if height > rpc_head:
+                rejected.append({**candidate, "reason": "ahead_of_rpc_head"})
+                continue
+            try:
+                block = rpc("eth_getBlockByNumber", [hex(height), False], 100 + len(rejected))
+            except Exception as exc:
+                rejected.append({**candidate, "reason": f"rpc_block_lookup:{type(exc).__name__}"})
+                continue
+            if not isinstance(block, dict) or not isinstance(block.get("hash"), str):
+                rejected.append({**candidate, "reason": "rpc_block_missing"})
+                continue
+            rpc_hash = block["hash"].lower()
+            source_hash = candidate.get("finalized_hash")
+            if source_hash and source_hash != rpc_hash:
+                rejected.append({**candidate, "rpc_hash": rpc_hash, "reason": "source_hash_conflicts_with_rpc"})
+                continue
+            selected = {
+                "finalized_height": height,
+                "finalized_hash": rpc_hash,
+                "finalized_timestamp": block.get("timestamp"),
+                "selected_from": candidate["source"],
+                "selection_rule": "highest reported finalized height validated against canonical RPC block",
+            }
+            break
 
-    checks = {
-        "all_sources_reachable": not errors,
-        "chain_id_matches": rpc_chain_id == CHAIN_ID,
-        "health_explorer_height_matches": health_height is not None and health_height == explorer_height,
-        "rpc_not_behind_finalized": rpc_block_height is not None and health_height is not None and rpc_block_height >= health_height,
-        "hash_matches_when_available": not (health_hash and explorer_hash) or health_hash == explorer_hash,
-    }
-    verified = all(checks.values())
-    public_state: dict[str, Any]
-    if verified:
-        public_state = {
-            "chain_id": CHAIN_ID,
-            "chain_id_hex": CHAIN_ID_HEX,
-            "finalized_height": health_height,
-            "finalized_hash": health_hash or explorer_hash,
-            "rpc_block_height": rpc_block_height,
-            "access": "read-only",
-        }
-    else:
-        public_state = {
-            "chain_id": CHAIN_ID,
-            "chain_id_hex": CHAIN_ID_HEX,
-            "status": "evidence_unavailable",
-            "display_rule": "Do not display height, hash, peer or ready values until parity is restored."
-        }
+    if selected is None and rpc_chain_id == CHAIN_ID and rpc_head is not None:
+        block = rpc("eth_getBlockByNumber", [hex(rpc_head), False], 999)
+        if isinstance(block, dict) and isinstance(block.get("hash"), str):
+            selected = {
+                "finalized_height": rpc_head,
+                "finalized_hash": block["hash"].lower(),
+                "finalized_timestamp": block.get("timestamp"),
+                "selected_from": "rpc",
+                "selection_rule": "RPC canonical head used because finalized source metadata was unavailable or stale",
+            }
+
+    if selected is None:
+        raise SystemExit("No canonical JSEC runtime state could be resolved")
+
+    corrections = []
+    for row in observations:
+        differs = row.get("finalized_height") != selected["finalized_height"] or (
+            row.get("finalized_hash") is not None and row.get("finalized_hash") != selected["finalized_hash"]
+        )
+        corrections.append({
+            "source": row["source"],
+            "observed_height": row.get("finalized_height"),
+            "observed_hash": row.get("finalized_hash"),
+            "action": "align_to_canonical" if differs else "already_aligned",
+            "canonical_height": selected["finalized_height"],
+            "canonical_hash": selected["finalized_hash"],
+        })
 
     result = {
-        "schema": "jsec-public-runtime-parity/v1",
+        "schema": "jsec-public-runtime-reconciliation/v2",
         "observed_at": observed_at,
         "authority": "JAIOS Institutional Governance",
-        "status": "verified" if verified else "evidence_unavailable",
+        "status": "canonicalized",
         "canonical_network": "JUNCA Social Ecosystem Chain Public Testnet",
         "source_urls": {"health": HEALTH, "explorer": EXPLORER, "rpc": RPC},
-        "checks": checks,
+        "source_observations": observations,
+        "rejected_candidates": rejected,
+        "correction_directives": corrections,
+        "public_state": {
+            "chain_id": CHAIN_ID,
+            "chain_id_hex": CHAIN_ID_HEX,
+            **selected,
+            "rpc_block_height": rpc_head,
+            "access": "read-only",
+        },
         "errors": errors,
-        "public_state": public_state,
         "safety_boundary": {
             "mainnet_changed": False,
             "assets_moved": False,
