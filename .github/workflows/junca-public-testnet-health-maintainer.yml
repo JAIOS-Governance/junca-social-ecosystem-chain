@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - ".github/workflows/junca-public-testnet-health-maintainer.yml"
+  schedule:
+    - cron: "23 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -19,21 +21,84 @@ permissions:
   issues: write
 
 concurrency:
-  group: junca-public-testnet-health-maintainer
+  group: junca-public-testnet-health-maintainer-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 env:
   INCIDENT_TITLE: "[AUTO] JUNCA Public Testnet continuity health incident"
 
 jobs:
-  maintain-health:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
-      (github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.event != 'pull_request')
+  provider-gate:
+    name: GitHub Actions provider gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 3
+    outputs:
+      operational: ${{ steps.status.outputs.operational }}
+      provider_status: ${{ steps.status.outputs.provider_status }}
+    steps:
+      - name: Classify GitHub Actions provider state
+        id: status
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "operational=true" >> "$GITHUB_OUTPUT"
+            echo "provider_status=MANUAL_EXECUTION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          summary=""
+          for attempt in 1 2 3; do
+            if summary="$(curl --fail --silent --show-error --max-time 10 \
+              https://www.githubstatus.com/api/v2/summary.json)"; then
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+
+          if [ -z "$summary" ]; then
+            echo "operational=false" >> "$GITHUB_OUTPUT"
+            echo "provider_status=STATUS_API_UNAVAILABLE" >> "$GITHUB_OUTPUT"
+            echo "::warning title=GitHub Actions provider gate::Maintenance deferred because provider status could not be verified."
+            exit 0
+          fi
+
+          provider_status="$(jq -r '.components[] | select(.name == "Actions") | .status' <<<"$summary")"
+          test -n "$provider_status"
+          echo "provider_status=$provider_status" >> "$GITHUB_OUTPUT"
+          if [ "$provider_status" = "operational" ]; then
+            echo "operational=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "operational=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=GitHub Actions provider incident::Recovery reruns deferred while Actions status is $provider_status."
+          fi
+
+      - name: Publish provider-gate summary
+        if: always()
+        run: |
+          {
+            echo "## GitHub Actions Provider Gate"
+            echo "- Event: `${{ github.event_name }}`"
+            echo "- Provider status: `${{ steps.status.outputs.provider_status || 'UNKNOWN' }}`"
+            echo "- Recovery execution authorized: `${{ steps.status.outputs.operational || 'false' }}`"
+            echo "- Mainnet changed: `false`"
+            echo "- Assets moved: `false`"
+            echo "- Bridge activated: `false`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  maintain-health:
+    needs: provider-gate
+    if: >-
+      needs.provider-gate.outputs.operational == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'push' ||
+       github.event_name == 'schedule' ||
+       (github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event != 'pull_request'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     steps:
       - name: Resolve target run
         id: target
@@ -90,7 +155,7 @@ jobs:
           echo "trigger=$(jq -r '.event' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
           echo "updated_at=$(jq -r '.updated_at' /tmp/run-final.json)" >> "${GITHUB_OUTPUT}"
 
-      - name: Perform one bounded recovery rerun
+      - name: Perform one bounded full recovery rerun
         id: recovery
         if: steps.state.outputs.conclusion != 'success' && steps.state.outputs.attempt == '1'
         env:
@@ -98,7 +163,7 @@ jobs:
           RUN_ID: ${{ steps.target.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun-failed-jobs"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun"
           echo "requested=true" >> "${GITHUB_OUTPUT}"
 
       - name: Open or update persistent incident
@@ -155,7 +220,7 @@ jobs:
             echo "- Continuity run: ${{ steps.state.outputs.run_url || steps.target.outputs.run_url }}"
             echo "- Conclusion: ${{ steps.state.outputs.conclusion || steps.target.outputs.conclusion }}"
             echo "- Attempt: ${{ steps.state.outputs.attempt || steps.target.outputs.attempt }}"
-            echo "- Bounded rerun requested: ${{ steps.recovery.outputs.requested || 'false' }}"
+            echo "- Full rerun requested: ${{ steps.recovery.outputs.requested || 'false' }}"
             echo "- Mainnet changed: false"
             echo "- Assets moved: false"
             echo "- Bridge activated: false"
