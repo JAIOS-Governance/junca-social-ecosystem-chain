@@ -1,0 +1,181 @@
+name: Diagnose Validator 01 Bootstrap Boundary
+
+on:
+  push:
+    branches:
+      - diagnose/validator-01-bootstrap-20260806
+    paths:
+      - '.github/workflows/diagnose-validator-01-bootstrap-20260806.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: diagnose-validator-01-bootstrap-20260806
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    environment: public-testnet
+    timeout-minutes: 15
+    env:
+      AWS_REGION: us-east-1
+      DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+      INSTANCE_ID: i-0fab97065e4736eaa
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-validator-bootstrap-diagnostic-${{ github.run_id }}
+
+      - name: Execute bounded read-only bootstrap diagnostic
+        id: diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cat > /tmp/diagnostic.py <<'PY'
+          import grp
+          import json
+          import os
+          import pwd
+          import stat
+          import subprocess
+          from pathlib import Path
+
+          def account_by_name(name):
+              try:
+                  item = pwd.getpwnam(name)
+              except KeyError:
+                  return None
+              return {
+                  "name": item.pw_name,
+                  "uid": item.pw_uid,
+                  "gid": item.pw_gid,
+                  "home": item.pw_dir,
+                  "shell": item.pw_shell,
+              }
+
+          def account_by_uid(uid):
+              try:
+                  item = pwd.getpwuid(uid)
+              except KeyError:
+                  return None
+              return {"name": item.pw_name, "uid": item.pw_uid, "gid": item.pw_gid}
+
+          def group_by_name(name):
+              try:
+                  item = grp.getgrnam(name)
+              except KeyError:
+                  return None
+              return {"name": item.gr_name, "gid": item.gr_gid}
+
+          def group_by_gid(gid):
+              try:
+                  item = grp.getgrgid(gid)
+              except KeyError:
+                  return None
+              return {"name": item.gr_name, "gid": item.gr_gid}
+
+          def path_state(path):
+              value = Path(path)
+              if not value.exists() and not value.is_symlink():
+                  return {"exists": False}
+              metadata = os.lstat(value)
+              return {
+                  "exists": True,
+                  "symlink": stat.S_ISLNK(metadata.st_mode),
+                  "uid": metadata.st_uid,
+                  "gid": metadata.st_gid,
+                  "mode": oct(stat.S_IMODE(metadata.st_mode)),
+                  "size": metadata.st_size,
+                  "links": metadata.st_nlink,
+              }
+
+          def run(command):
+              completed = subprocess.run(command, text=True, capture_output=True, check=False)
+              return {
+                  "exit": completed.returncode,
+                  "stdout": completed.stdout[-6000:],
+                  "stderr": completed.stderr[-2000:],
+              }
+
+          output_log = Path("/var/log/cloud-init-output.log")
+          selected = []
+          if output_log.is_file():
+              keywords = (
+                  "failed", "error", "runtime.env", "groupadd", "useradd",
+                  "permission", "no such file", "junca-validator", "cloud-final",
+              )
+              for line in output_log.read_text(encoding="utf-8", errors="replace").splitlines():
+                  if any(keyword in line.lower() for keyword in keywords):
+                      selected.append(line[:1000])
+              selected = selected[-80:]
+
+          evidence = {
+              "schema_version": "junca-validator-bootstrap-diagnostic/v1",
+              "instance_id": "i-0fab97065e4736eaa",
+              "junca_user": account_by_name("junca"),
+              "uid_992": account_by_uid(992),
+              "junca_group": group_by_name("junca"),
+              "gid_992": group_by_gid(992),
+              "paths": {
+                  "/etc/junca": path_state("/etc/junca"),
+                  "/etc/junca/runtime.env": path_state("/etc/junca/runtime.env"),
+                  "/etc/junca/genesis.json": path_state("/etc/junca/genesis.json"),
+                  "/etc/junca/validator.toml": path_state("/etc/junca/validator.toml"),
+                  "/var/lib/junca": path_state("/var/lib/junca"),
+                  "/var/lib/junca/state.sqlite": path_state("/var/lib/junca/state.sqlite"),
+              },
+              "cloud_init": run(["cloud-init", "status", "--long"]),
+              "cloud_final": run(["systemctl", "show", "cloud-final.service", "--property=ActiveState,SubState,Result,ExecMainStatus"]),
+              "validator_service": run(["systemctl", "show", "junca-validator.service", "--property=ActiveState,SubState,Result,ExecMainStatus"]),
+              "selected_cloud_init_output": selected,
+              "mutation_performed": False,
+              "mainnet_changed": False,
+              "assets_moved": False,
+              "bridge_activated": False,
+          }
+          print(json.dumps(evidence, sort_keys=True))
+          PY
+          payload="$(base64 -w0 /tmp/diagnostic.py)"
+          jq -n --arg payload "$payload" '{commands:[
+            "set -euo pipefail",
+            "printf %s " + ($payload|@sh) + " | base64 -d >/tmp/junca-bootstrap-diagnostic.py",
+            "python3 /tmp/junca-bootstrap-diagnostic.py",
+            "rm -f /tmp/junca-bootstrap-diagnostic.py"
+          ]}' > artifacts/ssm-bootstrap-diagnostic-command.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://artifacts/ssm-bootstrap-diagnostic-command.json \
+            --comment 'JUNCA validator bootstrap read-only diagnostic' \
+            --query Command.CommandId --output text)"
+          for attempt in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" --query Status --output text)"
+            case "$status" in Success|Failed|Cancelled|TimedOut|Cancelling) break;; esac
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" > artifacts/ssm-bootstrap-diagnostic-invocation.json
+          jq -e '.Status == "Success" and .ResponseCode == 0' artifacts/ssm-bootstrap-diagnostic-invocation.json >/dev/null
+          jq -er .StandardOutputContent artifacts/ssm-bootstrap-diagnostic-invocation.json | jq . > artifacts/validator-01-bootstrap-diagnostic.json
+          jq -e '
+            .instance_id == "i-0fab97065e4736eaa" and
+            .mutation_performed == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/validator-01-bootstrap-diagnostic.json >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validator-01-bootstrap-diagnostic-${{ github.run_id }}
+          path: |
+            artifacts/validator-01-bootstrap-diagnostic.json
+            artifacts/ssm-bootstrap-diagnostic-invocation.json
+          if-no-files-found: error
+          retention-days: 7
