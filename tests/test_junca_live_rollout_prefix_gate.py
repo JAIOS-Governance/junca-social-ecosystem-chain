@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import unittest
 
 from scripts.junca_live_rollout_prefix_gate import (
     EvidenceBoundPrefixError,
+    RETRYABLE_HEAD_REASON,
+    classify_live_prefix_convergence,
     evaluate_evidence_bound_rolling_compatibility,
     evaluate_live_rollout_prefix_v2,
 )
@@ -578,6 +581,131 @@ class EvidenceBoundRollingLifecycleTests(EvidenceBoundLivePrefixTests):
             "fallback",
         ):
             evaluate_evidence_bound_rolling_compatibility(value)
+
+
+class LivePrefixConvergenceTests(unittest.TestCase):
+    @staticmethod
+    def fixture():
+        return EvidenceBoundLivePrefixTests().fixture()
+
+    @staticmethod
+    def rejected_decision():
+        return {
+            "state": "EVIDENCE_BOUND_PREFIX_REJECTED",
+            "reason": RETRYABLE_HEAD_REASON,
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+
+    @staticmethod
+    def accepted_decision():
+        return {
+            "state": "EVIDENCE_BOUND_PREFIX_ACCEPTED",
+            "mainnet_changed": False,
+            "assets_moved": False,
+            "bridge_activated": False,
+        }
+
+    @staticmethod
+    def advance_head(validator, *, delta: int, head_digit: str = "d", certificate_digit: str = "e"):
+        validator["head_height"] += delta
+        validator["head_hash"] = "0x" + head_digit * 64
+        validator["certificate_height"] = validator["head_height"]
+        validator["certificate_block_hash"] = validator["head_hash"]
+        validator["certificate_hash"] = "0x" + certificate_digit * 64
+
+    def test_one_block_sampling_race_retries_then_accepts_fresh_convergence(self):
+        raced = self.fixture()
+        self.advance_head(raced["validators"][2], delta=1)
+        first = classify_live_prefix_convergence(
+            raced,
+            self.rejected_decision(),
+            attempt=1,
+            now=60,
+        )
+        self.assertEqual(first["action"], "RETRY")
+        self.assertEqual(first["reason"], "single_slot_observation_race")
+        self.assertTrue(first["retryable_one_block_skew"])
+        self.assertGreaterEqual(first["retry_wait_seconds"], 1)
+        self.assertLessEqual(first["retry_wait_seconds"], 32)
+
+        fresh = classify_live_prefix_convergence(
+            self.fixture(),
+            self.accepted_decision(),
+            attempt=2,
+            now=62,
+        )
+        self.assertEqual(fresh["action"], "ACCEPT")
+
+    def test_same_height_different_hash_is_not_retryable(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=0)
+        result = classify_live_prefix_convergence(
+            value, self.rejected_decision(), attempt=1, now=60
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertFalse(result["retryable_one_block_skew"])
+
+    def test_more_than_one_block_skew_is_not_retryable(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=2)
+        result = classify_live_prefix_convergence(
+            value, self.rejected_decision(), attempt=1, now=60
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertFalse(result["retryable_one_block_skew"])
+
+    def test_invalid_certificate_is_not_retryable(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=1)
+        value["validators"][2]["certificate_block_hash"] = "0x" + "f" * 64
+        result = classify_live_prefix_convergence(
+            value, self.rejected_decision(), attempt=1, now=60
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertFalse(result["retryable_one_block_skew"])
+
+    def test_retry_budget_exhaustion_remains_fail_closed(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=1)
+        result = classify_live_prefix_convergence(
+            value,
+            self.rejected_decision(),
+            attempt=5,
+            max_attempts=5,
+            now=60,
+        )
+        self.assertEqual(result["action"], "REJECT")
+        self.assertEqual(result["reason"], "retry_budget_exhausted")
+
+    def test_safety_boundaries_cannot_be_reclassified(self):
+        value = self.fixture()
+        self.advance_head(value["validators"][2], delta=1)
+        value["mainnet_changed"] = True
+        with self.assertRaisesRegex(EvidenceBoundPrefixError, "must be false"):
+            classify_live_prefix_convergence(
+                value, self.rejected_decision(), attempt=1, now=60
+            )
+
+    def test_retry_segment_is_read_only_and_concurrent(self):
+        script = Path("scripts/junca_public_testnet_foundation.sh").read_text(encoding="utf-8")
+        segment = script.split("# LIVE_PREFIX_CONVERGENCE_RETRY_START", 1)[1].split(
+            "# LIVE_PREFIX_CONVERGENCE_RETRY_END", 1
+        )[0]
+        self.assertIn("--mode convergence", segment)
+        self.assertIn("live_prefix_capture_pids", segment)
+        self.assertIn("capture_validator_observation", segment)
+        self.assertIn(") &", segment)
+        self.assertIn("for live_prefix_attempt in 1 2 3 4 5", segment)
+        for forbidden in (
+            "terraform apply",
+            "terraform -chdir=infra/aws/public-testnet apply",
+            "ensure_validator_service_available",
+            "aws ec2 modify",
+            "aws ec2 terminate",
+        ):
+            self.assertNotIn(forbidden, segment)
 
 
 if __name__ == "__main__":
