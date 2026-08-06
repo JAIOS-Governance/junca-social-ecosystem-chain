@@ -2,8 +2,8 @@
   "schema_version": "junca-public-gateway-repair-request/v1",
   "authorized_scope": "PUBLIC_TESTNET_GATEWAY_REPAIR",
   "incident": "HTTP_502_ALL_PUBLIC_GATEWAYS",
-  "observed_at": "2026-08-06T22:32:42Z",
-  "one_shot_nonce": "gateway-public-evidence-restore-20260806T223242Z-v4",
+  "observed_at": "2026-08-06T23:27:00Z",
+  "one_shot_nonce": "jsec-immediate-runtime-gateway-restore-20260806T232700Z-v5",
   "services": [
     "junca-public-rpc.service",
     "junca-public-explorer.service"
