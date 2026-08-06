@@ -1,0 +1,149 @@
+name: JUNCA Chain Public Evidence Restore
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-chain-public-evidence-restore.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-chain-public-evidence-restore
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DOCS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DISTRIBUTION_ID: E19R4RMVAZRYHJ
+  CHAIN_PUBLIC_URL: https://chain.jaios-governance.org/
+  RUNTIME_URL: https://docs.jaios-governance.org/chain-brand-root/trust-runtime-v3.js
+  ACCEPTED_ARTIFACT_ID: "8916101583"
+  ACCEPTED_RUN_ID: "30969847156"
+  ACCEPTED_INDEX_SHA256: f7ae718410abc3e542f9852c2c81682fadcaf53f4f651d0fe7df413c9f8a5907
+  ACCEPTED_RUNTIME_SHA256: f50317c4ddbc3b8f57d0e97ae383ffe1dbfb07f3592d2099545ff99207d38edf
+
+jobs:
+  restore-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: junca-chain-docs-production
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download exact previously accepted Chain artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/accepted
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ACCEPTED_ARTIFACT_ID}/zip" \
+            > /tmp/accepted.zip
+          unzip -q /tmp/accepted.zip -d /tmp/accepted
+          index="$(find /tmp/accepted -type f -path '*/tmp/chain-trust-v3/index.html' -print -quit)"
+          runtime="$(find /tmp/accepted -type f -path '*/tmp/chain-trust-v3/trust-runtime-v3.js' -print -quit)"
+          test -n "$index" && test -n "$runtime"
+          test "$(sha256sum "$index" | awk '{print $1}')" = "$ACCEPTED_INDEX_SHA256"
+          test "$(sha256sum "$runtime" | awk '{print $1}')" = "$ACCEPTED_RUNTIME_SHA256"
+          cp "$index" /tmp/accepted-index.html
+          cp "$runtime" /tmp/accepted-runtime.js
+          grep -F 'Public Testnet: Active · Finality Verified' /tmp/accepted-index.html
+          grep -F '>10699<' /tmp/accepted-index.html
+          grep -F '2026-08-05 02:36:55 UTC' /tmp/accepted-index.html
+          node --check /tmp/accepted-runtime.js
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-chain-evidence-restore-${{ github.run_id }}
+
+      - name: Restore exact accepted public evidence surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws s3 cp /tmp/accepted-runtime.js \
+            "s3://${DOCS_BUCKET}/chain-brand-root/trust-runtime-v3.js" \
+            --content-type 'application/javascript; charset=utf-8' \
+            --cache-control 'public,max-age=0,must-revalidate' \
+            --metadata "restored-from-run=${ACCEPTED_RUN_ID},accepted-sha256=${ACCEPTED_RUNTIME_SHA256}"
+          aws s3 cp /tmp/accepted-index.html \
+            "s3://${DOCS_BUCKET}/chain-brand-root/index.html" \
+            --content-type 'text/html; charset=utf-8' \
+            --cache-control 'public,max-age=0,must-revalidate' \
+            --metadata "restored-from-run=${ACCEPTED_RUN_ID},accepted-sha256=${ACCEPTED_INDEX_SHA256}"
+          aws s3 cp "s3://${DOCS_BUCKET}/chain-brand-root/index.html" /tmp/s3-index.html
+          aws s3 cp "s3://${DOCS_BUCKET}/chain-brand-root/trust-runtime-v3.js" /tmp/s3-runtime.js
+          cmp /tmp/accepted-index.html /tmp/s3-index.html
+          cmp /tmp/accepted-runtime.js /tmp/s3-runtime.js
+
+      - name: Invalidate exact Chain evidence paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/' '/index.html' '/chain-brand-root/index.html' \
+              '/chain-brand-root/trust-runtime-v3.js' \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          echo "INVALIDATION_ID=$invalidation_id" >> "$GITHUB_ENV"
+
+      - name: Public readback of restored Testnet evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          restored=false
+          for attempt in $(seq 1 36); do
+            if curl --fail-with-body --silent --show-error --location \
+              --max-time 30 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              --output /tmp/public.html \
+              "${CHAIN_PUBLIC_URL}?restore_run=${GITHUB_RUN_ID}&attempt=${attempt}" \
+              && grep -Fq 'Public Testnet: Active · Finality Verified' /tmp/public.html \
+              && grep -Fq '>10699<' /tmp/public.html \
+              && grep -Fq '2026-08-05 02:36:55 UTC' /tmp/public.html; then
+              restored=true
+              break
+            fi
+            sleep 5
+          done
+          test "$restored" = true
+          curl --fail-with-body --silent --show-error --location \
+            --max-time 30 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --output /tmp/public-runtime.js \
+            "${RUNTIME_URL}?restore_run=${GITHUB_RUN_ID}"
+          cmp /tmp/accepted-runtime.js /tmp/public-runtime.js
+          node --check /tmp/public-runtime.js
+          {
+            echo '## JUNCA Chain Public Evidence Restore'
+            echo "- Accepted source run: \`${ACCEPTED_RUN_ID}\`"
+            echo "- Accepted artifact: \`${ACCEPTED_ARTIFACT_ID}\`"
+            echo "- CloudFront invalidation: \`${INVALIDATION_ID}\`"
+            echo '- Public Testnet visible: `true`'
+            echo '- Last verified finalized height shown: `10699`'
+            echo '- Last verified observed time shown: `2026-08-05 02:36:55 UTC`'
+            echo '- Validator state changed: `false`'
+            echo '- Mainnet changed: `false`'
+            echo '- Assets moved: `false`'
+            echo '- Bridge activated: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-chain-public-evidence-restore-${{ github.run_id }}
+          path: |
+            /tmp/accepted-index.html
+            /tmp/accepted-runtime.js
+            /tmp/public.html
+            /tmp/public-runtime.js
+          if-no-files-found: warn
+          retention-days: 90
