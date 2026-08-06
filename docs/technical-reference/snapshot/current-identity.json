@@ -1,69 +1,77 @@
 {
-  "schema": "junca-current-identity/v1",
-  "effective_date": "2026-08-04",
+  "schema": "junca-current-identity/v2",
+  "effective_date": "2026-08-06",
   "governance": "JAIOS Institutional Governance",
   "current_identity": {
     "formal_name": "JUNCA Social Ecosystem Chain",
     "abbreviation": "JSEC",
-    "network_state": "Public Testnet",
-    "statement_en": "The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a Public Testnet.",
-    "statement_ja": "現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、現在はPublic Testnetとして公開されています。"
+    "network_state": "Public Testnet / Governed Read-only Operations",
+    "statement_en": "The current formal technology foundation is JUNCA Social Ecosystem Chain (JSEC), presently published as a governed Public Testnet.",
+    "statement_ja": "現在の正式な技術基盤はJUNCA Social Ecosystem Chain（JSEC）であり、現在は統制されたPublic Testnetとして公開されています。"
+  },
+  "current_network_identity": {
+    "chain_id": 20260723,
+    "chain_id_hex": "0x1352773",
+    "rpc": "https://rpc.jaios-governance.org/",
+    "explorer": "https://explorer.jaios-governance.org/",
+    "health": "https://health.jaios-governance.org/health",
+    "mainnet": false,
+    "assets_moved": false,
+    "bridge_activated": false,
+    "registry_record": "https://docs.jaios-governance.org/network-registry/"
   },
   "institutional_trust": {
-    "jaios_role_en": "JAIOS Institutional Governance continuously organizes international legal developments, jurisdictional frameworks, technology and financial conditions, user-protection requirements and global affairs into maintained audit and management standards.",
-    "jaios_role_ja": "JAIOS Institutional Governanceは、国際法令、各国の制度、技術・金融環境、利用者保護に関する要件および国際情勢を継続的に整理し、監査・管理基準へ反映する機関です。",
-    "junca_audit_en": "JUNCA HOLDINGS advances its business, development, operations and public disclosures while subject to JAIOS review and evidence-based assessment.",
+    "jaios_role_en": "JAIOS Institutional Governance maintains audit, publication and operating standards by organizing international legal, institutional, technology, financial and user-protection requirements.",
+    "jaios_role_ja": "JAIOS Institutional Governanceは、国際法令、制度、技術・金融環境および利用者保護要件を整理し、監査・公開・運営基準へ反映します。",
+    "junca_audit_en": "JUNCA HOLDINGS advances business, development, operations and public disclosures subject to JAIOS review and evidence-based assessment.",
     "junca_audit_ja": "JUNCA HOLDINGSは、JAIOSによる監査と証拠に基づく評価を受けながら、事業・開発・運用・公開を進めています。",
     "jsec_management_en": "JUNCA Social Ecosystem Chain is developed and operated under JAIOS management standards.",
     "jsec_management_ja": "JUNCA Social Ecosystem ChainはJAIOSの管理基準のもとで開発・運営されています。",
-    "trust_outcome_en": "Continuous review, transparent records and controlled publication support fairness, accountability and an operating environment capable of earning international trust.",
-    "trust_outcome_ja": "継続的な監査、透明な記録、統制された公開により、公平性、説明責任、国際的な信頼に耐え得る運営環境を形成します。",
     "canonical_record": "https://docs.jaios-governance.org/institutional-trust/"
   },
   "historical_materials": [
     {
       "name": "JUNCA GLOBAL CHAIN",
       "classification": "historical Proof-of-Concept or legacy project material",
-      "not_current_as": [
-        "core chain",
-        "native token",
-        "business plan",
-        "operating model"
-      ]
+      "not_current_as": ["core chain", "native token", "business plan", "operating model"]
     },
     {
       "name": "legacy uses of junca Chain",
       "classification": "historical Proof-of-Concept or legacy project material",
-      "not_current_as": [
-        "core chain",
-        "deployed current chain",
-        "current technical specification"
-      ]
+      "not_current_as": ["core chain", "deployed current chain", "current technical specification"]
     },
     {
       "name": "JCC / JUNCA CASH",
       "classification": "historical Proof-of-Concept or legacy project material",
-      "not_current_as": [
-        "current native token",
-        "current core business",
-        "current operating model"
-      ]
+      "not_current_as": ["current native token", "current core business", "current operating model"]
     }
   ],
-  "interpretation_rule_en": "Legacy remittance, ATM, payment-terminal, wallet, token, legacy PoSV, former-company or personal-operator descriptions must not be treated as current specifications or governance unless a current official source explicitly confirms them.",
-  "interpretation_rule_ja": "送金、ATM、決済端末、ウォレット、トークン、旧PoSV、旧法人または個人運営に関する過去情報は、現在の公式情報が明示的に確認しない限り、現行仕様または現行ガバナンスとして扱いません。",
-  "public_information_scope": [
-    "institutional governance",
-    "audit relationships",
-    "network management",
-    "verifiable public evidence"
+  "external_registry_conflicts": [
+    {
+      "provider": "thirdweb",
+      "listing": "JuncaChain",
+      "chain_id": 668,
+      "former_symbol": "JGC",
+      "classification": "retired legacy network identity",
+      "current_jsec": false
+    },
+    {
+      "provider": "thirdweb",
+      "listing": "JuncaChain testnet",
+      "chain_id": 669,
+      "former_symbol": "JGCT",
+      "classification": "retired legacy network identity",
+      "current_jsec": false
+    }
   ],
+  "interpretation_rule_en": "Legacy remittance, ATM, payment-terminal, wallet, token, PoSV, former-company, personal-operator or third-party chain-registry descriptions must not be treated as current JSEC specifications or governance unless a current official source explicitly confirms them.",
+  "interpretation_rule_ja": "送金、ATM、決済端末、ウォレット、トークン、旧PoSV、旧法人、個人運営または第三者チェーン登録に関する過去情報は、現在の公式情報が明示的に確認しない限り、現行JSECの仕様またはガバナンスとして扱いません。",
   "official_sources": {
     "institutional_governance": "https://jaios-governance.org/",
     "chain_overview": "https://chain.jaios-governance.org/",
     "technical_reference": "https://docs.jaios-governance.org/",
     "public_explorer": "https://explorer.jaios-governance.org/",
-    "institutional_trust": "https://docs.jaios-governance.org/institutional-trust/",
+    "network_registry": "https://docs.jaios-governance.org/network-registry/",
     "holdings": "https://junca-global.group/",
     "source_repository": "https://github.com/JAIOS-Governance/junca-social-ecosystem-chain"
   },
