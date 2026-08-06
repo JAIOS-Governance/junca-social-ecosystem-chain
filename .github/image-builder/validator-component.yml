@@ -9,8 +9,13 @@ phases:
         inputs:
           commands:
             - set -euo pipefail
-            - getent group junca >/dev/null || groupadd --system junca
-            - id -u junca >/dev/null 2>&1 || useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
+            - test -z "$(getent group 992 2>/dev/null || true)" || test "$(getent group 992 | cut -d: -f1)" = junca
+            - getent group junca >/dev/null || groupadd --system --gid 992 junca
+            - test "$(getent group junca | cut -d: -f3)" = 992
+            - test -z "$(getent passwd 992 2>/dev/null || true)" || test "$(getent passwd 992 | cut -d: -f1)" = junca
+            - id -u junca >/dev/null 2>&1 || useradd --system --uid 992 --gid 992 --home-dir /var/lib/junca --shell /sbin/nologin --no-create-home junca
+            - test "$(id -u junca)" = 992
+            - test "$(id -g junca)" = 992
             - install -d -m 0755 /opt/junca /var/log/junca
             - install -d -o root -g junca -m 0750 /etc/junca
             - dnf install -y python3-boto3
@@ -34,8 +39,10 @@ phases:
             - test -x /usr/local/bin/junca-chain-node
             - test -x /usr/local/bin/junca-public-gateway
             - test -s /etc/junca/genesis.json
-            - id -u junca
-            - getent group junca
+            - test "$(id -u junca)" = 992
+            - test "$(id -g junca)" = 992
+            - test "$(getent passwd 992 | cut -d: -f1)" = junca
+            - test "$(getent group 992 | cut -d: -f1)" = junca
             - test "$(stat -c '%U:%G:%a' /etc/junca)" = "root:junca:750"
             - test "$(stat -c '%U:%G:%a:%h' /etc/junca/genesis.json)" = "root:junca:640:1"
             - test "$(stat -c '%U:%G:%a:%h' /etc/junca/validator.toml)" = "root:junca:640:1"
