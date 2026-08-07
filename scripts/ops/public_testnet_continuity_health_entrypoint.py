@@ -95,7 +95,7 @@ def _health_projection_normalize_snapshot(
             "chain_id": explorer.chain_id,
             "head_height": health_height,
             "authenticated_peer_count": explorer.authenticated_peer_count,
-            "last_block_timestamp": explorer.finalized_timestamp,
+            "finalized_timestamp": explorer.finalized_timestamp,
             "head_hash": health_hash,
             "certificate_hash": explorer.certificate_hash,
             "signed_power": explorer.signed_power,
