@@ -1,0 +1,195 @@
+name: JUNCA Public Testnet Final Recovery Acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-public-testnet-final-recovery-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-public-testnet-final-recovery-acceptance
+  cancel-in-progress: true
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+  TARGET_ARTIFACT_SHA256: fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+
+jobs:
+  accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-final-recovery-${{ github.run_id }}
+
+      - name: Read exact current three-validator state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account==$account and (.Arn|contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[]|{
+              instance_id:.InstanceId,
+              image_id:.ImageId,
+              validator:(.Tags[]|select(.Key=="Validator")|.Value),
+              private_ip:.PrivateIpAddress,
+              state:.State.Name
+            }]|sort_by(.validator)|select(
+              length==3 and map(.validator)==["01","02","03"] and
+              (map(.instance_id)|unique|length)==3 and
+              all(.[];.state=="running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          cat > /tmp/read-final-health.sh <<'REMOTE'
+          set -Eeuo pipefail
+          value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env|tail -n1
+          }
+          test "$(value NODE_ARTIFACT_SHA256)" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz|awk '{print $1}')" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          systemctl is-active --quiet junca-validator.service
+          systemctl is-active --quiet junca-public-rpc.service
+          systemctl is-active --quiet junca-public-explorer.service
+          curl -fsS http://127.0.0.1:8545/health >/tmp/final-health.json
+          jq -e '.status=="healthy" and .chain_id==20260723 and .head_height>=15000 and .authenticated_peer_count==2 and (.authenticated_peer_ids|length)==2 and .automatic_finality_enabled==true and .automatic_finality_loop_running==true and .consensus.authenticated_vote_count==3 and .consensus.last_certificate.height==.head_height and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/final-health.json >/dev/null
+          cat /tmp/final-health.json
+          echo JUNCA_FINAL_VALIDATOR_ACCEPTANCE_PASS
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/read-final-health.sh > /tmp/read-final-health.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file:///tmp/read-final-health.json \
+            --comment 'JUNCA final validator recovery acceptance' \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/validator-acceptance-command-id.txt
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 90); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 90
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/validator-${instance}.json"
+            jq -r '.Status,.StandardOutputContent,.StandardErrorContent' "artifacts/validator-${instance}.json"
+            if jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_FINAL_VALIDATOR_ACCEPTANCE_PASS"))' "artifacts/validator-${instance}.json" >/dev/null; then
+              jq -r '.StandardOutputContent' "artifacts/validator-${instance}.json" | sed '/JUNCA_FINAL_VALIDATOR_ACCEPTANCE_PASS/d' > "artifacts/health-${instance}.json"
+              jq -e . "artifacts/health-${instance}.json" >/dev/null
+            else
+              failures=$((failures+1))
+            fi
+          done
+          test "$failures" -eq 0
+          python3 - <<'PY'
+          import glob,json
+          records=[json.load(open(p)) for p in glob.glob('artifacts/health-i-*.json')]
+          fields={
+            'head_height':{r['head_height'] for r in records},
+            'head_hash':{r['head_hash'] for r in records},
+            'head_timestamp':{r['head_timestamp'] for r in records},
+            'certificate_hash':{r['consensus']['last_certificate']['certificate_hash'] for r in records},
+            'certificate_height':{r['consensus']['last_certificate']['height'] for r in records},
+            'round':{r['consensus']['last_certificate']['round'] for r in records},
+          }
+          divergent={k:list(v) for k,v in fields.items() if len(v)!=1}
+          if divergent: raise SystemExit(f'THREE_VALIDATOR_DIVERGENCE:{divergent}')
+          json.dump({'records':records,'parity':{k:next(iter(v)) for k,v in fields.items()}},open('artifacts/validator-parity.json','w'),indent=2)
+          PY
+
+      - name: Require public Health Explorer RPC parity and advancement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sample() {
+            local suffix="$1"
+            curl -fsS https://health.jaios-governance.org/health > "artifacts/public-health-${suffix}.json"
+            curl -fsS https://explorer.jaios-governance.org/explorer.json > "artifacts/public-explorer-${suffix}.json"
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+              https://rpc.jaios-governance.org/ > "artifacts/public-chain-id-${suffix}.json"
+            curl -fsS -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' \
+              https://rpc.jaios-governance.org/ > "artifacts/public-block-${suffix}.json"
+            jq -e '.status=="healthy" and .read_only==true and .validator.head_height>=15000 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' "artifacts/public-health-${suffix}.json" >/dev/null
+            jq -e '.status=="ready" and .read_only==true and .finalized_only==true and .network.chain_id_decimal==20260723 and .network.peer_count==2 and .head.height>=15000 and .head.signed_power==3 and .head.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' "artifacts/public-explorer-${suffix}.json" >/dev/null
+            jq -e '.result=="0x1352773"' "artifacts/public-chain-id-${suffix}.json" >/dev/null
+            jq -e '.result|test("^0x[0-9a-f]+$")' "artifacts/public-block-${suffix}.json" >/dev/null
+          }
+          sample one
+          first="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/public-block-one.json'))['result'],16))
+          PY
+          )"
+          sleep 40
+          sample two
+          second="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/public-block-two.json'))['result'],16))
+          PY
+          )"
+          test "$second" -gt "$first"
+          jq -e --argjson height "$second" '.head.height==$height' artifacts/public-explorer-two.json >/dev/null
+          jq -e --argjson height "$second" '.validator.head_height==$height' artifacts/public-health-two.json >/dev/null
+          jq -n \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --argjson first "$first" --argjson second "$second" \
+            --argjson validators "$(cat artifacts/validators.json)" \
+            --argjson parity "$(cat artifacts/validator-parity.json)" \
+            --argjson health "$(cat artifacts/public-health-two.json)" \
+            --argjson explorer "$(cat artifacts/public-explorer-two.json)" '{
+              schema_version:"junca-public-testnet-final-recovery-acceptance/v1",
+              result:"ACTIVE_ADVANCING",
+              workflow_run_url:$run_url,
+              first_public_height:$first,
+              second_public_height:$second,
+              validators:$validators,
+              validator_parity:$parity,
+              public_health:$health,
+              public_explorer:$explorer,
+              peer_count:2,
+              signed_power:3,
+              total_power:3,
+              transaction_submission_enabled:false,
+              mainnet_changed:false,
+              assets_moved:false,
+              bridge_activated:false,
+              mainnet_activation_authorized:false
+            }' > artifacts/final-recovery-acceptance.json
+          sha256sum artifacts/final-recovery-acceptance.json > artifacts/final-recovery-acceptance.json.sha256
+          cat artifacts/final-recovery-acceptance.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-public-testnet-final-recovery-acceptance-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
