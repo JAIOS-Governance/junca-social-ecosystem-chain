@@ -11,8 +11,8 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const snapshot = join(root, "snapshot");
 const dist = join(root, "dist");
-const release = "2026.08.02";
-const revision = "R36";
+const release = "2026.08.07";
+const revision = "R38";
 const chainSource =
   process.env.GITHUB_SHA ?? "cb8c3c0494b04c8e99b01ba9525db3b899f0d075";
 const canonicalFoundationCommit = "6de0979b97254c5b4777ede8c82378fd4e143137";
@@ -118,6 +118,7 @@ const runtimePanel = [
   `<p>Explorer observed · <span data-live-runtime="observed-at">${observedAt}</span></p></div>`,
   '<dl><div><dt>Network</dt><dd data-live-runtime="network">VERIFIED</dd></div>',
   '<div><dt>Runtime</dt><dd data-live-runtime="runtime">READY · READ-ONLY</dd></div>',
+  '<div><dt>Evidence Source</dt><dd data-live-runtime="source">CANONICAL EXPLORER</dd></div>',
   `<div><dt>Finality</dt><dd data-live-runtime="finality">${publicValue(head.signed_power)} / ${publicValue(head.total_power)}</dd></div>`,
   `<div><dt>Finalized Height</dt><dd data-live-runtime="height">${publicValue(head.height)}</dd></div>`,
   `<div><dt>Finalized Block Hash</dt><dd data-live-runtime="hash">${publicValue(head.hash)}</dd></div>`,
@@ -132,7 +133,7 @@ const runtimePanel = [
   `<div><dt>Peer Count</dt><dd data-live-runtime="peers">${publicValue(network.peer_count)}</dd></div>`,
   `<div><dt>Block Timestamp</dt><dd data-live-runtime="block-timestamp">${new Date(Number.parseInt(head.timestamp, 16) * 1000).toISOString()}</dd></div></dl>`,
   '<p class="live-runtime-boundary" data-live-runtime="boundaries">',
-  `Mainnet Changed: ${publicValue(explorer.mainnet_changed)} · Assets Moved: ${publicValue(explorer.assets_moved)} · Bridge Activated: ${publicValue(explorer.bridge_activated)} · Mainnet Activation Authorized: false.</p>`,
+  "Mainnet State: UNCHANGED · Production Asset Boundary: UNCHANGED · Bridge State: GOVERNANCE-CONTROLLED · Mainnet Release: SEPARATE AUTHORIZATION.</p>",
   '<div class="runtime-evidence-actions"><a href="https://chain.jaios-governance.org/api/operational">Operational API ↗</a>',
   '<a href="https://explorer.jaios-governance.org/explorer.json">Explorer JSON ↗</a></div>',
   '</section>',
@@ -278,7 +279,7 @@ await cp(
   join(dist, "official-brand-lockup-r32.js"),
 );
 await cp(join(root, "src", "docs-controls.js"), join(dist, "docs-controls-r32.js"));
-await cp(join(root, "src", "live-runtime.js"), join(dist, "live-runtime-r36.js"));
+await cp(join(root, "src", "live-runtime.js"), join(dist, "live-runtime-r38.js"));
 await writeFile(
   join(dist, "secondary-language.js"),
   `${renderSecondaryLanguageRuntime()}\n`,
@@ -300,10 +301,10 @@ for (const route of routes) {
   }
   const decorated = decorateSecondaryCopy(
     source
-      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260802-r36" alt="JUNCA" width="190" height="57"></a>')
-      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260802-r36" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
-      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260802-r36" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
-      .replace("</head>", `${seoHead}<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260802-r36"></script></head>`)
+      .replace('<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><span>JUNCA Social Ecosystem Chain</span></a>', '<a href="/" class="wordmark" aria-label="JUNCA Social Ecosystem Chain home"><img src="/junca-chain-official-wordmark.png?v=20260807-r38" alt="JUNCA" width="190" height="57"></a>')
+      .replace('<div class="documentation-nav-head"><p>Contents / 目次</p><strong>JUNCA Social Ecosystem Chain</strong>', '<div class="documentation-nav-head"><p>Contents / 目次</p><strong class="official-brand-lockup"><img src="/junca-chain-official-wordmark.png?v=20260807-r38" alt="JUNCA" width="200" height="60"><span>Social Ecosystem Chain</span></strong>')
+      .replace('<h1>JUNCA Social Ecosystem Chain</h1>', '<h1 class="official-product-name"><img src="/junca-chain-official-wordmark.png?v=20260807-r38" alt="JUNCA" width="410" height="123"><span>Social Ecosystem Chain</span></h1>')
+      .replace("</head>", `${seoHead}<meta name="application-name" content="JUNCA Docs"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="JUNCA Docs"><link rel="icon" href="/favicon.ico" sizes="any">${governanceLinkStyle}<script defer src="/secondary-language.js?v=20260807-r38"></script></head>`)
       .replace('<span class="badge badge-gold">Technical Reference</span>', `${headerExplorerLink}<span class="badge badge-gold">Technical Reference</span>`)
       .replace("</header>", `</header>${secondaryLanguageToolbar}`)
       .replace(governanceFooter, `${governanceLink}${explorerLink}`)
@@ -313,10 +314,10 @@ for (const route of routes) {
       .replaceAll("junca-j-r21-192.png", "icon-192.png")
       .replaceAll("junca-j-r21-apple-touch.png", "apple-touch-icon.png")
       .replaceAll("junca-j-r21.webmanifest", "manifest.webmanifest")
-      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.08.02 / R36")
-      .replaceAll("20260727-r29", "20260802-r36")
+      .replaceAll("Revision · 2026.07.27 / R21", "Revision · 2026.08.07 / R38")
+      .replaceAll("20260727-r29", "20260807-r38")
       .replaceAll("official-brand-lockup-r29.js", "official-brand-lockup-r32.js")
-      .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-08-02"')
+      .replaceAll('"dateModified":"2026-07-27"', '"dateModified":"2026-08-07"')
       .replaceAll('"version":"2026.07.27-R21"', '"version":"2026.08.02-R36"')
       .replaceAll('"inLanguage":["en","ja"]', '"inLanguage":["en","ja","zh-Hans","es","it","ar"]')
       .replaceAll("Runtime Deployment in Progress", "Governed Read-only Operations")
@@ -335,6 +336,14 @@ for (const route of routes) {
       )
       .replaceAll("No Monetary Value", "Protocol Validation Environment")
       .replaceAll("NO MONETARY VALUE", "PROTOCOL VALIDATION ENVIRONMENT")
+      .replaceAll("No Active", "Governance-Controlled Release")
+      .replaceAll("NO ACTIVE", "GOVERNANCE-CONTROLLED RELEASE")
+      .replaceAll("Not Activated", "Governance-Controlled Activation")
+      .replaceAll("NOT ACTIVATED", "GOVERNANCE-CONTROLLED RELEASE")
+      .replaceAll("not activated", "governance-controlled")
+      .replaceAll("not-activated", "governance-controlled")
+      .replaceAll("Not Launched", "Separate Governance Release")
+      .replaceAll("Not Yet Published", "Registry-Controlled Disclosure")
       .replaceAll(
         "No economic value or legal conformity is guaranteed by JAIOS Institutional Governance.",
         "Economic treatment and legal classification are governed separately from protocol testing and require jurisdiction-specific review.",
@@ -355,15 +364,15 @@ for (const route of routes) {
       .replaceAll("Public endpoint pending", "Read-only evidence access")
       .replaceAll("Pending Verification", "Verification in Progress")
       .replaceAll("Pending verification", "Verification in progress")
-      .replaceAll("Pending Deployment", "Not Yet Published")
+      .replaceAll("Pending Deployment", "Registry-Controlled Disclosure")
       .replaceAll("Runtime Binding Pending", "Verification in Progress")
       .replaceAll("pending verification", "verification in progress")
       .replaceAll("pending acceptance", "acceptance in progress")
       .replaceAll("pending runtime evidence", "runtime verification in progress")
-      .replaceAll("Known, pending and blocked", "Known, under verification and not activated")
-      .replaceAll("verified, targeted, pending and blocked", "verified, targeted, under-verification and not-activated")
-      .replaceAll("Verified, targeted, pending and blocked", "Verified, targeted, under-verification and not-activated")
-      .replaceAll("Meaning of verified, targeted, pending and blocked", "Meaning of verified, targeted, under-verification and not-activated")
+      .replaceAll("Known, pending and blocked", "Known, under verification and governance-controlled")
+      .replaceAll("verified, targeted, pending and blocked", "verified, targeted, under-verification and governance-controlled")
+      .replaceAll("Verified, targeted, pending and blocked", "Verified, targeted, under-verification and governance-controlled")
+      .replaceAll("Meaning of verified, targeted, pending and blocked", "Meaning of verified, targeted, under-verification and governance-controlled")
       .replaceAll(
         "What is known, targeted and still blocked.",
         "What is known, targeted and still under verification.",
@@ -372,11 +381,18 @@ for (const route of routes) {
         "Public administrative, debug, mining, personal and txpool methods must remain unavailable.",
         "Public administrative, debug, mining, personal and txpool methods are intentionally not exposed.",
       )
-      .replaceAll("All routes remain blocked.", "All routes remain not activated.")
+      .replaceAll("All routes remain blocked.", "All routes remain under governance-controlled release authority.")
       .replaceAll("FINALITY_PENDING", "FINALITY_VERIFICATION")
       .replaceAll("finality_pending", "finality_verification")
       .replaceAll("保留中", "検証継続中")
       .replaceAll("No public endpoint is asserted", "Read-only evidence access is available; transaction submission remains disabled")
+      .replaceAll("No test asset symbol is asserted before registry approval", "Test asset symbols are disclosed only through the approved registry")
+      .replaceAll("No endpoint is inferred from implementation state", "Endpoint disclosure is controlled by the approved service registry")
+      .replaceAll("No faucet endpoint is published without auditable issuance controls", "Faucet disclosure follows auditable issuance controls")
+      .replaceAll("No hash is inferred; it must match the deployed canonical genesis", "The published hash must match the deployed canonical genesis")
+      .replaceAll("No deployment or asset movement.", "Deployment and production asset movement remain separately governed.")
+      .replaceAll("No bridge-mediated or production asset movement is represented", "Current Public Testnet evidence records the production asset boundary as unchanged")
+      .replaceAll("All interoperability routes remain paused and evidence-gated", "Interoperability routes require evidence review and separate institutional authorization")
       .replaceAll("Three-validator quorum and advancing head require live evidence", "Three-validator finality quorum is observed; advancing-head activity is reported separately")
       .replaceAll("RPC parity and contract verification are not yet accepted", "Explorer and RPC evidence remain read-only and independently inspectable")
       .replaceAll("Continuous Production Under Review", "Read-only Runtime Snapshot")
@@ -394,10 +410,10 @@ for (const route of routes) {
       .replace('<tr><td>Finality Policy</td><td>Certified finality / strict &gt;2/3 voting power</td><td>Implemented in source; runtime evidence pending</td></tr>', '<tr><td>Finality Policy</td><td>Certified finality · 3 / 3 observed</td><td>Verified against the current read-only Explorer snapshot</td></tr>')
       .replaceAll("34d838b8a59c", "052598647079")
       .replaceAll("052598647079", "6de0979b9725")
-      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260802-r36")
-      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260802-r36")
-      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260802-r36")
-      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260802-r36"></script><script defer src="/live-runtime-r36.js?v=20260802-r36"></script></body>'),
+      .replaceAll("https://docs.jaios-governance.org/icon-192.png", "https://docs.jaios-governance.org/icon-192.png?v=20260807-r38")
+      .replaceAll("https://docs.jaios-governance.org/apple-touch-icon.png", "https://docs.jaios-governance.org/apple-touch-icon.png?v=20260807-r38")
+      .replaceAll("https://docs.jaios-governance.org/manifest.webmanifest", "https://docs.jaios-governance.org/manifest.webmanifest?v=20260807-r38")
+      .replace("</body>", '<script defer src="/docs-controls-r32.js?v=20260807-r38"></script><script defer src="/live-runtime-r38.js?v=20260807-r38"></script></body>'),
     route,
   );
   await writeFile(path, decorated, "utf8");
@@ -405,7 +421,7 @@ for (const route of routes) {
 const installManifestPath = join(dist, "manifest.webmanifest");
 const installManifest = JSON.parse(await readFile(installManifestPath, "utf8"));
 for (const icon of installManifest.icons) {
-  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260802-r36");
+  icon.src = icon.src.replace(/\?v=.*$/, "?v=20260807-r38");
 }
 await writeFile(
   installManifestPath,
@@ -416,8 +432,8 @@ const sitemapPath = join(dist, "sitemap.xml");
 await writeFile(
   sitemapPath,
   (await readFile(sitemapPath, "utf8"))
-    .replaceAll("<lastmod>2026-07-27</lastmod>", "<lastmod>2026-08-02</lastmod>")
-    .replaceAll("<lastmod>2026-07-29</lastmod>", "<lastmod>2026-08-02</lastmod>"),
+    .replaceAll("<lastmod>2026-07-27</lastmod>", "<lastmod>2026-08-07</lastmod>")
+    .replaceAll("<lastmod>2026-07-29</lastmod>", "<lastmod>2026-08-07</lastmod>"),
   "utf8",
 );
 await writeFile(

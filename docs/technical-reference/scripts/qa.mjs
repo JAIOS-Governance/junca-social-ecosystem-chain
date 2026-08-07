@@ -17,6 +17,8 @@ const prohibited = [
   "CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled",
   "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
   "No Monetary Value",
+  "No Active", "Not Activated", "Not Yet Published", "not-activated",
+  "Known, under verification and not activated",
   "Public Testnet Runtime Active", "Runtime Verified", "Live Acceptance Verified", "Automation Active · PASS",
   "Continuous block production remains under review", "No public endpoint is asserted",
   "PENDING", "pending", "保留中",
@@ -55,6 +57,11 @@ for (const route of routes) {
     "20260723",
     "Block Timestamp",
     'data-live-runtime="observed-at"',
+    'data-live-runtime="source"',
+    "CANONICAL EXPLORER",
+    "Mainnet State: UNCHANGED",
+    "Production Asset Boundary: UNCHANGED",
+    "Bridge State: GOVERNANCE-CONTROLLED",
     'data-live-runtime="height"',
     "PR #237 · MERGED",
     "PR #236 · OPEN DRAFT",
@@ -69,11 +76,11 @@ for (const route of routes) {
     'class="header-explorer-link"',
     '<meta name="application-name" content="JUNCA Docs">',
     '<meta name="apple-mobile-web-app-title" content="JUNCA Docs">',
-    'src="/junca-chain-official-wordmark.png?v=20260802-r36"',
-    'src="/official-brand-lockup-r32.js?v=20260802-r36"',
-    'src="/docs-controls-r32.js?v=20260802-r36"',
-    'src="/live-runtime-r36.js?v=20260802-r36"',
-    'src="/secondary-language.js?v=20260802-r36"',
+    'src="/junca-chain-official-wordmark.png?v=20260807-r38"',
+    'src="/official-brand-lockup-r32.js?v=20260807-r38"',
+    'src="/docs-controls-r32.js?v=20260807-r38"',
+    'src="/live-runtime-r38.js?v=20260807-r38"',
+    'src="/secondary-language.js?v=20260807-r38"',
     'href="/favicon.ico"',
     'id="secondary-language-select"',
     'English remains the fixed primary language.',
@@ -86,7 +93,7 @@ for (const route of routes) {
     if (html.toLowerCase().includes(term.toLowerCase())) failures.push(`${route}: prohibited public claim ${term}`);
   }
   const exposedPublicState = visibleText(html).match(
-    /\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE)\b/i,
+    /\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED)\b/i,
   )?.[0];
   if (exposedPublicState) {
     failures.push(`${route}: exposed public failure-oriented state ${exposedPublicState}`);
@@ -144,9 +151,9 @@ const home = await readFile(join(dist, "index.html"), "utf8");
 if (home.length > 100000) failures.push(`/: overview payload is too long (${home.length} bytes)`);
 if (home.includes("codex-preview")) failures.push("/: development preview metadata remains");
 for (const requiredInstallLink of [
-  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260802-r36"',
-  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260802-r36"',
-  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260802-r36"',
+  'rel="icon" href="https://docs.jaios-governance.org/icon-192.png?v=20260807-r38"',
+  'rel="apple-touch-icon" href="https://docs.jaios-governance.org/apple-touch-icon.png?v=20260807-r38"',
+  'rel="manifest" href="https://docs.jaios-governance.org/manifest.webmanifest?v=20260807-r38"',
 ]) {
   if (!home.includes(requiredInstallLink)) failures.push(`/: missing cache-busted install metadata ${requiredInstallLink}`);
 }
@@ -156,7 +163,7 @@ for (const required of [
   "AWS Runtime",
   "Read-only Operations",
   "Assets Moved",
-  "Revision · 2026.08.02 / R36",
+  "Revision · 2026.08.07 / R38",
 ]) {
   if (!home.includes(required)) failures.push(`/: missing release-state item ${required}`);
 }
@@ -249,7 +256,7 @@ if ((await readFile(join(dist, "googlebc356aae986ed066.html"), "utf8")).trim() !
 }
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
-if (releaseManifest.revision !== "R36") failures.push("release manifest revision must be R36");
+if (releaseManifest.revision !== "R38") failures.push("release manifest revision must be R38");
 if (!/^[0-9a-f]{40}$/.test(releaseManifest.chain_source_commit ?? "")) {
   failures.push("release manifest must bind the exact development source commit");
 }
@@ -327,9 +334,9 @@ const installManifest = JSON.parse(await readFile(join(dist, "manifest.webmanife
 if (installManifest.id !== "/") failures.push("install manifest identity must remain bound to the canonical root");
 if (installManifest.short_name !== "JUNCA Docs") failures.push("install manifest short name must be JUNCA Docs");
 for (const requiredIcon of [
-  "/icon-192.png?v=20260802-r36",
-  "/icon-512.png?v=20260802-r36",
-  "/icon-maskable-512.png?v=20260802-r36",
+  "/icon-192.png?v=20260807-r38",
+  "/icon-512.png?v=20260807-r38",
+  "/icon-maskable-512.png?v=20260807-r38",
 ]) {
   if (!installManifest.icons?.some((icon) => icon.src === requiredIcon)) {
     failures.push(`install manifest missing cache-busted official symbol ${requiredIcon}`);
@@ -358,7 +365,7 @@ const docsControls = await readFile(join(dist, "docs-controls-r32.js"), "utf8");
 for (const required of ["Escape", "docs-menu-open", "aria-expanded", "menuButton.focus()"]) {
   if (!docsControls.includes(required)) failures.push(`mobile menu control missing ${required}`);
 }
-const liveRuntime = await readFile(join(dist, "live-runtime-r36.js"), "utf8");
+const liveRuntime = await readFile(join(dist, "live-runtime-r38.js"), "utf8");
 for (const required of [
   'fetch("/explorer.json"',
   'cache: "no-store"',

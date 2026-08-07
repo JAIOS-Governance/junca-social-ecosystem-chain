@@ -1,10 +1,10 @@
 # Public Status Language Policy
 
 Status: ACTIVE / MANDATORY
-Effective: 2026-08-04 JST
-Authority: JAIOS Institutional Governance
+Effective: 2026-08-07 JST
+Authority: Latest CEO directive, Creative Constitution and JAIOS Institutional Governance
 
-The JUNCA Social Ecosystem Chain technical reference applies the latest CEO-approved public display vocabulary across every canonical route.
+The JUNCA Social Ecosystem Chain technical reference applies evidence-first, governance-accurate public vocabulary across every canonical route.
 
 ## Canonical routes
 
@@ -22,23 +22,41 @@ The JUNCA Social Ecosystem Chain technical reference applies the latest CEO-appr
 - `PENDING`
 - `BLOCKED`
 - `No Monetary Value`
+- `No Active`
+- `Not Activated`
+- `Not Yet Published`
+- `not-activated`
 - `保留中`
 
 ## Approved status families
 
 - `Implemented / CI Verified`
 - `Verification in Progress`
-- `Not Yet Published`
-- `Not Activated`
-- `Read-only Evidence Available`
-- `Active`
+- `Registry-Controlled Disclosure`
+- `Governance-Controlled Activation`
+- `Evidence-bound Read-only Access`
+- `Finality Certificate Observed`
+- `Separate Governance Release`
+- `Boundary Unchanged`
+- `Active / Active Advancing`
+
+## Runtime connection authority
+
+- Canonical Explorer evidence: `https://explorer.jaios-governance.org/explorer.json`
+- Operational API: `https://chain.jaios-governance.org/api/operational`
+- Same-origin continuity proxy: `https://docs.jaios-governance.org/explorer.json`
+- Canonical network identity: Chain ID `20260723`
+- Acceptance boundary: schema `junca-public-explorer/v4`, read-only, finalized-only, quorum `3/3`, authenticated peers `2/2`
+
+Browser readback attempts the canonical Explorer endpoint first. The same-origin route is retained only as a verified continuity fallback. Neither route may update the page unless the exact schema, chain identity, quorum, peer count, provenance and safety boundaries pass validation.
 
 The build normalizes legacy variants, audits visible text for every route, emits `status-language-audit.json`, binds the result into `release-manifest.json`, and fails closed when any prohibited display label remains.
 
-Production acceptance requires successful deployment, CloudFront invalidation, HTTP 200 on all eight routes, public Audit/Manifest parity, and independent post-deployment readback evidence.
+Production acceptance requires successful deployment, CloudFront invalidation, HTTP 200 on all eight routes, public Audit/Manifest parity, canonical endpoint readback and independent post-deployment verification.
 
-Safety boundaries remain unchanged:
+Safety boundaries remain machine-verifiable and are presented publicly with affirmative governance language:
 
-- Mainnet Changed: false
-- Assets Moved: false
-- Bridge Activated: false
+- Mainnet State: `UNCHANGED`
+- Production Asset Boundary: `UNCHANGED`
+- Bridge State: `GOVERNANCE-CONTROLLED`
+- Mainnet Release: `SEPARATE AUTHORIZATION`
