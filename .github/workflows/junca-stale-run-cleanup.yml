@@ -39,18 +39,22 @@ jobs:
             *) echo "Verified continuity commit is not in current main lineage" >&2; exit 1 ;;
           esac
 
-      - name: Cancel only the two superseded queued runs
+      - name: Force-cancel only the two superseded queued runs
         shell: bash
         run: |
           set -euo pipefail
           for run_id in 31125147612 30969847156; do
-            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
-            status="$(jq -r .status <<<"$run")"
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
             case "$status" in
               queued|requested|pending|waiting|in_progress)
-                gh api --method POST \
+                if ! gh api --method POST \
                   "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" \
-                  >/dev/null
+                  >/dev/null 2>/tmp/cancel-${run_id}.err; then
+                  cat /tmp/cancel-${run_id}.err >&2
+                  gh api --method POST \
+                    "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" \
+                    >/dev/null
+                fi
                 ;;
               completed)
                 ;;
@@ -60,14 +64,14 @@ jobs:
                 ;;
             esac
           done
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 45); do
             active=0
             for run_id in 31125147612 30969847156; do
               status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
               case "$status" in completed) ;; *) active=$((active+1));; esac
             done
             if [ "$active" -eq 0 ]; then exit 0; fi
-            test "$attempt" -lt 30
+            test "$attempt" -lt 45
             sleep 2
           done
 
