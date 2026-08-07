@@ -1,0 +1,389 @@
+name: JUNCA Validator Runtime Hot Convergence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-runtime-hot-convergence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-runtime-hot-convergence
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+  TARGET_ARTIFACT_SHA256: fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+  TARGET_SOURCE_COMMIT: f9b05801399d9e40d14562e9c17fb9f66e638d90
+
+jobs:
+  converge-and-accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-runtime-hot-convergence-${{ github.run_id }}
+
+      - name: Resolve exact partial-rollout fleet and accepted target runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account == $account and
+            (.Arn | contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[] | {
+              instance_id:.InstanceId,
+              image_id:.ImageId,
+              validator:(.Tags[]|select(.Key=="Validator")|.Value),
+              private_ip:.PrivateIpAddress,
+              state:.State.Name
+            }] | sort_by(.validator) |
+            select(
+              length==3 and
+              map(.validator)==["01","02","03"] and
+              (map(.instance_id)|unique|length)==3 and
+              (map(.private_ip)|unique|length)==3 and
+              all(.[];.state=="running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          source_instance="$(jq -er '.[]|select(.validator=="01")|.instance_id' artifacts/validators.json)"
+          source_ip="$(jq -er '.[]|select(.validator=="01")|.private_ip' artifacts/validators.json)"
+          source_image="$(jq -er '.[]|select(.validator=="01")|.image_id' artifacts/validators.json)"
+          target02="$(jq -er '.[]|select(.validator=="02")|.instance_id' artifacts/validators.json)"
+          target03="$(jq -er '.[]|select(.validator=="03")|.instance_id' artifacts/validators.json)"
+          test "$source_image" = ami-00e3ad233280970ec
+          echo "$source_instance" > artifacts/source-instance.txt
+          echo "$source_ip" > artifacts/source-ip.txt
+          printf '%s\n' "$target02" "$target03" > artifacts/target-instances.txt
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,;echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
+          jq -e --argjson expected "$(jq '[.[].instance_id]|sort' artifacts/validators.json)" '
+            [.InstanceInformationList[]|select(.PingStatus=="Online")|.InstanceId]|sort|.==$expected
+          ' artifacts/ssm-instances.json >/dev/null
+          mapfile -t images < <(jq -r '.[].image_id' artifacts/validators.json|sort -u)
+          aws ec2 describe-images --image-ids "${images[@]}" > artifacts/images.json
+          jq -e --arg image "$source_image" --arg sha "$TARGET_ARTIFACT_SHA256" --arg commit "$TARGET_SOURCE_COMMIT" '
+            .Images[] | select(.ImageId==$image) |
+            ([.Tags[]|select(.Key=="NodeArtifactSHA256")|.Value][0]==$sha) and
+            ([.Tags[]|select(.Key=="SourceCommit")|.Value][0]==$commit) and
+            ([.Tags[]|select(.Key=="Network")|.Value][0]=="Public Testnet") and
+            ([.Tags[]|select(.Key=="MainnetChanged")|.Value][0]=="false") and
+            ([.Tags[]|select(.Key=="AssetsMoved")|.Value][0]=="false") and
+            ([.Tags[]|select(.Key=="BridgeActivated")|.Value][0]=="false")
+          ' artifacts/images.json >/dev/null
+          curl -fsS -H 'content-type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+            https://rpc.jaios-governance.org/ > artifacts/public-baseline-block.json
+
+      - name: Serve exact accepted validator-01 runtime inside private validator network
+        id: source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_instance="$(cat artifacts/source-instance.txt)"
+          cat > /tmp/start-runtime-server.sh <<'REMOTE'
+          set -Eeuo pipefail
+          value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env | tail -n1
+          }
+          test "$(value VALIDATOR_ID)" = validator-01
+          test "$(value NODE_ARTIFACT_SHA256)" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz|awk '{print $1}')" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          systemctl stop junca-public-rpc.service junca-public-explorer.service || true
+          systemctl stop junca-validator.service
+          pkill -f 'python3 -m http.server 30303' || true
+          nohup python3 -m http.server 30303 --bind 0.0.0.0 --directory /opt/junca \
+            >/tmp/junca-runtime-server.log 2>&1 &
+          echo $! >/tmp/junca-runtime-server.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:30303/validator-runtime.tar.gz >/tmp/runtime-source-check.tar.gz \
+              && test "$(sha256sum /tmp/runtime-source-check.tar.gz|awk '{print $1}')" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a; then
+              echo JUNCA_RUNTIME_SOURCE_READY
+              exit 0
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          exit 1
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/start-runtime-server.sh > /tmp/start-runtime-server.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "$source_instance" --document-name AWS-RunShellScript \
+            --parameters file:///tmp/start-runtime-server.json \
+            --comment 'Serve exact accepted JSEC runtime to current validators' \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/source-server-command-id.txt
+          for attempt in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" --query Status --output text 2>/dev/null||true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" > artifacts/source-server.json
+          jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_RUNTIME_SOURCE_READY"))' artifacts/source-server.json >/dev/null
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Roll forward validator-02 and validator-03 to exact accepted runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_ip="$(cat artifacts/source-ip.txt)"
+          failures=0
+          while IFS=$'\t' read -r validator instance; do
+            test "$validator" != 01
+            {
+              printf 'EXPECTED_VALIDATOR=%q\n' "validator-${validator}"
+              printf 'SOURCE_IP=%q\n' "$source_ip"
+              printf 'TARGET_SHA=%q\n' "$TARGET_ARTIFACT_SHA256"
+              cat <<'REMOTE'
+          set -Eeuo pipefail
+          value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env | tail -n1
+          }
+          rollback() {
+            rc=$?
+            echo "JUNCA_RUNTIME_ROLLFORWARD_FAILED rc=${rc}; applying exact local rollback"
+            if [ -f /opt/junca/validator-runtime.tar.gz.pre-convergence ]; then
+              old_sha="$(sha256sum /opt/junca/validator-runtime.tar.gz.pre-convergence|awk '{print $1}')"
+              systemctl stop junca-public-rpc.service junca-public-explorer.service junca-validator.service || true
+              tar -xzf /opt/junca/validator-runtime.tar.gz.pre-convergence -C / --no-same-owner
+              cp /opt/junca/validator-runtime.tar.gz.pre-convergence /opt/junca/validator-runtime.tar.gz
+              python3 - "$old_sha" <<'PY'
+          from pathlib import Path
+          import os,sys
+          sha=sys.argv[1]; path=Path('/etc/junca/runtime.env')
+          lines=[]
+          for line in path.read_text().splitlines():
+              lines.append(f'NODE_ARTIFACT_SHA256={sha}' if line.startswith('NODE_ARTIFACT_SHA256=') else line)
+          tmp=Path('/etc/junca/runtime.env.rollback.tmp'); tmp.write_text('\n'.join(lines)+'\n')
+          os.chmod(tmp,0o640); os.chown(tmp,0,os.stat(path).st_gid); tmp.replace(path)
+          PY
+              systemctl daemon-reload
+              systemctl restart junca-validator.service
+              systemctl restart junca-public-rpc.service junca-public-explorer.service
+            fi
+            exit "$rc"
+          }
+          trap rollback ERR
+          test "$(value VALIDATOR_ID)" = "$EXPECTED_VALIDATOR"
+          old_sha="$(sha256sum /opt/junca/validator-runtime.tar.gz|awk '{print $1}')"
+          if [ "$old_sha" = "$TARGET_SHA" ]; then
+            echo JUNCA_RUNTIME_ALREADY_CONVERGED
+            exit 0
+          fi
+          cp /opt/junca/validator-runtime.tar.gz /opt/junca/validator-runtime.tar.gz.pre-convergence
+          curl -fsS --retry 5 --retry-delay 2 \
+            "http://${SOURCE_IP}:30303/validator-runtime.tar.gz" \
+            -o /tmp/validator-runtime.target.tar.gz
+          test "$(sha256sum /tmp/validator-runtime.target.tar.gz|awk '{print $1}')" = "$TARGET_SHA"
+          rm -rf /tmp/junca-runtime-stage
+          mkdir -p /tmp/junca-runtime-stage
+          tar -xzf /tmp/validator-runtime.target.tar.gz -C /tmp/junca-runtime-stage
+          (cd /tmp/junca-runtime-stage && sha256sum -c SHA256SUMS)
+          grep -F './usr/local/lib/junca/jaios/social_ecosystem_chain/validator_node.py' <(tar -tzf /tmp/validator-runtime.target.tar.gz)
+          grep -F './usr/local/lib/junca/jaios/social_ecosystem_chain/finality_gossip.py' <(tar -tzf /tmp/validator-runtime.target.tar.gz)
+
+          systemctl stop junca-public-rpc.service junca-public-explorer.service || true
+          systemctl stop junca-validator.service
+          tar -xzf /tmp/validator-runtime.target.tar.gz -C / --no-same-owner
+          install -o root -g root -m 0644 /tmp/validator-runtime.target.tar.gz /opt/junca/validator-runtime.tar.gz
+          python3 - "$TARGET_SHA" <<'PY'
+          from pathlib import Path
+          import os,sys
+          sha=sys.argv[1]; path=Path('/etc/junca/runtime.env')
+          lines=[]; found=False
+          for line in path.read_text().splitlines():
+              if line.startswith('NODE_ARTIFACT_SHA256='):
+                  lines.append(f'NODE_ARTIFACT_SHA256={sha}'); found=True
+              else: lines.append(line)
+          if not found: raise SystemExit('NODE_ARTIFACT_SHA256_MISSING')
+          tmp=Path('/etc/junca/runtime.env.converge.tmp'); tmp.write_text('\n'.join(lines)+'\n')
+          os.chmod(tmp,0o640); os.chown(tmp,0,os.stat(path).st_gid); tmp.replace(path)
+          PY
+          chown -R root:root /usr/local/lib/junca
+          chmod 0755 /usr/local/bin/junca-chain-node /usr/local/bin/junca-public-gateway
+          systemctl daemon-reload
+          systemctl reset-failed junca-validator.service junca-public-rpc.service junca-public-explorer.service || true
+          systemctl restart junca-validator.service
+          ready=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/health.json \
+              && jq -e '.status=="healthy" and .chain_id==20260723 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/health.json >/dev/null; then ready=true; break; fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          test "$ready" = true
+          test "$(value NODE_ARTIFACT_SHA256)" = "$TARGET_SHA"
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz|awk '{print $1}')" = "$TARGET_SHA"
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8546/health >/tmp/rpc.json && curl -fsS http://127.0.0.1:3000/health >/tmp/explorer.json; then break; fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          trap - ERR
+          rm -f /opt/junca/validator-runtime.tar.gz.pre-convergence
+          jq -cn --arg validator_id "$(value VALIDATOR_ID)" --arg old_sha "$old_sha" --arg new_sha "$TARGET_SHA" --slurpfile health /tmp/health.json '{schema_version:"junca-validator-runtime-hot-convergence/v1",accepted:true,validator_id:$validator_id,old_artifact_sha256:$old_sha,new_artifact_sha256:$new_sha,health:$health[0],mainnet_changed:false,assets_moved:false,bridge_activated:false}'
+          echo JUNCA_RUNTIME_ROLLFORWARD_ACCEPTED
+          REMOTE
+            } > /tmp/rollforward-${validator}.sh
+            jq -Rs '{commands:[.]}' /tmp/rollforward-${validator}.sh > /tmp/rollforward-${validator}.json
+            command_id="$(aws ssm send-command \
+              --instance-ids "$instance" --document-name AWS-RunShellScript \
+              --parameters file:///tmp/rollforward-${validator}.json \
+              --comment "JUNCA validator-${validator} exact runtime roll-forward" \
+              --query Command.CommandId --output text)"
+            for attempt in $(seq 1 180); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 180
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/rollforward-${validator}-${instance}.json"
+            jq -r '.Status,.StandardOutputContent,.StandardErrorContent' "artifacts/rollforward-${validator}-${instance}.json"
+            if ! jq -e '.Status=="Success" and ((.StandardOutputContent|contains("JUNCA_RUNTIME_ROLLFORWARD_ACCEPTED")) or (.StandardOutputContent|contains("JUNCA_RUNTIME_ALREADY_CONVERGED")))' "artifacts/rollforward-${validator}-${instance}.json" >/dev/null; then failures=$((failures+1)); break; fi
+          done < <(jq -r '.[]|select(.validator!="01")|[.validator,.instance_id]|@tsv' artifacts/validators.json)
+          test "$failures" -eq 0
+
+      - name: Stop private runtime server and restore validator-01
+        if: always() && steps.source.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_instance="$(cat artifacts/source-instance.txt)"
+          cat > /tmp/stop-runtime-server.sh <<'REMOTE'
+          set -Eeuo pipefail
+          if [ -f /tmp/junca-runtime-server.pid ]; then kill "$(cat /tmp/junca-runtime-server.pid)" 2>/dev/null || true; fi
+          pkill -f 'python3 -m http.server 30303' || true
+          systemctl reset-failed junca-validator.service junca-public-rpc.service junca-public-explorer.service || true
+          systemctl restart junca-validator.service
+          ready=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/health.json && jq -e '.status=="healthy" and .chain_id==20260723' /tmp/health.json >/dev/null; then ready=true; break; fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          test "$ready" = true
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8546/health >/dev/null && curl -fsS http://127.0.0.1:3000/health >/dev/null; then break; fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          echo JUNCA_RUNTIME_SOURCE_RESTORED
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/stop-runtime-server.sh > /tmp/stop-runtime-server.json
+          command_id="$(aws ssm send-command --instance-ids "$source_instance" --document-name AWS-RunShellScript --parameters file:///tmp/stop-runtime-server.json --comment 'Restore validator-01 after runtime convergence' --query Command.CommandId --output text)"
+          for attempt in $(seq 1 150); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" --query Status --output text 2>/dev/null||true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+            test "$attempt" -lt 150
+            sleep 2
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" > artifacts/source-restored.json
+          jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_RUNTIME_SOURCE_RESTORED"))' artifacts/source-restored.json >/dev/null
+
+      - name: Require exact runtime, peer quorum and advancing public finality
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          cat > /tmp/accept-runtime.sh <<'REMOTE'
+          set -Eeuo pipefail
+          value() { local key="$1"; awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env|tail -n1; }
+          test "$(value NODE_ARTIFACT_SHA256)" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz|awk '{print $1}')" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          accepted=false
+          for attempt in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/health.json \
+              && jq -e '.status=="healthy" and .authenticated_peer_count==2 and (.authenticated_peer_ids|length)==2 and .automatic_finality_enabled==true and .automatic_finality_loop_running==true and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/health.json >/dev/null; then accepted=true; break; fi
+            test "$attempt" -lt 180
+            sleep 2
+          done
+          test "$accepted" = true
+          cat /tmp/health.json
+          echo JUNCA_RUNTIME_AND_PEERS_ACCEPTED
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/accept-runtime.sh > /tmp/accept-runtime.json
+          command_id="$(aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/accept-runtime.json --comment 'JUNCA exact runtime and peer acceptance' --query Command.CommandId --output text)"
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 210); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 210
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/final-acceptance-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_RUNTIME_AND_PEERS_ACCEPTED"))' "artifacts/final-acceptance-${instance}.json" >/dev/null; then failures=$((failures+1)); fi
+          done
+          test "$failures" -eq 0
+          baseline="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/public-baseline-block.json'))['result'],16))
+          PY
+          )"
+          first=""; last=""
+          : > artifacts/public-samples.jsonl
+          for sample in 1 2 3 4; do
+            for attempt in $(seq 1 40); do
+              if curl -fsS https://health.jaios-governance.org/health >/tmp/public-health.json \
+                && curl -fsS https://explorer.jaios-governance.org/explorer.json >/tmp/public-explorer.json \
+                && curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' https://rpc.jaios-governance.org/ >/tmp/chain-id.json \
+                && curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ >/tmp/block.json \
+                && jq -e '.status=="healthy" and .read_only==true and .validator.authenticated_peer_count==2' /tmp/public-health.json >/dev/null \
+                && jq -e '.status=="ready" and .read_only==true and .finalized_only==true and .network.chain_id_decimal==20260723 and .network.peer_count==2 and .head.signed_power==3 and .head.total_power==3' /tmp/public-explorer.json >/dev/null \
+                && jq -e '.result=="0x1352773"' /tmp/chain-id.json >/dev/null; then break; fi
+              test "$attempt" -lt 40
+              sleep 2
+            done
+            height="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('/tmp/block.json'))['result'],16))
+          PY
+          )"
+            [ -n "$first" ] || first="$height"
+            last="$height"
+            jq -cn --argjson sample "$sample" --argjson height "$height" --slurpfile health /tmp/public-health.json --slurpfile explorer /tmp/public-explorer.json '{sample:$sample,height:$height,observed_at:(now|todateiso8601),health:$health[0],explorer:$explorer[0]}' >> artifacts/public-samples.jsonl
+            [ "$sample" -eq 4 ] || sleep 35
+          done
+          test "$last" -gt "$baseline"
+          test "$last" -gt "$first"
+          jq -s '.' artifacts/public-samples.jsonl > artifacts/public-samples.json
+          jq -n --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --argjson baseline "$baseline" --argjson first "$first" --argjson last "$last" --arg target_sha "$TARGET_ARTIFACT_SHA256" --arg source_commit "$TARGET_SOURCE_COMMIT" --argjson validators "$(cat artifacts/validators.json)" --argjson samples "$(cat artifacts/public-samples.json)" '{schema_version:"junca-public-testnet-runtime-convergence/v1",result:"ACTIVE_ADVANCING",workflow_run_url:$run_url,target_artifact_sha256:$target_sha,target_source_commit:$source_commit,baseline_height:$baseline,first_sample_height:$first,final_sample_height:$last,validators:$validators,public_samples:$samples,peer_count:2,signed_power:3,total_power:3,mainnet_changed:false,assets_moved:false,bridge_activated:false,mainnet_activation_authorized:false}' > artifacts/runtime-convergence-acceptance.json
+          sha256sum artifacts/runtime-convergence-acceptance.json > artifacts/runtime-convergence-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-runtime-hot-convergence-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
