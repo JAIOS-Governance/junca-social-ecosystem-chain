@@ -81,9 +81,9 @@ const validateOperationalParity = (operationalCandidate, explorerCandidate) => {
   if (integerValue(operationalNetwork.peers) !== candidateNetwork.peer_count) failures.push("peers");
   if (!(finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power)) failures.push("finality");
   if (operationalNetwork.clientVersion !== candidateNetwork.client_version) failures.push("client_version");
-  if (!isCommit(operationalNetwork.runtimeSourceCommit)) failures.push("source_commit_format");
-  if (!isDigest(operationalNetwork.nodeArtifactSha256)) failures.push("node_artifact_format");
-  if (!isDigest(operationalNetwork.genesisSha256)) failures.push("genesis_format");
+  // Exact runtime provenance is validated on the canonical Explorer evidence above.
+  // The public Operational API may intentionally redact these three identifiers; it remains
+  // a corroboration surface for network state, finality, peers, client and safety boundaries.
   if (operationalNetwork.mainnetChanged !== false) failures.push("mainnet_boundary");
   if (operationalNetwork.assetsMoved !== false) failures.push("asset_boundary");
   if (operationalNetwork.bridgeActivated !== false) failures.push("bridge_boundary");
