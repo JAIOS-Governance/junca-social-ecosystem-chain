@@ -1,0 +1,283 @@
+name: JSEC Docs Mobile Cache R39 Remediation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/jsec-docs-mobile-cache-r39-remediation.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jsec-docs-mobile-cache-r39-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply bounded mobile cache and legacy-page recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+
+          cat > /tmp/current-release.json <<'JSON'
+          {
+            "schema": "jsec-docs-client-release/v1",
+            "delivery_revision": "R39",
+            "token": "20260807-r39-mobile-cache-recovery",
+            "canonical_url": "https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery",
+            "required_visible_terms": [
+              "Public Testnet",
+              "Governed Read-only Operations",
+              "Protocol Validation Environment"
+            ],
+            "stale_visible_terms": [
+              "Runtime Deployment in Progress",
+              "No Monetary Value",
+              "No Active",
+              "Not Activated",
+              "Not Yet Published"
+            ],
+            "mainnet_changed": false,
+            "assets_moved": false,
+            "bridge_activated": false
+          }
+          JSON
+
+          cat > /tmp/release-guard.js <<'JS'
+          ;(() => {
+            const releaseEndpoint = "/current-release.json";
+            const stalePattern = /RUNTIME\s+DEPLOYMENT\s+IN\s+PROGRESS|NO\s+MONETARY\s+VALUE|\bNO\s+ACTIVE\b|\bNOT\s+ACTIVATED\b|\bNOT\s+YET\s+PUBLISHED\b/i;
+            let navigating = false;
+
+            const visibleText = () => document.body?.innerText ?? "";
+            const verifyRelease = async () => {
+              if (navigating) return;
+              try {
+                const response = await fetch(`${releaseEndpoint}?readback=${Date.now()}`, {
+                  cache: "no-store",
+                  headers: {
+                    Accept: "application/json",
+                    "Cache-Control": "no-cache, no-store, max-age=0",
+                    Pragma: "no-cache",
+                  },
+                });
+                if (!response.ok) return;
+                const current = await response.json();
+                const stale = stalePattern.test(visibleText());
+                const required = Array.isArray(current.required_visible_terms)
+                  ? current.required_visible_terms.every((term) => visibleText().includes(term))
+                  : true;
+                if (!stale && required) return;
+
+                const sessionKey = `jsec-docs-release-refresh:${current.token}`;
+                if (window.sessionStorage.getItem(sessionKey) === "1") return;
+                window.sessionStorage.setItem(sessionKey, "1");
+                navigating = true;
+                const target = new URL(current.canonical_url || "/", window.location.origin);
+                target.searchParams.set("release", current.token);
+                target.searchParams.set("refresh", String(Date.now()));
+                window.location.replace(target.toString());
+              } catch {
+                // Preserve the last rendered page when the release control endpoint is unreachable.
+              }
+            };
+
+            window.addEventListener("pageshow", verifyRelease);
+            window.addEventListener("focus", verifyRelease);
+            window.addEventListener("online", verifyRelease);
+            document.addEventListener("visibilitychange", () => {
+              if (document.visibilityState === "visible") void verifyRelease();
+            });
+            void verifyRelease();
+          })();
+          JS
+
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          root = Path('.')
+
+          build_path = root / 'docs/technical-reference/scripts/build.mjs'
+          build = build_path.read_text(encoding='utf-8')
+          deletion = 'await rm(join(dist, "official-brand-lockup-r29.js"));'
+          if deletion not in build:
+              raise SystemExit('build.mjs legacy asset deletion signature not found')
+          build = build.replace(
+              deletion,
+              '// R39 compatibility: retain the exact legacy R29 script path so stale installed pages can self-recover.',
+              1,
+          )
+          build_path.write_text(build, encoding='utf-8')
+
+          manifest_path = root / 'docs/technical-reference/snapshot/manifest.webmanifest'
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          manifest['id'] = '/'
+          manifest['scope'] = '/'
+          manifest['start_url'] = '/?release=20260807-r39-mobile-cache-recovery'
+          manifest['description'] = 'Institutional technical reference with governed mobile cache recovery issued by JAIOS Institutional Governance.'
+          manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          current_release = Path('/tmp/current-release.json').read_text(encoding='utf-8')
+          (root / 'docs/technical-reference/snapshot/current-release.json').write_text(current_release, encoding='utf-8')
+
+          legacy_path = root / 'docs/technical-reference/snapshot/official-brand-lockup-r29.js'
+          legacy = legacy_path.read_text(encoding='utf-8')
+          guard = Path('/tmp/release-guard.js').read_text(encoding='utf-8')
+          marker = 'jsec-docs-release-refresh:'
+          if marker not in legacy:
+              legacy = legacy.rstrip() + '\n\n' + guard
+          legacy_path.write_text(legacy, encoding='utf-8')
+
+          production_path = root / '.github/workflows/junca-chain-docs-production.yml'
+          production = production_path.read_text(encoding='utf-8')
+          old_immutable = '''            --exclude "*.html" \\
+            --exclude "*.webmanifest" \\
+            --exclude "robots.txt" \\
+            --exclude "sitemap.xml" \\
+            --cache-control "public,max-age=31536000,immutable"'''
+          new_immutable = '''            --exclude "*.html" \\
+            --exclude "*.webmanifest" \\
+            --exclude "*.json" \\
+            --exclude "official-brand-lockup-r29.js" \\
+            --exclude "robots.txt" \\
+            --exclude "sitemap.xml" \\
+            --cache-control "public,max-age=31536000,immutable"'''
+          if old_immutable not in production:
+              raise SystemExit('production immutable sync signature not found')
+          production = production.replace(old_immutable, new_immutable, 1)
+
+          old_dynamic = '''            --include "*.html" \\
+            --include "*.webmanifest" \\
+            --include "robots.txt" \\
+            --include "sitemap.xml" \\
+            --cache-control "public,max-age=0,must-revalidate"'''
+          new_dynamic = '''            --include "*.html" \\
+            --include "*.webmanifest" \\
+            --include "*.json" \\
+            --include "official-brand-lockup-r29.js" \\
+            --include "robots.txt" \\
+            --include "sitemap.xml" \\
+            --cache-control "no-store,no-cache,must-revalidate,max-age=0"'''
+          if old_dynamic not in production:
+              raise SystemExit('production dynamic sync signature not found')
+          production = production.replace(old_dynamic, new_dynamic, 1)
+
+          old_assets = 'for asset in favicon.ico favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png; do'
+          new_assets = 'for asset in favicon.ico favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png current-release.json official-brand-lockup-r29.js; do'
+          if old_assets not in production:
+              raise SystemExit('production asset readback signature not found')
+          production = production.replace(old_assets, new_assets, 1)
+
+          old_manifest_cache = "grep -i '^cache-control: public,max-age=0,must-revalidate' <<< \"${manifest_headers}\""
+          new_manifest_cache = "grep -i '^cache-control: .*no-store' <<< \"${manifest_headers}\""
+          if old_manifest_cache not in production:
+              raise SystemExit('manifest cache assertion signature not found')
+          production = production.replace(old_manifest_cache, new_manifest_cache, 1)
+
+          old_public_testnet = "          grep -F 'Public Testnet' /tmp/home.html\n"
+          new_public_testnet = '''          grep -F 'Public Testnet' /tmp/home.html
+          grep -F 'Governed Read-only Operations' /tmp/home.html
+          grep -F 'Protocol Validation Environment' /tmp/home.html
+          ! grep -Fqi 'RUNTIME DEPLOYMENT IN PROGRESS' /tmp/home.html
+          ! grep -Fqi 'NO MONETARY VALUE' /tmp/home.html
+
+          mobile_url="https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 5 \\
+            --user-agent 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/151 Mobile Safari/537.36' \\
+            --header 'Cache-Control: no-cache, no-store, max-age=0' \\
+            --output /tmp/mobile-home.html "${mobile_url}"
+          grep -F 'Governed Read-only Operations' /tmp/mobile-home.html
+          grep -F 'Protocol Validation Environment' /tmp/mobile-home.html
+          ! grep -Fqi 'RUNTIME DEPLOYMENT IN PROGRESS' /tmp/mobile-home.html
+          ! grep -Fqi 'NO MONETARY VALUE' /tmp/mobile-home.html
+
+          root_headers="$(curl --fail --silent --show-error --head https://docs.jaios-governance.org/)"
+          grep -i '^cache-control: .*no-store' <<< "${root_headers}"
+          release_headers="$(curl --fail --silent --show-error --head https://docs.jaios-governance.org/current-release.json)"
+          grep -i '^cache-control: .*no-store' <<< "${release_headers}"
+          curl --fail --silent --show-error --location \\
+            --output /tmp/current-release.json https://docs.jaios-governance.org/current-release.json
+          jq -e '.delivery_revision == "R39" and .token == "20260807-r39-mobile-cache-recovery"' /tmp/current-release.json >/dev/null
+          curl --fail --silent --show-error --location \\
+            --output /tmp/legacy-r29.js https://docs.jaios-governance.org/official-brand-lockup-r29.js?v=20260727-r29
+          grep -F 'jsec-docs-release-refresh:' /tmp/legacy-r29.js
+'''
+          if old_public_testnet not in production:
+              raise SystemExit('production public readback insertion point not found')
+          production = production.replace(old_public_testnet, new_public_testnet, 1)
+          production_path.write_text(production, encoding='utf-8')
+
+          readback_path = root / '.github/workflows/docs-status-language-production-readback.yml'
+          readback = readback_path.read_text(encoding='utf-8')
+          old_prohibited = "              'No Monetary Value': re.compile(r'No Monetary Value', re.I),\n              '保留中': re.compile(r'保留中'),"
+          new_prohibited = "              'No Monetary Value': re.compile(r'No Monetary Value', re.I),\n              'Runtime Deployment in Progress': re.compile(r'Runtime Deployment in Progress', re.I),\n              'No Active': re.compile(r'\\bNo Active\\b', re.I),\n              'Not Activated': re.compile(r'\\bNot Activated\\b', re.I),\n              '保留中': re.compile(r'保留中'),"
+          if old_prohibited not in readback:
+              raise SystemExit('readback prohibited dictionary signature not found')
+          readback = readback.replace(old_prohibited, new_prohibited, 1)
+
+          old_start = '''          set -euo pipefail
+          mkdir -p evidence/production'''
+          new_start = '''          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          mkdir -p evidence/production'''
+          if old_start not in readback:
+              raise SystemExit('readback persist start signature not found')
+          readback = readback.replace(old_start, new_start, 1)
+
+          old_late_pull = '''          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add evidence/production/docs-status-language-production-acceptance-latest.json \\
+'''
+          new_late_pull = '''          git add evidence/production/docs-status-language-production-acceptance-latest.json \\
+'''
+          if old_late_pull not in readback:
+              raise SystemExit('readback late pull signature not found')
+          readback = readback.replace(old_late_pull, new_late_pull, 1)
+          readback = readback.replace(
+              'prohibited_public_terms: ["PENDING", "BLOCKED", "No Monetary Value", "保留中"],',
+              'prohibited_public_terms: ["PENDING", "BLOCKED", "Runtime Deployment in Progress", "No Monetary Value", "No Active", "Not Activated", "保留中"],',
+              1,
+          )
+          readback_path.write_text(readback, encoding='utf-8')
+
+          evidence_path = root / 'docs/technical-reference/MOBILE_CACHE_RECOVERY_R39.md'
+          evidence_path.write_text('''# JSEC Docs Mobile Cache Recovery R39
+
+- Public HTML, Web App Manifest and current-state JSON are delivered with `no-store`.
+- The installed-app start URL is release-bound to `20260807-r39-mobile-cache-recovery`.
+- The historical `official-brand-lockup-r29.js` path is retained as a compatibility refresh controller.
+- Stale pages containing `Runtime Deployment in Progress` or `No Monetary Value` redirect to the canonical current release.
+- Mainnet Changed: false
+- Assets Moved: false
+- Bridge Activated: false
+''', encoding='utf-8')
+          PY
+
+          node --check docs/technical-reference/snapshot/official-brand-lockup-r29.js
+          python -m json.tool docs/technical-reference/snapshot/manifest.webmanifest >/dev/null
+          python -m json.tool docs/technical-reference/snapshot/current-release.json >/dev/null
+          grep -F 'no-store,no-cache,must-revalidate,max-age=0' .github/workflows/junca-chain-docs-production.yml
+          grep -F 'jsec-docs-release-refresh:' docs/technical-reference/snapshot/official-brand-lockup-r29.js
+          grep -F '20260807-r39-mobile-cache-recovery' docs/technical-reference/snapshot/manifest.webmanifest
+
+          rm .github/workflows/jsec-docs-mobile-cache-r39-remediation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(docs): enforce mobile cache recovery R39"
+          git pull --rebase origin main
+          git push origin HEAD:main
