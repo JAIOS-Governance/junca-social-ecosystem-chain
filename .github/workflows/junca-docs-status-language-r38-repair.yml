@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RECOVERY_REVISION: R38.5
+  RECOVERY_REVISION: R38.6
 
 jobs:
   repair:
@@ -66,14 +66,14 @@ jobs:
           PY
           fi
 
-      - name: Apply post-patch normalization and release-cadence-safe endpoint corroboration
+      - name: Apply post-patch normalization, semantic no-value removal and endpoint corroboration
         run: python .github/patches/junca-docs-r38-post-patch.py
 
       - name: Run full eight-route build and QA
         working-directory: docs/technical-reference
         run: npm test
 
-      - name: Run independent rendered-language and endpoint assertion
+      - name: Run independent rendered-language, no-value and endpoint assertion
         run: python .github/patches/junca-docs-r38-assert.py
 
       - name: Commit verified repair to current main
@@ -92,5 +92,5 @@ jobs:
             echo "R38 production repair already applied."
             exit 0
           fi
-          git commit -m "fix: remove prohibited docs language and verify runtime endpoints"
+          git commit -m "fix: remove prohibited docs language and semantic no-value wording"
           git push origin HEAD:main
