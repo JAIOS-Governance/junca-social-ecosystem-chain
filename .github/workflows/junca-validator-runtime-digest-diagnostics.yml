@@ -1,0 +1,120 @@
+name: JUNCA Validator Runtime Digest Diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-runtime-digest-diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-runtime-digests-${{ github.run_id }}
+
+      - name: Compare AMI and runtime digests across validators
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[]|{
+              instance_id:.InstanceId,
+              image_id:.ImageId,
+              launch_time:.LaunchTime,
+              validator:(.Tags[]|select(.Key=="Validator")|.Value),
+              private_ip:.PrivateIpAddress
+            }]|sort_by(.validator)|select(length==3 and map(.validator)==["01","02","03"])
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          cat > /tmp/runtime-digest.sh <<'REMOTE'
+          set -Eeuo pipefail
+          pid="$(systemctl show junca-validator.service -p MainPID --value)"
+          test "$pid" -gt 0
+          jq -n \
+            --arg node_sha "$(sha256sum /usr/local/bin/junca-chain-node|awk '{print $1}')" \
+            --arg gateway_sha "$(sha256sum /usr/local/bin/junca-public-gateway|awk '{print $1}')" \
+            --arg service_sha "$(sha256sum /etc/systemd/system/junca-validator.service|awk '{print $1}')" \
+            --arg node_size "$(stat -c %s /usr/local/bin/junca-chain-node)" \
+            --arg gateway_size "$(stat -c %s /usr/local/bin/junca-public-gateway)" \
+            --arg node_mtime "$(stat -c %y /usr/local/bin/junca-chain-node)" \
+            --arg gateway_mtime "$(stat -c %y /usr/local/bin/junca-public-gateway)" \
+            --arg cmdline "$(tr '\0' ' ' </proc/${pid}/cmdline)" \
+            --arg python "$(python3 --version 2>&1)" \
+            --arg os_release "$(. /etc/os-release; printf '%s %s' "$ID" "$VERSION_ID")" '{
+              node_sha256:$node_sha,
+              gateway_sha256:$gateway_sha,
+              validator_service_sha256:$service_sha,
+              node_size:($node_size|tonumber),
+              gateway_size:($gateway_size|tonumber),
+              node_mtime:$node_mtime,
+              gateway_mtime:$gateway_mtime,
+              process_cmdline:$cmdline,
+              python:$python,
+              os_release:$os_release
+            }'
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/runtime-digest.sh > /tmp/runtime-digest.json
+          while IFS=$'\t' read -r validator instance; do
+            command_id="$(aws ssm send-command \
+              --instance-ids "$instance" \
+              --document-name AWS-RunShellScript \
+              --parameters file:///tmp/runtime-digest.json \
+              --comment "JUNCA validator-${validator} runtime digest" \
+              --query Command.CommandId --output text)"
+            for attempt in $(seq 1 60); do
+              status="$(aws ssm get-command-invocation \
+                --command-id "$command_id" --instance-id "$instance" \
+                --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              sleep 2
+            done
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              > "artifacts/invocation-${validator}.json"
+            jq -e '.Status=="Success" and (.ResponseCode//-1)==0' "artifacts/invocation-${validator}.json" >/dev/null
+            jq -r '.StandardOutputContent' "artifacts/invocation-${validator}.json" > "artifacts/runtime-${validator}.json"
+            jq -e . "artifacts/runtime-${validator}.json" >/dev/null
+          done < <(jq -r '.[]|[.validator,.instance_id]|@tsv' artifacts/validators.json)
+          jq -n \
+            --argjson validators "$(cat artifacts/validators.json)" \
+            --argjson v01 "$(cat artifacts/runtime-01.json)" \
+            --argjson v02 "$(cat artifacts/runtime-02.json)" \
+            --argjson v03 "$(cat artifacts/runtime-03.json)" '{
+              validators:$validators,
+              runtime:{"01":$v01,"02":$v02,"03":$v03},
+              node_digest_parity:([$v01.node_sha256,$v02.node_sha256,$v03.node_sha256]|unique|length)==1,
+              gateway_digest_parity:([$v01.gateway_sha256,$v02.gateway_sha256,$v03.gateway_sha256]|unique|length)==1,
+              service_digest_parity:([$v01.validator_service_sha256,$v02.validator_service_sha256,$v03.validator_service_sha256]|unique|length)==1
+            }' > artifacts/runtime-parity.json
+          cat artifacts/runtime-parity.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-runtime-digests-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
