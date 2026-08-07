@@ -28,55 +28,41 @@ jobs:
         with:
           node-version: 20
 
-      - name: Repair translated status and bounded overview output
+      - name: Repair translated status and compact redundant SEO payload
         shell: bash
         run: |
           set -euo pipefail
           python <<'PY'
           from pathlib import Path
 
-          build_path = Path("docs/technical-reference/scripts/build.mjs")
-          build = build_path.read_text(encoding="utf-8")
-          build_marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
-          build_addition = build_marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
-          if build_addition not in build:
-              if build_marker not in build:
-                  raise SystemExit("Expected R38 build normalization marker is missing")
-              build = build.replace(build_marker, build_addition, 1)
-              build_path.write_text(build, encoding="utf-8")
+          path = Path("docs/technical-reference/scripts/build.mjs")
+          source = path.read_text(encoding="utf-8")
+          before_size = len(source.encode("utf-8"))
 
-          status_path = Path("docs/technical-reference/scripts/status-language-normalize.mjs")
-          status = status_path.read_text(encoding="utf-8")
-          old_status_regex = r'      /<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tr|ul|ol|li)>\s{2,}/g,'
-          new_status_regex = r'      /<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)>\s+(?=<)/g,'
-          if old_status_regex in status:
-              status = status.replace(old_status_regex, new_status_regex, 1)
-          if '      "</$1><",' in status:
-              status = status.replace('      "</$1><",', '      "</$1>",', 1)
-          status_path.write_text(status, encoding="utf-8")
+          marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
+          addition = marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
+          if addition not in source:
+              if marker not in source:
+                  raise SystemExit("Expected R38 status normalization marker is missing")
+              source = source.replace(marker, addition, 1)
 
-          runtime_path = Path("docs/technical-reference/scripts/runtime-current-state-normalize.mjs")
-          runtime = runtime_path.read_text(encoding="utf-8")
-          old_runtime = r'  if (route === "/" && html.length > 100000) html = html.replace(/\n\s*/g, "");'
-          new_runtime = "\n".join([
-              '  if (route === "/" && html.length > 100000) {',
-              r'    html = html.replace(/\n\s*/g, "");',
-              r'    html = html.replace(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/gi, (match, body) => {',
-              r'      try { return `<script type="application/ld+json">${JSON.stringify(JSON.parse(body))}</script>`; }',
-              r'      catch { return match; }',
-              r'    });',
-              r'    html = html.replace(/<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)>\s+(?=<)/g, "</$1>");',
-              r'    html = html.replace(/>\s+(?=<(?:section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)\b)/g, ">");',
-              r'    html = html.replace(/\s+(?=<\/(?:section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)>)/g, "");',
-              '  }',
-          ])
-          if old_runtime in runtime:
-              runtime = runtime.replace(old_runtime, new_runtime, 1)
-          elif new_runtime not in runtime:
-              raise SystemExit("Expected R38 overview publication gate marker is missing")
-          runtime_path.write_text(runtime, encoding="utf-8")
+          old_meta = '<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, junca chain, juncachain, JUNCA Platform, junca platform, JUNCA GLOBAL CHAIN, junca Global Chain, JCC, JUNCA CASH, junca Cash, JUNCA, junca, JAIOS, JAIOS Institutional Governance, Public Testnet, chain documentation, technical reference, protocol specification">'
+          new_meta = '<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, JAIOS, Public Testnet, technical reference, protocol specification">'
+          if old_meta in source:
+              source = source.replace(old_meta, new_meta, 1)
+          elif new_meta not in source:
+              raise SystemExit("Expected canonical SEO keyword metadata is missing")
 
-          print("R38 translated status and bounded overview repair applied")
+          duplicate_keywords = ',"keywords":["JUNCA Social Ecosystem Chain","JSEC","JUNCA Chain","junca chain","juncachain","JUNCA Platform","junca platform","JUNCA GLOBAL CHAIN","junca Global Chain","JCC","JUNCA CASH","junca Cash","JAIOS","Public Testnet","technical reference"]'
+          if duplicate_keywords in source:
+              source = source.replace(duplicate_keywords, "", 1)
+
+          path.write_text(source, encoding="utf-8")
+          after_size = len(source.encode("utf-8"))
+          saved = before_size - after_size
+          if saved < 367:
+              raise SystemExit(f"SEO compaction saved only {saved} bytes; minimum is 367")
+          print(f"R38 source repaired; redundant SEO payload reduced by {saved} bytes")
           PY
 
       - name: Run full eight-route build and QA
@@ -89,10 +75,10 @@ jobs:
           set -euo pipefail
           git config user.name "juncaGlobal"
           git config user.email "juncajapan.inc@gmail.com"
-          git add             docs/technical-reference/scripts/build.mjs             docs/technical-reference/scripts/status-language-normalize.mjs             docs/technical-reference/scripts/runtime-current-state-normalize.mjs
+          git add docs/technical-reference/scripts/build.mjs
           if git diff --cached --quiet; then
-            echo "R38 production repair already applied."
+            echo "R38 status and SEO payload repair already applied."
             exit 0
           fi
-          git commit -m "fix: finalize bounded R38 docs status rendering"
+          git commit -m "fix: finalize R38 docs status and bounded SEO payload"
           git push origin HEAD:main
