@@ -40,6 +40,16 @@ function handler(event) {
     request.uri = '/chain-brand-root/sitemap.xml';
     return request;
   }
+  if (request.uri === '/runtime-status.json' || request.uri === '/runtime-parity.json') {
+    useOrigin(DOCS_ORIGIN);
+    request.uri = '/runtime-parity.json';
+    return request;
+  }
+  if (request.uri === '/network-registry.json') {
+    useOrigin(DOCS_ORIGIN);
+    request.uri = '/network-registry.json';
+    return request;
+  }
 
   useOrigin(NATIVE_ORIGIN);
   return request;

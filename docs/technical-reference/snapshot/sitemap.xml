@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://docs.jaios-governance.org/</loc><lastmod>2026-08-04</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/current-identity/</loc><lastmod>2026-08-04</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/current-identity.json</loc><lastmod>2026-08-04</lastmod></url>
-  <url><loc>https://docs.jaios-governance.org/current-identity.txt</loc><lastmod>2026-08-04</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/current-identity/</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/current-identity.json</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/current-identity.txt</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/network-registry/</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/network-registry.json</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/network-registry.txt</loc><lastmod>2026-08-06</lastmod></url>
+  <url><loc>https://docs.jaios-governance.org/runtime-parity.json</loc><lastmod>2026-08-06</lastmod></url>
   <url><loc>https://docs.jaios-governance.org/institutional-trust/</loc><lastmod>2026-08-04</lastmod></url>
   <url><loc>https://docs.jaios-governance.org/institutional-trust.json</loc><lastmod>2026-08-04</lastmod></url>
   <url><loc>https://docs.jaios-governance.org/institutional-trust.txt</loc><lastmod>2026-08-04</lastmod></url>

@@ -1,0 +1,139 @@
+name: JSEC Identity Runtime Convergence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/junca_social_ecosystem_chain_networks.json"
+      - "docs/technical-reference/**"
+      - "scripts/jsec_public_runtime_parity.py"
+      - "infra/aws/chain-brand-institutional-trust-router.js"
+      - ".github/workflows/jsec-identity-runtime-convergence.yml"
+  push:
+    branches: [main]
+    paths:
+      - "config/junca_social_ecosystem_chain_networks.json"
+      - "docs/technical-reference/**"
+      - "scripts/jsec_public_runtime_parity.py"
+      - "infra/aws/chain-brand-institutional-trust-router.js"
+      - ".github/workflows/jsec-identity-runtime-convergence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: jsec-identity-runtime-convergence
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DOCS_BUCKET: junca-chain-docs-595710543956
+  DOCS_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  DOCS_URL: https://docs.jaios-governance.org
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate identity, registry and canonical reconciliation sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/jsec_public_runtime_parity.py
+          node --check docs/technical-reference/scripts/search-surface-normalize.mjs
+          python3 -m json.tool config/junca_social_ecosystem_chain_networks.json >/dev/null
+          python3 -m json.tool docs/technical-reference/snapshot/current-identity.json >/dev/null
+          python3 -m json.tool docs/technical-reference/snapshot/network-registry.json >/dev/null
+          jq -e '.current_network.chain_id == 20260723 and (.historical_networks|map(.chain_id)|sort)==[668,669]' config/junca_social_ecosystem_chain_networks.json >/dev/null
+          jq -e '.current_network_identity.chain_id == 20260723' docs/technical-reference/snapshot/current-identity.json >/dev/null
+          jq -e '.current.chain_id == 20260723 and (.retired_legacy|map(.chain_id)|sort)==[668,669]' docs/technical-reference/snapshot/network-registry.json >/dev/null
+          grep -F "request.uri = '/runtime-parity.json'" infra/aws/chain-brand-institutional-trust-router.js
+          cp docs/technical-reference/snapshot/index.html /tmp/index-before.html
+          node docs/technical-reference/scripts/search-surface-normalize.mjs
+          grep -F 'data-jsec-canonical-search-status="20260806-r37"' docs/technical-reference/snapshot/index.html
+          grep -F 'Chain ID 20260723' docs/technical-reference/snapshot/index.html
+          ! grep -Eqi 'No Monetary Value|金銭価値なし|>PENDING<' docs/technical-reference/snapshot/index.html
+          mv /tmp/index-before.html docs/technical-reference/snapshot/index.html
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: junca-chain-docs-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build canonical search and reconcile runtime data
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node docs/technical-reference/scripts/search-surface-normalize.mjs
+          python3 scripts/jsec_public_runtime_parity.py --output /tmp/runtime-parity.json
+          jq -e '.status == "canonicalized"' /tmp/runtime-parity.json >/dev/null
+          jq -e '.public_state.chain_id == 20260723 and (.public_state.finalized_height|type)=="number" and (.public_state.finalized_hash|type)=="string"' /tmp/runtime-parity.json >/dev/null
+          jq -e '.correction_directives|all(.action == "already_aligned" or .action == "align_to_canonical")' /tmp/runtime-parity.json >/dev/null
+      - name: Configure governed Docs identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DOCS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jsec-identity-runtime-${{ github.run_id }}
+      - name: Publish normalized identity and canonical runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          cache='public,max-age=0,must-revalidate'
+          root='docs/technical-reference/snapshot'
+          aws s3 cp "$root/index.html" "s3://${DOCS_BUCKET}/index.html" --content-type 'text/html; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=20260806-r37"
+          aws s3 cp "$root/current-identity.json" "s3://${DOCS_BUCKET}/current-identity.json" --content-type 'application/json; charset=utf-8' --cache-control "$cache" --metadata "source-commit=${GITHUB_SHA},revision=current-identity-v2"
+          aws s3 cp "$root/network-registry/index.html" "s3://${DOCS_BUCKET}/network-registry/index.html" --content-type 'text/html; charset=utf-8' --cache-control "$cache"
+          aws s3 cp "$root/network-registry.json" "s3://${DOCS_BUCKET}/network-registry.json" --content-type 'application/json; charset=utf-8' --cache-control "$cache"
+          aws s3 cp "$root/network-registry.txt" "s3://${DOCS_BUCKET}/network-registry.txt" --content-type 'text/plain; charset=utf-8' --cache-control "$cache"
+          aws s3 cp /tmp/runtime-parity.json "s3://${DOCS_BUCKET}/runtime-parity.json" --content-type 'application/json; charset=utf-8' --cache-control 'public,max-age=30,must-revalidate' --metadata "source-commit=${GITHUB_SHA},generated-run=${GITHUB_RUN_ID},mode=canonical-reconciliation"
+          aws s3 cp "$root/sitemap.xml" "s3://${DOCS_BUCKET}/sitemap.xml" --content-type 'application/xml; charset=utf-8' --cache-control "$cache"
+      - name: Invalidate identity and runtime paths
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          distribution_id="$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, 'docs.jaios-governance.org')].Id | [0]" --output text)"
+          test -n "$distribution_id" && test "$distribution_id" != None
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$distribution_id" --paths '/' '/index.html' '/current-identity.json' '/network-registry*' '/runtime-parity.json' '/sitemap.xml' --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$distribution_id" --id "$invalidation_id"
+          echo "INVALIDATION_ID=$invalidation_id" >> "$GITHUB_ENV"
+      - name: Production canonical readback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail-with-body --silent --show-error --location --retry 8 --retry-delay 8 --retry-all-errors --output /tmp/runtime-readback.json "$DOCS_URL/runtime-parity.json"
+          cmp /tmp/runtime-parity.json /tmp/runtime-readback.json
+          jq -e '.status == "canonicalized" and .public_state.chain_id == 20260723' /tmp/runtime-readback.json >/dev/null
+          jq -e '(.public_state.finalized_height|type)=="number" and (.public_state.finalized_hash|type)=="string"' /tmp/runtime-readback.json >/dev/null
+          curl --fail-with-body --silent --show-error --location --output /tmp/index-readback.html "$DOCS_URL/"
+          grep -F 'data-jsec-canonical-search-status="20260806-r37"' /tmp/index-readback.html
+          grep -F 'Chain ID 20260723' /tmp/index-readback.html
+          {
+            echo '### JSEC identity and runtime convergence'
+            echo "- Invalidation: \`${INVALIDATION_ID}\`"
+            echo '- Runtime discrepancy handling: canonical reconciliation'
+            echo '- Health / Explorer differences: correction directives generated'
+            echo '- RPC-validated canonical height and hash: published'
+            echo '- Exact public readback: PASS'
+          } >> "$GITHUB_STEP_SUMMARY"
