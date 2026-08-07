@@ -3,7 +3,7 @@
 Status: ACTIVE / MANDATORY
 Effective: 2026-08-07 JST
 Authority: Latest CEO directive, Creative Constitution and JAIOS Institutional Governance
-Source revision: R38.3 / Canonical Runtime Corroboration Repair
+Source revision: R38.4 / Canonical Explorer Authority and Independent Corroboration
 
 The JUNCA Social Ecosystem Chain technical reference applies evidence-first, governance-accurate public vocabulary across every canonical route.
 
@@ -52,7 +52,7 @@ The JUNCA Social Ecosystem Chain technical reference applies evidence-first, gov
 - Canonical network identity: Chain ID `20260723`
 - Acceptance boundary: schema `junca-public-explorer/v4`, read-only, finalized-only, quorum `3/3`, authenticated peers `2/2`
 
-Browser and build readback attempt the canonical Explorer endpoint first with bounded retries. The same-origin route is retained only as a verified continuity fallback. The canonical Explorer remains the rendered-state authority. The Operational API independently corroborates chain identity, quorum, runtime provenance and safety boundaries without imposing a race-prone exact cross-endpoint snapshot lock. No endpoint may update the page unless its assigned validation boundary passes.
+Browser and build readback attempt the canonical Explorer endpoint first with bounded retries. The same-origin route is retained only as a verified continuity fallback. The canonical Explorer remains the strict rendered-state authority. The Operational API independently corroborates active network identity, quorum, valid provenance formats and safety boundaries; it is not required to expose the same artifact revision at the same instant because the two publication surfaces can advance on different release cadences. No endpoint may update the page unless its assigned validation boundary passes.
 
 The build normalizes legacy variants, audits visible text for every route, emits `status-language-audit.json`, binds the result into `release-manifest.json`, and fails closed when any prohibited display label remains.
 
