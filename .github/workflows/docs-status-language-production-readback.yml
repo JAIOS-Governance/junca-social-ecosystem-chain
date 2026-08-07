@@ -67,7 +67,11 @@ jobs:
           prohibited = {
               'PENDING': re.compile(r'\bPENDING\b', re.I),
               'BLOCKED': re.compile(r'\bBLOCKED\b', re.I),
+              'Runtime Deployment in Progress': re.compile(r'Runtime Deployment in Progress', re.I),
               'No Monetary Value': re.compile(r'No Monetary Value', re.I),
+              'No Active': re.compile(r'\bNo Active\b', re.I),
+              'Not Activated': re.compile(r'\bNot Activated\b', re.I),
+              'Not Yet Published': re.compile(r'\bNot Yet Published\b', re.I),
               '保留中': re.compile(r'保留中'),
           }
           failures = []
@@ -113,6 +117,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+
           mkdir -p evidence/production
           observed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           jq -n \
@@ -131,7 +139,7 @@ jobs:
               source_workflow_run_id: $source_run_id,
               source_workflow_run_url: $source_run_url,
               canonical_routes: ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"],
-              prohibited_public_terms: ["PENDING", "BLOCKED", "No Monetary Value", "保留中"],
+              prohibited_public_terms: ["PENDING", "BLOCKED", "Runtime Deployment in Progress", "No Monetary Value", "No Active", "Not Activated", "Not Yet Published", "保留中"],
               visible_route_readback: "PASS",
               status_language_audit_result: "PASS",
               status_language_audit_sha256: $audit_sha256,
@@ -150,9 +158,6 @@ jobs:
           cp /tmp/docs-readback/release-manifest.json \
             evidence/production/docs-release-manifest-public-readback.json
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add evidence/production/docs-status-language-production-acceptance-latest.json \
             evidence/production/docs-status-language-audit-public-readback.json \
             evidence/production/docs-release-manifest-public-readback.json
@@ -161,4 +166,7 @@ jobs:
             exit 0
           fi
           git commit -m "Record Docs status-language production acceptance ${SOURCE_RUN_ID}"
-          git push origin HEAD:main
+          if ! git push origin HEAD:main; then
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
