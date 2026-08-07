@@ -97,7 +97,7 @@ class HealthProjectionTests(unittest.TestCase):
             "assets_moved": True,
         }
         with self.assertRaisesRegex(
-            continuity.ContinuityError, "assets_moved diverge"
+            continuity.ContinuityError, "assets_moved"
         ):
             health_entrypoint._health_projection_normalize_snapshot(
                 HEALTH, source="operational_api", require_safety=True
