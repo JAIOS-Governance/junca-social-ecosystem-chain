@@ -16,7 +16,7 @@ concurrency:
 jobs:
   repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout exact current main
         uses: actions/checkout@v4
@@ -26,57 +26,398 @@ jobs:
       - name: Configure Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Repair translated status and compact redundant SEO payload
+      - name: Apply verified status-language and runtime-binding repair
         shell: bash
         run: |
           set -euo pipefail
           python <<'PY'
           from pathlib import Path
 
-          path = Path("docs/technical-reference/scripts/build.mjs")
-          source = path.read_text(encoding="utf-8")
-          before_size = len(source.encode("utf-8"))
-
-          marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
-          addition = marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
-          if addition not in source:
-              if marker not in source:
-                  raise SystemExit("Expected R38 status normalization marker is missing")
-              source = source.replace(marker, addition, 1)
+          build_path = Path("docs/technical-reference/scripts/build.mjs")
+          build = build_path.read_text(encoding="utf-8")
+          build_start_marker = 'const explorerUrl = "https://explorer.jaios-governance.org/explorer.json";'
+          build_end_marker = 'const publicValue = (value) =>'
+          build_start = build.index(build_start_marker)
+          build_end = build.index(build_end_marker)
+          robust_build_block = r'''const explorerUrl = "https://explorer.jaios-governance.org/explorer.json";
+const explorerProxyUrl = "https://docs.jaios-governance.org/explorer.json";
+const operationalUrl = "https://chain.jaios-governance.org/api/operational";
+const expectedExplorerSchema = "junca-public-explorer/v4";
+const expectedChainId = 20260723;
+const evidenceHeaders = {
+  Accept: "application/json",
+  "Cache-Control": "no-cache, no-store, max-age=0",
+  Pragma: "no-cache",
+  "User-Agent": "JUNCA-Docs-Release/1.1",
+};
+const integerValue = (value) => {
+  if (Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^0x[0-9a-f]+$/i.test(value)) return Number.parseInt(value, 16);
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) return Number.parseInt(value, 10);
+  return Number.NaN;
+};
+const isHash = (value) => /^0x[0-9a-f]{64}$/i.test(String(value ?? ""));
+const isDigest = (value) => /^[0-9a-f]{64}$/i.test(String(value ?? ""));
+const isCommit = (value) => /^[0-9a-f]{40}$/i.test(String(value ?? ""));
+const validateExplorerEvidence = (candidate) => {
+  const candidateHead = candidate?.head ?? {};
+  const candidateNetwork = candidate?.network ?? {};
+  const artifact = candidate?.runtime_artifact ?? {};
+  return (
+    candidate?.schema_version === expectedExplorerSchema &&
+    candidate?.status === "ready" &&
+    candidate?.read_only === true &&
+    candidate?.finalized_only === true &&
+    candidate?.notice === "Public Testnet / Protocol Validation Environment" &&
+    candidate?.mainnet_changed === false &&
+    candidate?.assets_moved === false &&
+    candidate?.bridge_activated === false &&
+    Number.isInteger(candidateHead.height) &&
+    candidateHead.height > 1 &&
+    candidateHead.signed_power === 3 &&
+    candidateHead.total_power === 3 &&
+    isHash(candidateHead.hash) &&
+    isHash(candidateHead.certificate_hash) &&
+    isHash(candidateHead.state_root) &&
+    integerValue(candidateHead.timestamp) > 0 &&
+    candidateNetwork.chain_id_decimal === expectedChainId &&
+    candidateNetwork.peer_count === 2 &&
+    isCommit(artifact.source_commit) &&
+    isDigest(artifact.genesis_sha256) &&
+    isDigest(artifact.node_artifact_sha256)
+  );
+};
+const validateOperationalParity = (operationalCandidate, explorerCandidate) => {
+  const operationalNetwork = operationalCandidate?.network ?? {};
+  const candidateHead = explorerCandidate.head;
+  const candidateNetwork = explorerCandidate.network;
+  const artifact = explorerCandidate.runtime_artifact;
+  const finality = String(operationalNetwork.finality ?? "")
+    .replace(/\s+/g, "")
+    .split("/")
+    .map((value) => integerValue(value));
+  const expectedBlockTimestamp = new Date(integerValue(candidateHead.timestamp) * 1000).toISOString();
+  return (
+    operationalNetwork.state === "VERIFIED" &&
+    operationalNetwork.status === "READY · READ-ONLY" &&
+    integerValue(operationalNetwork.chainId) === expectedChainId &&
+    integerValue(operationalNetwork.height) === candidateHead.height &&
+    operationalNetwork.headHash === candidateHead.hash &&
+    operationalNetwork.certificateHash === candidateHead.certificate_hash &&
+    operationalNetwork.stateRoot === candidateHead.state_root &&
+    integerValue(operationalNetwork.peers) === candidateNetwork.peer_count &&
+    finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power &&
+    integerValue(operationalNetwork.transactions) === integerValue(candidateHead.transaction_count) &&
+    operationalNetwork.blockTimestamp === expectedBlockTimestamp &&
+    operationalNetwork.clientVersion === candidateNetwork.client_version &&
+    operationalNetwork.runtimeSourceCommit === artifact.source_commit &&
+    operationalNetwork.nodeArtifactSha256 === artifact.node_artifact_sha256 &&
+    operationalNetwork.genesisSha256 === artifact.genesis_sha256 &&
+    operationalNetwork.mainnetChanged === false &&
+    operationalNetwork.assetsMoved === false &&
+    operationalNetwork.bridgeActivated === false &&
+    operationalNetwork.source === explorerUrl
+  );
+};
+const fetchJson = async (url, label) => {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: evidenceHeaders,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${label} did not return a JSON object`);
+  }
+  return payload;
+};
+const runtimeCandidates = [
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerProxyUrl, source: "VERIFIED SAME-ORIGIN PROXY" },
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerProxyUrl, source: "VERIFIED SAME-ORIGIN PROXY" },
+];
+const fetchVerifiedRuntimePair = async () => {
+  const failures = [];
+  for (const candidate of runtimeCandidates) {
+    try {
+      const [explorerCandidate, operationalCandidate] = await Promise.all([
+        fetchJson(candidate.url, candidate.source),
+        fetchJson(operationalUrl, "OPERATIONAL API"),
+      ]);
+      if (!validateExplorerEvidence(explorerCandidate)) {
+        throw new Error(`${candidate.source} evidence boundary or provenance mismatch`);
+      }
+      if (!validateOperationalParity(operationalCandidate, explorerCandidate)) {
+        throw new Error(`${candidate.source} and Operational API parity mismatch`);
+      }
+      return {
+        explorer: explorerCandidate,
+        operational: operationalCandidate,
+        evidenceSource: candidate.source,
+        evidenceUrl: candidate.url,
+      };
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+  throw new Error(`Verified runtime pair unavailable: ${failures.join(" | ")}`);
+};
+const {
+  explorer,
+  operational,
+  evidenceSource: explorerEvidenceSource,
+  evidenceUrl: explorerEvidenceUrl,
+} = await fetchVerifiedRuntimePair();
+const observedAt = String(explorer.observed_at);
+const head = explorer.head ?? {};
+const network = explorer.network ?? {};
+const runtimeArtifact = explorer.runtime_artifact ?? {};
+'''
+          build = build[:build_start] + robust_build_block + build[build_end:]
+          build = build.replace(
+              '? "NOT CURRENTLY PUBLISHED"\n    : String(value);',
+              '? "REGISTRY-CONTROLLED DISCLOSURE"\n    : String(value);',
+              1,
+          )
+          build = build.replace(
+              '  \'<div><dt>Evidence Source</dt><dd data-live-runtime="source">CANONICAL EXPLORER</dd></div>\',',
+              '  `<div><dt>Evidence Source</dt><dd data-live-runtime="source">${explorerEvidenceSource}</dd></div>`,',
+              1,
+          )
+          build = build.replace(
+              '  canonical_origin: "https://docs.jaios-governance.org",\n',
+              '  canonical_origin: "https://docs.jaios-governance.org",\n  runtime_evidence_endpoint: explorerEvidenceUrl,\n  runtime_evidence_source_mode: explorerEvidenceSource,\n',
+              1,
+          )
+          build = build.replace(
+              '      explorer_json: "https://explorer.jaios-governance.org/explorer.json",\n',
+              '      explorer_json: "https://explorer.jaios-governance.org/explorer.json",\n      selected_explorer_endpoint: explorerEvidenceUrl,\n      selected_explorer_source_mode: explorerEvidenceSource,\n',
+              1,
+          )
+          required_phrase = '''      .replaceAll(
+        "No Monetary Value、Rate Limit、Abuse Controlを前提に公開します。",
+        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
+      )'''
+          if required_phrase not in build:
+              raise SystemExit("Specific Japanese status-language normalization is missing")
 
           old_meta = '<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, junca chain, juncachain, JUNCA Platform, junca platform, JUNCA GLOBAL CHAIN, junca Global Chain, JCC, JUNCA CASH, junca Cash, JUNCA, junca, JAIOS, JAIOS Institutional Governance, Public Testnet, chain documentation, technical reference, protocol specification">'
           new_meta = '<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, JAIOS, Public Testnet, technical reference, protocol specification">'
-          if old_meta in source:
-              source = source.replace(old_meta, new_meta, 1)
-          elif new_meta not in source:
-              raise SystemExit("Expected canonical SEO keyword metadata is missing")
+          build = build.replace(old_meta, new_meta, 1)
+          build = build.replace(',"keywords":["JUNCA Social Ecosystem Chain","JSEC","JUNCA Chain","junca chain","juncachain","JUNCA Platform","junca platform","JUNCA GLOBAL CHAIN","junca Global Chain","JCC","JUNCA CASH","junca Cash","JAIOS","Public Testnet","technical reference"]', "", 1)
+          build = build.replace('"alternateName":["JUNCA Chain Documentation","junca chain docs","juncachain docs","JUNCA Platform technical reference"]', '"alternateName":["JUNCA Chain Documentation","juncachain docs"]', 1)
+          build = build.replace(',{"@type":"Question","name":"What is the current network state?","acceptedAnswer":{"@type":"Answer","text":"Public Testnet. Mainnet Changed is false, Assets Moved is false, and Bridge Activated is false."}}', "", 1)
+          build_path.write_text(build, encoding="utf-8")
 
-          duplicate_keywords = ',"keywords":["JUNCA Social Ecosystem Chain","JSEC","JUNCA Chain","junca chain","juncachain","JUNCA Platform","junca platform","JUNCA GLOBAL CHAIN","junca Global Chain","JCC","JUNCA CASH","junca Cash","JAIOS","Public Testnet","technical reference"]'
-          if duplicate_keywords in source:
-              source = source.replace(duplicate_keywords, "", 1)
+          status_path = Path("docs/technical-reference/scripts/status-language-normalize.mjs")
+          status = status_path.read_text(encoding="utf-8")
+          status = status.replace(
+              '  [/\\bNot Yet Published\\b/gi, "Registry-Controlled Disclosure"],\n',
+              '  [/\\bNot Yet Published\\b/gi, "Registry-Controlled Disclosure"],\n  [/\\bNOT CURRENTLY PUBLISHED\\b/gi, "REGISTRY-CONTROLLED DISCLOSURE"],\n  [/\\bEVIDENCE REFRESHING\\b/gi, "VERIFICATION IN PROGRESS"],\n',
+              1,
+          )
+          status = status.replace(
+              '  { label: "Not Yet Published", pattern: /\\bNot Yet Published\\b/i },\n',
+              '  { label: "Not Yet Published", pattern: /\\bNot Yet Published\\b/i },\n  { label: "NOT CURRENTLY PUBLISHED", pattern: /\\bNOT CURRENTLY PUBLISHED\\b/i },\n  { label: "EVIDENCE REFRESHING", pattern: /\\bEVIDENCE REFRESHING\\b/i },\n  { label: "Not Launched", pattern: /\\bNot Launched\\b/i },\n',
+              1,
+          )
+          status = status.replace('      "</$1><",', '      "</$1>",', 1)
+          status = status.replace(
+              '    "Not Yet Published",\n',
+              '    "Not Yet Published",\n    "NOT CURRENTLY PUBLISHED",\n    "EVIDENCE REFRESHING",\n    "Not Launched",\n',
+              1,
+          )
+          status_path.write_text(status, encoding="utf-8")
 
-          old_alt = '"alternateName":["JUNCA Chain Documentation","junca chain docs","juncachain docs","JUNCA Platform technical reference"]'
-          new_alt = '"alternateName":["JUNCA Chain Documentation","juncachain docs"]'
-          if old_alt in source:
-              source = source.replace(old_alt, new_alt, 1)
+          runtime_path = Path("docs/technical-reference/scripts/runtime-current-state-normalize.mjs")
+          runtime = runtime_path.read_text(encoding="utf-8")
+          runtime_start_marker = 'const explorerUrl = "https://explorer.jaios-governance.org/explorer.json";'
+          runtime_end_marker = 'const observedAt = String(explorer.observed_at ?? "");'
+          runtime_start = runtime.index(runtime_start_marker)
+          runtime_end = runtime.index(runtime_end_marker)
+          robust_runtime_block = r'''const explorerUrl = "https://explorer.jaios-governance.org/explorer.json";
+const explorerProxyUrl = "https://docs.jaios-governance.org/explorer.json";
+const operationalUrl = "https://chain.jaios-governance.org/api/operational";
+const expectedSchema = "junca-public-explorer/v4";
+const expectedChainId = 20260723;
+const integerValue = (value) => {
+  if (Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^0x[0-9a-f]+$/i.test(value)) return Number.parseInt(value, 16);
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) return Number.parseInt(value, 10);
+  return Number.NaN;
+};
+const isHash = (value) => /^0x[0-9a-f]{64}$/i.test(String(value ?? ""));
+const isDigest = (value) => /^[0-9a-f]{64}$/i.test(String(value ?? ""));
+const isCommit = (value) => /^[0-9a-f]{40}$/i.test(String(value ?? ""));
+const validateExplorer = (candidate) => {
+  const candidateHead = candidate?.head ?? {};
+  const candidateNetwork = candidate?.network ?? {};
+  const artifact = candidate?.runtime_artifact ?? {};
+  return candidate?.schema_version === expectedSchema &&
+    candidate?.status === "ready" && candidate?.read_only === true &&
+    candidate?.finalized_only === true &&
+    candidate?.notice === "Public Testnet / Protocol Validation Environment" &&
+    candidate?.mainnet_changed === false && candidate?.assets_moved === false &&
+    candidate?.bridge_activated === false && Number.isInteger(candidateHead.height) &&
+    candidateHead.height > 1 && candidateHead.signed_power === 3 &&
+    candidateHead.total_power === 3 && isHash(candidateHead.hash) &&
+    isHash(candidateHead.certificate_hash) && isHash(candidateHead.state_root) &&
+    integerValue(candidateHead.timestamp) > 0 &&
+    candidateNetwork.chain_id_decimal === expectedChainId && candidateNetwork.peer_count === 2 &&
+    isCommit(artifact.source_commit) && isDigest(artifact.genesis_sha256) &&
+    isDigest(artifact.node_artifact_sha256);
+};
+const validateOperational = (operationalCandidate, explorerCandidate) => {
+  const candidate = operationalCandidate?.network ?? {};
+  const head = explorerCandidate.head;
+  const network = explorerCandidate.network;
+  const artifact = explorerCandidate.runtime_artifact;
+  const finality = String(candidate.finality ?? "").replace(/\s+/g, "").split("/").map(integerValue);
+  return candidate.state === "VERIFIED" && candidate.status === "READY · READ-ONLY" &&
+    integerValue(candidate.chainId) === expectedChainId && integerValue(candidate.height) === head.height &&
+    candidate.headHash === head.hash && candidate.certificateHash === head.certificate_hash &&
+    candidate.stateRoot === head.state_root && integerValue(candidate.peers) === network.peer_count &&
+    finality.length === 2 && finality[0] === head.signed_power && finality[1] === head.total_power &&
+    candidate.blockTimestamp === new Date(integerValue(head.timestamp) * 1000).toISOString() &&
+    candidate.runtimeSourceCommit === artifact.source_commit &&
+    candidate.nodeArtifactSha256 === artifact.node_artifact_sha256 &&
+    candidate.genesisSha256 === artifact.genesis_sha256 &&
+    candidate.mainnetChanged === false && candidate.assetsMoved === false &&
+    candidate.bridgeActivated === false && candidate.source === explorerUrl;
+};
+const fetchJson = async (url, label) => {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
+      "User-Agent": "JUNCA-Docs-Current-State/1.1",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`${label} readback failed: HTTP ${response.status}`);
+  return response.json();
+};
+const candidates = [
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerProxyUrl, source: "VERIFIED SAME-ORIGIN PROXY" },
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerProxyUrl, source: "VERIFIED SAME-ORIGIN PROXY" },
+];
+let explorer;
+let explorerEvidenceSource;
+let explorerEvidenceUrl;
+const readbackFailures = [];
+for (const candidate of candidates) {
+  try {
+    const [explorerCandidate, operationalCandidate] = await Promise.all([
+      fetchJson(candidate.url, candidate.source),
+      fetchJson(operationalUrl, "OPERATIONAL API"),
+    ]);
+    if (!validateExplorer(explorerCandidate)) throw new Error(`${candidate.source} boundary mismatch`);
+    if (!validateOperational(operationalCandidate, explorerCandidate)) throw new Error(`${candidate.source} parity mismatch`);
+    explorer = explorerCandidate;
+    explorerEvidenceSource = candidate.source;
+    explorerEvidenceUrl = candidate.url;
+    break;
+  } catch (error) {
+    readbackFailures.push(error instanceof Error ? error.message : String(error));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+}
+if (!explorer) throw new Error(`Governed current-state readback failed: ${readbackFailures.join(" | ")}`);
+'''
+          runtime = runtime[:runtime_start] + robust_runtime_block + runtime[runtime_end:]
+          runtime = runtime.replace(
+              '  for (const [before, after] of replacements) html = html.split(before).join(after);\n',
+              '  for (const [before, after] of replacements) html = html.split(before).join(after);\n  html = html.replace(/(<dd[^>]*data-live-runtime="source"[^>]*>)[^<]*(<\\/dd>)/g, `$1${explorerEvidenceSource}$2`);\n',
+              1,
+          )
+          runtime = runtime.replace(
+              'const prohibitedVisible = /\\bPENDING\\b|\\bBLOCKED\\b|No Monetary Value|\\bNo Active\\b|\\bNot Activated\\b|\\bNot Yet Published\\b|\\bnot-activated\\b|保留中/i;',
+              'const prohibitedVisible = /\\bPENDING\\b|\\bBLOCKED\\b|No Monetary Value|\\bNo Active\\b|\\bNot Activated\\b|\\bNot Yet Published\\b|\\bNOT CURRENTLY PUBLISHED\\b|\\bEVIDENCE REFRESHING\\b|\\bNot Launched\\b|\\bnot-activated\\b|保留中/i;',
+              1,
+          )
+          runtime = runtime.replace(
+              '    source: explorerUrl,\n',
+              '    source: explorerEvidenceUrl,\n    source_mode: explorerEvidenceSource,\n',
+              1,
+          )
+          runtime = runtime.replace(
+              '    source_endpoint: explorerUrl,\n',
+              '    source_endpoint: explorerEvidenceUrl,\n    source_mode: explorerEvidenceSource,\n',
+              1,
+          )
+          runtime_path.write_text(runtime, encoding="utf-8")
 
-          redundant_network_faq = ',{"@type":"Question","name":"What is the current network state?","acceptedAnswer":{"@type":"Answer","text":"Public Testnet. Mainnet Changed is false, Assets Moved is false, and Bridge Activated is false."}}'
-          if redundant_network_faq in source:
-              source = source.replace(redundant_network_faq, "", 1)
+          qa_path = Path("docs/technical-reference/scripts/qa.mjs")
+          qa = qa_path.read_text(encoding="utf-8")
+          qa = qa.replace(
+              '  "No Active", "Not Activated", "Not Yet Published", "not-activated",\n',
+              '  "No Active", "Not Activated", "Not Yet Published", "NOT CURRENTLY PUBLISHED", "EVIDENCE REFRESHING", "Not Launched", "not-activated",\n',
+              1,
+          )
+          qa = qa.replace('    "CANONICAL EXPLORER",\n', '', 1)
+          qa = qa.replace(
+              '  for (const term of prohibited) {\n',
+              '  if (!html.includes("CANONICAL EXPLORER") && !html.includes("VERIFIED SAME-ORIGIN PROXY")) {\n    failures.push(`${route}: missing verified runtime evidence source mode`);\n  }\n  for (const term of prohibited) {\n',
+              1,
+          )
+          qa = qa.replace(
+              '/\\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED)\\b/i,',
+              '/\\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED|NOT CURRENTLY PUBLISHED|EVIDENCE REFRESHING|NOT LAUNCHED)\\b/i,',
+              1,
+          )
+          qa = qa.replace(
+              'if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");\n',
+              'if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");\nconst approvedRuntimeEvidenceEndpoints = new Set([\n  "https://explorer.jaios-governance.org/explorer.json",\n  "https://docs.jaios-governance.org/explorer.json",\n]);\nif (!approvedRuntimeEvidenceEndpoints.has(releaseManifest.runtime_evidence_endpoint)) {\n  failures.push("runtime evidence endpoint is outside the approved canonical/fallback routes");\n}\nif (!["CANONICAL EXPLORER", "VERIFIED SAME-ORIGIN PROXY"].includes(releaseManifest.runtime_evidence_source_mode)) {\n  failures.push("runtime evidence source mode is not verified");\n}\n',
+              1,
+          )
+          qa_path.write_text(qa, encoding="utf-8")
 
-          path.write_text(source, encoding="utf-8")
-          after_size = len(source.encode("utf-8"))
-          saved = before_size - after_size
-          if saved < 367:
-              raise SystemExit(f"SEO compaction saved only {saved} bytes; minimum is 367")
-          print(f"R38 source repaired; redundant SEO payload reduced by {saved} bytes")
+          policy_path = Path("docs/technical-reference/STATUS_LANGUAGE_POLICY.md")
+          policy = policy_path.read_text(encoding="utf-8")
+          policy = policy.replace(
+              '- `Not Yet Published`\n',
+              '- `Not Yet Published`\n- `NOT CURRENTLY PUBLISHED`\n- `EVIDENCE REFRESHING`\n- `Not Launched`\n',
+              1,
+          )
+          policy = policy.replace(
+              'Browser readback attempts the canonical Explorer endpoint first. The same-origin route is retained only as a verified continuity fallback.',
+              'Browser and build readback attempt the canonical Explorer endpoint first with bounded retries. The same-origin route is retained only as a verified continuity fallback.',
+              1,
+          )
+          policy = policy.replace(
+              'Neither route may update the page unless the exact schema, chain identity, quorum, peer count, provenance and safety boundaries pass validation.',
+              'Neither route may update the page unless the exact schema, chain identity, quorum, peer count, provenance, safety boundaries and Operational API parity pass validation.',
+              1,
+          )
+          policy_path.write_text(policy, encoding="utf-8")
+          print("R38 repair source changes applied")
           PY
 
       - name: Run full eight-route build and QA
         working-directory: docs/technical-reference
         run: npm test
+
+      - name: Assert bounded output and prohibited-language removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(wc -c < docs/technical-reference/dist/index.html)" -le 100000
+          ! grep -RniE 'No Monetary Value|No Active|Not Activated|Not Yet Published|NOT CURRENTLY PUBLISHED|EVIDENCE REFRESHING|Not Launched|\bPENDING\b|\bBLOCKED\b' \
+            docs/technical-reference/dist --include='*.html'
+          jq -e '.result == "PASS"' docs/technical-reference/dist/status-language-audit.json >/dev/null
+          jq -e '.result == "PASS"' docs/technical-reference/dist/current-runtime-audit.json >/dev/null
+          jq -e '.public_status_language_policy.result == "PASS"' docs/technical-reference/dist/release-manifest.json >/dev/null
 
       - name: Commit verified repair to current main
         shell: bash
@@ -84,10 +425,15 @@ jobs:
           set -euo pipefail
           git config user.name "juncaGlobal"
           git config user.email "juncajapan.inc@gmail.com"
-          git add docs/technical-reference/scripts/build.mjs
+          git add \
+            docs/technical-reference/STATUS_LANGUAGE_POLICY.md \
+            docs/technical-reference/scripts/build.mjs \
+            docs/technical-reference/scripts/status-language-normalize.mjs \
+            docs/technical-reference/scripts/runtime-current-state-normalize.mjs \
+            docs/technical-reference/scripts/qa.mjs
           if git diff --cached --quiet; then
-            echo "R38 status and SEO payload repair already applied."
+            echo "R38 production repair already applied."
             exit 0
           fi
-          git commit -m "fix: finalize R38 docs status and bounded SEO payload"
+          git commit -m "fix: remove prohibited docs language and verify runtime endpoints"
           git push origin HEAD:main
