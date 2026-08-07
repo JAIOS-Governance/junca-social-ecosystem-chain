@@ -19,7 +19,11 @@ _compat_normalize_snapshot = continuity.normalize_snapshot
 
 
 def _health_value(payload: Mapping[str, Any], *paths: str) -> Any:
-    return compatibility._first_published(payload, paths)
+    for path in paths:
+        found = compatibility._published_path(payload, path)
+        if found is not None:
+            return found
+    return None
 
 
 def _explorer_payload() -> Mapping[str, Any]:
@@ -45,7 +49,9 @@ def _require_health_contract(
         raise continuity.ContinuityError(
             "operational health must independently publish finalized height and hash"
         )
-    height = compatibility._integer(height_raw, "operational health finalized_height")
+    height = compatibility._integer(
+        height_raw, "operational health finalized_height"
+    )
     if not isinstance(hash_raw, str) or not hash_raw:
         raise continuity.ContinuityError("operational health hash must be a string")
 
