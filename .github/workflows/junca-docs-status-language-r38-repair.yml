@@ -28,52 +28,43 @@ jobs:
         with:
           node-version: 20
 
-      - name: Apply CEO-directed R38 repair
+      - name: Repair translated public-status normalization boundary
         shell: bash
         run: |
           set -euo pipefail
           python <<'PY'
-          import base64
-          import hashlib
-          import zlib
+          from pathlib import Path
 
-          payload = (
-              "eNrtPctyG0lyd3xFqUcxBGaABkXNzsigSAUEQhJmKYADgPJqRS3QABpkS41uTHeDEpfgZ/iwDvvmgy++7vrgCEfst2x4/RnOzHp09QsEOd6ddYR1EIHuzKys"
-              "Rz4rq/DFg/oqDOoTx6vb3iVbXkUXvve4NA/8BVta0YXrTJizWPpBxE7ga0l8DuxSqd/rDdkBPS4bM38a1iN7euE5U8utBfbcDmxvahuV0vPTzvERABJ8nRnh"
-              "NHCWUVifrBx3Zi4+hEbph2bO+x8t/rLb679uHnd+3c6BCSMrWoU11/LOV9a5XfP8YGG5zm9tjto67ffb3WEOYrDyImdh16arAPiMakgog94/7Q47rxPtBtO6"
-              "61zaNYFvIthJ77jTeqtBDYbN4elgdNzsvjxtvmyPOIC5mBmlQbd5MnjVS7DkWcvwwo+MUmlmz2Fol641tUeB/ePKCexZObI/Rw0WRkGV+e5MfPLsT+KTa01s"
-              "lz5XWO0Q/zZKDP45cwRnnh8xx2NEhJ7jv8ByQpsNrsLIXrQ/O1F5bvRFc9i+5QTM8qYXfsAWThg63nmDXVM7NzCfRMCOVgGnagqGy9Aa8VUplb5gj0zWsjyf"
-              "VgMTg8Vsb7b0HQ96M4OmphFrf166fmAHbO4EYVRll3bgzB1gIrRgbvzAOQfWl4H/+YrNLdedWNOPppwV81PgRPYIWSgHOzs75XKFHRyya+Bv6nthxPrtF/32"
-              "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"
-          )
-          source = zlib.decompress(base64.b64decode(payload)).decode("utf-8")
-          expected = "962c7db9c16e47c167753056f72bd2d328267a69d549d686adcd7a053df7f774"
-          actual = hashlib.sha256(source.encode("utf-8")).hexdigest()
-          if actual != expected:
-              raise SystemExit(f"Repair payload digest mismatch: {actual}")
-          exec(compile(source, "junca_docs_status_language_r38_repair.py", "exec"), {"__name__": "__main__"})
+          path = Path("docs/technical-reference/scripts/build.mjs")
+          source = path.read_text(encoding="utf-8")
+          marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
+          addition = marker + '''      .replaceAll(
+        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",
+        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
+      )
+'''
+          if addition not in source:
+              if marker not in source:
+                  raise SystemExit("Expected R38 normalization marker is missing")
+              source = source.replace(marker, addition, 1)
+              path.write_text(source, encoding="utf-8")
+          print("R38 translation normalization boundary repaired")
           PY
 
-      - name: Validate JavaScript and build generators
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --check docs/technical-reference/src/live-runtime.js
-          node --check docs/technical-reference/scripts/status-language-normalize.mjs
-          node --check docs/technical-reference/scripts/runtime-current-state-normalize.mjs
-          node --check docs/technical-reference/scripts/build.mjs
-          node --check docs/technical-reference/scripts/qa.mjs
+      - name: Run full eight-route build and QA
+        working-directory: docs/technical-reference
+        run: npm test
 
-      - name: Commit exact repair to current main
+      - name: Commit verified repair to current main
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "juncaGlobal"
           git config user.email "juncajapan.inc@gmail.com"
-          git add             docs/technical-reference/STATUS_LANGUAGE_POLICY.md             docs/technical-reference/src/live-runtime.js             docs/technical-reference/scripts/status-language-normalize.mjs             docs/technical-reference/scripts/runtime-current-state-normalize.mjs             docs/technical-reference/scripts/build.mjs             docs/technical-reference/scripts/qa.mjs             docs/technical-reference/snapshot
+          git add docs/technical-reference/scripts/build.mjs
           if git diff --cached --quiet; then
-            echo "Exact R38 source already applied."
+            echo "Translation boundary repair already applied."
             exit 0
           fi
-          git commit -m "fix: repair docs status language and canonical runtime binding"
+          git commit -m "fix: normalize translated docs status language before rendering"
           git push origin HEAD:main
