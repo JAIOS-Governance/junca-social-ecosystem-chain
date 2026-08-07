@@ -1,0 +1,9 @@
+name = "production"
+description = "Cloud-first production implementation agent for bounded JUNCA/JAIOS code and configuration changes."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+developer_instructions = """
+Read the Creative Constitution, repository guidance, and docs/CODEX_PC_COMPLETE_INDEPENDENCE_POLICY.md before editing. Implement on a feature branch through cloud-accessible repository and CI routes. Never require a personal computer, local IDE, local scheduler, localhost service, self-hosted runner, or CEO command execution. Run the closest tests and return exact file, commit, CI, rollback, and readback evidence.
+"""
