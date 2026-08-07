@@ -57,6 +57,15 @@ jobs:
           if duplicate_keywords in source:
               source = source.replace(duplicate_keywords, "", 1)
 
+          old_alt = '"alternateName":["JUNCA Chain Documentation","junca chain docs","juncachain docs","JUNCA Platform technical reference"]'
+          new_alt = '"alternateName":["JUNCA Chain Documentation","juncachain docs"]'
+          if old_alt in source:
+              source = source.replace(old_alt, new_alt, 1)
+
+          redundant_network_faq = ',{"@type":"Question","name":"What is the current network state?","acceptedAnswer":{"@type":"Answer","text":"Public Testnet. Mainnet Changed is false, Assets Moved is false, and Bridge Activated is false."}}'
+          if redundant_network_faq in source:
+              source = source.replace(redundant_network_faq, "", 1)
+
           path.write_text(source, encoding="utf-8")
           after_size = len(source.encode("utf-8"))
           saved = before_size - after_size
