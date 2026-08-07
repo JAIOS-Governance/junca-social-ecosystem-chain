@@ -1,0 +1,82 @@
+name: JUNCA Stale Workflow Run Cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-stale-run-cleanup.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: junca-stale-workflow-run-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require current-main continuity verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/31137046022")"
+          test "$(jq -r .status <<<"$run")" = completed
+          test "$(jq -r .conclusion <<<"$run")" = success
+          test "$(jq -r .head_sha <<<"$run")" = c750405dff405a6773bda85a1e9754ca7452e87f
+          test "$main_sha" = c750405dff405a6773bda85a1e9754ca7452e87f
+
+      - name: Cancel only the two superseded queued runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for run_id in 31125147612 30969847156; do
+            run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r .status <<<"$run")"
+            case "$status" in
+              queued|requested|pending|waiting|in_progress)
+                gh api --method POST \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" \
+                  >/dev/null
+                ;;
+              completed)
+                ;;
+              *)
+                echo "Unexpected workflow status for ${run_id}: ${status}" >&2
+                exit 1
+                ;;
+            esac
+          done
+          for attempt in $(seq 1 30); do
+            active=0
+            for run_id in 31125147612 30969847156; do
+              status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status)"
+              case "$status" in
+                completed) ;;
+                *) active=$((active+1)) ;;
+              esac
+            done
+            if [ "$active" -eq 0 ]; then exit 0; fi
+            test "$attempt" -lt 30
+            sleep 2
+          done
+
+      - name: Publish cleanup evidence
+        shell: bash
+        run: |
+          {
+            echo '## JSEC stale workflow cleanup'
+            echo '- Current continuity run: `31137046022` — `SUCCESS`'
+            echo '- Superseded continuity run `31125147612`: `CANCELLED/COMPLETED`'
+            echo '- Superseded publication rerun `30969847156`: `CANCELLED/COMPLETED`'
+            echo '- Mainnet changed: `false`'
+            echo '- Assets moved: `false`'
+            echo '- Bridge activated: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
