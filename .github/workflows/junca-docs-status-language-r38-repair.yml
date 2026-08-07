@@ -66,6 +66,30 @@ jobs:
           print("Japanese faucet status copy normalized")
           PY
 
+      - name: Restore runtime evidence aliases after endpoint normalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/technical-reference/scripts/runtime-current-state-normalize.mjs")
+          source = path.read_text(encoding="utf-8")
+          marker = 'const observedAt = String(explorer.observed_at ?? "");\n'
+          aliases = (
+              'const head = explorer.head ?? {};\n'
+              'const network = explorer.network ?? {};\n'
+              'const runtimeArtifact = explorer.runtime_artifact ?? {};\n'
+              + marker
+          )
+          if aliases not in source:
+              if marker not in source:
+                  raise SystemExit("Expected runtime observed-at marker is missing")
+              source = source.replace(marker, aliases, 1)
+              path.write_text(source, encoding="utf-8")
+          print("Runtime evidence aliases restored")
+          PY
+
       - name: Run full eight-route build and QA
         working-directory: docs/technical-reference
         run: npm test
