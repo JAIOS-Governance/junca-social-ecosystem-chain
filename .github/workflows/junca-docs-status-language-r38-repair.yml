@@ -47,6 +47,25 @@ jobs:
           exec(compile(source, "junca_docs_status_language_r38_repair.py", "exec"), {"__name__": "__main__"})
           PY
 
+      - name: Normalize Japanese faucet status copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/technical-reference/scripts/build.mjs")
+          source = path.read_text(encoding="utf-8")
+          marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
+          addition = marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
+          if addition not in source:
+              if marker not in source:
+                  raise SystemExit("Expected Japanese status normalization marker is missing")
+              source = source.replace(marker, addition, 1)
+              path.write_text(source, encoding="utf-8")
+          print("Japanese faucet status copy normalized")
+          PY
+
       - name: Run full eight-route build and QA
         working-directory: docs/technical-reference
         run: npm test
