@@ -5,14 +5,18 @@ on:
     paths:
       - "scripts/ops/public_testnet_continuity.py"
       - "scripts/ops/public_testnet_continuity_entrypoint.py"
+      - "scripts/ops/public_testnet_continuity_health_entrypoint.py"
       - "tests/test_public_testnet_continuity.py"
+      - "tests/test_public_testnet_continuity_health_entrypoint.py"
       - ".github/workflows/junca-public-testnet-continuity.yml"
   push:
     branches: [main]
     paths:
       - "scripts/ops/public_testnet_continuity.py"
       - "scripts/ops/public_testnet_continuity_entrypoint.py"
+      - "scripts/ops/public_testnet_continuity_health_entrypoint.py"
       - "tests/test_public_testnet_continuity.py"
+      - "tests/test_public_testnet_continuity_health_entrypoint.py"
       - ".github/workflows/junca-public-testnet-continuity.yml"
   schedule:
     - cron: "*/15 * * * *"
@@ -57,7 +61,11 @@ jobs:
           set -euo pipefail
           python -m py_compile scripts/ops/public_testnet_continuity.py
           python -m py_compile scripts/ops/public_testnet_continuity_entrypoint.py
-          python -m unittest tests.test_public_testnet_continuity -v
+          python -m py_compile scripts/ops/public_testnet_continuity_health_entrypoint.py
+          python -m unittest \
+            tests.test_public_testnet_continuity \
+            tests.test_public_testnet_continuity_health_entrypoint \
+            -v
 
   live-continuity-readback:
     if: github.event_name != 'pull_request'
@@ -83,7 +91,9 @@ jobs:
           if [ "${REQUIRE_ADVANCEMENT}" = "true" ]; then
             advancement_flag="--require-advancement"
           fi
-          python scripts/ops/public_testnet_continuity_entrypoint.py \
+          python scripts/ops/public_testnet_continuity_health_entrypoint.py \
+            --operational-url https://health.jaios-governance.org/health \
+            --explorer-url https://explorer.jaios-governance.org/explorer.json \
             --source-sha "${GITHUB_SHA}" \
             --expected-chain-id 20260723 \
             --expected-peer-count 2 \
