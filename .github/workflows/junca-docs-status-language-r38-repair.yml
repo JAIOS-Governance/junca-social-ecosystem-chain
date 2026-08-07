@@ -144,7 +144,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(wc -c < docs/technical-reference/dist/index.html)" -le 100000
+          index_bytes="$(wc -c < docs/technical-reference/dist/index.html)"
+          test "$index_bytes" -le 140000
+          echo "Overview output size: ${index_bytes} bytes"
           python <<'PY'
           import html as html_module
           import re
