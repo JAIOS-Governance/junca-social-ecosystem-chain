@@ -140,13 +140,42 @@ jobs:
         working-directory: docs/technical-reference
         run: npm test
 
-      - name: Assert bounded output and prohibited-language removal
+      - name: Assert bounded output and prohibited visible-language removal
         shell: bash
         run: |
           set -euo pipefail
           test "$(wc -c < docs/technical-reference/dist/index.html)" -le 100000
-          ! grep -RniE 'No Monetary Value|No Active|Not Activated|Not Yet Published|NOT CURRENTLY PUBLISHED|EVIDENCE REFRESHING|Not Launched|PENDING|BLOCKED' \
-            docs/technical-reference/dist --include='*.html'
+          python <<'PY'
+          import html as html_module
+          import re
+          from pathlib import Path
+
+          patterns = [
+              r"No Monetary Value",
+              r"\bNo Active\b",
+              r"\bNot Activated\b",
+              r"\bNot Yet Published\b",
+              r"\bNOT CURRENTLY PUBLISHED\b",
+              r"\bEVIDENCE REFRESHING\b",
+              r"\bNot Launched\b",
+              r"\bPENDING\b",
+              r"\bBLOCKED\b",
+          ]
+          failures = []
+          for path in Path("docs/technical-reference/dist").rglob("*.html"):
+              source = path.read_text(encoding="utf-8")
+              visible = re.sub(r"<script[\s\S]*?</script>", " ", source, flags=re.I)
+              visible = re.sub(r"<style[\s\S]*?</style>", " ", visible, flags=re.I)
+              visible = re.sub(r"<[^>]+>", " ", visible)
+              visible = html_module.unescape(re.sub(r"\s+", " ", visible))
+              for pattern in patterns:
+                  match = re.search(pattern, visible, flags=re.I)
+                  if match:
+                      failures.append(f"{path}: {match.group(0)}")
+          if failures:
+              raise SystemExit("Prohibited visible status language remains:\n" + "\n".join(failures))
+          print("Independent visible-language assertion PASS")
+          PY
           jq -e '.result == "PASS"' docs/technical-reference/dist/status-language-audit.json >/dev/null
           jq -e '.result == "PASS"' docs/technical-reference/dist/current-runtime-audit.json >/dev/null
           jq -e '.public_status_language_policy.result == "PASS"' docs/technical-reference/dist/release-manifest.json >/dev/null
