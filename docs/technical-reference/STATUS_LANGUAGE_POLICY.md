@@ -3,6 +3,7 @@
 Status: ACTIVE / MANDATORY
 Effective: 2026-08-07 JST
 Authority: Latest CEO directive, Creative Constitution and JAIOS Institutional Governance
+Source revision: R38 / Canonical Runtime Binding Repair
 
 The JUNCA Social Ecosystem Chain technical reference applies evidence-first, governance-accurate public vocabulary across every canonical route.
 
