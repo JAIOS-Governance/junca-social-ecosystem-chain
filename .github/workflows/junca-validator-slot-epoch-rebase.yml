@@ -1,0 +1,323 @@
+name: JUNCA Validator Slot Epoch Rebase
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-slot-epoch-rebase.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-slot-epoch-rebase
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+  TARGET_ARTIFACT_SHA256: fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+
+jobs:
+  rebase-and-accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-slot-epoch-rebase-${{ github.run_id }}
+
+      - name: Resolve exact converged three-validator fleet
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account==$account and
+            (.Arn|contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[]|{
+              instance_id:.InstanceId,
+              validator:(.Tags[]|select(.Key=="Validator")|.Value),
+              private_ip:.PrivateIpAddress,
+              state:.State.Name
+            }]|sort_by(.validator)|select(
+              length==3 and map(.validator)==["01","02","03"] and
+              (map(.instance_id)|unique|length)==3 and
+              (map(.private_ip)|unique|length)==3 and
+              all(.[];.state=="running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,;echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
+          jq -e --argjson expected "$(jq '[.[].instance_id]|sort' artifacts/validators.json)" '
+            [.InstanceInformationList[]|select(.PingStatus=="Online")|.InstanceId]|sort|.==$expected
+          ' artifacts/ssm-instances.json >/dev/null
+          new_epoch="$(( ( $(date +%s) / 30 + 5 ) * 30 ))"
+          test "$new_epoch" -gt "$(date +%s)"
+          test "$((new_epoch % 30))" -eq 0
+          echo "$new_epoch" > artifacts/new-slot-epoch.txt
+          jq -r '[.[]|"validator-\(.validator)=\(.private_ip):30303"]|join(",")' \
+            artifacts/validators.json > artifacts/canonical-peer-endpoints.txt
+
+      - name: Verify exact common finalized baseline before epoch rebase
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          cat > /tmp/read-baseline.sh <<'REMOTE'
+          set -Eeuo pipefail
+          value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env|tail -n1
+          }
+          test "$(value NODE_ARTIFACT_SHA256)" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          test "$(sha256sum /opt/junca/validator-runtime.tar.gz|awk '{print $1}')" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          curl -fsS http://127.0.0.1:8545/health >/tmp/baseline-health.json
+          jq -e '.status=="healthy" and .head_height>=14997 and .consensus.last_certificate.height==.head_height and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/baseline-health.json >/dev/null
+          jq -cn --slurpfile health /tmp/baseline-health.json '{validator_id:$health[0].validator_id,head_height:$health[0].head_height,head_hash:$health[0].head_hash,head_timestamp:$health[0].head_timestamp,certificate_hash:$health[0].consensus.last_certificate.certificate_hash,certificate_height:$health[0].consensus.last_certificate.height,current_round:$health[0].consensus.current_round}'
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/read-baseline.sh > /tmp/read-baseline.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file:///tmp/read-baseline.json \
+            --comment 'Read exact JSEC baseline before slot epoch rebase' \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/baseline-command-id.txt
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 90); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 90
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/baseline-${instance}.json"
+            jq -e '.Status=="Success" and (.ResponseCode//-1)==0' "artifacts/baseline-${instance}.json" >/dev/null
+            jq -r '.StandardOutputContent' "artifacts/baseline-${instance}.json" > "artifacts/baseline-health-${instance}.json"
+            jq -e . "artifacts/baseline-health-${instance}.json" >/dev/null
+          done
+          python3 - <<'PY'
+          import glob,json
+          records=[json.load(open(p)) for p in glob.glob('artifacts/baseline-health-i-*.json')]
+          for field in ('head_height','head_hash','head_timestamp','certificate_hash','certificate_height'):
+              values={record[field] for record in records}
+              if len(values)!=1:
+                  raise SystemExit(f'BASELINE_DIVERGENCE {field}: {values}')
+          json.dump({'records':records,'head_height':records[0]['head_height'],'head_hash':records[0]['head_hash'],'head_timestamp':records[0]['head_timestamp'],'certificate_hash':records[0]['certificate_hash']},open('artifacts/converged-baseline.json','w'),indent=2)
+          PY
+
+      - name: Install one future slot epoch and restart all validators before activation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          new_epoch="$(cat artifacts/new-slot-epoch.txt)"
+          peers="$(cat artifacts/canonical-peer-endpoints.txt)"
+          {
+            printf 'NEW_EPOCH=%q\n' "$new_epoch"
+            printf 'CANONICAL_PEERS=%q\n' "$peers"
+            cat <<'REMOTE'
+          set -Eeuo pipefail
+          value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env|tail -n1
+          }
+          test "$(value CHAIN_ID)" = 20260723
+          test "$(value NODE_ARTIFACT_SHA256)" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          test "$(date +%s)" -lt "$NEW_EPOCH"
+          python3 - "$NEW_EPOCH" "$CANONICAL_PEERS" <<'PY'
+          from pathlib import Path
+          import os,sys
+          epoch,peers=sys.argv[1:]
+          path=Path('/etc/junca/runtime.env')
+          updates={
+              'P2P_PORT':'30303',
+              'VALIDATOR_PEER_ENDPOINTS':peers,
+              'AUTOMATIC_FINALITY_ENABLED':'true',
+              'TESTNET_BLOCK_INTERVAL_SECONDS':'30',
+              'TESTNET_SLOT_EPOCH_SECONDS':epoch,
+          }
+          output=[]; observed=set()
+          for line in path.read_text().splitlines():
+              if '=' not in line or line.lstrip().startswith('#'):
+                  output.append(line); continue
+              key=line.split('=',1)[0]
+              if key in updates:
+                  output.append(f'{key}={updates[key]}'); observed.add(key)
+              else: output.append(line)
+          missing=set(updates)-observed
+          if missing: raise SystemExit(f'RUNTIME_ENV_KEYS_MISSING:{sorted(missing)}')
+          tmp=Path('/etc/junca/runtime.env.epoch-rebase.tmp')
+          tmp.write_text('\n'.join(output)+'\n')
+          os.chmod(tmp,0o640); os.chown(tmp,0,os.stat(path).st_gid); tmp.replace(path)
+          PY
+          chown root:junca /etc/junca/runtime.env
+          chmod 0640 /etc/junca/runtime.env
+          test "$(value TESTNET_SLOT_EPOCH_SECONDS)" = "$NEW_EPOCH"
+          test "$(value VALIDATOR_PEER_ENDPOINTS)" = "$CANONICAL_PEERS"
+          systemctl reset-failed junca-validator.service junca-public-rpc.service junca-public-explorer.service || true
+          systemctl restart junca-validator.service
+          ready=false
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/pre-epoch-health.json \
+              && jq -e --argjson epoch "$NEW_EPOCH" '.status=="healthy" and .slot_epoch_seconds==$epoch and .automatic_finality_enabled==true and .automatic_finality_loop_running==true' /tmp/pre-epoch-health.json >/dev/null; then ready=true; break; fi
+            test "$attempt" -lt 90
+            sleep 1
+          done
+          test "$ready" = true
+          test "$(date +%s)" -lt "$NEW_EPOCH"
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          jq -cn --arg validator_id "$(value VALIDATOR_ID)" --argjson new_epoch "$NEW_EPOCH" --slurpfile health /tmp/pre-epoch-health.json '{schema_version:"junca-validator-slot-epoch-rebase/v1",configured:true,validator_id:$validator_id,new_epoch:$new_epoch,pre_epoch_health:$health[0],mainnet_changed:false,assets_moved:false,bridge_activated:false}'
+          echo JUNCA_FUTURE_EPOCH_INSTALLED
+          REMOTE
+          } > /tmp/install-future-epoch.sh
+          jq -Rs '{commands:[.]}' /tmp/install-future-epoch.sh > /tmp/install-future-epoch.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file:///tmp/install-future-epoch.json \
+            --comment "JUNCA future slot epoch ${new_epoch} rebase" \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/epoch-install-command-id.txt
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 120); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 120
+              sleep 1
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/epoch-install-${instance}.json"
+            jq -r '.Status,.StandardOutputContent,.StandardErrorContent' "artifacts/epoch-install-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_FUTURE_EPOCH_INSTALLED"))' "artifacts/epoch-install-${instance}.json" >/dev/null; then failures=$((failures+1)); fi
+          done
+          test "$failures" -eq 0
+
+      - name: Require first common future slot to finalize across all validators
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          new_epoch="$(cat artifacts/new-slot-epoch.txt)"
+          baseline_height="$(jq -r .head_height artifacts/converged-baseline.json)"
+          first_slot="$((new_epoch+30))"
+          while [ "$(date +%s)" -lt "$((first_slot+5))" ]; do sleep 1; done
+          {
+            printf 'NEW_EPOCH=%q\n' "$new_epoch"
+            printf 'BASELINE_HEIGHT=%q\n' "$baseline_height"
+            cat <<'REMOTE'
+          set -Eeuo pipefail
+          accepted=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/post-epoch-health.json \
+              && jq -e --argjson epoch "$NEW_EPOCH" --argjson baseline "$BASELINE_HEIGHT" '.status=="healthy" and .slot_epoch_seconds==$epoch and .head_height>$baseline and .authenticated_peer_count==2 and (.authenticated_peer_ids|length)==2 and .consensus.last_certificate.height==.head_height and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3 and .automatic_finality_last_successful_height==.head_height and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/post-epoch-health.json >/dev/null; then accepted=true; break; fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          test "$accepted" = true
+          cat /tmp/post-epoch-health.json
+          echo JUNCA_COMMON_FUTURE_SLOT_FINALIZED
+          REMOTE
+          } > /tmp/accept-common-slot.sh
+          jq -Rs '{commands:[.]}' /tmp/accept-common-slot.sh > /tmp/accept-common-slot.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file:///tmp/accept-common-slot.json \
+            --comment 'JUNCA first common future slot finality acceptance' \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/common-slot-command-id.txt
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 150); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 150
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/common-slot-${instance}.json"
+            jq -r '.Status,.StandardOutputContent,.StandardErrorContent' "artifacts/common-slot-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_COMMON_FUTURE_SLOT_FINALIZED"))' "artifacts/common-slot-${instance}.json" >/dev/null; then failures=$((failures+1)); fi
+          done
+          test "$failures" -eq 0
+
+      - name: Require public Testnet parity and continued advancement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          baseline="$(jq -r .head_height artifacts/converged-baseline.json)"
+          curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ > artifacts/public-block-1.json
+          first="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/public-block-1.json'))['result'],16))
+          PY
+          )"
+          test "$first" -gt "$baseline"
+          sleep 40
+          curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ > artifacts/public-block-2.json
+          second="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/public-block-2.json'))['result'],16))
+          PY
+          )"
+          test "$second" -gt "$first"
+          curl -fsS https://health.jaios-governance.org/health > artifacts/public-health.json
+          curl -fsS https://explorer.jaios-governance.org/explorer.json > artifacts/public-explorer.json
+          jq -e '.status=="healthy" and .read_only==true and .validator.authenticated_peer_count==2 and .validator.head_height>=1' artifacts/public-health.json >/dev/null
+          jq -e '.status=="ready" and .read_only==true and .finalized_only==true and .network.chain_id_decimal==20260723 and .network.peer_count==2 and .head.signed_power==3 and .head.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' artifacts/public-explorer.json >/dev/null
+          jq -n \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --argjson new_epoch "$(cat artifacts/new-slot-epoch.txt)" \
+            --argjson baseline "$baseline" \
+            --argjson first "$first" \
+            --argjson second "$second" \
+            --argjson validators "$(cat artifacts/validators.json)" \
+            --argjson health "$(cat artifacts/public-health.json)" \
+            --argjson explorer "$(cat artifacts/public-explorer.json)" '{
+              schema_version:"junca-public-testnet-slot-epoch-recovery/v1",
+              result:"ACTIVE_ADVANCING",
+              workflow_run_url:$run_url,
+              slot_epoch_seconds:$new_epoch,
+              baseline_height:$baseline,
+              first_public_height:$first,
+              second_public_height:$second,
+              validators:$validators,
+              public_health:$health,
+              public_explorer:$explorer,
+              peer_count:2,
+              signed_power:3,
+              total_power:3,
+              mainnet_changed:false,
+              assets_moved:false,
+              bridge_activated:false,
+              mainnet_activation_authorized:false
+            }' > artifacts/slot-epoch-recovery-acceptance.json
+          sha256sum artifacts/slot-epoch-recovery-acceptance.json > artifacts/slot-epoch-recovery-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-slot-epoch-rebase-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
