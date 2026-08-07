@@ -8,7 +8,7 @@ on:
       - ".github/workflows/jsec-docs-mobile-cache-r39-remediation.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: jsec-docs-mobile-cache-r39-remediation
@@ -22,44 +22,45 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: Synchronize current main before mutation
+        run: git pull --ff-only origin main
 
       - name: Apply exact-boundary R39 remediation v2
         run: python scripts/ops/jsec_docs_mobile_cache_r39_remediation_v2.py
 
-      - name: Validate modified source and controls
+      - name: Preserve workflow files for connector-controlled deployment
+        run: |
+          git restore --source=HEAD -- \
+            .github/workflows/junca-chain-docs-production.yml \
+            .github/workflows/jsec-docs-mobile-cache-r39-remediation.yml
+
+      - name: Validate persistent R39 source
         shell: bash
         run: |
           set -euo pipefail
           node --check docs/technical-reference/snapshot/official-brand-lockup-r29.js
           python -m json.tool docs/technical-reference/snapshot/manifest.webmanifest >/dev/null
           python -m json.tool docs/technical-reference/snapshot/current-release.json >/dev/null
-          grep -F 'no-store,no-cache,must-revalidate,max-age=0' .github/workflows/junca-chain-docs-production.yml
           grep -F 'jsec-docs-release-refresh:' docs/technical-reference/snapshot/official-brand-lockup-r29.js
           grep -F '20260807-r39-mobile-cache-recovery' docs/technical-reference/snapshot/manifest.webmanifest
+          grep -F '20260807-r39-mobile-cache-recovery' docs/technical-reference/snapshot/current-release.json
+          ! git diff --name-only | grep -E '^\.github/workflows/'
 
-      - name: Package verified source handoff
+      - name: Commit verified non-workflow source to main
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/r39-handoff
-          cp --parents \
-            .github/workflows/junca-chain-docs-production.yml \
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
             docs/technical-reference/scripts/build.mjs \
             docs/technical-reference/snapshot/manifest.webmanifest \
             docs/technical-reference/snapshot/official-brand-lockup-r29.js \
             docs/technical-reference/snapshot/current-release.json \
             docs/technical-reference/MOBILE_CACHE_RECOVERY_R39.md \
-            /tmp/r39-handoff/
-          tar -C /tmp/r39-handoff -czf /tmp/jsec-docs-r39-source-handoff.tar.gz .
-          sha256sum /tmp/jsec-docs-r39-source-handoff.tar.gz | tee /tmp/jsec-docs-r39-source-handoff.sha256
-
-      - name: Upload verified source handoff
-        uses: actions/upload-artifact@v4
-        with:
-          name: jsec-docs-r39-source-handoff-${{ github.run_id }}
-          path: |
-            /tmp/jsec-docs-r39-source-handoff.tar.gz
-            /tmp/jsec-docs-r39-source-handoff.sha256
-          if-no-files-found: error
-          retention-days: 7
+            scripts/ops/jsec_docs_mobile_cache_r39_remediation.py \
+            scripts/ops/jsec_docs_mobile_cache_r39_remediation_v2.py
+          git commit -m "fix(docs): stage mobile cache recovery R39 [skip ci]"
+          git push origin HEAD:main
