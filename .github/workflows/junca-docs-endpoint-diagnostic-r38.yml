@@ -1,0 +1,167 @@
+name: JUNCA Docs Endpoint Diagnostic R38
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-docs-endpoint-diagnostic-r38.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-docs-endpoint-diagnostic-r38
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+
+      - name: Read canonical, operational and same-origin endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p endpoint-evidence
+          stamp="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
+
+          read_endpoint() {
+            local name="$1"
+            local url="$2"
+            local attempt="$3"
+            local output="endpoint-evidence/${name}-${attempt}.json"
+            local headers="endpoint-evidence/${name}-${attempt}.headers"
+            curl --fail --silent --show-error --location \
+              --retry 2 --retry-all-errors --max-time 20 \
+              -D "$headers" \
+              -H 'Accept: application/json' \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              -A 'JUNCA-Docs-Endpoint-Diagnostic-R38/1.0' \
+              "${url}?readback=${stamp}-${attempt}" \
+              -o "$output"
+            jq -e 'type == "object"' "$output" >/dev/null
+            printf '%s attempt %s sha256=' "$name" "$attempt"
+            sha256sum "$output" | awk '{print $1}'
+            jq -c --arg endpoint "$name" --argjson attempt "$attempt" '{
+              endpoint: $endpoint,
+              attempt: $attempt,
+              schema_version: (.schema_version // null),
+              status: (.status // null),
+              read_only: (.read_only // null),
+              finalized_only: (.finalized_only // null),
+              notice: (.notice // null),
+              chain_id: (.chain_id // .chainId // .network.chain_id // .network.chainId // .network.chain_id_decimal // null),
+              finalized_height: (.finalized_height // .head_height // .height // .head.height // .network.height // .status.finalized_height // .latest.height // null),
+              finalized_timestamp: (.finalized_timestamp // .block_timestamp // .head.timestamp // .network.timestamp // .latest.timestamp // null),
+              finalized_hash: (.finalized_hash // .head_hash // .head.hash // .network.headHash // .latest.hash // null),
+              certificate_hash: (.certificate_hash // .last_certificate_hash // .head.certificate_hash // .network.certificateHash // null),
+              authenticated_peers: (.authenticated_peer_count // .peer_count // .network.peer_count // .network.peers // null),
+              signed_power: (.signed_power // .head.signed_power // .finality.signed_power // .runtime_evidence.signed_power // null),
+              total_power: (.total_power // .head.total_power // .finality.total_power // .runtime_evidence.total_power // null),
+              mainnet_changed: (.mainnet_changed // .safety.mainnet_changed // .network.mainnetChanged // null),
+              assets_moved: (.assets_moved // .safety.assets_moved // .network.assetsMoved // null),
+              bridge_activated: (.bridge_activated // .safety.bridge_activated // .network.bridgeActivated // null),
+              runtime_artifact: (.runtime_artifact // null)
+            }' "$output"
+          }
+
+          for attempt in 1 2 3; do
+            read_endpoint canonical 'https://explorer.jaios-governance.org/explorer.json' "$attempt"
+            read_endpoint operational 'https://chain.jaios-governance.org/api/operational' "$attempt"
+            read_endpoint proxy 'https://docs.jaios-governance.org/explorer.json' "$attempt"
+          done
+
+      - name: Evaluate endpoint provenance and parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path('endpoint-evidence')
+          names = ('canonical', 'operational', 'proxy')
+
+          def first(payload, *paths):
+              for path in paths:
+                  current = payload
+                  for part in path.split('.'):
+                      if not isinstance(current, dict) or part not in current:
+                          current = None
+                          break
+                      current = current[part]
+                  if current is not None:
+                      return current
+              return None
+
+          def valid_hex(value, length):
+              return isinstance(value, str) and len(value) == length and all(ch in '0123456789abcdefABCDEF' for ch in value)
+
+          def normalized(payload):
+              artifact = payload.get('runtime_artifact') if isinstance(payload.get('runtime_artifact'), dict) else {}
+              return {
+                  'schema_version': payload.get('schema_version'),
+                  'status': payload.get('status'),
+                  'read_only': payload.get('read_only'),
+                  'finalized_only': payload.get('finalized_only'),
+                  'notice': payload.get('notice'),
+                  'chain_id': first(payload, 'chain_id', 'chainId', 'network.chain_id', 'network.chainId', 'network.chain_id_decimal', 'runtime_evidence.chain_id', 'status.chain_id'),
+                  'height': first(payload, 'finalized_height', 'head_height', 'height', 'head.height', 'network.height', 'runtime_evidence.finalized_height', 'status.finalized_height', 'latest.height'),
+                  'timestamp': first(payload, 'finalized_timestamp', 'block_timestamp', 'head.timestamp', 'network.timestamp', 'runtime_evidence.finalized_timestamp', 'latest.timestamp'),
+                  'hash': first(payload, 'finalized_hash', 'head_hash', 'head.hash', 'network.headHash', 'runtime_evidence.finalized_hash', 'latest.hash'),
+                  'certificate_hash': first(payload, 'certificate_hash', 'last_certificate_hash', 'head.certificate_hash', 'network.certificateHash', 'runtime_evidence.certificate_hash'),
+                  'peers': first(payload, 'authenticated_peer_count', 'peer_count', 'network.peer_count', 'network.peers', 'runtime_evidence.authenticated_peer_count'),
+                  'signed_power': first(payload, 'signed_power', 'head.signed_power', 'finality.signed_power', 'runtime_evidence.signed_power'),
+                  'total_power': first(payload, 'total_power', 'head.total_power', 'finality.total_power', 'runtime_evidence.total_power'),
+                  'mainnet_changed': first(payload, 'mainnet_changed', 'safety.mainnet_changed', 'network.mainnetChanged', 'runtime_evidence.mainnet_changed'),
+                  'assets_moved': first(payload, 'assets_moved', 'safety.assets_moved', 'network.assetsMoved', 'runtime_evidence.assets_moved'),
+                  'bridge_activated': first(payload, 'bridge_activated', 'safety.bridge_activated', 'network.bridgeActivated', 'runtime_evidence.bridge_activated'),
+                  'runtime_source_commit': artifact.get('source_commit'),
+                  'runtime_genesis_sha256': artifact.get('genesis_sha256'),
+                  'runtime_node_artifact_sha256': artifact.get('node_artifact_sha256'),
+                  'provenance_valid': valid_hex(artifact.get('source_commit'), 40) and valid_hex(artifact.get('genesis_sha256'), 64) and valid_hex(artifact.get('node_artifact_sha256'), 64),
+              }
+
+          report = {'schema': 'junca-docs-endpoint-diagnostic-r38/v1', 'source_sha': None, 'endpoints': {}, 'parity': []}
+          for name in names:
+              report['endpoints'][name] = []
+              for attempt in range(1, 4):
+                  path = root / f'{name}-{attempt}.json'
+                  raw = path.read_bytes()
+                  payload = json.loads(raw)
+                  item = normalized(payload)
+                  item['attempt'] = attempt
+                  item['payload_sha256'] = hashlib.sha256(raw).hexdigest()
+                  report['endpoints'][name].append(item)
+
+          for attempt in range(3):
+              canonical = report['endpoints']['canonical'][attempt]
+              proxy = report['endpoints']['proxy'][attempt]
+              operational = report['endpoints']['operational'][attempt]
+              comparable = ('chain_id', 'height', 'timestamp', 'hash', 'certificate_hash', 'peers', 'signed_power', 'total_power')
+              report['parity'].append({
+                  'attempt': attempt + 1,
+                  'canonical_proxy_exact': all(canonical.get(key) == proxy.get(key) for key in comparable),
+                  'canonical_operational_exact': all(canonical.get(key) == operational.get(key) for key in comparable),
+                  'proxy_operational_exact': all(proxy.get(key) == operational.get(key) for key in comparable),
+                  'canonical_provenance_valid': canonical['provenance_valid'],
+                  'proxy_provenance_valid': proxy['provenance_valid'],
+              })
+
+          output = root / 'endpoint-diagnostic-report.json'
+          output.write_text(json.dumps(report, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(report, sort_keys=True, indent=2))
+          PY
+
+      - name: Upload endpoint diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-docs-endpoint-diagnostic-r38-${{ github.run_id }}
+          path: endpoint-evidence
+          if-no-files-found: error
+          retention-days: 30
