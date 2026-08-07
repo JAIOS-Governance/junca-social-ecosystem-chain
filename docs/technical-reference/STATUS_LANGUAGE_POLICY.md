@@ -3,7 +3,7 @@
 Status: ACTIVE / MANDATORY
 Effective: 2026-08-07 JST
 Authority: Latest CEO directive, Creative Constitution and JAIOS Institutional Governance
-Source revision: R38 / Canonical Runtime Binding Repair
+Source revision: R38.3 / Canonical Runtime Corroboration Repair
 
 The JUNCA Social Ecosystem Chain technical reference applies evidence-first, governance-accurate public vocabulary across every canonical route.
 
@@ -47,12 +47,12 @@ The JUNCA Social Ecosystem Chain technical reference applies evidence-first, gov
 ## Runtime connection authority
 
 - Canonical Explorer evidence: `https://explorer.jaios-governance.org/explorer.json`
-- Operational API: `https://chain.jaios-governance.org/api/operational`
+- Operational API corroboration: `https://chain.jaios-governance.org/api/operational`
 - Same-origin continuity proxy: `https://docs.jaios-governance.org/explorer.json`
 - Canonical network identity: Chain ID `20260723`
 - Acceptance boundary: schema `junca-public-explorer/v4`, read-only, finalized-only, quorum `3/3`, authenticated peers `2/2`
 
-Browser and build readback attempt the canonical Explorer endpoint first with bounded retries. The same-origin route is retained only as a verified continuity fallback. Neither route may update the page unless the exact schema, chain identity, quorum, peer count, provenance, safety boundaries and Operational API parity pass validation.
+Browser and build readback attempt the canonical Explorer endpoint first with bounded retries. The same-origin route is retained only as a verified continuity fallback. The canonical Explorer remains the rendered-state authority. The Operational API independently corroborates chain identity, quorum, runtime provenance and safety boundaries without imposing a race-prone exact cross-endpoint snapshot lock. No endpoint may update the page unless its assigned validation boundary passes.
 
 The build normalizes legacy variants, audits visible text for every route, emits `status-language-audit.json`, binds the result into `release-manifest.json`, and fails closed when any prohibited display label remains.
 
