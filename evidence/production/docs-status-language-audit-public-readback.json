@@ -1,6 +1,6 @@
 {
-  "schema": "junca-chain-docs-status-language-audit/v1",
-  "effective_date": "2026-08-04",
+  "schema": "junca-chain-docs-status-language-audit/v2",
+  "effective_date": "2026-08-07",
   "authority": "JAIOS Institutional Governance",
   "routes": [
     "/",

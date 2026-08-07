@@ -1,27 +1,29 @@
 {
   "schema": "junca-chain-docs-release/v2",
-  "release": "2026.08.02",
-  "revision": "R36",
+  "release": "2026.08.07",
+  "revision": "R38",
   "design_source": "Sites Version 15",
-  "chain_source_commit": "ea2e2a77b19627d1935958a9248a49a1954b0d12",
-  "development_source_commit": "ea2e2a77b19627d1935958a9248a49a1954b0d12",
+  "chain_source_commit": "628ac31fc731a277a7305a6c683746d490cd21c1",
+  "development_source_commit": "628ac31fc731a277a7305a6c683746d490cd21c1",
   "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
   "runtime_artifact_commit_status": "VERIFIED",
   "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
   "runtime_node_artifact_sha256": "cf1ca0039d7855e5dc9cd2bda00d8ea691bb702966fa538c4510195a8926317f",
   "canonical_origin": "https://docs.jaios-governance.org",
+  "runtime_evidence_endpoint": "https://explorer.jaios-governance.org/explorer.json",
+  "runtime_evidence_source_mode": "CANONICAL EXPLORER",
   "network_label": "Public Testnet / Read-only / Finalized / Protocol Validation Environment",
   "runtime_status": "VERIFIED_READY_READ_ONLY",
   "public_endpoint_status": "ACTIVE_READ_ONLY",
   "runtime_evidence": {
-    "observed_at": "2026-08-04T12:57:00.120569+00:00",
+    "observed_at": "2026-08-07T05:57:01.378097+00:00",
     "network": "VERIFIED",
     "runtime": "READY_READ_ONLY",
     "finality": "CERTIFICATE_OBSERVED",
     "explorer_schema": "junca-public-explorer/v4",
-    "finalized_height": 9059,
-    "finalized_hash": "0xf3b370ba57114276c8a982a5abaa8e078e6f3bc032b4485cbba7809497c4f1d9",
-    "certificate_hash": "0x7c219d6fab6e799f25f71afea30452977a477fe186c9af8c8eab11e13dac118d",
+    "finalized_height": 15617,
+    "finalized_hash": "0x4298dc3d56086f079ffd8c0689a4fa08bfe4e144aee3c10bcff3f7c7602fcd6c",
+    "certificate_hash": "0x608338ce59f01b0a7ad252ee5ddbfed4745d8aca46b6998106c1cb8ddfdff480",
     "state_root": "0x4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     "signed_power": 3,
     "total_power": 3,
@@ -29,14 +31,16 @@
     "client_version": "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1",
     "transaction_count": 0,
     "peer_count": 2,
-    "block_timestamp": "0x6a71e17e",
-    "block_timestamp_public_label": "2026-08-04T12:56:30.000Z",
+    "block_timestamp": "0x6a7573ac",
+    "block_timestamp_public_label": "2026-08-07T05:57:00.000Z",
     "block_timestamp_public_label_ja": "公開時点の確定Block時刻",
     "block_activity_conclusion": "PUBLICATION_SNAPSHOT_ONLY",
     "source_evidence": {
       "operational_api": "https://chain.jaios-governance.org/api/operational",
       "explorer_json": "https://explorer.jaios-governance.org/explorer.json",
-      "documentation_source_commit": "ea2e2a77b19627d1935958a9248a49a1954b0d12",
+      "selected_explorer_endpoint": "https://explorer.jaios-governance.org/explorer.json",
+      "selected_explorer_source_mode": "CANONICAL EXPLORER",
+      "documentation_source_commit": "628ac31fc731a277a7305a6c683746d490cd21c1",
       "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
       "runtime_artifact_commit_status": "VERIFIED",
       "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
@@ -74,48 +78,48 @@
   "files": [
     {
       "path": "index.html",
-      "bytes": 104367,
-      "sha256": "e4d5545e0f934069957431eda9367079152dcf33633e676dd55cb95235f18422"
+      "bytes": 104123,
+      "sha256": "d12a0b06dcf2e907275ab858a879b8297305a9134a3c5684bd8da3920715e9fb"
     },
     {
       "path": "protocol/index.html",
-      "bytes": 106618,
-      "sha256": "7494fa4fcf2b502a368fe090b0eef3ecd6a1ac3099b0be49b75256bb91985606"
+      "bytes": 106390,
+      "sha256": "b2d2d91f7cd9b1631a6ba9ed6ba26770e58c1e0a86632c4c32a8823a2c12e561"
     },
     {
       "path": "assets/index.html",
-      "bytes": 106468,
-      "sha256": "168bf247607e3ebde29c064d2b2a1ee4ee2ff5d61e49b3f0649a7d07abcda5a2"
+      "bytes": 106224,
+      "sha256": "9dd7724a8ff096943980dbac7935161b0af71f96b68f1bf37cfc75e9468fd1c8"
     },
     {
       "path": "interoperability/index.html",
-      "bytes": 106481,
-      "sha256": "aaf90ad4429a373ae502c15a3a5fd67b1633c24beba5f1e665f3a68cddebf18c"
+      "bytes": 106269,
+      "sha256": "6d7c78316d3502128a9706faf6a80c86d755e03c7088787df1f2c87a74daf926"
     },
     {
       "path": "implementation/index.html",
-      "bytes": 106695,
-      "sha256": "e464055ccac850f47ea36c47085ac70d6a15f9c0c01eca022396757943dec084"
+      "bytes": 106451,
+      "sha256": "d6bc544eb548535852c3f7113761bf20af24c13abc4e68f4e0ca1c9a3cf80f87"
     },
     {
       "path": "governance/index.html",
-      "bytes": 106728,
-      "sha256": "5efa994af3b10a248097f24724b19470f0f69c4d17b1c92d35ac704bfaa87cb2"
+      "bytes": 106484,
+      "sha256": "92971de303269dee1c870214ba85fb7761f318d4bbee4e9439300b66ec6f940c"
     },
     {
       "path": "evidence/index.html",
-      "bytes": 106682,
-      "sha256": "1b7a4943b1dd4d42b15de487d57386d94dbea7224e20c0d3e067a5a628bed873"
+      "bytes": 106454,
+      "sha256": "68a8c90c5d30a9a820c866de97bfa13f6e05788f8d0912c4a78005d2eee7d4f4"
     },
     {
       "path": "glossary/index.html",
-      "bytes": 106331,
-      "sha256": "71bf81d29fd48bf2282b7d6fe84491f66aa3031e47c54003d1215556b256aee1"
+      "bytes": 106103,
+      "sha256": "1844d61b0a6112dd9b62ad5650a958750334ddc6cf018acb600502795d66166a"
     },
     {
       "path": "404.html",
-      "bytes": 104367,
-      "sha256": "2bb1da3b8ed7bd32bcbfffa343965ccbb36d094696930d414fb0eed72795e650"
+      "bytes": 104123,
+      "sha256": "19e3fab1c0c275385e14a6b2bf7bc942f2d0328ea9d01f5369b1ec992df499a4"
     },
     {
       "path": "apple-touch-icon.png",
@@ -159,18 +163,38 @@
     },
     {
       "path": "current-identity.json",
-      "bytes": 2515,
-      "sha256": "6f0b3fbda4620457c85fefb675fd527de7c774967ee53907e01500c766a9def8"
+      "bytes": 4367,
+      "sha256": "1260d146e57aa06fdd4d897e16d3aa56099764159f68373652c53f795aba4d66"
     },
     {
       "path": "current-identity.txt",
-      "bytes": 1778,
-      "sha256": "8170564c4c00a76e63b7ea21e03b3b0d2e04c2757880175430448e0e0d8a25fb"
+      "bytes": 3321,
+      "sha256": "455eac55bff57bd5ea6dff2ab1c88bb05a135377d62756f030190ccca89828be"
+    },
+    {
+      "path": "current-release.json",
+      "bytes": 439,
+      "sha256": "27fa513313a5c4eae5e07e1892d5f14ea0638c815621fa2eb60f4ea57f7d08f0"
     },
     {
       "path": "docs-controls-r32.js",
       "bytes": 940,
       "sha256": "d3fcfa8a4a3a5bed48bc9d9d4a7294e0ccc71cb4dec3b26448e40042cc635299"
+    },
+    {
+      "path": "due-diligence/index.html",
+      "bytes": 8791,
+      "sha256": "a711e981ab1c991473e5a1210f1b4dd231d149aee4f84ada485252530c97a2e4"
+    },
+    {
+      "path": "due-diligence.json",
+      "bytes": 2800,
+      "sha256": "555a006e541f616fa5234fe6cfa2313b7e8ec629f3c1ab0474b843307ad377b9"
+    },
+    {
+      "path": "due-diligence.txt",
+      "bytes": 2195,
+      "sha256": "52a66bab7457c583d5e5914b817b50ee105556947424f3aac91c849d379622ef"
     },
     {
       "path": "favicon.ico",
@@ -203,14 +227,29 @@
       "sha256": "8c97a6770bf26bee416e9d9014cf16ec94d750c264d2bf6aa23d246357bc0e22"
     },
     {
+      "path": "institutional-trust/index.html",
+      "bytes": 8892,
+      "sha256": "9d5c1e4e9b6d0776997344e5519d0053781a2b4a33375c9ef3d958e83d71ae34"
+    },
+    {
+      "path": "institutional-trust.json",
+      "bytes": 2363,
+      "sha256": "b5316365fad5b68f285edab7a492633b9ae1c4b81396ef0457dc585b6d09a1af"
+    },
+    {
+      "path": "institutional-trust.txt",
+      "bytes": 2117,
+      "sha256": "79d9ea5c3cfb7e47a0b2b536ad9eaf167d1f25cbe80f3be241aa1b2a93d8056b"
+    },
+    {
       "path": "junca-chain-official-wordmark.png",
       "bytes": 34548,
       "sha256": "31cc93f73cf01d8479260cf1a6894c0ca28ca0eff7bd95c89226e086049728ac"
     },
     {
-      "path": "live-runtime-r36.js",
-      "bytes": 3022,
-      "sha256": "7c1a0a3b7f986550b49381995fa142bc1fa53f669232db231295540b7ed72c40"
+      "path": "live-runtime-r38.js",
+      "bytes": 4721,
+      "sha256": "350da8083463777b76fa71f0886858825a48d46f84ab99d1dd466949a4225546"
     },
     {
       "path": "llms.txt",
@@ -219,13 +258,18 @@
     },
     {
       "path": "manifest.webmanifest",
-      "bytes": 801,
-      "sha256": "4d946e02c7292acdb882d324b07ef74fa635c90872dc5778c57b50ee58371fab"
+      "bytes": 880,
+      "sha256": "c3d66d84fe26469ee6d0404abf569984a86ead5a0a3b6e4952875fbff94563be"
+    },
+    {
+      "path": "official-brand-lockup-r29.js",
+      "bytes": 4340,
+      "sha256": "cae4ae196afdee8336f23d44004708982fa4607e2cf918d4cc7779633e3128b2"
     },
     {
       "path": "official-brand-lockup-r32.js",
-      "bytes": 2718,
-      "sha256": "7689ee7973301e7ef82243437203cd71d18df985e15d35f78c42f3e49e889f31"
+      "bytes": 4340,
+      "sha256": "cae4ae196afdee8336f23d44004708982fa4607e2cf918d4cc7779633e3128b2"
     },
     {
       "path": "official-junca-symbol.png",
@@ -254,27 +298,52 @@
     },
     {
       "path": "sitemap.xml",
-      "bytes": 1206,
-      "sha256": "e20d000492e736a61e813822b71b4e08d7521bca28181e4ffce488a2e0626b92"
+      "bytes": 1858,
+      "sha256": "b1c3b9df87b6310bfaa7dd41982dd14f358054f1f9f400619e1e0976a3a6c12a"
+    },
+    {
+      "path": "social-channels/index.html",
+      "bytes": 8866,
+      "sha256": "8eb5e206884c5928260a6fe1cd6d555d7c3ab18ab639fa71d25dbfc636ec4eb9"
+    },
+    {
+      "path": "social-channels.json",
+      "bytes": 4827,
+      "sha256": "86c41892476730796ef5c1bca20c352c680b5078f4b4c64ed8a348457c9f887d"
+    },
+    {
+      "path": "social-correction.txt",
+      "bytes": 4119,
+      "sha256": "faf97f2f9aca152288340d80c7de164725a10f3007059d2f06d39c7e71d11d84"
     }
   ],
   "public_status_language_policy": {
     "authority": "Latest CEO directive and Creative Constitution",
-    "effective_date": "2026-08-04",
+    "effective_date": "2026-08-07",
     "routes_audited": 8,
     "prohibited_public_terms": [
       "PENDING",
       "BLOCKED",
       "No Monetary Value",
+      "No Active",
+      "Not Activated",
+      "Not Yet Published",
+      "NOT CURRENTLY PUBLISHED",
+      "EVIDENCE REFRESHING",
+      "Not Launched",
+      "not-activated",
       "保留中"
     ],
     "approved_status_families": [
       "Implemented / CI Verified",
       "Verification in Progress",
-      "Not Yet Published",
-      "Not Activated",
-      "Read-only Evidence Available",
-      "Active"
+      "Registry-Controlled Disclosure",
+      "Governance-Controlled Activation",
+      "Evidence-bound Read-only Access",
+      "Finality Certificate Observed",
+      "Separate Governance Release",
+      "Boundary Unchanged",
+      "Active / Active Advancing"
     ],
     "result": "PASS"
   }
