@@ -1,0 +1,217 @@
+name: JUNCA Validator Clock Convergence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-clock-convergence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-clock-convergence
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+
+jobs:
+  converge-and-accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-clock-convergence-${{ github.run_id }}
+
+      - name: Resolve exact validator fleet
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[]|{
+              instance_id:.InstanceId,
+              validator:(.Tags[]|select(.Key=="Validator")|.Value),
+              private_ip:.PrivateIpAddress
+            }]|sort_by(.validator)|select(length==3 and map(.validator)==["01","02","03"])
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+
+      - name: Synchronize clocks and restart validators at one exact slot boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          target_epoch="$(( ( $(date +%s) / 30 + 3 ) * 30 + 5 ))"
+          echo "$target_epoch" > artifacts/coordinated-restart-epoch.txt
+          {
+            printf 'TARGET_EPOCH=%q\n' "$target_epoch"
+            cat <<'REMOTE'
+          set -Eeuo pipefail
+          value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env | tail -n1
+          }
+          test "$(value CHAIN_ID)" = 20260723
+          if command -v chronyc >/dev/null 2>&1; then
+            systemctl enable --now chronyd
+            chronyc -a burst 4/4 || true
+            chronyc -a makestep
+            for attempt in $(seq 1 30); do
+              if chronyc tracking | grep -Eq 'Leap status[[:space:]]*:[[:space:]]*Normal'; then break; fi
+              test "$attempt" -lt 30
+              sleep 1
+            done
+          else
+            systemctl enable --now systemd-timesyncd 2>/dev/null || true
+            timedatectl set-ntp true
+          fi
+          while [ "$(date +%s)" -lt "$TARGET_EPOCH" ]; do sleep 1; done
+          systemctl restart junca-validator.service
+          ready=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/clock-health.json \
+              && jq -e '.status=="healthy" and .chain_id==20260723 and .automatic_finality_enabled==true and .automatic_finality_loop_running==true' /tmp/clock-health.json >/dev/null; then ready=true; break; fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          test "$ready" = true
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8546/health >/dev/null && curl -fsS http://127.0.0.1:3000/health >/dev/null; then break; fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          chrony_tracking=""
+          if command -v chronyc >/dev/null 2>&1; then chrony_tracking="$(chronyc tracking)"; fi
+          jq -cn \
+            --arg validator_id "$(value VALIDATOR_ID)" \
+            --argjson unix_time "$(date +%s)" \
+            --arg iso_time "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
+            --arg chrony_tracking "$chrony_tracking" \
+            --slurpfile health /tmp/clock-health.json '{
+              schema_version:"junca-validator-clock-convergence/v1",
+              validator_id:$validator_id,
+              unix_time:$unix_time,
+              iso_time:$iso_time,
+              chrony_tracking:$chrony_tracking,
+              health:$health[0],
+              mainnet_changed:false,
+              assets_moved:false,
+              bridge_activated:false
+            }'
+          echo JUNCA_CLOCK_CONVERGENCE_LOCAL_ACCEPTED
+          REMOTE
+          } > /tmp/clock-convergence.sh
+          jq -Rs '{commands:[.]}' /tmp/clock-convergence.sh > /tmp/clock-convergence.json
+          command_id="$(aws ssm send-command \
+            --instance-ids "${instances[@]}" \
+            --document-name AWS-RunShellScript \
+            --parameters file:///tmp/clock-convergence.json \
+            --comment 'JUNCA synchronized clock and slot restart' \
+            --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/clock-command-id.txt
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 180); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 180
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/clock-${instance}.json"
+            jq -r '.Status,.StandardOutputContent,.StandardErrorContent' "artifacts/clock-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("junca-validator-clock-convergence/v1")) and (.StandardOutputContent|contains("JUNCA_CLOCK_CONVERGENCE_LOCAL_ACCEPTED"))' "artifacts/clock-${instance}.json" >/dev/null; then failures=$((failures+1)); fi
+          done
+          test "$failures" -eq 0
+          python3 - <<'PY'
+          import json,glob
+          records=[]
+          for path in glob.glob('artifacts/clock-i-*.json'):
+              inv=json.load(open(path))
+              lines=[x for x in inv['StandardOutputContent'].splitlines() if x.strip().startswith('{')]
+              records.append(json.loads(lines[-1]))
+          times=[x['unix_time'] for x in records]
+          rounds=[x['health']['consensus']['current_round'] for x in records]
+          if max(times)-min(times)>2:
+              raise SystemExit(f'CLOCK_SKEW_REMAINS: {times}')
+          if max(rounds)-min(rounds)>30:
+              raise SystemExit(f'ROUND_SKEW_REMAINS: {rounds}')
+          json.dump({'records':records,'clock_skew_seconds':max(times)-min(times),'round_span_seconds':max(rounds)-min(rounds)},open('artifacts/clock-convergence.json','w'),indent=2)
+          PY
+
+      - name: Require exact peer quorum and advancing finalized height
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          cat > /tmp/peer-accept.sh <<'REMOTE'
+          set -Eeuo pipefail
+          accepted=false
+          for attempt in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/peer-health.json \
+              && jq -e '.status=="healthy" and .authenticated_peer_count==2 and (.authenticated_peer_ids|length)==2 and .automatic_finality_enabled==true and .automatic_finality_loop_running==true and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/peer-health.json >/dev/null; then accepted=true; break; fi
+            test "$attempt" -lt 180
+            sleep 2
+          done
+          test "$accepted" = true
+          cat /tmp/peer-health.json
+          echo JUNCA_CLOCK_PEER_ACCEPTANCE_PASS
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/peer-accept.sh > /tmp/peer-accept.json
+          command_id="$(aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/peer-accept.json --comment 'JUNCA post-clock peer acceptance' --query Command.CommandId --output text)"
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 210); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 210
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/peer-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_CLOCK_PEER_ACCEPTANCE_PASS"))' "artifacts/peer-${instance}.json" >/dev/null; then failures=$((failures+1)); fi
+          done
+          test "$failures" -eq 0
+          curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ > artifacts/block-before.json
+          before="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/block-before.json'))['result'],16))
+          PY
+          )"
+          sleep 70
+          curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ > artifacts/block-after.json
+          after="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/block-after.json'))['result'],16))
+          PY
+          )"
+          test "$after" -gt "$before"
+          curl -fsS https://health.jaios-governance.org/health > artifacts/public-health.json
+          curl -fsS https://explorer.jaios-governance.org/explorer.json > artifacts/public-explorer.json
+          jq -e '.status=="healthy" and .read_only==true and .validator.authenticated_peer_count==2' artifacts/public-health.json >/dev/null
+          jq -e '.status=="ready" and .read_only==true and .finalized_only==true and .network.peer_count==2 and .head.signed_power==3 and .head.total_power==3' artifacts/public-explorer.json >/dev/null
+          jq -n --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --argjson before "$before" --argjson after "$after" --argjson clock "$(cat artifacts/clock-convergence.json)" --argjson validators "$(cat artifacts/validators.json)" '{schema_version:"junca-public-testnet-clock-recovery/v1",result:"ACTIVE_ADVANCING",workflow_run_url:$run_url,height_before:$before,height_after:$after,clock:$clock,validators:$validators,peer_count:2,signed_power:3,total_power:3,mainnet_changed:false,assets_moved:false,bridge_activated:false,mainnet_activation_authorized:false}' > artifacts/clock-recovery-acceptance.json
+          sha256sum artifacts/clock-recovery-acceptance.json > artifacts/clock-recovery-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-clock-convergence-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
