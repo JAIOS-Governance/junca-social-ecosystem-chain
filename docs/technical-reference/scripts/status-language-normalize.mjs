@@ -22,6 +22,8 @@ const replacementRules = [
   [/\bnot-activated\b/gi, "governance-controlled"],
   [/\bNot Launched\b/gi, "Separate Governance Release"],
   [/\bNot Yet Published\b/gi, "Registry-Controlled Disclosure"],
+  [/\bNOT CURRENTLY PUBLISHED\b/gi, "REGISTRY-CONTROLLED DISCLOSURE"],
+  [/\bEVIDENCE REFRESHING\b/gi, "VERIFICATION IN PROGRESS"],
   [/\bFINALITY_PENDING\b/g, "FINALITY_VERIFICATION"],
   [/\bfinality_pending\b/g, "finality_verification"],
   [/Runtime Binding Pending/gi, "Verification in Progress"],
@@ -61,6 +63,9 @@ const prohibitedVisiblePatterns = [
   { label: "No Active", pattern: /\bNo Active\b/i },
   { label: "Not Activated", pattern: /\bNot Activated\b/i },
   { label: "Not Yet Published", pattern: /\bNot Yet Published\b/i },
+  { label: "NOT CURRENTLY PUBLISHED", pattern: /\bNOT CURRENTLY PUBLISHED\b/i },
+  { label: "EVIDENCE REFRESHING", pattern: /\bEVIDENCE REFRESHING\b/i },
+  { label: "Not Launched", pattern: /\bNot Launched\b/i },
   { label: "not-activated", pattern: /\bnot-activated\b/i },
   { label: "保留中", pattern: /保留中/ },
 ];
@@ -86,7 +91,7 @@ for (const route of routes) {
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(
       /<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tr|ul|ol|li)>\s{2,}</g,
-      "</$1><",
+      "</$1>",
     );
 
   if (html !== source) await writeFile(path, html, "utf8");
@@ -122,6 +127,9 @@ manifest.public_status_language_policy = {
     "No Active",
     "Not Activated",
     "Not Yet Published",
+    "NOT CURRENTLY PUBLISHED",
+    "EVIDENCE REFRESHING",
+    "Not Launched",
     "not-activated",
     "保留中",
   ],

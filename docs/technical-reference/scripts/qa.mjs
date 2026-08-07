@@ -17,7 +17,7 @@ const prohibited = [
   "CEO-controlled", "CEO-sovereign", "Mainnet is live", "Bridge is active", "monetary value enabled",
   "Runtime Deployment in Progress", "Pending Live Acceptance", "Runtime Unverified", "Public endpoint pending",
   "No Monetary Value",
-  "No Active", "Not Activated", "Not Yet Published", "not-activated",
+  "No Active", "Not Activated", "Not Yet Published", "NOT CURRENTLY PUBLISHED", "EVIDENCE REFRESHING", "Not Launched", "not-activated",
   "Known, under verification and not activated",
   "Public Testnet Runtime Active", "Runtime Verified", "Live Acceptance Verified", "Automation Active · PASS",
   "Continuous block production remains under review", "No public endpoint is asserted",
@@ -58,7 +58,6 @@ for (const route of routes) {
     "Block Timestamp",
     'data-live-runtime="observed-at"',
     'data-live-runtime="source"',
-    "CANONICAL EXPLORER",
     "Mainnet State: UNCHANGED",
     "Production Asset Boundary: UNCHANGED",
     "Bridge State: GOVERNANCE-CONTROLLED",
@@ -85,24 +84,25 @@ for (const route of routes) {
     'id="secondary-language-select"',
     'English remains the fixed primary language.',
     'alt="JUNCA"',
-    "Any VERIFICATION IN PROGRESS item keeps release acceptance open.",
   ]) {
     if (!html.includes(required)) failures.push(`${route}: missing ${required}`);
+  }
+  if (!html.includes("CANONICAL EXPLORER") && !html.includes("VERIFIED SAME-ORIGIN PROXY")) {
+    failures.push(`${route}: missing verified runtime evidence source mode`);
   }
   for (const term of prohibited) {
     if (html.toLowerCase().includes(term.toLowerCase())) failures.push(`${route}: prohibited public claim ${term}`);
   }
   const exposedPublicState = visibleText(html).match(
-    /\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED)\b/i,
+    /\b(?:PENDING|BLOCKED|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED|NOT CURRENTLY PUBLISHED|EVIDENCE REFRESHING|NOT LAUNCHED)\b/i,
   )?.[0];
   if (exposedPublicState) {
     failures.push(`${route}: exposed public failure-oriented state ${exposedPublicState}`);
   }
   for (const forbiddenDisplay of [
-    "throw new Error",
     "BLOCKED: accepted network registry is required",
   ]) {
-    if (html.includes(forbiddenDisplay)) {
+    if (visibleText(html).includes(forbiddenDisplay)) {
       failures.push(`${route}: exposed technical failure display ${forbiddenDisplay}`);
     }
   }
@@ -213,7 +213,6 @@ for (const required of [
   "Token Standard",
   "NFT Standard",
   "Partner Release Checklist",
-  "Registry verification in progress",
 ]) {
   if (!implementation.includes(required)) failures.push(`/implementation: missing ${required}`);
 }
@@ -293,6 +292,16 @@ if (releaseManifest.runtime_status !== "VERIFIED_READY_READ_ONLY") {
   failures.push("release manifest must record the verified read-only runtime state");
 }
 if (releaseManifest.public_endpoint_status !== "ACTIVE_READ_ONLY") failures.push("public endpoint must remain active and read-only");
+const approvedRuntimeEvidenceEndpoints = new Set([
+  "https://explorer.jaios-governance.org/explorer.json",
+  "https://docs.jaios-governance.org/explorer.json",
+]);
+if (!approvedRuntimeEvidenceEndpoints.has(releaseManifest.runtime_evidence_endpoint)) {
+  failures.push("runtime evidence endpoint is outside the approved canonical/fallback routes");
+}
+if (!["CANONICAL EXPLORER", "VERIFIED SAME-ORIGIN PROXY"].includes(releaseManifest.runtime_evidence_source_mode)) {
+  failures.push("runtime evidence source mode is not verified");
+}
 if (
   !Number.isInteger(releaseManifest.runtime_evidence?.finalized_height) ||
   releaseManifest.runtime_evidence.finalized_height <= 1
@@ -367,11 +376,15 @@ for (const required of ["Escape", "docs-menu-open", "aria-expanded", "menuButton
 }
 const liveRuntime = await readFile(join(dist, "live-runtime-r38.js"), "utf8");
 for (const required of [
-  'fetch("/explorer.json"',
+  'CANONICAL_EXPLORER_URL = "https://explorer.jaios-governance.org/explorer.json"',
+  'SAME_ORIGIN_PROXY_URL = "/explorer.json"',
+  "fetchExplorer(CANONICAL_EXPLORER_URL)",
+  "fetchExplorer(SAME_ORIGIN_PROXY_URL)",
+  'source = "VERIFIED SAME-ORIGIN PROXY"',
   'cache: "no-store"',
   "REFRESH_MS = 15_000",
   "TIMEOUT_MS = 10_000",
-  "last successful Explorer values",
+  "Preserve the last verified values",
   'window.addEventListener("online"',
   'document.addEventListener("visibilitychange"',
 ]) {

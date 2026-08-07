@@ -26,6 +26,9 @@ The JUNCA Social Ecosystem Chain technical reference applies evidence-first, gov
 - `No Active`
 - `Not Activated`
 - `Not Yet Published`
+- `NOT CURRENTLY PUBLISHED`
+- `EVIDENCE REFRESHING`
+- `Not Launched`
 - `not-activated`
 - `保留中`
 
@@ -49,7 +52,7 @@ The JUNCA Social Ecosystem Chain technical reference applies evidence-first, gov
 - Canonical network identity: Chain ID `20260723`
 - Acceptance boundary: schema `junca-public-explorer/v4`, read-only, finalized-only, quorum `3/3`, authenticated peers `2/2`
 
-Browser readback attempts the canonical Explorer endpoint first. The same-origin route is retained only as a verified continuity fallback. Neither route may update the page unless the exact schema, chain identity, quorum, peer count, provenance and safety boundaries pass validation.
+Browser and build readback attempt the canonical Explorer endpoint first with bounded retries. The same-origin route is retained only as a verified continuity fallback. Neither route may update the page unless the exact schema, chain identity, quorum, peer count, provenance, safety boundaries and Operational API parity pass validation.
 
 The build normalizes legacy variants, audits visible text for every route, emits `status-language-audit.json`, binds the result into `release-manifest.json`, and fails closed when any prohibited display label remains.
 

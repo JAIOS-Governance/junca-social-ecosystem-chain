@@ -17,45 +17,144 @@ const chainSource =
   process.env.GITHUB_SHA ?? "cb8c3c0494b04c8e99b01ba9525db3b899f0d075";
 const canonicalFoundationCommit = "6de0979b97254c5b4777ede8c82378fd4e143137";
 const explorerUrl = "https://explorer.jaios-governance.org/explorer.json";
-const explorerResponse = await fetch(explorerUrl, {
-  cache: "no-store",
-  headers: { Accept: "application/json", "User-Agent": "JUNCA-Docs-Release/1.0" },
-  signal: AbortSignal.timeout(10_000),
-});
-if (!explorerResponse.ok) {
-  throw new Error(`Live Explorer readback failed with HTTP ${explorerResponse.status}`);
-}
-const explorer = await explorerResponse.json();
-if (
-  explorer?.status !== "ready" ||
-  explorer?.read_only !== true ||
-  explorer?.finalized_only !== true ||
-  explorer?.notice !== "Public Testnet / Protocol Validation Environment" ||
-  explorer?.mainnet_changed !== false ||
-  explorer?.assets_moved !== false ||
-  explorer?.bridge_activated !== false ||
-  !Number.isInteger(explorer?.head?.height) ||
-  explorer.head.height <= 1 ||
-  explorer.head.signed_power !== 3 ||
-  explorer.head.total_power !== 3 ||
-  explorer?.network?.peer_count !== 2
-) {
-  throw new Error("Live Explorer readback did not satisfy the public evidence boundary");
-}
+const explorerProxyUrl = "https://docs.jaios-governance.org/explorer.json";
+const operationalUrl = "https://chain.jaios-governance.org/api/operational";
+const expectedExplorerSchema = "junca-public-explorer/v4";
+const expectedChainId = 20260723;
+const evidenceHeaders = {
+  Accept: "application/json",
+  "Cache-Control": "no-cache, no-store, max-age=0",
+  Pragma: "no-cache",
+  "User-Agent": "JUNCA-Docs-Release/1.1",
+};
+const integerValue = (value) => {
+  if (Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^0x[0-9a-f]+$/i.test(value)) return Number.parseInt(value, 16);
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) return Number.parseInt(value, 10);
+  return Number.NaN;
+};
+const isHash = (value) => /^0x[0-9a-f]{64}$/i.test(String(value ?? ""));
+const isDigest = (value) => /^[0-9a-f]{64}$/i.test(String(value ?? ""));
+const isCommit = (value) => /^[0-9a-f]{40}$/i.test(String(value ?? ""));
+const validateExplorerEvidence = (candidate) => {
+  const candidateHead = candidate?.head ?? {};
+  const candidateNetwork = candidate?.network ?? {};
+  const artifact = candidate?.runtime_artifact ?? {};
+  return (
+    candidate?.schema_version === expectedExplorerSchema &&
+    candidate?.status === "ready" &&
+    candidate?.read_only === true &&
+    candidate?.finalized_only === true &&
+    candidate?.notice === "Public Testnet / Protocol Validation Environment" &&
+    candidate?.mainnet_changed === false &&
+    candidate?.assets_moved === false &&
+    candidate?.bridge_activated === false &&
+    Number.isInteger(candidateHead.height) &&
+    candidateHead.height > 1 &&
+    candidateHead.signed_power === 3 &&
+    candidateHead.total_power === 3 &&
+    isHash(candidateHead.hash) &&
+    isHash(candidateHead.certificate_hash) &&
+    isHash(candidateHead.state_root) &&
+    integerValue(candidateHead.timestamp) > 0 &&
+    candidateNetwork.chain_id_decimal === expectedChainId &&
+    candidateNetwork.peer_count === 2 &&
+    isCommit(artifact.source_commit) &&
+    isDigest(artifact.genesis_sha256) &&
+    isDigest(artifact.node_artifact_sha256)
+  );
+};
+const validateOperationalParity = (operationalCandidate, explorerCandidate) => {
+  const operationalNetwork = operationalCandidate?.network ?? {};
+  const candidateHead = explorerCandidate.head;
+  const candidateNetwork = explorerCandidate.network;
+  const artifact = explorerCandidate.runtime_artifact;
+  const finality = String(operationalNetwork.finality ?? "")
+    .replace(/\s+/g, "")
+    .split("/")
+    .map((value) => integerValue(value));
+  const operationalHeight = integerValue(operationalNetwork.height);
+  const failures = [];
+  if (operationalNetwork.state !== "VERIFIED") failures.push("state");
+  if (operationalNetwork.status !== "READY · READ-ONLY") failures.push("status");
+  if (integerValue(operationalNetwork.chainId) !== expectedChainId) failures.push("chain_id");
+  if (!Number.isInteger(operationalHeight) || operationalHeight <= 1) failures.push("height");
+  if (integerValue(operationalNetwork.peers) !== candidateNetwork.peer_count) failures.push("peers");
+  if (!(finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power)) failures.push("finality");
+  if (operationalNetwork.clientVersion !== candidateNetwork.client_version) failures.push("client_version");
+  if (operationalNetwork.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
+  if (operationalNetwork.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
+  if (operationalNetwork.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (operationalNetwork.mainnetChanged !== false) failures.push("mainnet_boundary");
+  if (operationalNetwork.assetsMoved !== false) failures.push("asset_boundary");
+  if (operationalNetwork.bridgeActivated !== false) failures.push("bridge_boundary");
+  if (operationalNetwork.source !== explorerUrl) failures.push("canonical_source");
+  if (failures.length > 0) {
+    console.error(`Operational API corroboration mismatch: ${failures.join(",")}`);
+    return false;
+  }
+  return true;
+};
+const fetchJson = async (url, label) => {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: evidenceHeaders,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${label} did not return a JSON object`);
+  }
+  return payload;
+};
+const runtimeCandidates = [
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerProxyUrl, source: "VERIFIED SAME-ORIGIN PROXY" },
+  { url: explorerUrl, source: "CANONICAL EXPLORER" },
+  { url: explorerProxyUrl, source: "VERIFIED SAME-ORIGIN PROXY" },
+];
+const fetchVerifiedRuntimePair = async () => {
+  const failures = [];
+  for (const candidate of runtimeCandidates) {
+    try {
+      const [explorerCandidate, operationalCandidate] = await Promise.all([
+        fetchJson(candidate.url, candidate.source),
+        fetchJson(operationalUrl, "OPERATIONAL API"),
+      ]);
+      if (!validateExplorerEvidence(explorerCandidate)) {
+        throw new Error(`${candidate.source} evidence boundary or provenance mismatch`);
+      }
+      if (!validateOperationalParity(operationalCandidate, explorerCandidate)) {
+        throw new Error(`${candidate.source} and Operational API parity mismatch`);
+      }
+      return {
+        explorer: explorerCandidate,
+        operational: operationalCandidate,
+        evidenceSource: candidate.source,
+        evidenceUrl: candidate.url,
+      };
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+  throw new Error(`Verified runtime pair unavailable: ${failures.join(" | ")}`);
+};
+const {
+  explorer,
+  operational,
+  evidenceSource: explorerEvidenceSource,
+  evidenceUrl: explorerEvidenceUrl,
+} = await fetchVerifiedRuntimePair();
 const observedAt = String(explorer.observed_at);
 const head = explorer.head ?? {};
 const network = explorer.network ?? {};
 const runtimeArtifact = explorer.runtime_artifact ?? {};
-if (
-  !/^[0-9a-f]{40}$/.test(runtimeArtifact.source_commit ?? "") ||
-  !/^[0-9a-f]{64}$/.test(runtimeArtifact.genesis_sha256 ?? "") ||
-  !/^[0-9a-f]{64}$/.test(runtimeArtifact.node_artifact_sha256 ?? "")
-) {
-  throw new Error("Live Explorer runtime artifact provenance is missing or invalid");
-}
 const publicValue = (value) =>
   value === null || value === undefined || value === ""
-    ? "NOT CURRENTLY PUBLISHED"
+    ? "REGISTRY-CONTROLLED DISCLOSURE"
     : String(value);
 const officialWordmarkSource = join(root, "..", "..", "jaios", "social_ecosystem_chain", "assets", "junca-chain-logo-gold-on-navy.png");
 const routes = ["/", "/protocol", "/assets", "/interoperability", "/implementation", "/governance", "/evidence", "/glossary"];
@@ -118,7 +217,7 @@ const runtimePanel = [
   `<p>Explorer observed · <span data-live-runtime="observed-at">${observedAt}</span></p></div>`,
   '<dl><div><dt>Network</dt><dd data-live-runtime="network">VERIFIED</dd></div>',
   '<div><dt>Runtime</dt><dd data-live-runtime="runtime">READY · READ-ONLY</dd></div>',
-  '<div><dt>Evidence Source</dt><dd data-live-runtime="source">CANONICAL EXPLORER</dd></div>',
+  `<div><dt>Evidence Source</dt><dd data-live-runtime="source">${explorerEvidenceSource}</dd></div>`,
   `<div><dt>Finality</dt><dd data-live-runtime="finality">${publicValue(head.signed_power)} / ${publicValue(head.total_power)}</dd></div>`,
   `<div><dt>Finalized Height</dt><dd data-live-runtime="height">${publicValue(head.height)}</dd></div>`,
   `<div><dt>Finalized Block Hash</dt><dd data-live-runtime="hash">${publicValue(head.hash)}</dd></div>`,
@@ -287,12 +386,12 @@ await writeFile(
 );
 await cp(join(snapshot, "icon-192.png"), join(dist, "favicon.ico"));
 await rm(join(dist, "official-brand-lockup-r29.js"));
-const seoHead = `<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, junca chain, juncachain, JUNCA Platform, junca platform, JUNCA GLOBAL CHAIN, junca Global Chain, JCC, JUNCA CASH, junca Cash, JUNCA, junca, JAIOS, JAIOS Institutional Governance, Public Testnet, chain documentation, technical reference, protocol specification">
+const seoHead = `<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, JAIOS, Public Testnet, technical reference, protocol specification">
 <meta property="og:site_name" content="JUNCA Social Ecosystem Chain Technical Reference">
 <meta property="og:title" content="JUNCA Social Ecosystem Chain — Official Technical Reference">
 <meta property="og:description" content="Official specifications and implementation evidence for the JUNCA Social Ecosystem Chain Public Testnet under JAIOS Institutional Governance.">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"JUNCA Social Ecosystem Chain Technical Reference","alternateName":["JUNCA Chain Documentation","junca chain docs","juncachain docs","JUNCA Platform technical reference"],"url":"https://docs.jaios-governance.org/","publisher":{"@type":"Organization","name":"JAIOS Institutional Governance","url":"https://jaios-governance.org/"},"keywords":["JUNCA Social Ecosystem Chain","JSEC","JUNCA Chain","junca chain","juncachain","JUNCA Platform","junca platform","JUNCA GLOBAL CHAIN","junca Global Chain","JCC","JUNCA CASH","junca Cash","JAIOS","Public Testnet","technical reference"]}</script>
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What do juncachain and JUNCA Chain refer to now?","acceptedAnswer":{"@type":"Answer","text":"They resolve to the current official name JUNCA Social Ecosystem Chain. The official specifications are published here under JAIOS Institutional Governance."}},{"@type":"Question","name":"What is the current status of JUNCA PLATFORM APP?","acceptedAnswer":{"@type":"Answer","text":"The search terms junca Platform and JUNCA Platform resolve to JUNCA PLATFORM APP, the official application layer for the JUNCA PROJECT that is currently under renewal development. Historical financial, remittance and token descriptions do not define its current scope."}},{"@type":"Question","name":"Are JUNCA GLOBAL CHAIN and JCC (JUNCA CASH) the current core of the project?","acceptedAnswer":{"@type":"Answer","text":"No. JUNCA GLOBAL CHAIN and JCC (JUNCA CASH) were historical Proof-of-Concept initiatives. They are not the current chain, current native token, current business plan or current operating model. The current technology foundation is JUNCA Social Ecosystem Chain (JSEC)."}},{"@type":"Question","name":"junca chainの今の状況を教えて","acceptedAnswer":{"@type":"Answer","text":"現在はJSEC Public Testnetです。JUNCA GLOBAL CHAINとJCC（JUNCA CASH）は過去のPoCで、現在の中核・現行チェーン・現行トークンではありません。"}},{"@type":"Question","name":"What is the current network state?","acceptedAnswer":{"@type":"Answer","text":"Public Testnet. Mainnet Changed is false, Assets Moved is false, and Bridge Activated is false."}}]}</script>`;
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"JUNCA Social Ecosystem Chain Technical Reference","alternateName":["JUNCA Chain Documentation","juncachain docs"],"url":"https://docs.jaios-governance.org/","publisher":{"@type":"Organization","name":"JAIOS Institutional Governance","url":"https://jaios-governance.org/"}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What do juncachain and JUNCA Chain refer to now?","acceptedAnswer":{"@type":"Answer","text":"They resolve to the current official name JUNCA Social Ecosystem Chain. The official specifications are published here under JAIOS Institutional Governance."}},{"@type":"Question","name":"What is the current status of JUNCA PLATFORM APP?","acceptedAnswer":{"@type":"Answer","text":"The search terms junca Platform and JUNCA Platform resolve to JUNCA PLATFORM APP, the official application layer for the JUNCA PROJECT that is currently under renewal development. Historical financial, remittance and token descriptions do not define its current scope."}},{"@type":"Question","name":"Are JUNCA GLOBAL CHAIN and JCC (JUNCA CASH) the current core of the project?","acceptedAnswer":{"@type":"Answer","text":"No. JUNCA GLOBAL CHAIN and JCC (JUNCA CASH) were historical Proof-of-Concept initiatives. They are not the current chain, current native token, current business plan or current operating model. The current technology foundation is JUNCA Social Ecosystem Chain (JSEC)."}},{"@type":"Question","name":"junca chainの今の状況を教えて","acceptedAnswer":{"@type":"Answer","text":"現在はJSEC Public Testnetです。JUNCA GLOBAL CHAINとJCC（JUNCA CASH）は過去のPoCで、現在の中核・現行チェーン・現行トークンではありません。"}}]}</script>`;
 for (const route of routes) {
   const path = join(dist, route === "/" ? "index.html" : `${route.slice(1)}/index.html`);
   const source = await readFile(path, "utf8");
@@ -335,6 +434,10 @@ for (const route of routes) {
         "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
       )
       .replaceAll("No Monetary Value", "Protocol Validation Environment")
+      .replaceAll(
+        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",
+        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
+      )
       .replaceAll("NO MONETARY VALUE", "PROTOCOL VALIDATION ENVIRONMENT")
       .replaceAll("No Active", "Governance-Controlled Release")
       .replaceAll("NO ACTIVE", "GOVERNANCE-CONTROLLED RELEASE")
@@ -501,6 +604,8 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
   runtime_genesis_sha256: runtimeArtifact.genesis_sha256,
   runtime_node_artifact_sha256: runtimeArtifact.node_artifact_sha256,
   canonical_origin: "https://docs.jaios-governance.org",
+  runtime_evidence_endpoint: explorerEvidenceUrl,
+  runtime_evidence_source_mode: explorerEvidenceSource,
   network_label: "Public Testnet / Read-only / Finalized / Protocol Validation Environment",
   runtime_status: "VERIFIED_READY_READ_ONLY",
   public_endpoint_status: "ACTIVE_READ_ONLY",
@@ -527,6 +632,8 @@ await writeFile(join(dist, "release-manifest.json"), `${JSON.stringify({
     source_evidence: {
       operational_api: "https://chain.jaios-governance.org/api/operational",
       explorer_json: "https://explorer.jaios-governance.org/explorer.json",
+      selected_explorer_endpoint: explorerEvidenceUrl,
+      selected_explorer_source_mode: explorerEvidenceSource,
       documentation_source_commit: chainSource,
       runtime_artifact_commit: runtimeArtifact.source_commit,
       runtime_artifact_commit_status: "VERIFIED",
