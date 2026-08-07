@@ -172,6 +172,8 @@ jobs:
             --delete \
             --exclude "*.html" \
             --exclude "*.webmanifest" \
+            --exclude "*.json" \
+            --exclude "official-brand-lockup-r29.js" \
             --exclude "robots.txt" \
             --exclude "sitemap.xml" \
             --cache-control "public,max-age=31536000,immutable"
@@ -180,9 +182,11 @@ jobs:
             --exclude "*" \
             --include "*.html" \
             --include "*.webmanifest" \
+            --include "*.json" \
+            --include "official-brand-lockup-r29.js" \
             --include "robots.txt" \
             --include "sitemap.xml" \
-            --cache-control "public,max-age=0,must-revalidate"
+            --cache-control "no-store,no-cache,must-revalidate,max-age=0"
       - name: Verify deployed manifest
         shell: bash
         run: |
@@ -215,7 +219,7 @@ jobs:
               --output "/tmp/${route:-home}.html" --write-out '%{http_code}' "${url}")"
             test "${code}" = "200"
           done
-          for asset in favicon.ico favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png; do
+          for asset in favicon.ico favicon.svg icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png manifest.webmanifest official-junca-symbol.png current-release.json official-brand-lockup-r29.js; do
             curl --fail --silent --show-error --location --retry 5 --retry-delay 10 \
               --output "/tmp/${asset//\//-}" "https://docs.jaios-governance.org/${asset}"
             cmp "docs/technical-reference/dist/${asset}" "/tmp/${asset//\//-}"
@@ -229,16 +233,44 @@ jobs:
           manifest_headers="$(curl --fail --silent --show-error --head \
             "https://docs.jaios-governance.org/manifest.webmanifest")"
           grep -i '^content-type: application/manifest+json' <<< "${manifest_headers}"
-          grep -i '^cache-control: public,max-age=0,must-revalidate' <<< "${manifest_headers}"
+          grep -i '^cache-control: .*no-store' <<< "${manifest_headers}"
           icon_headers="$(curl --fail --silent --show-error --head \
             "https://docs.jaios-governance.org/icon-192.png")"
           grep -i '^content-type: image/png' <<< "${icon_headers}"
           grep -i '^cache-control: public,max-age=31536000,immutable' <<< "${icon_headers}"
           grep -F 'Public Testnet' /tmp/home.html
+          grep -F 'Governed Read-only Operations' /tmp/home.html
+          grep -F 'Protocol Validation Environment' /tmp/home.html
+          ! grep -Fqi 'RUNTIME DEPLOYMENT IN PROGRESS' /tmp/home.html
+          ! grep -Fqi 'NO MONETARY VALUE' /tmp/home.html
+
+          mobile_url="https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 5 \
+            --user-agent 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/151 Mobile Safari/537.36' \
+            --header 'Cache-Control: no-cache, no-store, max-age=0' \
+            --output /tmp/mobile-home.html "${mobile_url}"
+          grep -F 'Governed Read-only Operations' /tmp/mobile-home.html
+          grep -F 'Protocol Validation Environment' /tmp/mobile-home.html
+          ! grep -Fqi 'RUNTIME DEPLOYMENT IN PROGRESS' /tmp/mobile-home.html
+          ! grep -Fqi 'NO MONETARY VALUE' /tmp/mobile-home.html
+
+          root_headers="$(curl --fail --silent --show-error --head https://docs.jaios-governance.org/)"
+          grep -i '^cache-control: .*no-store' <<< "${root_headers}"
+          release_headers="$(curl --fail --silent --show-error --head https://docs.jaios-governance.org/current-release.json)"
+          grep -i '^cache-control: .*no-store' <<< "${release_headers}"
+          curl --fail --silent --show-error --location --output /tmp/current-release.json \
+            https://docs.jaios-governance.org/current-release.json
+          jq -e '.delivery_revision == "R39" and .token == "20260807-r39-mobile-cache-recovery"' \
+            /tmp/current-release.json >/dev/null
+          curl --fail --silent --show-error --location --output /tmp/legacy-r29.js \
+            'https://docs.jaios-governance.org/official-brand-lockup-r29.js?v=20260727-r29'
+          grep -F 'jsec-docs-release-refresh:' /tmp/legacy-r29.js
           {
             echo "- Invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
             echo "- Invalidation status: \`${{ steps.invalidate.outputs.status }}\`"
             echo "- Public URL: https://docs.jaios-governance.org"
             echo "- DNS resolution and TLS readback: PASS"
             echo "- Eight-route HTTP readback: PASS"
+            echo "- Android mobile-UA readback: PASS"
+            echo "- Legacy R29 self-refresh route: PASS"
           } >> "$GITHUB_STEP_SUMMARY"
