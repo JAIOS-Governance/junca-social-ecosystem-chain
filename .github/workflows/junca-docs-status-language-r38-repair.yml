@@ -28,23 +28,55 @@ jobs:
         with:
           node-version: 20
 
-      - name: Repair translated public-status normalization boundary
+      - name: Repair translated status and bounded overview output
         shell: bash
         run: |
           set -euo pipefail
           python <<'PY'
           from pathlib import Path
 
-          path = Path("docs/technical-reference/scripts/build.mjs")
-          source = path.read_text(encoding="utf-8")
-          marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
-          addition = marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
-          if addition not in source:
-              if marker not in source:
-                  raise SystemExit("Expected R38 normalization marker is missing")
-              source = source.replace(marker, addition, 1)
-              path.write_text(source, encoding="utf-8")
-          print("R38 translation normalization boundary repaired")
+          build_path = Path("docs/technical-reference/scripts/build.mjs")
+          build = build_path.read_text(encoding="utf-8")
+          build_marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
+          build_addition = build_marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
+          if build_addition not in build:
+              if build_marker not in build:
+                  raise SystemExit("Expected R38 build normalization marker is missing")
+              build = build.replace(build_marker, build_addition, 1)
+              build_path.write_text(build, encoding="utf-8")
+
+          status_path = Path("docs/technical-reference/scripts/status-language-normalize.mjs")
+          status = status_path.read_text(encoding="utf-8")
+          old_status_regex = r'      /<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tr|ul|ol|li)>\s{2,}/g,'
+          new_status_regex = r'      /<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)>\s+(?=<)/g,'
+          if old_status_regex in status:
+              status = status.replace(old_status_regex, new_status_regex, 1)
+          if '      "</$1><",' in status:
+              status = status.replace('      "</$1><",', '      "</$1>",', 1)
+          status_path.write_text(status, encoding="utf-8")
+
+          runtime_path = Path("docs/technical-reference/scripts/runtime-current-state-normalize.mjs")
+          runtime = runtime_path.read_text(encoding="utf-8")
+          old_runtime = r'  if (route === "/" && html.length > 100000) html = html.replace(/\n\s*/g, "");'
+          new_runtime = "\n".join([
+              '  if (route === "/" && html.length > 100000) {',
+              r'    html = html.replace(/\n\s*/g, "");',
+              r'    html = html.replace(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/gi, (match, body) => {',
+              r'      try { return `<script type="application/ld+json">${JSON.stringify(JSON.parse(body))}</script>`; }',
+              r'      catch { return match; }',
+              r'    });',
+              r'    html = html.replace(/<\/(section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)>\s+(?=<)/g, "</$1>");',
+              r'    html = html.replace(/>\s+(?=<(?:section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)\b)/g, ">");',
+              r'    html = html.replace(/\s+(?=<\/(?:section|article|div|header|footer|nav|main|table|thead|tbody|tfoot|tr|ul|ol|li|p|h1|h2|h3|h4|h5|h6|dl|dt|dd|figure|figcaption)>)/g, "");',
+              '  }',
+          ])
+          if old_runtime in runtime:
+              runtime = runtime.replace(old_runtime, new_runtime, 1)
+          elif new_runtime not in runtime:
+              raise SystemExit("Expected R38 overview publication gate marker is missing")
+          runtime_path.write_text(runtime, encoding="utf-8")
+
+          print("R38 translated status and bounded overview repair applied")
           PY
 
       - name: Run full eight-route build and QA
@@ -57,10 +89,10 @@ jobs:
           set -euo pipefail
           git config user.name "juncaGlobal"
           git config user.email "juncajapan.inc@gmail.com"
-          git add docs/technical-reference/scripts/build.mjs
+          git add             docs/technical-reference/scripts/build.mjs             docs/technical-reference/scripts/status-language-normalize.mjs             docs/technical-reference/scripts/runtime-current-state-normalize.mjs
           if git diff --cached --quiet; then
-            echo "Translation boundary repair already applied."
+            echo "R38 production repair already applied."
             exit 0
           fi
-          git commit -m "fix: normalize translated docs status language before rendering"
+          git commit -m "fix: finalize bounded R38 docs status rendering"
           git push origin HEAD:main
