@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RECOVERY_REVISION: R38.3
+  RECOVERY_REVISION: R38.4
 
 jobs:
   repair:
@@ -60,7 +60,7 @@ jobs:
           exec(compile(source, "junca_docs_status_language_r38_repair.py", "exec"), {"__name__": "__main__"})
           PY
 
-      - name: Apply post-patch normalization and race-safe endpoint corroboration
+      - name: Apply post-patch normalization and release-cadence-safe endpoint corroboration
         run: python .github/patches/junca-docs-r38-post-patch.py
 
       - name: Run full eight-route build and QA
