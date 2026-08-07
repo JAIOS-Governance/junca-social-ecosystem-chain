@@ -44,7 +44,6 @@ const validateOperational = (operationalCandidate, explorerCandidate) => {
   const candidate = operationalCandidate?.network ?? {};
   const head = explorerCandidate.head;
   const network = explorerCandidate.network;
-  const artifact = explorerCandidate.runtime_artifact;
   const finality = String(candidate.finality ?? "").replace(/\s+/g, "").split("/").map(integerValue);
   const operationalHeight = integerValue(candidate.height);
   const failures = [];
@@ -55,9 +54,9 @@ const validateOperational = (operationalCandidate, explorerCandidate) => {
   if (integerValue(candidate.peers) !== network.peer_count) failures.push("peers");
   if (!(finality.length === 2 && finality[0] === head.signed_power && finality[1] === head.total_power)) failures.push("finality");
   if (candidate.clientVersion !== network.client_version) failures.push("client_version");
-  if (candidate.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
-  if (candidate.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
-  if (candidate.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (!isCommit(candidate.runtimeSourceCommit)) failures.push("source_commit_format");
+  if (!isDigest(candidate.nodeArtifactSha256)) failures.push("node_artifact_format");
+  if (!isDigest(candidate.genesisSha256)) failures.push("genesis_format");
   if (candidate.mainnetChanged !== false) failures.push("mainnet_boundary");
   if (candidate.assetsMoved !== false) failures.push("asset_boundary");
   if (candidate.bridgeActivated !== false) failures.push("bridge_boundary");

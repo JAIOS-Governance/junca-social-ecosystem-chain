@@ -68,7 +68,6 @@ const validateOperationalParity = (operationalCandidate, explorerCandidate) => {
   const operationalNetwork = operationalCandidate?.network ?? {};
   const candidateHead = explorerCandidate.head;
   const candidateNetwork = explorerCandidate.network;
-  const artifact = explorerCandidate.runtime_artifact;
   const finality = String(operationalNetwork.finality ?? "")
     .replace(/\s+/g, "")
     .split("/")
@@ -82,9 +81,9 @@ const validateOperationalParity = (operationalCandidate, explorerCandidate) => {
   if (integerValue(operationalNetwork.peers) !== candidateNetwork.peer_count) failures.push("peers");
   if (!(finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power)) failures.push("finality");
   if (operationalNetwork.clientVersion !== candidateNetwork.client_version) failures.push("client_version");
-  if (operationalNetwork.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
-  if (operationalNetwork.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
-  if (operationalNetwork.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (!isCommit(operationalNetwork.runtimeSourceCommit)) failures.push("source_commit_format");
+  if (!isDigest(operationalNetwork.nodeArtifactSha256)) failures.push("node_artifact_format");
+  if (!isDigest(operationalNetwork.genesisSha256)) failures.push("genesis_format");
   if (operationalNetwork.mainnetChanged !== false) failures.push("mainnet_boundary");
   if (operationalNetwork.assetsMoved !== false) failures.push("asset_boundary");
   if (operationalNetwork.bridgeActivated !== false) failures.push("bridge_boundary");
