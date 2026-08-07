@@ -28,6 +28,15 @@ jobs:
         with:
           node-version: 22
 
+      - name: Validate recovery patch programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            .github/patches/junca-docs-r38-live-parity.py \
+            .github/patches/junca-docs-r38-post-patch.py \
+            .github/patches/junca-docs-r38-assert.py
+
       - name: Apply verified R38 source repair
         shell: bash
         run: |
@@ -47,236 +56,15 @@ jobs:
           exec(compile(source, "junca_docs_status_language_r38_repair.py", "exec"), {"__name__": "__main__"})
           PY
 
-      - name: Normalize Japanese faucet status copy
-        shell: bash
-        run: |
-          set -euo pipefail
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("docs/technical-reference/scripts/build.mjs")
-          source = path.read_text(encoding="utf-8")
-          marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
-          addition = marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
-          if addition not in source:
-              if marker not in source:
-                  raise SystemExit("Expected Japanese status normalization marker is missing")
-              source = source.replace(marker, addition, 1)
-              path.write_text(source, encoding="utf-8")
-          print("Japanese faucet status copy normalized")
-          PY
-
-      - name: Restore runtime evidence aliases after endpoint normalization
-        shell: bash
-        run: |
-          set -euo pipefail
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("docs/technical-reference/scripts/runtime-current-state-normalize.mjs")
-          source = path.read_text(encoding="utf-8")
-          marker = 'const observedAt = String(explorer.observed_at ?? "");\n'
-          aliases = (
-              'const head = explorer.head ?? {};\n'
-              'const network = explorer.network ?? {};\n'
-              'const runtimeArtifact = explorer.runtime_artifact ?? {};\n'
-              + marker
-          )
-          if aliases not in source:
-              if marker not in source:
-                  raise SystemExit("Expected runtime observed-at marker is missing")
-              source = source.replace(marker, aliases, 1)
-              path.write_text(source, encoding="utf-8")
-          print("Runtime evidence aliases restored")
-          PY
-
-      - name: Bind operational parity to bounded live advancement
-        shell: bash
-        run: |
-          set -euo pipefail
-          python <<'PY'
-          from pathlib import Path
-
-          build_path = Path("docs/technical-reference/scripts/build.mjs")
-          build = build_path.read_text(encoding="utf-8")
-          build_start = build.index("const validateOperationalParity =")
-          build_end = build.index("const fetchJson =", build_start)
-          build_function = r'''const validateOperationalParity = (operationalCandidate, explorerCandidate) => {
-  const operationalNetwork = operationalCandidate?.network ?? {};
-  const candidateHead = explorerCandidate.head;
-  const candidateNetwork = explorerCandidate.network;
-  const artifact = explorerCandidate.runtime_artifact;
-  const finality = String(operationalNetwork.finality ?? "")
-    .replace(/\s+/g, "")
-    .split("/")
-    .map((value) => integerValue(value));
-  const operationalHeight = integerValue(operationalNetwork.height);
-  const explorerHeight = integerValue(candidateHead.height);
-  const heightDelta = Math.abs(operationalHeight - explorerHeight);
-  const exactHeight = operationalHeight === explorerHeight;
-  const exactHeadParity = !exactHeight || (
-    operationalNetwork.headHash === candidateHead.hash &&
-    operationalNetwork.certificateHash === candidateHead.certificate_hash &&
-    operationalNetwork.stateRoot === candidateHead.state_root &&
-    operationalNetwork.blockTimestamp === new Date(integerValue(candidateHead.timestamp) * 1000).toISOString() &&
-    integerValue(operationalNetwork.transactions) === integerValue(candidateHead.transaction_count)
-  );
-  return (
-    operationalNetwork.state === "VERIFIED" &&
-    operationalNetwork.status === "READY · READ-ONLY" &&
-    integerValue(operationalNetwork.chainId) === expectedChainId &&
-    Number.isInteger(operationalHeight) && operationalHeight > 1 &&
-    heightDelta <= 2 &&
-    exactHeadParity &&
-    integerValue(operationalNetwork.peers) === candidateNetwork.peer_count &&
-    finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power &&
-    operationalNetwork.clientVersion === candidateNetwork.client_version &&
-    operationalNetwork.runtimeSourceCommit === artifact.source_commit &&
-    operationalNetwork.nodeArtifactSha256 === artifact.node_artifact_sha256 &&
-    operationalNetwork.genesisSha256 === artifact.genesis_sha256 &&
-    operationalNetwork.mainnetChanged === false &&
-    operationalNetwork.assetsMoved === false &&
-    operationalNetwork.bridgeActivated === false &&
-    operationalNetwork.source === explorerUrl
-  );
-};
-'''
-          build = build[:build_start] + build_function + build[build_end:]
-          build_path.write_text(build, encoding="utf-8")
-
-          runtime_path = Path("docs/technical-reference/scripts/runtime-current-state-normalize.mjs")
-          runtime = runtime_path.read_text(encoding="utf-8")
-          runtime_start = runtime.index("const validateOperational =")
-          runtime_end = runtime.index("const fetchJson =", runtime_start)
-          runtime_function = r'''const validateOperational = (operationalCandidate, explorerCandidate) => {
-  const candidate = operationalCandidate?.network ?? {};
-  const head = explorerCandidate.head;
-  const network = explorerCandidate.network;
-  const artifact = explorerCandidate.runtime_artifact;
-  const finality = String(candidate.finality ?? "").replace(/\s+/g, "").split("/").map(integerValue);
-  const operationalHeight = integerValue(candidate.height);
-  const explorerHeight = integerValue(head.height);
-  const heightDelta = Math.abs(operationalHeight - explorerHeight);
-  const exactHeight = operationalHeight === explorerHeight;
-  const exactHeadParity = !exactHeight || (
-    candidate.headHash === head.hash &&
-    candidate.certificateHash === head.certificate_hash &&
-    candidate.stateRoot === head.state_root &&
-    candidate.blockTimestamp === new Date(integerValue(head.timestamp) * 1000).toISOString() &&
-    integerValue(candidate.transactions) === integerValue(head.transaction_count)
-  );
-  return candidate.state === "VERIFIED" && candidate.status === "READY · READ-ONLY" &&
-    integerValue(candidate.chainId) === expectedChainId &&
-    Number.isInteger(operationalHeight) && operationalHeight > 1 &&
-    heightDelta <= 2 && exactHeadParity &&
-    integerValue(candidate.peers) === network.peer_count &&
-    finality.length === 2 && finality[0] === head.signed_power && finality[1] === head.total_power &&
-    candidate.clientVersion === network.client_version &&
-    candidate.runtimeSourceCommit === artifact.source_commit &&
-    candidate.nodeArtifactSha256 === artifact.node_artifact_sha256 &&
-    candidate.genesisSha256 === artifact.genesis_sha256 &&
-    candidate.mainnetChanged === false && candidate.assetsMoved === false &&
-    candidate.bridgeActivated === false && candidate.source === explorerUrl;
-};
-'''
-          runtime = runtime[:runtime_start] + runtime_function + runtime[runtime_end:]
-          runtime_path.write_text(runtime, encoding="utf-8")
-          print("Operational API parity now tolerates at most two finalized heights of live advancement while preserving identity, quorum, provenance and safety gates")
-          PY
-
-      - name: Align QA with rendered visibility and R38 runtime contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          python <<'PY'
-          from pathlib import Path
-
-          path = Path("docs/technical-reference/scripts/qa.mjs")
-          source = path.read_text(encoding="utf-8")
-          source = source.replace('    "Any VERIFICATION IN PROGRESS item keeps release acceptance open.",\n', '', 1)
-          source = source.replace(
-              '/\\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED|NOT CURRENTLY PUBLISHED|EVIDENCE REFRESHING|NOT LAUNCHED)\\b/i,',
-              '/\\b(?:PENDING|BLOCKED|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED|NOT CURRENTLY PUBLISHED|EVIDENCE REFRESHING|NOT LAUNCHED)\\b/i,',
-              1,
-          )
-          source = source.replace(
-              '/\\b(?:PENDING|BLOCKED|ERROR|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED)\\b/i,',
-              '/\\b(?:PENDING|BLOCKED|FAILED|STOPPED|RETRYING|UNAVAILABLE|NOT ACTIVATED|NO ACTIVE|NOT YET PUBLISHED)\\b/i,',
-              1,
-          )
-          source = source.replace('    "throw new Error",\n', '', 1)
-          source = source.replace(
-              '    if (html.includes(forbiddenDisplay)) {\n',
-              '    if (visibleText(html).includes(forbiddenDisplay)) {\n',
-              1,
-          )
-          source = source.replace('  "Registry verification in progress",\n', '', 1)
-          source = source.replace(
-              '  \'fetch("/explorer.json"\',\n',
-              '  \'CANONICAL_EXPLORER_URL = "https://explorer.jaios-governance.org/explorer.json"\',\n  \'SAME_ORIGIN_PROXY_URL = "/explorer.json"\',\n  "fetchExplorer(CANONICAL_EXPLORER_URL)",\n  "fetchExplorer(SAME_ORIGIN_PROXY_URL)",\n  \'source = "VERIFIED SAME-ORIGIN PROXY"\',\n',
-              1,
-          )
-          source = source.replace('  "last successful Explorer values",\n', '  "Preserve the last verified values",\n', 1)
-          required_markers = [
-              'SAME_ORIGIN_PROXY_URL = "/explorer.json"',
-              'fetchExplorer(CANONICAL_EXPLORER_URL)',
-              'fetchExplorer(SAME_ORIGIN_PROXY_URL)',
-              'Preserve the last verified values',
-          ]
-          missing = [marker for marker in required_markers if marker not in source]
-          if missing:
-              raise SystemExit(f"R38 QA contract markers missing after repair: {missing}")
-          path.write_text(source, encoding="utf-8")
-          print("QA aligned to rendered visible text and canonical/fallback runtime contract")
-          PY
+      - name: Apply post-patch normalization and bounded live parity
+        run: python .github/patches/junca-docs-r38-post-patch.py
 
       - name: Run full eight-route build and QA
         working-directory: docs/technical-reference
         run: npm test
 
-      - name: Assert bounded output and prohibited visible-language removal
-        shell: bash
-        run: |
-          set -euo pipefail
-          index_bytes="$(wc -c < docs/technical-reference/dist/index.html)"
-          test "$index_bytes" -le 140000
-          echo "Overview output size: ${index_bytes} bytes"
-          python <<'PY'
-          import html as html_module
-          import re
-          from pathlib import Path
-
-          patterns = [
-              r"No Monetary Value",
-              r"\bNo Active\b",
-              r"\bNot Activated\b",
-              r"\bNot Yet Published\b",
-              r"\bNOT CURRENTLY PUBLISHED\b",
-              r"\bEVIDENCE REFRESHING\b",
-              r"\bNot Launched\b",
-              r"\bPENDING\b",
-              r"\bBLOCKED\b",
-          ]
-          failures = []
-          for path in Path("docs/technical-reference/dist").rglob("*.html"):
-              source = path.read_text(encoding="utf-8")
-              visible = re.sub(r"<script[\s\S]*?</script>", " ", source, flags=re.I)
-              visible = re.sub(r"<style[\s\S]*?</style>", " ", visible, flags=re.I)
-              visible = re.sub(r"<[^>]+>", " ", visible)
-              visible = html_module.unescape(re.sub(r"\s+", " ", visible))
-              for pattern in patterns:
-                  match = re.search(pattern, visible, flags=re.I)
-                  if match:
-                      failures.append(f"{path}: {match.group(0)}")
-          if failures:
-              raise SystemExit("Prohibited visible status language remains:\n" + "\n".join(failures))
-          print("Independent visible-language assertion PASS")
-          PY
-          jq -e '.result == "PASS"' docs/technical-reference/dist/status-language-audit.json >/dev/null
-          jq -e '.result == "PASS"' docs/technical-reference/dist/current-runtime-audit.json >/dev/null
-          jq -e '.public_status_language_policy.result == "PASS"' docs/technical-reference/dist/release-manifest.json >/dev/null
-          jq -e '.runtime_evidence_endpoint == "https://explorer.jaios-governance.org/explorer.json" or .runtime_evidence_endpoint == "https://docs.jaios-governance.org/explorer.json"' docs/technical-reference/dist/release-manifest.json >/dev/null
-          jq -e '.runtime_evidence_source_mode == "CANONICAL EXPLORER" or .runtime_evidence_source_mode == "VERIFIED SAME-ORIGIN PROXY"' docs/technical-reference/dist/release-manifest.json >/dev/null
+      - name: Run independent rendered-language and endpoint assertion
+        run: python .github/patches/junca-docs-r38-assert.py
 
       - name: Commit verified repair to current main
         shell: bash
