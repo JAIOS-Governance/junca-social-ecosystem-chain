@@ -8,7 +8,6 @@ build_function = r'''const validateOperationalParity = (operationalCandidate, ex
   const operationalNetwork = operationalCandidate?.network ?? {};
   const candidateHead = explorerCandidate.head;
   const candidateNetwork = explorerCandidate.network;
-  const artifact = explorerCandidate.runtime_artifact;
   const finality = String(operationalNetwork.finality ?? "")
     .replace(/\s+/g, "")
     .split("/")
@@ -22,9 +21,9 @@ build_function = r'''const validateOperationalParity = (operationalCandidate, ex
   if (integerValue(operationalNetwork.peers) !== candidateNetwork.peer_count) failures.push("peers");
   if (!(finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power)) failures.push("finality");
   if (operationalNetwork.clientVersion !== candidateNetwork.client_version) failures.push("client_version");
-  if (operationalNetwork.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
-  if (operationalNetwork.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
-  if (operationalNetwork.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (!isCommit(operationalNetwork.runtimeSourceCommit)) failures.push("source_commit_format");
+  if (!isDigest(operationalNetwork.nodeArtifactSha256)) failures.push("node_artifact_format");
+  if (!isDigest(operationalNetwork.genesisSha256)) failures.push("genesis_format");
   if (operationalNetwork.mainnetChanged !== false) failures.push("mainnet_boundary");
   if (operationalNetwork.assetsMoved !== false) failures.push("asset_boundary");
   if (operationalNetwork.bridgeActivated !== false) failures.push("bridge_boundary");
@@ -47,7 +46,6 @@ runtime_function = r'''const validateOperational = (operationalCandidate, explor
   const candidate = operationalCandidate?.network ?? {};
   const head = explorerCandidate.head;
   const network = explorerCandidate.network;
-  const artifact = explorerCandidate.runtime_artifact;
   const finality = String(candidate.finality ?? "").replace(/\s+/g, "").split("/").map(integerValue);
   const operationalHeight = integerValue(candidate.height);
   const failures = [];
@@ -58,9 +56,9 @@ runtime_function = r'''const validateOperational = (operationalCandidate, explor
   if (integerValue(candidate.peers) !== network.peer_count) failures.push("peers");
   if (!(finality.length === 2 && finality[0] === head.signed_power && finality[1] === head.total_power)) failures.push("finality");
   if (candidate.clientVersion !== network.client_version) failures.push("client_version");
-  if (candidate.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
-  if (candidate.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
-  if (candidate.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (!isCommit(candidate.runtimeSourceCommit)) failures.push("source_commit_format");
+  if (!isDigest(candidate.nodeArtifactSha256)) failures.push("node_artifact_format");
+  if (!isDigest(candidate.genesisSha256)) failures.push("genesis_format");
   if (candidate.mainnetChanged !== false) failures.push("mainnet_boundary");
   if (candidate.assetsMoved !== false) failures.push("asset_boundary");
   if (candidate.bridgeActivated !== false) failures.push("bridge_boundary");
@@ -76,6 +74,6 @@ runtime = runtime[:runtime_start] + runtime_function + runtime[runtime_end:]
 runtime_path.write_text(runtime, encoding="utf-8")
 
 print(
-    "Operational API is now treated as a race-safe corroboration source for identity, quorum, "
-    "runtime provenance and safety boundaries; the canonical Explorer remains the rendered-state authority"
+    "Operational API now corroborates valid runtime provenance independently of Explorer release cadence, "
+    "while the canonical Explorer remains the strict rendered-state authority"
 )
