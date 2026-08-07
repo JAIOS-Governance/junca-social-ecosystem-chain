@@ -2,7 +2,9 @@
   "schema": "jsec-docs-client-release/v1",
   "delivery_revision": "R39",
   "token": "20260807-r39-mobile-cache-recovery",
-  "canonical_url": "https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery",
+  "canonical_url": "https://docs.jaios-governance.org/refresh-r40/",
+  "current_document_url": "https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery",
+  "device_cache_recovery": "20260807-r40",
   "required_visible_terms": [
     "Public Testnet",
     "Governed Read-only Operations",

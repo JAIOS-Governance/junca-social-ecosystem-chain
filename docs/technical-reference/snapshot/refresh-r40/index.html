@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#081a31">
+  <title>JUNCA Docs — Device Cache Recovery</title>
+  <style>
+    :root{color-scheme:dark;font-family:Arial,"Noto Sans JP",sans-serif;background:#07172b;color:#f3eee2}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 80% 20%,rgba(109,74,115,.28),transparent 42%),linear-gradient(145deg,#061326,#0a213d)}
+    main{width:min(560px,100%);border:1px solid rgba(205,174,112,.55);padding:34px 28px;background:rgba(5,19,38,.9);box-shadow:0 28px 80px rgba(0,0,0,.35)}
+    .brand{letter-spacing:.28em;color:#d5b77a;font-weight:700;font-size:1.15rem}.rule{height:1px;background:linear-gradient(90deg,#b69452,transparent);margin:22px 0}
+    h1{font-size:clamp(1.65rem,6vw,2.35rem);line-height:1.25;margin:0 0 16px}p{color:#bac7d7;line-height:1.8;margin:0 0 12px}
+    .state{margin-top:24px;padding:16px;border-left:2px solid #d5b77a;background:rgba(255,255,255,.035);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88rem}
+    a{display:inline-flex;margin-top:24px;padding:14px 20px;border:1px solid #d5b77a;color:#f3eee2;text-decoration:none;letter-spacing:.08em}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">JUNCA</div>
+    <div class="rule"></div>
+    <h1>正規版へ更新しています</h1>
+    <p>端末内に残った旧ページを解除し、現在のPublic Testnet情報を直接取得します。</p>
+    <div id="state" class="state" role="status" aria-live="polite">DEVICE CACHE RESET · INITIALIZING</div>
+    <a id="fallback" href="/?release=20260807-r39-mobile-cache-recovery&device_reset=manual">正規版を開く</a>
+  </main>
+  <script>
+  (() => {
+    let started = false;
+    const state = document.getElementById('state');
+    const freshUrl = `/?release=20260807-r39-mobile-cache-recovery&device_reset=20260807-r40&refresh=${Date.now()}`;
+    const stale = /RUNTIME\s+DEPLOYMENT\s+IN\s+PROGRESS|NO\s+MONETARY\s+VALUE|\bNO\s+ACTIVE\b|\bNOT\s+ACTIVATED\b|\bNOT\s+YET\s+PUBLISHED\b/i;
+    const required = ['Governed Read-only Operations', 'Protocol Validation Environment'];
+
+    const clearSiteState = async () => {
+      const jobs = [];
+      if ('caches' in window) {
+        jobs.push(caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))));
+      }
+      if ('serviceWorker' in navigator) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then((registrations) =>
+          Promise.all(registrations.map((registration) => registration.unregister()))));
+      }
+      try {
+        for (const storage of [localStorage, sessionStorage]) {
+          for (let index = storage.length - 1; index >= 0; index -= 1) {
+            const key = storage.key(index) || '';
+            if (/jsec|junca|docs|release|cache/i.test(key)) storage.removeItem(key);
+          }
+        }
+      } catch {}
+      await Promise.allSettled(jobs);
+    };
+
+    const installFreshDocument = async () => {
+      const response = await fetch(freshUrl, {
+        cache: 'reload',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'Cache-Control': 'no-cache, no-store, max-age=0',
+          Pragma: 'no-cache',
+        },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      let html = await response.text();
+      if (stale.test(html) || !required.every((term) => html.includes(term))) {
+        throw new Error('CURRENT RELEASE VERIFICATION FAILED');
+      }
+      if (!/<base\b/i.test(html)) {
+        html = html.replace(/<head([^>]*)>/i, '<head$1><base href="https://docs.jaios-governance.org/">');
+      }
+      history.replaceState(null, '', freshUrl);
+      document.open();
+      document.write(html);
+      document.close();
+    };
+
+    const run = async () => {
+      if (started) return;
+      started = true;
+      try {
+        state.textContent = 'DEVICE CACHE RESET · CLEARING OLD CLIENT STATE';
+        await clearSiteState();
+        state.textContent = 'CURRENT RELEASE · VERIFIED DOWNLOAD';
+        await installFreshDocument();
+      } catch (error) {
+        state.textContent = `DIRECT RELOAD · ${error instanceof Error ? error.message : 'RETRY'}`;
+        const target = new URL(freshUrl, location.origin);
+        target.searchParams.set('force_reload', String(Date.now()));
+        document.getElementById('fallback').href = target.toString();
+        setTimeout(() => location.replace(target.toString()), 700);
+      }
+    };
+
+    addEventListener('pageshow', run, { once: true });
+    setTimeout(run, 40);
+  })();
+  </script>
+</body>
+</html>

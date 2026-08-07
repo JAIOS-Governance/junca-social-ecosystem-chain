@@ -2,27 +2,27 @@
   "id": "/",
   "name": "JUNCA Social Ecosystem Chain Technical Reference",
   "short_name": "JUNCA Docs",
-  "description": "Institutional technical reference with governed mobile cache recovery issued by JAIOS Institutional Governance.",
-  "start_url": "/?release=20260807-r39-mobile-cache-recovery",
+  "description": "Institutional technical reference with governed device-cache recovery issued by JAIOS Institutional Governance.",
+  "start_url": "/refresh-r40/?release=20260807-r39-mobile-cache-recovery",
   "scope": "/",
   "display": "standalone",
   "background_color": "#F4F1E9",
   "theme_color": "#0B2A4B",
   "icons": [
     {
-      "src": "/icon-192.png?v=20260727-r26",
+      "src": "/icon-192.png?v=20260807-r40",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png?v=20260727-r26",
+      "src": "/icon-512.png?v=20260807-r40",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-maskable-512.png?v=20260727-r26",
+      "src": "/icon-maskable-512.png?v=20260807-r40",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
