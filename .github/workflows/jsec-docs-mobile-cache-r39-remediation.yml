@@ -24,8 +24,8 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Apply bounded R39 remediation
-        run: python scripts/ops/jsec_docs_mobile_cache_r39_remediation.py
+      - name: Apply exact-boundary R39 remediation v2
+        run: python scripts/ops/jsec_docs_mobile_cache_r39_remediation_v2.py
 
       - name: Validate modified source and controls
         shell: bash
@@ -42,7 +42,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f scripts/ops/jsec_docs_mobile_cache_r39_remediation.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
