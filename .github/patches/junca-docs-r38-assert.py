@@ -19,6 +19,11 @@ patterns = [
     r"\bNot Launched\b",
     r"\bPENDING\b",
     r"\bBLOCKED\b",
+    r"does not represent monetary value",
+    r"金銭的価値を表さない",
+    r"does not guarantee the economic value",
+    r"経済価値、流動性、法的分類、規制適合性を保証するものではありません",
+    r"no platform guarantee",
 ]
 failures = []
 for path in root.rglob("*.html"):
@@ -32,7 +37,7 @@ for path in root.rglob("*.html"):
         if match:
             failures.append(f"{path}: {match.group(0)}")
 if failures:
-    raise SystemExit("Prohibited visible status language remains:\n" + "\n".join(failures))
+    raise SystemExit("Prohibited visible status or no-value language remains:\n" + "\n".join(failures))
 
 status_audit = json.loads((root / "status-language-audit.json").read_text(encoding="utf-8"))
 runtime_audit = json.loads((root / "current-runtime-audit.json").read_text(encoding="utf-8"))
@@ -54,4 +59,4 @@ if manifest.get("runtime_evidence_source_mode") not in {
 }:
     raise SystemExit("Runtime evidence source mode is not verified")
 
-print("Independent R38 visible-language, manifest and endpoint assertion PASS")
+print("Independent R38 visible-language, no-value wording, manifest and endpoint assertion PASS")
