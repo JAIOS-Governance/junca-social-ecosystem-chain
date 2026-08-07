@@ -1,0 +1,114 @@
+name: Codex Cloud-First Health
+
+on:
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - ".codex/**"
+      - ".agents/**"
+      - "docs/CODEX_PC_COMPLETE_INDEPENDENCE_POLICY.md"
+      - "scripts/validate_codex_cloud_first.py"
+      - ".github/workflows/codex-cloud-health.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "AGENTS.md"
+      - ".codex/**"
+      - ".agents/**"
+      - "docs/CODEX_PC_COMPLETE_INDEPENDENCE_POLICY.md"
+      - "scripts/validate_codex_cloud_first.py"
+      - ".github/workflows/codex-cloud-health.yml"
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: codex-cloud-health-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Validate PC-complete-independent cloud operation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate cloud-first baseline
+        id: validate
+        continue-on-error: true
+        run: python scripts/validate_codex_cloud_first.py
+
+      - name: Upload machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-cloud-health-${{ github.sha }}
+          path: evidence/codex-cloud-health/latest.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Open or update health incident
+        if: steps.validate.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '[P0] Codex cloud-first health failure';
+            const marker = '<!-- codex-cloud-health -->';
+            const body = `${marker}
+            Scheduled cloud audit failed for \`${context.repo.owner}/${context.repo.repo}\`.
+
+            - Commit: \`${context.sha}\`
+            - Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+            - Required boundary: no personal-computer, local-IDE, localhost, self-hosted-only, or manual CEO dependency
+            - Evidence artifact: \`codex-cloud-health-${context.sha}\`
+
+            Repair the failing configuration or execution route before activation.`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'codex-cloud-health'
+            });
+            const existing = issues.find(issue => issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+            } else {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'codex-cloud-health',
+                  description: 'P0 PC-independent Codex cloud health incident'
+                });
+              } catch (error) {
+                if (error.status !== 422) throw error;
+              }
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['codex-cloud-health']
+              });
+            }
+
+      - name: Enforce audit result
+        if: steps.validate.outcome == 'failure'
+        run: exit 1

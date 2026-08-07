@@ -1,0 +1,86 @@
+# JUNCA / JAIOS project-scoped Codex configuration.
+# The operating baseline is cloud-only and remains functional while all personal computers are offline.
+
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+web_search = "live"
+check_for_update_on_startup = true
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "high"
+personality = "pragmatic"
+project_doc_max_bytes = 65536
+project_root_markers = [".git", "AGENTS.md"]
+
+developer_instructions = """
+Apply the latest CEO instruction first. Before JUNCA/JAIOS work and every material architecture decision, read the Creative Constitution and docs/CODEX_PC_COMPLETE_INDEPENDENCE_POLICY.md. The environment must remain fully operable while every personal computer is powered off or offline. Never make a local IDE, GitHub Desktop, local clone, local scheduler, localhost service, self-hosted runner, local secret store, or manual CEO operation a dependency or Completion Gate. Use Codex Cloud, connected GitHub repositories, GitHub-hosted Actions, approved cloud runtimes, Google Drive, connectors, and API readback. Preserve verified outputs, resolve the single blocking delta, use independent Production, Review, Deployment, and Recovery agents when useful, and report only evidence-backed execution states. Use the OpenAI developer documentation MCP server for OpenAI API, plugins, ChatGPT, or Codex work.
+"""
+
+[auto_review]
+policy = """
+Approve bounded, reversible reads and workspace writes that directly advance the requested outcome. Require a feature branch, reject direct writes or pushes to main/master, reject secret disclosure, reject destructive system-wide commands, reject local-PC execution dependencies, and require cloud validation plus readback before deployment or merge.
+"""
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+apps = true
+enable_request_compression = true
+fast_mode = true
+goals = true
+hooks = true
+memories = true
+multi_agent = true
+personality = true
+remote_plugin = true
+shell_snapshot = true
+shell_tool = true
+skill_mcp_dependency_install = true
+
+[apps._default]
+enabled = true
+destructive_enabled = true
+open_world_enabled = true
+approvals_reviewer = "auto_review"
+default_tools_approval_mode = "writes"
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+enabled = true
+required = false
+default_tools_approval_mode = "approve"
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 8
+default_subagent_reasoning_effort = "high"
+interrupt_message = true
+
+[agents.production]
+description = "Implement bounded cloud-first production changes, run primary QA, and return exact changed files and evidence."
+config_file = "agents/production.toml"
+
+[agents.review]
+description = "Independently audit correctness, security, governance, PC independence, CI, sources, and regression risk without modifying files."
+config_file = "agents/review.toml"
+
+[agents.deployment]
+description = "Prepare cloud-only activation, repository integration, release evidence, rollback, and post-write readback."
+config_file = "agents/deployment.toml"
+
+[agents.recovery]
+description = "Replace failed or local-dependent execution routes, preserve verified artifacts, and prevent repeated failures."
+config_file = "agents/recovery.toml"
+
+[tools]
+view_image = true
+
+[tools.web_search]
+context_size = "high"
+
+[tools.web_search.location]
+country = "JP"
+timezone = "Asia/Tokyo"
