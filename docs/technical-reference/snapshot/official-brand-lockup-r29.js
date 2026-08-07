@@ -62,3 +62,41 @@
     observer.disconnect();
   }, 10_000);
 })();
+
+;(() => {
+  const endpoint = "/current-release.json";
+  const stale = /RUNTIME\s+DEPLOYMENT\s+IN\s+PROGRESS|NO\s+MONETARY\s+VALUE|\bNO\s+ACTIVE\b|\bNOT\s+ACTIVATED\b|\bNOT\s+YET\s+PUBLISHED\b/i;
+  let navigating = false;
+  const bodyText = () => document.body?.innerText ?? "";
+  const verify = async () => {
+    if (navigating) return;
+    try {
+      const response = await fetch(`${endpoint}?readback=${Date.now()}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json", "Cache-Control": "no-cache, no-store, max-age=0", Pragma: "no-cache" },
+      });
+      if (!response.ok) return;
+      const current = await response.json();
+      const body = bodyText();
+      const required = current.required_visible_terms.every((term) => body.includes(term));
+      if (!stale.test(body) && required) return;
+      const key = `jsec-docs-release-refresh:${current.token}`;
+      if (sessionStorage.getItem(key) === "1") return;
+      sessionStorage.setItem(key, "1");
+      navigating = true;
+      const target = new URL(current.canonical_url || "/", location.origin);
+      target.searchParams.set("release", current.token);
+      target.searchParams.set("refresh", String(Date.now()));
+      location.replace(target.toString());
+    } catch {
+      // Preserve the last rendered page when the release endpoint is unavailable.
+    }
+  };
+  addEventListener("pageshow", verify);
+  addEventListener("focus", verify);
+  addEventListener("online", verify);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void verify();
+  });
+  void verify();
+})();

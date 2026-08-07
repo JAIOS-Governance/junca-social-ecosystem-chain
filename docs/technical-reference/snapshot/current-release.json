@@ -1,0 +1,14 @@
+{
+  "schema": "jsec-docs-client-release/v1",
+  "delivery_revision": "R39",
+  "token": "20260807-r39-mobile-cache-recovery",
+  "canonical_url": "https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery",
+  "required_visible_terms": [
+    "Public Testnet",
+    "Governed Read-only Operations",
+    "Protocol Validation Environment"
+  ],
+  "mainnet_changed": false,
+  "assets_moved": false,
+  "bridge_activated": false
+}

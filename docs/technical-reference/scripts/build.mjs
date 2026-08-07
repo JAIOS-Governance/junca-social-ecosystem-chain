@@ -384,7 +384,7 @@ await writeFile(
   "utf8",
 );
 await cp(join(snapshot, "icon-192.png"), join(dist, "favicon.ico"));
-await rm(join(dist, "official-brand-lockup-r29.js"));
+// R39: retain the legacy R29 script path so stale installed pages self-recover.
 const seoHead = `<meta name="keywords" content="JUNCA Social Ecosystem Chain, JSEC, JUNCA Chain, JAIOS, Public Testnet, technical reference, protocol specification">
 <meta property="og:site_name" content="JUNCA Social Ecosystem Chain Technical Reference">
 <meta property="og:title" content="JUNCA Social Ecosystem Chain — Official Technical Reference">
