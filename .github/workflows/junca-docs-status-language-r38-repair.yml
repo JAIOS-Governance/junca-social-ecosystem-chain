@@ -38,11 +38,7 @@ jobs:
           path = Path("docs/technical-reference/scripts/build.mjs")
           source = path.read_text(encoding="utf-8")
           marker = '      .replaceAll("No Monetary Value", "Protocol Validation Environment")\n'
-          addition = marker + '''      .replaceAll(
-        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",
-        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",
-      )
-'''
+          addition = marker + '      .replaceAll(\n        "Protocol Validation Environment、Rate Limit、Abuse Controlを前提に公開します。",\n        "Test Asset Separation、Rate Limit、Abuse Controlを前提に公開します。",\n      )\n'
           if addition not in source:
               if marker not in source:
                   raise SystemExit("Expected R38 normalization marker is missing")
