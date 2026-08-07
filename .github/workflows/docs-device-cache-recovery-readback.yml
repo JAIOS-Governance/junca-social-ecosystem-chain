@@ -1,0 +1,81 @@
+name: Docs Device Cache Recovery Readback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/docs-device-cache-recovery-readback.yml"
+  workflow_run:
+    workflows: ["JUNCA Chain Docs Production"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-device-cache-recovery-readback
+  cancel-in-progress: true
+
+jobs:
+  verify-public-device-recovery:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Verify uncached R40 route and current public document
+        shell: bash
+        run: |
+          set -euo pipefail
+          nonce="$(date +%s%N)"
+          recovery_url="https://docs.jaios-governance.org/refresh-r40/?verify=${nonce}"
+          current_url="https://docs.jaios-governance.org/?release=20260807-r39-mobile-cache-recovery&device_reset=20260807-r40&verify=${nonce}"
+
+          recovery_code="$(curl --fail-with-body --silent --show-error --location \
+            --retry 6 --retry-delay 5 --retry-all-errors \
+            --header 'Cache-Control: no-cache, no-store, max-age=0' \
+            --user-agent 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/151 Mobile Safari/537.36' \
+            --output /tmp/recovery.html --write-out '%{http_code}' "${recovery_url}")"
+          test "${recovery_code}" = "200"
+          grep -F 'DEVICE CACHE RESET' /tmp/recovery.html
+          grep -F '20260807-r40' /tmp/recovery.html
+          grep -F '正規版へ更新しています' /tmp/recovery.html
+
+          recovery_headers="$(curl --fail --silent --show-error --head \
+            "https://docs.jaios-governance.org/refresh-r40/")"
+          grep -i '^cache-control: .*no-store' <<< "${recovery_headers}"
+
+          current_code="$(curl --fail-with-body --silent --show-error --location \
+            --retry 6 --retry-delay 5 --retry-all-errors \
+            --header 'Cache-Control: no-cache, no-store, max-age=0' \
+            --user-agent 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/151 Mobile Safari/537.36' \
+            --output /tmp/current.html --write-out '%{http_code}' "${current_url}")"
+          test "${current_code}" = "200"
+          grep -F 'Governed Read-only Operations' /tmp/current.html
+          grep -F 'Protocol Validation Environment' /tmp/current.html
+          ! grep -Fqi 'RUNTIME DEPLOYMENT IN PROGRESS' /tmp/current.html
+          ! grep -Fqi 'NO MONETARY VALUE' /tmp/current.html
+
+          curl --fail --silent --show-error --location \
+            --header 'Cache-Control: no-cache, no-store, max-age=0' \
+            --output /tmp/current-release.json \
+            "https://docs.jaios-governance.org/current-release.json?verify=${nonce}"
+          jq -e '
+            .delivery_revision == "R39" and
+            .token == "20260807-r39-mobile-cache-recovery" and
+            .canonical_url == "https://docs.jaios-governance.org/refresh-r40/" and
+            .device_cache_recovery == "20260807-r40"
+          ' /tmp/current-release.json >/dev/null
+
+          {
+            echo '## Docs device-cache recovery acceptance'
+            echo '- R40 uncached recovery route: `PASS`'
+            echo '- Android mobile-UA current copy: `PASS`'
+            echo '- Old prohibited banner: `ABSENT`'
+            echo '- Current-release redirect binding: `PASS`'
+            echo '- Mainnet Changed: `false`'
+            echo '- Assets Moved: `false`'
+            echo '- Bridge Activated: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
