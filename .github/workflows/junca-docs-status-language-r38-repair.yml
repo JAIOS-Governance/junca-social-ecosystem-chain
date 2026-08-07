@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RECOVERY_REVISION: R38.4
+  RECOVERY_REVISION: R38.5
 
 jobs:
   repair:
@@ -41,11 +41,16 @@ jobs:
             .github/patches/junca-docs-r38-post-patch.py \
             .github/patches/junca-docs-r38-assert.py
 
-      - name: Apply verified R38 source repair
+      - name: Apply base R38 repair only when absent
         shell: bash
         run: |
           set -euo pipefail
-          python <<'PY'
+          if grep -q 'REGISTRY-CONTROLLED DISCLOSURE' docs/technical-reference/scripts/build.mjs && \
+             grep -q 'runtime_evidence_endpoint' docs/technical-reference/scripts/build.mjs && \
+             grep -q 'CANONICAL_EXPLORER_URL' docs/technical-reference/src/live-runtime.js; then
+            echo "Base R38 repair already present; preserving verified source."
+          else
+            python <<'PY'
           import base64
           import hashlib
           import zlib
@@ -59,6 +64,7 @@ jobs:
               raise SystemExit(f"Repair payload digest mismatch: {actual}")
           exec(compile(source, "junca_docs_status_language_r38_repair.py", "exec"), {"__name__": "__main__"})
           PY
+          fi
 
       - name: Apply post-patch normalization and release-cadence-safe endpoint corroboration
         run: python .github/patches/junca-docs-r38-post-patch.py
