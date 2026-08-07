@@ -1,0 +1,352 @@
+name: JUNCA Validator Finalized State Convergence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-validator-finalized-state-convergence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: junca-validator-finalized-state-convergence
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: "595710543956"
+  AWS_REGION: us-east-1
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment
+  TARGET_ARTIFACT_SHA256: fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+
+jobs:
+  converge-and-accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: public-testnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: junca-state-convergence-${{ github.run_id }}
+
+      - name: Resolve exact current validator fleet
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          aws sts get-caller-identity > artifacts/aws-identity.json
+          jq -e --arg account "$AWS_ACCOUNT_ID" '
+            .Account==$account and (.Arn|contains(":assumed-role/JuncaChainPublicTestnetDeployment/"))
+          ' artifacts/aws-identity.json >/dev/null
+          aws ec2 describe-instances \
+            --filters \
+              "Name=instance-state-name,Values=running" \
+              "Name=tag:Project,Values=JUNCA Social Ecosystem Chain" \
+              "Name=tag:Network,Values=Public Testnet" \
+              "Name=tag:Validator,Values=01,02,03" \
+            > artifacts/ec2-instances.json
+          jq -e '
+            [.Reservations[].Instances[]|{
+              instance_id:.InstanceId,
+              validator:(.Tags[]|select(.Key=="Validator")|.Value),
+              private_ip:.PrivateIpAddress,
+              state:.State.Name
+            }]|sort_by(.validator)|select(
+              length==3 and map(.validator)==["01","02","03"] and
+              (map(.instance_id)|unique|length)==3 and
+              (map(.private_ip)|unique|length)==3 and all(.[];.state=="running")
+            )
+          ' artifacts/ec2-instances.json > artifacts/validators.json
+          source_instance="$(jq -er '.[]|select(.validator=="01")|.instance_id' artifacts/validators.json)"
+          source_ip="$(jq -er '.[]|select(.validator=="01")|.private_ip' artifacts/validators.json)"
+          echo "$source_instance" > artifacts/source-instance.txt
+          echo "$source_ip" > artifacts/source-ip.txt
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$(IFS=,;echo "${instances[*]}")" \
+            > artifacts/ssm-instances.json
+          jq -e --argjson expected "$(jq '[.[].instance_id]|sort' artifacts/validators.json)" '
+            [.InstanceInformationList[]|select(.PingStatus=="Online")|.InstanceId]|sort|.==$expected
+          ' artifacts/ssm-instances.json >/dev/null
+          curl -fsS -H 'content-type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+            https://rpc.jaios-governance.org/ > artifacts/public-baseline-block.json
+
+      - name: Freeze validator-01 and serve exact finalized state snapshot
+        id: source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_instance="$(cat artifacts/source-instance.txt)"
+          cat > /tmp/export-finalized-state.sh <<'REMOTE'
+          set -Eeuo pipefail
+          value() { local key="$1"; awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env|tail -n1; }
+          test "$(value VALIDATOR_ID)" = validator-01
+          test "$(value NODE_ARTIFACT_SHA256)" = fbfa8921109776e24a58630f476a70c5cdd11070c5058734cc71f06bc31fb19a
+          curl -fsS http://127.0.0.1:8545/health > /tmp/source-health-before.json
+          jq -e '.status=="healthy" and .head_height>=14997 and .authenticated_peer_count==2 and .consensus.last_certificate.height==.head_height and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3' /tmp/source-health-before.json >/dev/null
+          systemctl stop junca-public-rpc.service junca-public-explorer.service || true
+          systemctl stop junca-validator.service
+          rm -rf /tmp/junca-finalized-state-export
+          mkdir -p /tmp/junca-finalized-state-export
+          python3 - <<'PY'
+          import json,sqlite3,sys
+          from pathlib import Path
+          src=sqlite3.connect('file:/var/lib/junca/state.sqlite?mode=ro',uri=True)
+          dst=sqlite3.connect('/tmp/junca-finalized-state-export/state.sqlite')
+          src.backup(dst); dst.commit(); src.close(); dst.close()
+          check=sqlite3.connect('file:/tmp/junca-finalized-state-export/state.sqlite?mode=ro',uri=True)
+          result=check.execute('PRAGMA quick_check').fetchone(); check.close()
+          if not result or result[0] != 'ok': raise SystemExit(f'SQLITE_QUICK_CHECK_FAILED:{result!r}')
+          sys.path.insert(0,'/usr/local/lib/junca')
+          from jaios.social_ecosystem_chain.state_store import PersistentStateStore
+          store=PersistentStateStore('/tmp/junca-finalized-state-export/state.sqlite',chain_id=20260723)
+          head=store.head(); cert=store.latest_finality_certificate(); timestamp=store.block_timestamp(head.height)
+          metadata={
+            'schema_version':'junca-finalized-state-export/v1',
+            'chain_id':20260723,
+            'head_height':head.height,
+            'head_hash':head.block_hash,
+            'head_timestamp':timestamp,
+            'state_root':head.state_root,
+            'certificate':None if cert is None else cert.as_evidence(),
+            'sqlite_quick_check':'ok',
+            'mainnet_changed':False,'assets_moved':False,'bridge_activated':False,
+          }
+          store.close()
+          if not metadata['certificate'] or metadata['certificate']['height'] != metadata['head_height'] or metadata['certificate']['signed_power'] != 3 or metadata['certificate']['total_power'] != 3:
+              raise SystemExit('FINALIZED_CERTIFICATE_NOT_BOUND_TO_HEAD')
+          Path('/tmp/junca-finalized-state-export/metadata.json').write_text(json.dumps(metadata,sort_keys=True,indent=2)+'\n')
+          PY
+          sha256sum /tmp/junca-finalized-state-export/state.sqlite | awk '{print $1}' > /tmp/junca-finalized-state-export/state.sqlite.sha256
+          jq --arg sha "$(cat /tmp/junca-finalized-state-export/state.sqlite.sha256)" --argjson size "$(stat -c %s /tmp/junca-finalized-state-export/state.sqlite)" '. + {state_sha256:$sha,state_size:$size}' /tmp/junca-finalized-state-export/metadata.json > /tmp/metadata.json
+          mv /tmp/metadata.json /tmp/junca-finalized-state-export/metadata.json
+          pkill -f 'python3 -m http.server 30303' || true
+          nohup python3 -m http.server 30303 --bind 0.0.0.0 --directory /tmp/junca-finalized-state-export >/tmp/junca-state-server.log 2>&1 &
+          echo $! >/tmp/junca-state-server.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:30303/metadata.json >/tmp/metadata-readback.json && curl -fsS http://127.0.0.1:30303/state.sqlite >/tmp/state-readback.sqlite && test "$(sha256sum /tmp/state-readback.sqlite|awk '{print $1}')" = "$(jq -r .state_sha256 /tmp/metadata-readback.json)"; then
+              cat /tmp/metadata-readback.json
+              echo JUNCA_FINALIZED_STATE_SOURCE_READY
+              exit 0
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          exit 1
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/export-finalized-state.sh > /tmp/export-finalized-state.json
+          command_id="$(aws ssm send-command --instance-ids "$source_instance" --document-name AWS-RunShellScript --parameters file:///tmp/export-finalized-state.json --comment 'Export exact JSEC finalized state from validator-01' --query Command.CommandId --output text)"
+          echo "$command_id" > artifacts/source-state-command-id.txt
+          for attempt in $(seq 1 120); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" --query Status --output text 2>/dev/null||true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" > artifacts/source-state.json
+          jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_FINALIZED_STATE_SOURCE_READY"))' artifacts/source-state.json >/dev/null
+          jq -r '.StandardOutputContent' artifacts/source-state.json | sed -n '/^{/,/^}/p' > artifacts/source-metadata.json || true
+          echo ready=true >> "$GITHUB_OUTPUT"
+
+      - name: Converge validator-02 and validator-03 to exact finalized state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_ip="$(cat artifacts/source-ip.txt)"
+          failures=0
+          while IFS=$'\t' read -r validator instance; do
+            {
+              printf 'EXPECTED_VALIDATOR=%q\n' "validator-${validator}"
+              printf 'SOURCE_IP=%q\n' "$source_ip"
+              cat <<'REMOTE'
+          set -Eeuo pipefail
+          value() { local key="$1"; awk -F= -v key="$key" '$1==key {print substr($0,length(key)+2)}' /etc/junca/runtime.env|tail -n1; }
+          restore_old() {
+            rc=$?
+            echo "JUNCA_FINALIZED_STATE_CONVERGENCE_FAILED rc=${rc}; restoring local state backup"
+            if [ -f /var/lib/junca/state.sqlite.pre-convergence ]; then
+              systemctl stop junca-public-rpc.service junca-public-explorer.service junca-validator.service || true
+              mv -f /var/lib/junca/state.sqlite.pre-convergence /var/lib/junca/state.sqlite
+              [ ! -f /var/lib/junca/state.sqlite-wal.pre-convergence ] || mv -f /var/lib/junca/state.sqlite-wal.pre-convergence /var/lib/junca/state.sqlite-wal
+              [ ! -f /var/lib/junca/state.sqlite-shm.pre-convergence ] || mv -f /var/lib/junca/state.sqlite-shm.pre-convergence /var/lib/junca/state.sqlite-shm
+              uid="$(id -u junca)"; gid="$(id -g junca)"; chown "$uid:$gid" /var/lib/junca/state.sqlite* 2>/dev/null || true
+              systemctl restart junca-validator.service
+              systemctl restart junca-public-rpc.service junca-public-explorer.service
+            fi
+            exit "$rc"
+          }
+          trap restore_old ERR
+          test "$(value VALIDATOR_ID)" = "$EXPECTED_VALIDATOR"
+          curl -fsS --retry 5 --retry-delay 2 "http://${SOURCE_IP}:30303/metadata.json" -o /tmp/finalized-metadata.json
+          curl -fsS --retry 5 --retry-delay 2 "http://${SOURCE_IP}:30303/state.sqlite" -o /tmp/finalized-state.sqlite
+          jq -e '.schema_version=="junca-finalized-state-export/v1" and .chain_id==20260723 and .head_height>=14997 and .certificate.height==.head_height and .certificate.signed_power==3 and .certificate.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/finalized-metadata.json >/dev/null
+          test "$(sha256sum /tmp/finalized-state.sqlite|awk '{print $1}')" = "$(jq -r .state_sha256 /tmp/finalized-metadata.json)"
+          python3 - <<'PY'
+          import sqlite3
+          db=sqlite3.connect('file:/tmp/finalized-state.sqlite?mode=ro',uri=True)
+          result=db.execute('PRAGMA quick_check').fetchone(); db.close()
+          if not result or result[0] != 'ok': raise SystemExit(f'QUICK_CHECK_FAILED:{result!r}')
+          PY
+          systemctl stop junca-public-rpc.service junca-public-explorer.service || true
+          systemctl stop junca-validator.service
+          rm -f /var/lib/junca/state.sqlite.pre-convergence /var/lib/junca/state.sqlite-wal.pre-convergence /var/lib/junca/state.sqlite-shm.pre-convergence
+          cp -a /var/lib/junca/state.sqlite /var/lib/junca/state.sqlite.pre-convergence
+          [ ! -f /var/lib/junca/state.sqlite-wal ] || cp -a /var/lib/junca/state.sqlite-wal /var/lib/junca/state.sqlite-wal.pre-convergence
+          [ ! -f /var/lib/junca/state.sqlite-shm ] || cp -a /var/lib/junca/state.sqlite-shm /var/lib/junca/state.sqlite-shm.pre-convergence
+          install -o root -g root -m 0640 /tmp/finalized-state.sqlite /var/lib/junca/state.sqlite.new
+          mv -f /var/lib/junca/state.sqlite.new /var/lib/junca/state.sqlite
+          rm -f /var/lib/junca/state.sqlite-wal /var/lib/junca/state.sqlite-shm
+          uid="$(id -u junca)"; gid="$(id -g junca)"
+          chown "$uid:$gid" /var/lib/junca/state.sqlite
+          chmod 0640 /var/lib/junca/state.sqlite
+          python3 - <<'PY'
+          import sqlite3
+          db=sqlite3.connect('file:/var/lib/junca/state.sqlite?mode=ro',uri=True)
+          result=db.execute('PRAGMA quick_check').fetchone(); db.close()
+          if not result or result[0] != 'ok': raise SystemExit(f'INSTALLED_QUICK_CHECK_FAILED:{result!r}')
+          PY
+          systemctl reset-failed junca-validator.service junca-public-rpc.service junca-public-explorer.service || true
+          systemctl restart junca-validator.service
+          expected_height="$(jq -r .head_height /tmp/finalized-metadata.json)"
+          expected_hash="$(jq -r .head_hash /tmp/finalized-metadata.json)"
+          expected_cert="$(jq -r .certificate.certificate_hash /tmp/finalized-metadata.json)"
+          ready=false
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/installed-health.json && jq -e --argjson height "$expected_height" --arg hash "$expected_hash" --arg cert "$expected_cert" '.status=="healthy" and .head_height==$height and .head_hash==$hash and .consensus.last_certificate.certificate_hash==$cert and .consensus.last_certificate.height==$height' /tmp/installed-health.json >/dev/null; then ready=true; break; fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          test "$ready" = true
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8546/health >/dev/null && curl -fsS http://127.0.0.1:3000/health >/dev/null; then break; fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          trap - ERR
+          rm -f /var/lib/junca/state.sqlite.pre-convergence /var/lib/junca/state.sqlite-wal.pre-convergence /var/lib/junca/state.sqlite-shm.pre-convergence
+          jq -cn --arg validator_id "$(value VALIDATOR_ID)" --argjson metadata "$(cat /tmp/finalized-metadata.json)" --slurpfile health /tmp/installed-health.json '{schema_version:"junca-validator-finalized-state-convergence/v1",accepted:true,validator_id:$validator_id,source_metadata:$metadata,health:$health[0],mainnet_changed:false,assets_moved:false,bridge_activated:false}'
+          echo JUNCA_FINALIZED_STATE_TARGET_ACCEPTED
+          REMOTE
+            } > /tmp/converge-state-${validator}.sh
+            jq -Rs '{commands:[.]}' /tmp/converge-state-${validator}.sh > /tmp/converge-state-${validator}.json
+            command_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters file:///tmp/converge-state-${validator}.json --comment "JUNCA validator-${validator} exact finalized state convergence" --query Command.CommandId --output text)"
+            for attempt in $(seq 1 180); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 180
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/state-target-${validator}-${instance}.json"
+            jq -r '.Status,.StandardOutputContent,.StandardErrorContent' "artifacts/state-target-${validator}-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("junca-validator-finalized-state-convergence/v1")) and (.StandardOutputContent|contains("JUNCA_FINALIZED_STATE_TARGET_ACCEPTED"))' "artifacts/state-target-${validator}-${instance}.json" >/dev/null; then failures=$((failures+1)); break; fi
+          done < <(jq -r '.[]|select(.validator!="01")|[.validator,.instance_id]|@tsv' artifacts/validators.json)
+          test "$failures" -eq 0
+
+      - name: Stop state server and restore validator-01
+        if: always() && steps.source.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_instance="$(cat artifacts/source-instance.txt)"
+          cat > /tmp/restore-source.sh <<'REMOTE'
+          set -Eeuo pipefail
+          [ ! -f /tmp/junca-state-server.pid ] || kill "$(cat /tmp/junca-state-server.pid)" 2>/dev/null || true
+          pkill -f 'python3 -m http.server 30303' || true
+          systemctl reset-failed junca-validator.service junca-public-rpc.service junca-public-explorer.service || true
+          systemctl restart junca-validator.service
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/source-health.json && jq -e '.status=="healthy" and .head_height>=14997' /tmp/source-health.json >/dev/null; then break; fi
+            test "$attempt" -lt 120
+            sleep 2
+          done
+          systemctl restart junca-public-rpc.service junca-public-explorer.service
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8546/health >/dev/null && curl -fsS http://127.0.0.1:3000/health >/dev/null; then break; fi
+            test "$attempt" -lt 60
+            sleep 2
+          done
+          echo JUNCA_FINALIZED_STATE_SOURCE_RESTORED
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/restore-source.sh > /tmp/restore-source.json
+          command_id="$(aws ssm send-command --instance-ids "$source_instance" --document-name AWS-RunShellScript --parameters file:///tmp/restore-source.json --comment 'Restore validator-01 after finalized state convergence' --query Command.CommandId --output text)"
+          for attempt in $(seq 1 150); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" --query Status --output text 2>/dev/null||true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+            test "$attempt" -lt 150
+            sleep 2
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$source_instance" > artifacts/source-restored.json
+          jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_FINALIZED_STATE_SOURCE_RESTORED"))' artifacts/source-restored.json >/dev/null
+
+      - name: Require exact three-validator parity, 2 peers and advancing finality
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t instances < <(jq -r '.[].instance_id' artifacts/validators.json)
+          cat > /tmp/final-accept.sh <<'REMOTE'
+          set -Eeuo pipefail
+          accepted=false
+          for attempt in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8545/health >/tmp/final-health.json && jq -e '.status=="healthy" and .authenticated_peer_count==2 and (.authenticated_peer_ids|length)==2 and .automatic_finality_enabled==true and .automatic_finality_loop_running==true and .consensus.last_certificate.signed_power==3 and .consensus.last_certificate.total_power==3 and .mainnet_changed==false and .assets_moved==false and .bridge_activated==false' /tmp/final-health.json >/dev/null; then accepted=true; break; fi
+            test "$attempt" -lt 180
+            sleep 2
+          done
+          test "$accepted" = true
+          cat /tmp/final-health.json
+          echo JUNCA_FINALIZED_STATE_AND_PEERS_ACCEPTED
+          REMOTE
+          jq -Rs '{commands:[.]}' /tmp/final-accept.sh > /tmp/final-accept.json
+          command_id="$(aws ssm send-command --instance-ids "${instances[@]}" --document-name AWS-RunShellScript --parameters file:///tmp/final-accept.json --comment 'JUNCA exact finalized state and peer acceptance' --query Command.CommandId --output text)"
+          failures=0
+          for instance in "${instances[@]}"; do
+            for attempt in $(seq 1 210); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null||true)"
+              case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+              test "$attempt" -lt 210
+              sleep 2
+            done
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" > "artifacts/final-${instance}.json"
+            if ! jq -e '.Status=="Success" and (.StandardOutputContent|contains("JUNCA_FINALIZED_STATE_AND_PEERS_ACCEPTED"))' "artifacts/final-${instance}.json" >/dev/null; then failures=$((failures+1)); fi
+          done
+          test "$failures" -eq 0
+          baseline="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/public-baseline-block.json'))['result'],16))
+          PY
+          )"
+          curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ > artifacts/block-before.json
+          before="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/block-before.json'))['result'],16))
+          PY
+          )"
+          sleep 70
+          curl -fsS -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://rpc.jaios-governance.org/ > artifacts/block-after.json
+          after="$(python3 - <<'PY'
+          import json
+          print(int(json.load(open('artifacts/block-after.json'))['result'],16))
+          PY
+          )"
+          test "$after" -gt "$baseline"
+          test "$after" -gt "$before"
+          curl -fsS https://health.jaios-governance.org/health > artifacts/public-health.json
+          curl -fsS https://explorer.jaios-governance.org/explorer.json > artifacts/public-explorer.json
+          jq -e '.status=="healthy" and .read_only==true and .validator.authenticated_peer_count==2' artifacts/public-health.json >/dev/null
+          jq -e '.status=="ready" and .read_only==true and .finalized_only==true and .network.peer_count==2 and .head.signed_power==3 and .head.total_power==3' artifacts/public-explorer.json >/dev/null
+          jq -n --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --argjson baseline "$baseline" --argjson before "$before" --argjson after "$after" --argjson validators "$(cat artifacts/validators.json)" '{schema_version:"junca-public-testnet-finalized-state-recovery/v1",result:"ACTIVE_ADVANCING",workflow_run_url:$run_url,baseline_height:$baseline,height_before:$before,height_after:$after,validators:$validators,peer_count:2,signed_power:3,total_power:3,mainnet_changed:false,assets_moved:false,bridge_activated:false,mainnet_activation_authorized:false}' > artifacts/finalized-state-recovery-acceptance.json
+          sha256sum artifacts/finalized-state-recovery-acceptance.json > artifacts/finalized-state-recovery-acceptance.json.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-validator-finalized-state-convergence-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
