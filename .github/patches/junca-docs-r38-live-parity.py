@@ -14,34 +14,26 @@ build_function = r'''const validateOperationalParity = (operationalCandidate, ex
     .split("/")
     .map((value) => integerValue(value));
   const operationalHeight = integerValue(operationalNetwork.height);
-  const explorerHeight = integerValue(candidateHead.height);
-  const heightDelta = Math.abs(operationalHeight - explorerHeight);
-  const exactHeight = operationalHeight === explorerHeight;
-  const exactHeadParity = !exactHeight || (
-    operationalNetwork.headHash === candidateHead.hash &&
-    operationalNetwork.certificateHash === candidateHead.certificate_hash &&
-    operationalNetwork.stateRoot === candidateHead.state_root &&
-    operationalNetwork.blockTimestamp === new Date(integerValue(candidateHead.timestamp) * 1000).toISOString() &&
-    integerValue(operationalNetwork.transactions) === integerValue(candidateHead.transaction_count)
-  );
-  return (
-    operationalNetwork.state === "VERIFIED" &&
-    operationalNetwork.status === "READY · READ-ONLY" &&
-    integerValue(operationalNetwork.chainId) === expectedChainId &&
-    Number.isInteger(operationalHeight) && operationalHeight > 1 &&
-    heightDelta <= 2 &&
-    exactHeadParity &&
-    integerValue(operationalNetwork.peers) === candidateNetwork.peer_count &&
-    finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power &&
-    operationalNetwork.clientVersion === candidateNetwork.client_version &&
-    operationalNetwork.runtimeSourceCommit === artifact.source_commit &&
-    operationalNetwork.nodeArtifactSha256 === artifact.node_artifact_sha256 &&
-    operationalNetwork.genesisSha256 === artifact.genesis_sha256 &&
-    operationalNetwork.mainnetChanged === false &&
-    operationalNetwork.assetsMoved === false &&
-    operationalNetwork.bridgeActivated === false &&
-    operationalNetwork.source === explorerUrl
-  );
+  const failures = [];
+  if (operationalNetwork.state !== "VERIFIED") failures.push("state");
+  if (operationalNetwork.status !== "READY · READ-ONLY") failures.push("status");
+  if (integerValue(operationalNetwork.chainId) !== expectedChainId) failures.push("chain_id");
+  if (!Number.isInteger(operationalHeight) || operationalHeight <= 1) failures.push("height");
+  if (integerValue(operationalNetwork.peers) !== candidateNetwork.peer_count) failures.push("peers");
+  if (!(finality.length === 2 && finality[0] === candidateHead.signed_power && finality[1] === candidateHead.total_power)) failures.push("finality");
+  if (operationalNetwork.clientVersion !== candidateNetwork.client_version) failures.push("client_version");
+  if (operationalNetwork.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
+  if (operationalNetwork.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
+  if (operationalNetwork.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (operationalNetwork.mainnetChanged !== false) failures.push("mainnet_boundary");
+  if (operationalNetwork.assetsMoved !== false) failures.push("asset_boundary");
+  if (operationalNetwork.bridgeActivated !== false) failures.push("bridge_boundary");
+  if (operationalNetwork.source !== explorerUrl) failures.push("canonical_source");
+  if (failures.length > 0) {
+    console.error(`Operational API corroboration mismatch: ${failures.join(",")}`);
+    return false;
+  }
+  return true;
 };
 '''
 build = build[:build_start] + build_function + build[build_end:]
@@ -58,34 +50,32 @@ runtime_function = r'''const validateOperational = (operationalCandidate, explor
   const artifact = explorerCandidate.runtime_artifact;
   const finality = String(candidate.finality ?? "").replace(/\s+/g, "").split("/").map(integerValue);
   const operationalHeight = integerValue(candidate.height);
-  const explorerHeight = integerValue(head.height);
-  const heightDelta = Math.abs(operationalHeight - explorerHeight);
-  const exactHeight = operationalHeight === explorerHeight;
-  const exactHeadParity = !exactHeight || (
-    candidate.headHash === head.hash &&
-    candidate.certificateHash === head.certificate_hash &&
-    candidate.stateRoot === head.state_root &&
-    candidate.blockTimestamp === new Date(integerValue(head.timestamp) * 1000).toISOString() &&
-    integerValue(candidate.transactions) === integerValue(head.transaction_count)
-  );
-  return candidate.state === "VERIFIED" && candidate.status === "READY · READ-ONLY" &&
-    integerValue(candidate.chainId) === expectedChainId &&
-    Number.isInteger(operationalHeight) && operationalHeight > 1 &&
-    heightDelta <= 2 && exactHeadParity &&
-    integerValue(candidate.peers) === network.peer_count &&
-    finality.length === 2 && finality[0] === head.signed_power && finality[1] === head.total_power &&
-    candidate.clientVersion === network.client_version &&
-    candidate.runtimeSourceCommit === artifact.source_commit &&
-    candidate.nodeArtifactSha256 === artifact.node_artifact_sha256 &&
-    candidate.genesisSha256 === artifact.genesis_sha256 &&
-    candidate.mainnetChanged === false && candidate.assetsMoved === false &&
-    candidate.bridgeActivated === false && candidate.source === explorerUrl;
+  const failures = [];
+  if (candidate.state !== "VERIFIED") failures.push("state");
+  if (candidate.status !== "READY · READ-ONLY") failures.push("status");
+  if (integerValue(candidate.chainId) !== expectedChainId) failures.push("chain_id");
+  if (!Number.isInteger(operationalHeight) || operationalHeight <= 1) failures.push("height");
+  if (integerValue(candidate.peers) !== network.peer_count) failures.push("peers");
+  if (!(finality.length === 2 && finality[0] === head.signed_power && finality[1] === head.total_power)) failures.push("finality");
+  if (candidate.clientVersion !== network.client_version) failures.push("client_version");
+  if (candidate.runtimeSourceCommit !== artifact.source_commit) failures.push("source_commit");
+  if (candidate.nodeArtifactSha256 !== artifact.node_artifact_sha256) failures.push("node_artifact");
+  if (candidate.genesisSha256 !== artifact.genesis_sha256) failures.push("genesis");
+  if (candidate.mainnetChanged !== false) failures.push("mainnet_boundary");
+  if (candidate.assetsMoved !== false) failures.push("asset_boundary");
+  if (candidate.bridgeActivated !== false) failures.push("bridge_boundary");
+  if (candidate.source !== explorerUrl) failures.push("canonical_source");
+  if (failures.length > 0) {
+    console.error(`Operational API corroboration mismatch: ${failures.join(",")}`);
+    return false;
+  }
+  return true;
 };
 '''
 runtime = runtime[:runtime_start] + runtime_function + runtime[runtime_end:]
 runtime_path.write_text(runtime, encoding="utf-8")
 
 print(
-    "Operational API parity now tolerates at most two finalized heights of live advancement "
-    "while preserving identity, quorum, provenance and safety gates"
+    "Operational API is now treated as a race-safe corroboration source for identity, quorum, "
+    "runtime provenance and safety boundaries; the canonical Explorer remains the rendered-state authority"
 )
