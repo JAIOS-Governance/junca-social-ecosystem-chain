@@ -13,6 +13,9 @@ concurrency:
   group: junca-docs-status-language-r38-repair
   cancel-in-progress: false
 
+env:
+  RECOVERY_REVISION: R38.3
+
 jobs:
   repair:
     runs-on: ubuntu-24.04
@@ -32,6 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "Recovery revision: ${RECOVERY_REVISION}"
           python -m py_compile \
             .github/patches/junca-docs-r38-live-parity.py \
             .github/patches/junca-docs-r38-post-patch.py \
@@ -56,7 +60,7 @@ jobs:
           exec(compile(source, "junca_docs_status_language_r38_repair.py", "exec"), {"__name__": "__main__"})
           PY
 
-      - name: Apply post-patch normalization and bounded live parity
+      - name: Apply post-patch normalization and race-safe endpoint corroboration
         run: python .github/patches/junca-docs-r38-post-patch.py
 
       - name: Run full eight-route build and QA
