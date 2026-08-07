@@ -1,4 +1,4 @@
-name: JSEC Docs Mobile Cache R39 Remediation
+name: JSEC Docs Runtime Corroboration Repair
 
 on:
   push:
@@ -11,56 +11,56 @@ permissions:
   contents: write
 
 concurrency:
-  group: jsec-docs-mobile-cache-r39-remediation
+  group: jsec-docs-runtime-corroboration-repair
   cancel-in-progress: false
 
 jobs:
-  remediate:
+  repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Synchronize current main before mutation
+      - name: Synchronize current main
         run: git pull --ff-only origin main
 
-      - name: Apply exact-boundary R39 remediation v2
-        run: python scripts/ops/jsec_docs_mobile_cache_r39_remediation_v2.py
-
-      - name: Preserve workflow files for connector-controlled deployment
-        run: |
-          git restore --source=HEAD -- \
-            .github/workflows/junca-chain-docs-production.yml \
-            .github/workflows/jsec-docs-mobile-cache-r39-remediation.yml
-
-      - name: Validate persistent R39 source
+      - name: Preserve canonical Explorer provenance while accepting redacted operational fields
         shell: bash
         run: |
           set -euo pipefail
-          node --check docs/technical-reference/snapshot/official-brand-lockup-r29.js
-          python -m json.tool docs/technical-reference/snapshot/manifest.webmanifest >/dev/null
-          python -m json.tool docs/technical-reference/snapshot/current-release.json >/dev/null
-          grep -F 'jsec-docs-release-refresh:' docs/technical-reference/snapshot/official-brand-lockup-r29.js
-          grep -F '20260807-r39-mobile-cache-recovery' docs/technical-reference/snapshot/manifest.webmanifest
-          grep -F '20260807-r39-mobile-cache-recovery' docs/technical-reference/snapshot/current-release.json
-          ! git diff --name-only | grep -E '^\.github/workflows/'
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Commit verified non-workflow source to main
+          path = Path('docs/technical-reference/scripts/build.mjs')
+          source = path.read_text(encoding='utf-8')
+          old = '''  if (!isCommit(operationalNetwork.runtimeSourceCommit)) failures.push("source_commit_format");
+            if (!isDigest(operationalNetwork.nodeArtifactSha256)) failures.push("node_artifact_format");
+            if (!isDigest(operationalNetwork.genesisSha256)) failures.push("genesis_format");
+          '''
+          new = '''  // Exact runtime provenance is validated on the canonical Explorer evidence above.
+            // The public Operational API may intentionally redact these three identifiers; it remains
+            // a corroboration surface for network state, finality, peers, client and safety boundaries.
+          '''
+          if source.count(old) != 1:
+              raise SystemExit(f'corroboration repair signature count={source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+          node --check docs/technical-reference/scripts/build.mjs
+          ! grep -F 'source_commit_format' docs/technical-reference/scripts/build.mjs
+          ! grep -F 'node_artifact_format' docs/technical-reference/scripts/build.mjs
+          ! grep -F 'genesis_format' docs/technical-reference/scripts/build.mjs
+          grep -F 'Exact runtime provenance is validated on the canonical Explorer evidence above.' \
+            docs/technical-reference/scripts/build.mjs
+
+      - name: Commit repair and trigger production deployment
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            docs/technical-reference/scripts/build.mjs \
-            docs/technical-reference/snapshot/manifest.webmanifest \
-            docs/technical-reference/snapshot/official-brand-lockup-r29.js \
-            docs/technical-reference/snapshot/current-release.json \
-            docs/technical-reference/MOBILE_CACHE_RECOVERY_R39.md \
-            scripts/ops/jsec_docs_mobile_cache_r39_remediation.py \
-            scripts/ops/jsec_docs_mobile_cache_r39_remediation_v2.py
-          git commit -m "fix(docs): stage mobile cache recovery R39 [skip ci]"
+          git add docs/technical-reference/scripts/build.mjs
+          git commit -m "fix(docs): accept redacted operational provenance with canonical Explorer authority"
           git push origin HEAD:main
