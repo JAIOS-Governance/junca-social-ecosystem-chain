@@ -22,6 +22,14 @@ def _health_value(payload: Mapping[str, Any], *paths: str) -> Any:
     return compatibility._first_published(payload, paths)
 
 
+def _explorer_payload() -> Mapping[str, Any]:
+    if compatibility._cached_explorer_payload is not None:
+        return compatibility._cached_explorer_payload
+    payload = compatibility._original_fetch(compatibility._EXPLORER_URL, timeout=15)
+    compatibility._cached_explorer_payload = payload
+    return payload
+
+
 def _require_health_contract(
     payload: Mapping[str, Any], explorer_payload: Mapping[str, Any]
 ) -> tuple[int, str]:
@@ -37,9 +45,7 @@ def _require_health_contract(
         raise continuity.ContinuityError(
             "operational health must independently publish finalized height and hash"
         )
-    height = compatibility._integer(height_raw)
-    if height is None:
-        raise continuity.ContinuityError("operational health height must be an integer")
+    height = compatibility._integer(height_raw, "operational health finalized_height")
     if not isinstance(hash_raw, str) or not hash_raw:
         raise continuity.ContinuityError("operational health hash must be a string")
 
@@ -63,7 +69,7 @@ def _health_projection_normalize_snapshot(
             payload, source=source, require_safety=require_safety
         )
 
-    explorer_payload = compatibility._fetch_explorer_once()
+    explorer_payload = _explorer_payload()
     explorer = _compat_normalize_snapshot(
         explorer_payload, source="explorer_json", require_safety=False
     )
