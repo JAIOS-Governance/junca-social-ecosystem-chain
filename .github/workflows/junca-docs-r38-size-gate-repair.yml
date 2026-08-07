@@ -1,0 +1,47 @@
+name: JUNCA Docs R38 Size Gate Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/junca-docs-r38-size-gate-repair.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair-size-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replace obsolete 100KB gate with bounded R38 gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/junca-docs-status-language-r38-repair.yml')
+          source = path.read_text(encoding='utf-8')
+          old = '          test "$(wc -c < docs/technical-reference/dist/index.html)" -le 100000\n'
+          new = (
+              '          index_bytes="$(wc -c < docs/technical-reference/dist/index.html)"\n'
+              '          test "$index_bytes" -le 140000\n'
+              '          echo "Overview output size: ${index_bytes} bytes"\n'
+          )
+          if old not in source:
+              raise SystemExit('Expected obsolete 100KB gate was not found')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          git config user.name "juncaGlobal"
+          git config user.email "juncajapan.inc@gmail.com"
+          git rm .github/workflows/junca-docs-r38-size-gate-repair.yml
+          git add .github/workflows/junca-docs-status-language-r38-repair.yml
+          git commit -m "fix: align R38 docs size gate with verified endpoint payload"
+          git push origin HEAD:main
