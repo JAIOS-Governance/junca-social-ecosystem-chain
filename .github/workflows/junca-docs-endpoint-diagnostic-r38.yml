@@ -26,7 +26,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p endpoint-evidence
-          stamp="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
 
           read_endpoint() {
             local name="$1"
@@ -34,21 +33,30 @@ jobs:
             local attempt="$3"
             local output="endpoint-evidence/${name}-${attempt}.json"
             local headers="endpoint-evidence/${name}-${attempt}.headers"
-            curl --fail --silent --show-error --location \
+            local error="endpoint-evidence/${name}-${attempt}.error"
+            if ! curl --fail --silent --show-error --location \
               --retry 2 --retry-all-errors --max-time 20 \
               -D "$headers" \
               -H 'Accept: application/json' \
               -H 'Cache-Control: no-cache, no-store, max-age=0' \
               -H 'Pragma: no-cache' \
-              -A 'JUNCA-Docs-Endpoint-Diagnostic-R38/1.0' \
-              "${url}?readback=${stamp}-${attempt}" \
-              -o "$output"
-            jq -e 'type == "object"' "$output" >/dev/null
+              -A 'JUNCA-Docs-Endpoint-Diagnostic-R38/1.1' \
+              "$url" \
+              -o "$output" 2>"$error"; then
+              printf '{"endpoint":"%s","attempt":%s,"fetch_error":%s}\n' \
+                "$name" "$attempt" "$(jq -Rs . < "$error")" > "$output"
+            fi
+            if ! jq -e 'type == "object"' "$output" >/dev/null; then
+              printf '{"endpoint":"%s","attempt":%s,"parse_error":"response was not a JSON object"}\n' \
+                "$name" "$attempt" > "$output"
+            fi
             printf '%s attempt %s sha256=' "$name" "$attempt"
             sha256sum "$output" | awk '{print $1}'
             jq -c --arg endpoint "$name" --argjson attempt "$attempt" '{
               endpoint: $endpoint,
               attempt: $attempt,
+              fetch_error: (.fetch_error // null),
+              parse_error: (.parse_error // null),
               schema_version: (.schema_version // null),
               status: (.status // null),
               read_only: (.read_only // null),
@@ -73,6 +81,7 @@ jobs:
             read_endpoint canonical 'https://explorer.jaios-governance.org/explorer.json' "$attempt"
             read_endpoint operational 'https://chain.jaios-governance.org/api/operational' "$attempt"
             read_endpoint proxy 'https://docs.jaios-governance.org/explorer.json' "$attempt"
+            sleep 1
           done
 
       - name: Evaluate endpoint provenance and parity
@@ -105,6 +114,8 @@ jobs:
           def normalized(payload):
               artifact = payload.get('runtime_artifact') if isinstance(payload.get('runtime_artifact'), dict) else {}
               return {
+                  'fetch_error': payload.get('fetch_error'),
+                  'parse_error': payload.get('parse_error'),
                   'schema_version': payload.get('schema_version'),
                   'status': payload.get('status'),
                   'read_only': payload.get('read_only'),
@@ -127,7 +138,7 @@ jobs:
                   'provenance_valid': valid_hex(artifact.get('source_commit'), 40) and valid_hex(artifact.get('genesis_sha256'), 64) and valid_hex(artifact.get('node_artifact_sha256'), 64),
               }
 
-          report = {'schema': 'junca-docs-endpoint-diagnostic-r38/v1', 'source_sha': None, 'endpoints': {}, 'parity': []}
+          report = {'schema': 'junca-docs-endpoint-diagnostic-r38/v2', 'source_sha': None, 'endpoints': {}, 'parity': []}
           for name in names:
               report['endpoints'][name] = []
               for attempt in range(1, 4):
