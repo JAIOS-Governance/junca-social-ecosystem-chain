@@ -49,7 +49,7 @@ def _require_health_contract(
         raise continuity.ContinuityError(
             "operational health must independently publish finalized height and hash"
         )
-    height = compatibility._integer(
+    height = continuity._integer(
         height_raw, "operational health finalized_height"
     )
     if not isinstance(hash_raw, str) or not hash_raw:
