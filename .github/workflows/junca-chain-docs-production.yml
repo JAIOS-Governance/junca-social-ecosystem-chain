@@ -193,6 +193,7 @@ jobs:
           set -euo pipefail
           aws s3 cp "s3://${{ steps.resources.outputs.bucket }}/release-manifest.json" /tmp/release-manifest.readback.json
           cmp docs/technical-reference/dist/release-manifest.json /tmp/release-manifest.readback.json
+          ! grep -Eqi 'No Monetary Value|金銭的価値|金銭価値|資金価値' /tmp/release-manifest.readback.json
       - name: Invalidate and wait for completion
         id: invalidate
         shell: bash

@@ -450,6 +450,10 @@ for (const route of routes) {
         "No economic value or legal conformity is guaranteed by JAIOS Institutional Governance.",
         "Economic treatment and legal classification are governed separately from protocol testing and require jurisdiction-specific review.",
       )
+      .replaceAll(
+        "外部パートナーが発行・運用する資産の経済価値、流動性、法的分類、規制適合性を保証するものではありません。",
+        "外部パートナーが発行・運用する資産の経済的取扱いと法的分類はプロトコル検証と分離し、管轄法に応じて確認します。",
+      )
       .replaceAll("Pending Live Acceptance", "Finality Certificate Observed")
       .replaceAll(
         "throw new Error(&quot;BLOCKED: accepted network registry is required&quot;);",
