@@ -1,0 +1,58 @@
+name: Chain Shared Edge Capability Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/chain-shared-edge-capability-audit.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    environment: junca-chain-docs-production
+    timeout-minutes: 12
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: "595710543956"
+      AUDIT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+      DOCS_DISTRIBUTION_ID: E22CXYZGWNT0AJ
+      JAIOS_DISTRIBUTION_ID: E2WIXG3DWW8OX1
+      SHARED_FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AUDIT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: chain-shared-edge-audit-${{ github.run_id }}
+          disable-retry: true
+      - name: Read exact shared edge capability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          mkdir -p /tmp/shared-edge
+          # The accepted Docs role already has GetDistribution for the Docs edge;
+          # GetDistributionConfig is intentionally not granted.
+          aws cloudfront get-distribution --id "$DOCS_DISTRIBUTION_ID" > /tmp/shared-edge/docs-distribution.json
+          aws cloudfront get-distribution-config --id "$JAIOS_DISTRIBUTION_ID" > /tmp/shared-edge/jaios-distribution.json
+          aws cloudfront describe-function --name junca-chain-docs-routes-595710543956 --stage LIVE > /tmp/shared-edge/function.json
+          test "$(jq -r '.FunctionSummary.FunctionMetadata.FunctionARN' /tmp/shared-edge/function.json)" = "$SHARED_FUNCTION_ARN"
+          openssl s_client -connect docs.jaios-governance.org:443 -servername docs.jaios-governance.org </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName > /tmp/shared-edge/docs-tls.txt
+          openssl s_client -connect jaios-governance.org:443 -servername jaios-governance.org </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName > /tmp/shared-edge/jaios-tls.txt
+          jq '{aliases:.Distribution.DistributionConfig.Aliases,viewer_certificate:.Distribution.DistributionConfig.ViewerCertificate,origins:.Distribution.DistributionConfig.Origins,default_cache_behavior:.Distribution.DistributionConfig.DefaultCacheBehavior}' /tmp/shared-edge/docs-distribution.json
+          jq '{aliases:.DistributionConfig.Aliases,viewer_certificate:.DistributionConfig.ViewerCertificate,origins:.DistributionConfig.Origins,default_cache_behavior:.DistributionConfig.DefaultCacheBehavior}' /tmp/shared-edge/jaios-distribution.json
+          cat /tmp/shared-edge/docs-tls.txt
+          cat /tmp/shared-edge/jaios-tls.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chain-shared-edge-capability-${{ github.run_id }}
+          path: /tmp/shared-edge
+          if-no-files-found: error
+          retention-days: 90
