@@ -6,14 +6,15 @@ on:
     paths:
       - "sites/jaios-browser-app/**"
       - "scripts/build_jaios_browser_app_edge.py"
-      - "infra/aws/jaios-browser-app-router.js"
-      - "infra/aws/jaios-browser-app-router-rollback.js"
+      - "scripts/jaios_browser_edge_function.py"
       - "infra/aws/jaios-root-news-router.js"
+      - "infra/aws/junca-chain-docs-routes-baseline.js"
       - ".github/workflows/jaios-browser-app-edge-production.yml"
   push:
     branches: [main]
     paths:
       - "sites/jaios-browser-app/deploy-request.json"
+      - "scripts/jaios_browser_edge_function.py"
       - "infra/aws/jaios-root-news-router.js"
       - ".github/workflows/jaios-browser-app-edge-production.yml"
   workflow_dispatch:
@@ -35,16 +36,17 @@ env:
   DISTRIBUTION_ID: E2WIXG3DWW8OX1
   EXPECTED_DISTRIBUTION_DOMAIN: d6kqifze013tg.cloudfront.net
   EXPECTED_ORIGIN_DOMAIN: jaios-institutional-governance.juncajapan-inc.chatgpt.site
-  FUNCTION_NAME: jaios-root-news-router
-  FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/jaios-root-news-router
-  DOCS_DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
+  FUNCTION_NAME: junca-chain-docs-routes-595710543956
+  FUNCTION_ARN: arn:aws:cloudfront::595710543956:function/junca-chain-docs-routes-595710543956
+  BASELINE_FUNCTION_SHA256: 14951b9147b390582d82b153c190ce12e7d5fcfff98be2ac55cb1b99e8329b81
+  DEPLOYMENT_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
   RELEASE_MARKER: 20260804-desktop-063-copy-paste-repair
   PUBLIC_ENTRY: https://jaios-governance.org/browser
   PUBLIC_APP: https://jaios-governance.org/browser/app
   ARTIFACT_PATH: jaios-browser-app/index.html
 
 jobs:
-  quality-and-stage:
+  quality:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     environment: junca-chain-docs-production
@@ -52,11 +54,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate exact activation source
+      - name: Validate exact Browser release and shared router
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile scripts/build_jaios_browser_app_edge.py
+          python3 -m py_compile scripts/build_jaios_browser_app_edge.py scripts/jaios_browser_edge_function.py
+          test "$(sha256sum infra/aws/junca-chain-docs-routes-baseline.js | cut -d' ' -f1)" = "$BASELINE_FUNCTION_SHA256"
           python3 - <<'PY'
           import json,re
           from pathlib import Path
@@ -69,17 +72,16 @@ jobs:
           assert request['execute'] is True
           assert request['nonce']=='activate-jaios-browser-app-063-20260804-1520-jst'
           assert request['target']=='https://jaios-governance.org/browser/app'
-          assert request['permissionRecoveryCommit']=='4efd15d91acf0e14c0cc1c18eaf683750677467c'
           assert set(request['safety'].values())=={False}
-          assert Path('infra/aws/jaios-root-news-router.js').read_bytes()==Path('infra/aws/jaios-browser-app-router.js').read_bytes()
           assert set(release['downloads'])=={'windows','macosDmg','macosZip'}
           for item in release['downloads'].values():
               assert item['url'].startswith('https://github.com/juncaGlobal/junca-Project/releases/download/jaios-browser-v0.6.3/')
               assert re.fullmatch(r'[0-9a-f]{64}',item['sha256'])
               assert item['sizeBytes']>0
+          router=Path('infra/aws/jaios-root-news-router.js').read_text()
+          for value in ('docs.jaios-governance.org','/jaios-root-news/index.html','/jaios-browser-app/index.html','/browser/app'):
+              assert value in router
           PY
-          grep -F "const BROWSER_APP_ARTIFACT = '/jaios-browser-app/index.html';" infra/aws/jaios-root-news-router.js
-          grep -F "request.uri === '/browser/app'" infra/aws/jaios-root-news-router.js
 
       - name: Build byte-preserving Browser derivative
         shell: bash
@@ -103,20 +105,32 @@ jobs:
             curl --fail --silent --show-error --location --head --retry 4 --retry-delay 2 --max-time 60 "$url" >/dev/null
           done
 
-      - name: Configure governed Docs staging identity
+      - name: Configure governed Edge identity
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.DOCS_DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: jaios-browser-stage-${{ github.run_id }}
+          role-session-name: jaios-browser-quality-${{ github.run_id }}
           disable-retry: true
 
-      - name: Stage exact bytes without traffic change
+      - name: Verify shared Function and root Distribution baseline
         shell: bash
         run: |
           set -Eeuo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          python3 -m pip install --quiet boto3
+          python3 scripts/jaios_browser_edge_function.py preflight \
+            --baseline infra/aws/junca-chain-docs-routes-baseline.js \
+            --composite infra/aws/jaios-root-news-router.js \
+            --distribution-id "$DISTRIBUTION_ID" | tee /tmp/preflight.json
+          test "$(jq -r '.result' /tmp/preflight.json)" = PASS
+          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DomainName --output text)" = "$EXPECTED_DISTRIBUTION_DOMAIN"
           test "$(aws s3api get-bucket-versioning --bucket "$DOCS_BUCKET" --query Status --output text)" = Enabled
+
+      - name: Stage exact Browser bytes without traffic change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           aws s3 cp /tmp/index.html "s3://${DOCS_BUCKET}/${ARTIFACT_PATH}" \
             --content-type 'text/html; charset=utf-8' \
             --cache-control 'public,max-age=0,must-revalidate' \
@@ -136,14 +150,15 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jaios-browser-app-stage-${{ github.sha }}
+          name: jaios-browser-shared-edge-${{ github.sha }}
           path: |
             /tmp/index.html
             /tmp/staged-sha256.txt
+            /tmp/preflight.json
           if-no-files-found: error
           retention-days: 90
 
-  authorize-production:
+  authorize:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     outputs:
@@ -159,11 +174,11 @@ jobs:
           test "$execute" = true -o "$execute" = false
           echo "execute=$execute" >> "$GITHUB_OUTPUT"
 
-  publish-and-readback:
-    needs: authorize-production
-    if: needs.authorize-production.outputs.execute == 'true'
+  deploy:
+    needs: authorize
+    if: needs.authorize.outputs.execute == 'true'
     runs-on: ubuntu-24.04
-    environment: public-testnet
+    environment: junca-chain-docs-production
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -171,7 +186,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Verify production source and staged bytes
+      - name: Validate one-shot production state
         id: contract
         shell: bash
         run: |
@@ -184,92 +199,54 @@ jobs:
           assert request['execute'] is True
           assert request['nonce']=='activate-jaios-browser-app-063-20260804-1520-jst'
           assert request['releaseMarker']==release['releaseMarker']=='20260804-desktop-063-copy-paste-repair'
-          assert request['permissionRecoveryCommit']=='4efd15d91acf0e14c0cc1c18eaf683750677467c'
           assert set(request['safety'].values())=={False}
-          assert Path('infra/aws/jaios-root-news-router.js').read_bytes()==Path('infra/aws/jaios-browser-app-router.js').read_bytes()
           PY
           echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           curl --fail --silent --show-error --location -o /tmp/expected.html "https://${DOCS_DOMAIN}/${ARTIFACT_PATH}"
           grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/expected.html
 
-      - name: Acquire GitHub OIDC token
-        shell: bash
-        run: |
-          token_json="$(curl --fail-with-body --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")"
-          python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$token_json" >/tmp/oidc-token
-          test -s /tmp/oidc-token
+      - name: Configure production Edge identity
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: jaios-browser-production-${{ github.run_id }}
+          disable-retry: true
 
-      - name: Assume approved CloudFront bootstrap identity
-        id: bootstrap
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          selected=""
-          for role in arn:aws:iam::595710543956:role/JuncaChainPublicTestnetDeployment arn:aws:iam::595710543956:role/JUNCA-Social-Ecosystem-Chain-Testnet-Deployment; do
-            if aws sts assume-role-with-web-identity --role-arn "$role" --role-session-name "jaios-browser-cloudfront-${GITHUB_RUN_ID}" \
-              --web-identity-token "$(cat /tmp/oidc-token)" --duration-seconds 1800 >/tmp/assume.json 2>/tmp/assume.err; then
-              selected="$role"; break
-            fi
-          done
-          test -n "$selected"
-          echo "selected=$selected" >> "$GITHUB_OUTPUT"
-          echo "AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' /tmp/assume.json)" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' /tmp/assume.json)" >> "$GITHUB_ENV"
-          echo "AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' /tmp/assume.json)" >> "$GITHUB_ENV"
-
-      - name: Publish Function and complete public acceptance
+      - name: Publish shared Function and attach root Distribution
         id: acceptance
         shell: bash
         run: |
           set -Eeuo pipefail
-          activated=0
+          python3 -m pip install --quiet boto3 selenium
+          mkdir -p /tmp/browser-edge-state
+          changed=0
           rollback() {
             rc=$?
-            if [[ "$activated" -eq 1 ]]; then
-              dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-              aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" --function-config file:///tmp/function-before-config.json --function-code fileb:///tmp/function-before.js >/tmp/rollback-update.json || true
-              rollback_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-              aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$rollback_etag" >/tmp/rollback-publish.json || true
-              rid="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/browser/app' '/browser/app/' --query Invalidation.Id --output text 2>/dev/null || true)"
-              [[ -z "$rid" || "$rid" == None ]] || aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$rid" || true
+            if [[ "$changed" -eq 1 ]]; then
+              python3 scripts/jaios_browser_edge_function.py rollback \
+                --distribution-id "$DISTRIBUTION_ID" \
+                --state-dir /tmp/browser-edge-state || true
             fi
             exit "$rc"
           }
-          trap rollback ERR
+          trap rollback ERR INT TERM
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
-          aws cloudfront get-distribution-config --id "$DISTRIBUTION_ID" >/tmp/distribution.json
-          test "$(jq -r '.DistributionConfig.Aliases.Items[] | select(. == env.ROOT_DOMAIN)' /tmp/distribution.json)" = "$ROOT_DOMAIN"
-          test "$(jq -r '.DistributionConfig.Origins.Items[].DomainName | select(. == env.EXPECTED_ORIGIN_DOMAIN)' /tmp/distribution.json)" = "$EXPECTED_ORIGIN_DOMAIN"
-          test "$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query Distribution.DomainName --output text)" = "$EXPECTED_DISTRIBUTION_DOMAIN"
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/function-before.js >/tmp/function-before-get.json
-          aws cloudfront describe-function --name "$FUNCTION_NAME" --stage LIVE >/tmp/function-before-description.json
-          jq '.FunctionSummary.FunctionConfig' /tmp/function-before-description.json >/tmp/function-before-config.json
-          cat >/tmp/function-after-config.json <<'JSON'
-          {"Comment":"Route the JAIOS root and Browser app documents to governed exact artifacts","Runtime":"cloudfront-js-2.0"}
-          JSON
-          for name in root browser protected; do
-            case "$name" in root) uri=/;; browser) uri=/browser/app;; protected) uri=/browser;; esac
-            cat >"/tmp/test-${name}.json" <<JSON
-          {"version":"1.0","context":{"eventType":"viewer-request"},"viewer":{"ip":"198.51.100.10"},"request":{"method":"GET","uri":"$uri","querystring":{},"headers":{"host":{"value":"jaios-governance.org"}},"cookies":{}}}
-          JSON
-          done
-          dev_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-          aws cloudfront update-function --name "$FUNCTION_NAME" --if-match "$dev_etag" --function-config file:///tmp/function-after-config.json --function-code fileb://infra/aws/jaios-root-news-router.js >/tmp/function-update.json
-          updated_etag="$(aws cloudfront describe-function --name "$FUNCTION_NAME" --stage DEVELOPMENT --query ETag --output text)"
-          for name in root browser protected; do
-            aws cloudfront test-function --name "$FUNCTION_NAME" --if-match "$updated_etag" --stage DEVELOPMENT --event-object "fileb:///tmp/test-${name}.json" >"/tmp/function-test-${name}.json"
-            jq -e '.TestResult.FunctionErrorMessage == null or .TestResult.FunctionErrorMessage == ""' "/tmp/function-test-${name}.json" >/dev/null
-          done
-          aws cloudfront publish-function --name "$FUNCTION_NAME" --if-match "$updated_etag" >/tmp/function-publish.json
-          activated=1
-          aws cloudfront get-function --name "$FUNCTION_NAME" --stage LIVE /tmp/live-function.js >/tmp/live-function-get.json
-          cmp /tmp/live-function.js infra/aws/jaios-root-news-router.js
-          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/browser/app' '/browser/app/' --query Invalidation.Id --output text)"
-          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          changed=1
+          python3 scripts/jaios_browser_edge_function.py deploy \
+            --composite infra/aws/jaios-root-news-router.js \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --state-dir /tmp/browser-edge-state | tee /tmp/deploy-result.json
+          test "$(jq -r '.result' /tmp/deploy-result.json)" = PUBLISHED
+          invalidation_id="$(cat /tmp/browser-edge-state/invalidation-id.txt)"
+
           ready=false
           for attempt in {1..30}; do
-            if curl --fail-with-body --silent --show-error --location --header 'Cache-Control: no-cache' -o /tmp/public.html "${PUBLIC_APP}?release=${{ steps.contract.outputs.source_commit }}" \
-              && grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/public.html; then ready=true; break; fi
+            if curl --fail-with-body --silent --show-error --location --header 'Cache-Control: no-cache' \
+              -o /tmp/public.html "${PUBLIC_APP}?release=${{ steps.contract.outputs.source_commit }}" \
+              && grep -Fq "data-jaios-browser-release=\"${RELEASE_MARKER}\"" /tmp/public.html; then
+              ready=true; break
+            fi
             sleep 5
           done
           test "$ready" = true
@@ -278,12 +255,14 @@ jobs:
           grep -Fq 'JAIOS-Browser-0.6.3-mac-universal.dmg' /tmp/public.html
           grep -Fq 'JAIOS-Browser-0.6.3-mac-universal.zip' /tmp/public.html
           ! grep -Fq 'JAIOS-Browser-0.5.3-Windows-x64-Bootstrap.zip' /tmp/public.html
+          ! grep -Fq 'Public Alpha: Windows 0.5.3' /tmp/public.html
+
           curl --fail --silent --show-error --location -o /tmp/entry.html "$PUBLIC_ENTRY"
           grep -Fq '/browser/app' /tmp/entry.html
           curl --fail --silent --show-error --location -o /tmp/root.html "https://${ROOT_DOMAIN}/"
           grep -Fq 'data-jaios-news-release=' /tmp/root.html
           grep -Fq 'data-jaios-trust-release=' /tmp/root.html
-          python3 -m pip install --quiet selenium
+
           python3 - <<'PY'
           from selenium import webdriver
           from selenium.webdriver.common.by import By
@@ -297,17 +276,16 @@ jobs:
               WebDriverWait(driver,30).until(lambda d:d.find_element(By.TAG_NAME,'body').get_attribute('data-jaios-browser-release')=='20260804-desktop-063-copy-paste-repair')
               for element_id,href in expected.items():
                 element=driver.find_element(By.ID,element_id); assert element.is_displayed(); assert element.get_attribute('href')==href
-              driver.save_screenshot(f'/tmp/jaios-browser-app-{label}.png')
+              driver.save_screenshot(f'/tmp/jaios-browser-{label}.png')
           finally: driver.quit()
           PY
-          trap - ERR
+          trap - ERR INT TERM
           echo "invalidation_id=$invalidation_id" >> "$GITHUB_OUTPUT"
 
-      - name: Persist evidence and close request
+      - name: Persist production evidence and close request
         env:
           SOURCE_COMMIT: ${{ steps.contract.outputs.source_commit }}
           INVALIDATION_ID: ${{ steps.acceptance.outputs.invalidation_id }}
-          BOOTSTRAP_ROLE: ${{ steps.bootstrap.outputs.selected }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -317,9 +295,9 @@ jobs:
           from datetime import datetime,timezone
           from pathlib import Path
           public=Path('/tmp/public.html').read_bytes(); expected=Path('/tmp/expected.html').read_bytes(); assert public==expected
-          evidence={'schema':'jaios-browser-app-edge-production/v1','observed_at':datetime.now(timezone.utc).isoformat(),'source_commit':os.environ['SOURCE_COMMIT'],'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_url':f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",'public_url':'https://jaios-governance.org/browser/app','release_marker':os.environ['RELEASE_MARKER'],'public_html_sha256':hashlib.sha256(public).hexdigest(),'distribution_id':os.environ['DISTRIBUTION_ID'],'distribution_domain':os.environ['EXPECTED_DISTRIBUTION_DOMAIN'],'preserved_origin':os.environ['EXPECTED_ORIGIN_DOMAIN'],'function_arn':os.environ['FUNCTION_ARN'],'bootstrap_role':os.environ['BOOTSTRAP_ROLE'],'invalidation_id':os.environ['INVALIDATION_ID'],'links_present':3,'legacy_0_5_3_present':False,'desktop_acceptance':'PASS','tablet_acceptance':'PASS','mobile_acceptance':'PASS','root_route_preserved':True,'entry_route_preserved':True,'dns_changed':False,'tls_changed':False,'mainnet_changed':False,'assets_moved':False,'bridge_activated':False}
+          evidence={'schema':'jaios-browser-app-edge-production/v2','observed_at':datetime.now(timezone.utc).isoformat(),'source_commit':os.environ['SOURCE_COMMIT'],'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_url':f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",'public_url':'https://jaios-governance.org/browser/app','release_marker':os.environ['RELEASE_MARKER'],'public_html_sha256':hashlib.sha256(public).hexdigest(),'distribution_id':os.environ['DISTRIBUTION_ID'],'distribution_domain':os.environ['EXPECTED_DISTRIBUTION_DOMAIN'],'preserved_origin':os.environ['EXPECTED_ORIGIN_DOMAIN'],'function_arn':os.environ['FUNCTION_ARN'],'invalidation_id':os.environ['INVALIDATION_ID'],'links_present':3,'legacy_0_5_3_present':False,'desktop_acceptance':'PASS','tablet_acceptance':'PASS','mobile_acceptance':'PASS','root_route_preserved':True,'entry_route_preserved':True,'dns_changed':False,'tls_changed':False,'mainnet_changed':False,'assets_moved':False,'bridge_activated':False}
           Path('evidence/production/jaios-browser-app-production-latest.json').write_text(json.dumps(evidence,indent=2)+'\n')
-          Path('evidence/production/jaios-browser-app-production-latest.md').write_text('# JAIOS Browser App 0.6.3 Production Evidence\n\n'+f'- Public URL: {evidence["public_url"]}\n- Run: {evidence["workflow_run_url"]}\n- Public HTML SHA-256: `{evidence["public_html_sha256"]}`\n- Windows / macOS links: 3/3\n- Legacy Windows 0.5.3 link: absent\n- Desktop / Tablet / Mobile: PASS\n- DNS / TLS / Mainnet / Assets / Bridge changed: false\n')
+          Path('evidence/production/jaios-browser-app-production-latest.md').write_text('# JAIOS Browser App 0.6.3 Production Evidence\n\n'+f'- Public URL: {evidence["public_url"]}\n- Run: {evidence["workflow_run_url"]}\n- Public HTML SHA-256: `{evidence["public_html_sha256"]}`\n- Shared Function: `{evidence["function_arn"]}`\n- Windows / macOS links: 3/3\n- Legacy Windows 0.5.3 link: absent\n- Desktop / Tablet / Mobile: PASS\n- DNS / TLS / Mainnet / Assets / Bridge changed: false\n')
           request=json.loads(Path('sites/jaios-browser-app/deploy-request.json').read_text()); request['execute']=False; request['nonce']='completed-'+os.environ['GITHUB_RUN_ID']; request['completedEvidence']='evidence/production/jaios-browser-app-production-latest.json'; Path('sites/jaios-browser-app/deploy-request.json').write_text(json.dumps(request,indent=2)+'\n')
           PY
           git config user.name 'github-actions[bot]'
@@ -328,3 +306,16 @@ jobs:
           git commit -m "Record JAIOS Browser App 0.6.3 production evidence ${GITHUB_RUN_ID}"
           git pull --rebase origin main
           git push origin HEAD:main
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaios-browser-production-evidence-${{ github.run_id }}
+          path: |
+            evidence/production/jaios-browser-app-production-latest.json
+            evidence/production/jaios-browser-app-production-latest.md
+            /tmp/jaios-browser-desktop.png
+            /tmp/jaios-browser-tablet.png
+            /tmp/jaios-browser-mobile.png
+            /tmp/browser-edge-state
+          if-no-files-found: error
+          retention-days: 90
