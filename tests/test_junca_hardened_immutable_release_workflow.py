@@ -126,7 +126,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             'for issue in 266 $related_issues; do',
             'if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then',
             '"repos/${GITHUB_REPOSITORY}/issues/269"',
-            "--method PATCH",
+            "publish_with_retry PATCH",
             "issues/${issue}/comments",
             "EXACT_CURRENT_MAIN",
             "HISTORIC_EXACT_SHA",
