@@ -1,0 +1,78 @@
+name: Apply Foundation Renewal Env Expansion
+
+on:
+  pull_request:
+    paths:
+      - ".github/patches/apply_foundation_renewal_env_expansion.py"
+      - ".github/workflows/apply-foundation-renewal-env-expansion.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout controller source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/foundation-renewal-env-expansion
+          path: target
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply exact Bash expansion repair
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            controller/.github/patches/apply_foundation_renewal_env_expansion.py
+          python controller/.github/patches/apply_foundation_renewal_env_expansion.py \
+            target
+          bash -n target/scripts/junca_public_testnet_foundation.sh
+          env \
+            VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON='[1,2,3]' \
+            ROLLING_RESUME_PRIOR_SLOT_EPOCH_SECONDS=4 \
+            ROLLING_EPOCH_RENEWAL_PERFORMED=true \
+            ROLLING_EPOCH_RENEWAL_PREFIX_COUNT=1 \
+            bash -c '
+              set -euo pipefail
+              validator_bootstrap_slot_epochs_json="${VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON:-}"
+              rolling_resume_prior_slot_epoch_seconds="${ROLLING_RESUME_PRIOR_SLOT_EPOCH_SECONDS:-0}"
+              rolling_epoch_renewal_performed="${ROLLING_EPOCH_RENEWAL_PERFORMED:-false}"
+              rolling_epoch_renewal_prefix_count="${ROLLING_EPOCH_RENEWAL_PREFIX_COUNT:-0}"
+              test "$validator_bootstrap_slot_epochs_json" = "[1,2,3]"
+              test "$rolling_resume_prior_slot_epoch_seconds" = 4
+              test "$rolling_epoch_renewal_performed" = true
+              test "$rolling_epoch_renewal_prefix_count" = 1
+            '
+          (
+            cd target
+            python -m unittest -v \
+              tests.test_junca_social_ecosystem_chain_aws_foundation
+          )
+          git -C target diff --check
+          test "$(git -C target diff --name-only | sort -u | wc -l)" = 2
+
+      - name: Commit target branch repair
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            scripts/junca_public_testnet_foundation.sh \
+            tests/test_junca_social_ecosystem_chain_aws_foundation.py
+          git commit -m "Fix renewed Foundation Bash parameter expansion"
+          git push origin HEAD:fix/foundation-renewal-env-expansion
