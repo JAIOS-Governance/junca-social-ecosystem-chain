@@ -34,6 +34,7 @@ jobs:
           set -Eeuo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           foundation_path = Path("scripts/junca_public_testnet_foundation.sh")
           observer_path = Path(".github/workflows/junca-public-testnet-release-observer.yml")
@@ -41,16 +42,17 @@ jobs:
           identity_test_path = Path("tests/test_junca_foundation_controlled_identity_repair.py")
 
           foundation = foundation_path.read_text(encoding="utf-8")
-          old_foundation = '''if [[ "$runtime_config_access_verified" != true ]]; then
-            admit_controlled_active_repair || true
-          fi
-          verify_junca_system_identity || true
-          if [[ "$repair_status_admitted" == true &&
-                "$system_identity_verified" != true ]]; then
-            ensure_junca_system_identity || true
-          fi
-          '''
-          new_foundation = '''verify_junca_system_identity || true
+          foundation_pattern = re.compile(
+              r'''(?m)^if \[\[ "\$runtime_config_access_verified" != true \]\]; then\n'''
+              r'''  admit_controlled_active_repair \|\| true\n'''
+              r'''fi\n'''
+              r'''verify_junca_system_identity \|\| true\n'''
+              r'''if \[\[ "\$repair_status_admitted" == true &&\n'''
+              r'''      "\$system_identity_verified" != true \]\]; then\n'''
+              r'''  ensure_junca_system_identity \|\| true\n'''
+              r'''fi\n'''
+          )
+          foundation_replacement = '''verify_junca_system_identity || true
           if [[ "$repair_status_admitted" != true &&
                 ( "$runtime_config_access_verified" != true ||
                   "$system_identity_verified" != true ) ]]; then
@@ -61,25 +63,22 @@ jobs:
             ensure_junca_system_identity || true
           fi
           '''
-          if foundation.count(old_foundation) != 1:
-              raise SystemExit("FOUNDATION_IDENTITY_ADMISSION_SIGNATURE_MISMATCH")
-          foundation = foundation.replace(old_foundation, new_foundation, 1)
+          foundation, foundation_changes = foundation_pattern.subn(
+              foundation_replacement, foundation, count=1
+          )
+          if foundation_changes != 1:
+              raise SystemExit(
+                  f"FOUNDATION_IDENTITY_ADMISSION_SIGNATURE_MISMATCH count={foundation_changes}"
+              )
           foundation_path.write_text(foundation, encoding="utf-8")
 
           observer = observer_path.read_text(encoding="utf-8")
-          old_publish_function = '''          publish_with_retry() {
-            local method="$1"
-            local endpoint="$2"
-            local attempt
-            for attempt in 1 2 3; do
-              if gh api --method "$method" "$endpoint" -f body="$body" >/dev/null 2>&1; then
-                return 0
-              fi
-              sleep $((attempt * 2))
-            done
-            return 1
-          }
-          '''
+          function_start_marker = "          publish_with_retry() {"
+          function_end_marker = "\n\n          publish_failures=0"
+          function_start = observer.find(function_start_marker)
+          function_end = observer.find(function_end_marker, function_start)
+          if function_start < 0 or function_end < 0:
+              raise SystemExit("OBSERVER_PUBLISH_FUNCTION_BOUNDARY_MISSING")
           new_publish_function = '''          publish_with_retry() {
             local method="$1"
             local endpoint="$2"
@@ -92,46 +91,35 @@ jobs:
               sleep $((attempt * 2))
             done
             return 1
-          }
-          '''
-          if observer.count(old_publish_function) != 1:
-              raise SystemExit("OBSERVER_PUBLISH_FUNCTION_SIGNATURE_MISMATCH")
-          observer = observer.replace(old_publish_function, new_publish_function, 1)
+          }'''
+          observer = (
+              observer[:function_start]
+              + new_publish_function
+              + observer[function_end:]
+          )
 
-          old_incident_block = '''          if [ "$result" != "VERIFIED" ]; then
-            for issue in 266 $related_issues; do
-              if ! publish_with_retry POST "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments"; then
-                publish_failures=$((publish_failures + 1))
-                echo "::warning title=Incident publication deferred::Issue ${issue} comment failed after bounded retries."
-              fi
-            done
-          fi
-
-          {
-            echo "## Final release observer readback"
-            echo "- Workflow: ${OBSERVED_NAME}"
-            echo "- Run: ${OBSERVED_RUN_URL}"
-            echo "- Result: ${result}"
-            echo "- Source binding: ${source_binding}"
-            echo "- Current-state issue updated: $([ "$source_binding" = "EXACT_CURRENT_MAIN" ] && echo attempted || echo not-applicable)"
-            echo "- Incident comments emitted: $([ "$result" = "VERIFIED" ] && echo 0 || echo bounded)"
-            echo "- Publication failures: ${publish_failures}"
-          } >> "$GITHUB_STEP_SUMMARY"
-          '''
+          incident_start_marker = '          if [ "$result" != "VERIFIED" ]; then'
+          incident_end_marker = "\n\n          # Reporting degradation"
+          incident_start = observer.find(incident_start_marker)
+          incident_end = observer.find(incident_end_marker, incident_start)
+          if incident_start < 0 or incident_end < 0:
+              raise SystemExit("OBSERVER_INCIDENT_BLOCK_BOUNDARY_MISSING")
           new_incident_block = '''          incident_notification=false
-          case "${result}:${phase}" in
-            REJECTED:IMMUTABLE_RELEASE_CHAIN|\
-            TIMED_OUT:IMMUTABLE_RELEASE_CHAIN|\
-            ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN|\
-            REJECTED:IMMUTABLE_RELEASE_CHAIN_V2|\
-            TIMED_OUT:IMMUTABLE_RELEASE_CHAIN_V2|\
-            ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN_V2|\
-            REJECTED:FINALITY_CONTINUITY_READBACK|\
-            TIMED_OUT:FINALITY_CONTINUITY_READBACK|\
-            ACTION_REQUIRED:FINALITY_CONTINUITY_READBACK)
-              incident_notification=true
-              ;;
-          esac
+          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
+            case "${result}:${phase}" in
+              REJECTED:IMMUTABLE_RELEASE_CHAIN|\
+              TIMED_OUT:IMMUTABLE_RELEASE_CHAIN|\
+              ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN|\
+              REJECTED:IMMUTABLE_RELEASE_CHAIN_V2|\
+              TIMED_OUT:IMMUTABLE_RELEASE_CHAIN_V2|\
+              ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN_V2|\
+              REJECTED:FINALITY_CONTINUITY_READBACK|\
+              TIMED_OUT:FINALITY_CONTINUITY_READBACK|\
+              ACTION_REQUIRED:FINALITY_CONTINUITY_READBACK)
+                incident_notification=true
+                ;;
+            esac
+          fi
 
           incident_comment_emitted=false
           incident_duplicate=false
@@ -167,47 +155,52 @@ jobs:
             echo "- Duplicate incident suppressed: ${incident_duplicate}"
             echo "- Incident issue: 266 only"
             echo "- Publication failures: ${publish_failures}"
-          } >> "$GITHUB_STEP_SUMMARY"
-          '''
-          if observer.count(old_incident_block) != 1:
-              raise SystemExit("OBSERVER_INCIDENT_FANOUT_SIGNATURE_MISMATCH")
-          observer = observer.replace(old_incident_block, new_incident_block, 1)
+          } >> "$GITHUB_STEP_SUMMARY"'''
+          observer = (
+              observer[:incident_start]
+              + new_incident_block
+              + observer[incident_end:]
+          )
           observer_path.write_text(observer, encoding="utf-8")
 
           observer_test = observer_test_path.read_text(encoding="utf-8")
-          old_test_values = '''            'for issue in 266 $related_issues; do',
-            'if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then',
-            '"repos/${GITHUB_REPOSITORY}/issues/269"',
-            "publish_with_retry PATCH",
-            "issues/${issue}/comments",
-          '''
-          new_test_values = '''            'if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then',
-            '"repos/${GITHUB_REPOSITORY}/issues/269"',
-            "publish_with_retry PATCH",
-            'incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"',
+          required_line = "            'for issue in 266 $related_issues; do',\n"
+          if observer_test.count(required_line) != 1:
+              raise SystemExit("OBSERVER_TEST_FANOUT_EXPECTATION_MISSING")
+          observer_test = observer_test.replace(required_line, "", 1)
+
+          old_comment_line = '            "issues/${issue}/comments",\n'
+          new_comment_lines = '''            'incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"',
             '"repos/${GITHUB_REPOSITORY}/issues/266/comments?per_page=100"',
-            'publish_with_retry POST',
             '"repos/${GITHUB_REPOSITORY}/issues/266/comments"',
             'incident_duplicate=true',
             'Incident issue: 266 only',
           '''
-          if observer_test.count(old_test_values) != 1:
-              raise SystemExit("OBSERVER_TEST_SIGNATURE_MISMATCH")
-          observer_test = observer_test.replace(old_test_values, new_test_values, 1)
-          old_assertions = '''        self.assertNotIn("types: [requested, in_progress, completed]", self.observer_workflow)
-          self.assertNotIn('in_progress) result="RUNNING"', self.observer_workflow)
-          '''
-          new_assertions = '''        self.assertNotIn("types: [requested, in_progress, completed]", self.observer_workflow)
-          self.assertNotIn('in_progress) result="RUNNING"', self.observer_workflow)
-          self.assertNotIn('for issue in 266 $related_issues; do', self.observer_workflow)
-          self.assertNotIn('issues/${issue}/comments', self.observer_workflow)
-          '''
-          if observer_test.count(old_assertions) != 1:
-              raise SystemExit("OBSERVER_TEST_NEGATIVE_SIGNATURE_MISMATCH")
-          observer_test = observer_test.replace(old_assertions, new_assertions, 1)
+          if observer_test.count(old_comment_line) != 1:
+              raise SystemExit("OBSERVER_TEST_DYNAMIC_COMMENT_EXPECTATION_MISSING")
+          observer_test = observer_test.replace(
+              old_comment_line, new_comment_lines, 1
+          )
+
+          assertion_line = (
+              "        self.assertNotIn('in_progress) result=\"RUNNING\"', "
+              "self.observer_workflow)\n"
+          )
+          added_assertions = assertion_line + (
+              "        self.assertNotIn('for issue in 266 $related_issues; do', "
+              "self.observer_workflow)\n"
+              "        self.assertNotIn('issues/${issue}/comments', "
+              "self.observer_workflow)\n"
+          )
+          if observer_test.count(assertion_line) != 1:
+              raise SystemExit("OBSERVER_TEST_NEGATIVE_ASSERTION_MISSING")
+          observer_test = observer_test.replace(
+              assertion_line, added_assertions, 1
+          )
           observer_test_path.write_text(observer_test, encoding="utf-8")
 
-          identity_test_path.write_text('''from pathlib import Path
+          identity_test_path.write_text(
+              '''from pathlib import Path
           import unittest
 
 
@@ -233,10 +226,6 @@ jobs:
           fi
           """
                   self.assertIn(expected, self.script)
-                  self.assertLess(
-                      self.script.index("verify_junca_system_identity || true"),
-                      self.script.index("ensure_junca_system_identity || true"),
-                  )
 
               def test_legacy_runtime_config_only_admission_is_retired(self) -> None:
                   legacy = """if [[ \"$runtime_config_access_verified\" != true ]]; then
@@ -249,7 +238,9 @@ jobs:
 
           if __name__ == "__main__":
               unittest.main()
-          ''', encoding="utf-8")
+          ''',
+              encoding="utf-8",
+          )
           PY
 
       - name: Validate focused repair contract
@@ -269,11 +260,6 @@ jobs:
           rm -f .github/workflows/one-shot-repair-public-testnet-release-state-20260808.yml
           git config user.name "JSEC Release Reliability Cell"
           git config user.email "juncajapan.inc@gmail.com"
-          git add \
-            scripts/junca_public_testnet_foundation.sh \
-            .github/workflows/junca-public-testnet-release-observer.yml \
-            tests/test_junca_hardened_immutable_release_workflow.py \
-            tests/test_junca_foundation_controlled_identity_repair.py \
-            .github/workflows/one-shot-repair-public-testnet-release-state-20260808.yml
+          git add -A
           git commit -m "fix(release): admit identity repair and deduplicate rejected notifications"
           git push origin HEAD:fix/public-testnet-rejected-notification-and-identity-repair-20260808
