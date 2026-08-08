@@ -26,6 +26,12 @@ class DeterministicSystemIdentityTests(unittest.TestCase):
         self.assertNotIn("groupadd --system junca", self.component)
         self.assertNotIn("useradd --system --gid junca", self.component)
 
+    def test_image_builder_commands_remain_yaml_scalars(self) -> None:
+        risky = '- test "$(getent group junca | cut -d: -f3)" = "992"'
+        safe = '- \'test "$(getent group junca | cut -d: -f3)" = "992"\''
+        self.assertNotIn(risky, self.component)
+        self.assertEqual(self.component.count(safe), 2)
+
     def test_bootstrap_requires_deterministic_identity(self) -> None:
         for value in (
             "groupadd --system --gid 992 junca",
