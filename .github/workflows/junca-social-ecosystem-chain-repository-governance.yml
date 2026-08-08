@@ -8,12 +8,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: jsec-repository-governance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   repository-governance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - name: Run complete chain test suite
@@ -34,4 +39,4 @@ jobs:
           name: junca-social-ecosystem-chain-repository-governance-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-repository-governance.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
