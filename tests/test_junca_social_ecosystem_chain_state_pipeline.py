@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -182,6 +183,40 @@ class PersistentStatePipelineTests(unittest.TestCase):
                 transition=tampered,
                 certificate=self.certificate(proposal),
             )
+
+    def test_tampered_transition_receipt_is_rejected_before_persistence(self) -> None:
+        self.admit(self.transaction())
+        proposal = self.pipeline.execute_candidate()
+        receipt = proposal.transition.receipts[0]
+        tampered = replace(
+            proposal.transition,
+            receipts=(replace(receipt, validator_tip=receipt.validator_tip + 1),),
+        )
+        with self.assertRaisesRegex(StateStoreError, "receipt validator tip mismatch"):
+            self.store.commit_finalized_block(
+                height=proposal.height,
+                block_hash=proposal.block_hash,
+                parent_hash=proposal.parent_hash,
+                transition=tampered,
+                certificate=self.certificate(proposal),
+            )
+        self.assertEqual(self.store.head_height, 0)
+
+    def test_integrity_check_rejects_semantically_tampered_receipt(self) -> None:
+        self.admit(self.transaction())
+        proposal = self.pipeline.execute_candidate()
+        self.pipeline.commit_finalized(proposal, self.certificate(proposal))
+        row = self.store.connection.execute(
+            "SELECT receipts_json FROM blocks WHERE height=1"
+        ).fetchone()
+        receipts = json.loads(row["receipts_json"])
+        receipts[0]["transaction_index"] = 1
+        self.store.connection.execute(
+            "UPDATE blocks SET receipts_json=? WHERE height=1",
+            (json.dumps(receipts, sort_keys=True, separators=(",", ":")),),
+        )
+        with self.assertRaisesRegex(StateStoreError, "stored receipt integrity failure"):
+            self.store.integrity_check()
 
     def test_stale_proposal_cannot_commit_after_head_advances(self) -> None:
         self.admit(self.transaction())

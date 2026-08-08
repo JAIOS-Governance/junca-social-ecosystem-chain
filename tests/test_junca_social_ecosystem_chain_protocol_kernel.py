@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from jaios.social_ecosystem_chain.protocol_kernel import (
@@ -10,6 +11,7 @@ from jaios.social_ecosystem_chain.protocol_kernel import (
     compute_state_root,
     execute_block,
     next_base_fee,
+    validate_block_transition,
 )
 
 
@@ -64,6 +66,52 @@ class ProtocolKernelTests(unittest.TestCase):
         self.assertEqual(result.gas_used, 21_000)
         self.assertEqual(result.receipts[0].effective_gas_price, 1_100)
         self.assertEqual(result.as_evidence()["mainnet_changed"], False)
+
+    def test_transition_integrity_rejects_tampered_receipt_accounting(self) -> None:
+        result = self.execute(transaction())
+        receipt = result.receipts[0]
+        tampered = {
+            "receipt index": replace(
+                result,
+                receipts=(replace(receipt, transaction_index=1),),
+            ),
+            "receipt gas": replace(result, gas_used=result.gas_used + 1),
+            "base fee burn": replace(
+                result,
+                receipts=(replace(receipt, base_fee_burned=receipt.base_fee_burned + 1),),
+            ),
+            "validator tip": replace(
+                result,
+                receipts=(replace(receipt, validator_tip=receipt.validator_tip + 1),),
+            ),
+            "aggregate burn": replace(
+                result,
+                total_base_fee_burned=result.total_base_fee_burned + 1,
+            ),
+        }
+        for label, transition in tampered.items():
+            with self.subTest(label=label):
+                with self.assertRaises(ProtocolTransitionError):
+                    validate_block_transition(transition)
+
+    def test_transition_integrity_rejects_duplicate_and_noncanonical_receipts(self) -> None:
+        result = self.execute(transaction())
+        receipt = result.receipts[0]
+        duplicate = replace(
+            result,
+            gas_used=result.gas_used * 2,
+            total_base_fee_burned=result.total_base_fee_burned * 2,
+            total_validator_tips=result.total_validator_tips * 2,
+            receipts=(receipt, replace(receipt, transaction_index=1)),
+        )
+        with self.assertRaisesRegex(ProtocolTransitionError, "duplicate receipt"):
+            validate_block_transition(duplicate)
+        uppercase = replace(
+            result,
+            receipts=(replace(receipt, sender=receipt.sender.upper().replace("0X", "0x")),),
+        )
+        with self.assertRaisesRegex(ProtocolTransitionError, "canonical"):
+            validate_block_transition(uppercase)
 
     def test_chain_replay_is_rejected(self) -> None:
         with self.assertRaisesRegex(ProtocolTransitionError, "chain_id mismatch"):

@@ -254,7 +254,7 @@ def execute_block(
             )
         )
 
-    return BlockTransition(
+    transition = BlockTransition(
         chain_id=config.chain_id,
         base_fee_per_gas=base_fee,
         gas_used=block_gas_used,
@@ -264,6 +264,138 @@ def execute_block(
         accounts=dict(sorted(state.items())),
         receipts=tuple(receipts),
     )
+    validate_block_transition(transition)
+    return transition
+
+
+def validate_block_transition(transition: BlockTransition) -> None:
+    """Fail closed when execution evidence is internally inconsistent.
+
+    This validator deliberately runs independently from transaction execution so
+    persistence and recovery boundaries do not need to trust an in-memory
+    ``BlockTransition`` merely because it has the expected dataclass type.
+    """
+    if not isinstance(transition, BlockTransition):
+        raise ProtocolTransitionError("transition must be a BlockTransition")
+    if (
+        isinstance(transition.chain_id, bool)
+        or not isinstance(transition.chain_id, int)
+        or transition.chain_id <= 0
+    ):
+        raise ProtocolTransitionError("transition chain_id must be a positive integer")
+    integer_fields = {
+        "base_fee_per_gas": transition.base_fee_per_gas,
+        "gas_used": transition.gas_used,
+        "total_base_fee_burned": transition.total_base_fee_burned,
+        "total_validator_tips": transition.total_validator_tips,
+    }
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in integer_fields.values()
+    ):
+        raise ProtocolTransitionError(
+            "transition execution values must be non-negative integers"
+        )
+    if transition.base_fee_per_gas == 0:
+        raise ProtocolTransitionError("transition base_fee_per_gas must be positive")
+
+    normalized = _normalize_accounts(transition.accounts)
+    if transition.state_root != compute_state_root(normalized):
+        raise ProtocolTransitionError(
+            "transition state_root does not match account state"
+        )
+    _canonical_hash(transition.state_root, "transition state_root")
+    if transition.state_root != transition.state_root.lower():
+        raise ProtocolTransitionError("transition state_root must be canonical")
+
+    burned, tips = validate_receipt_sequence(
+        base_fee_per_gas=transition.base_fee_per_gas,
+        gas_used=transition.gas_used,
+        receipts=transition.receipts,
+    )
+    if burned != transition.total_base_fee_burned:
+        raise ProtocolTransitionError("transition total base fee burn mismatch")
+    if tips != transition.total_validator_tips:
+        raise ProtocolTransitionError("transition total validator tip mismatch")
+
+
+def validate_receipt_sequence(
+    *,
+    base_fee_per_gas: int,
+    gas_used: int,
+    receipts: Iterable[TransactionReceipt],
+) -> tuple[int, int]:
+    """Validate ordered receipt accounting and return aggregate burn and tips."""
+    if (
+        isinstance(base_fee_per_gas, bool)
+        or not isinstance(base_fee_per_gas, int)
+        or base_fee_per_gas <= 0
+    ):
+        raise ProtocolTransitionError("receipt base_fee_per_gas must be positive")
+    if isinstance(gas_used, bool) or not isinstance(gas_used, int) or gas_used < 0:
+        raise ProtocolTransitionError("receipt aggregate gas_used is invalid")
+    try:
+        sequence = tuple(receipts)
+    except TypeError as exc:
+        raise ProtocolTransitionError("transition receipts must be iterable") from exc
+
+    seen_hashes: set[str] = set()
+    aggregate_gas = 0
+    aggregate_burned = 0
+    aggregate_tips = 0
+    for expected_index, receipt in enumerate(sequence):
+        if not isinstance(receipt, TransactionReceipt):
+            raise ProtocolTransitionError(
+                "transition receipts must contain TransactionReceipt values"
+            )
+        if receipt.transaction_index != expected_index:
+            raise ProtocolTransitionError("receipt transaction indexes are not contiguous")
+        _canonical_hash(receipt.transaction_hash, "receipt transaction_hash")
+        if receipt.transaction_hash != receipt.transaction_hash.lower():
+            raise ProtocolTransitionError("receipt transaction_hash must be canonical")
+        if receipt.transaction_hash in seen_hashes:
+            raise ProtocolTransitionError("duplicate receipt transaction hash")
+        if _address(receipt.sender, "receipt sender") != receipt.sender:
+            raise ProtocolTransitionError("receipt sender must be canonical")
+        if _address(receipt.recipient, "receipt recipient") != receipt.recipient:
+            raise ProtocolTransitionError("receipt recipient must be canonical")
+        receipt_integers = {
+            "transaction_index": receipt.transaction_index,
+            "gas_used": receipt.gas_used,
+            "effective_gas_price": receipt.effective_gas_price,
+            "base_fee_burned": receipt.base_fee_burned,
+            "validator_tip": receipt.validator_tip,
+        }
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in receipt_integers.values()
+        ):
+            raise ProtocolTransitionError(
+                "receipt execution values must be non-negative integers"
+            )
+        if receipt.gas_used == 0:
+            raise ProtocolTransitionError("receipt gas_used must be positive")
+        if receipt.status != "SUCCESS":
+            raise ProtocolTransitionError("unsupported receipt status")
+        if receipt.effective_gas_price < base_fee_per_gas:
+            raise ProtocolTransitionError("receipt effective gas price is below base fee")
+        expected_burn = receipt.gas_used * base_fee_per_gas
+        expected_tip = receipt.gas_used * (
+            receipt.effective_gas_price - base_fee_per_gas
+        )
+        if receipt.base_fee_burned != expected_burn:
+            raise ProtocolTransitionError("receipt base fee burn mismatch")
+        if receipt.validator_tip != expected_tip:
+            raise ProtocolTransitionError("receipt validator tip mismatch")
+
+        seen_hashes.add(receipt.transaction_hash)
+        aggregate_gas += receipt.gas_used
+        aggregate_burned += receipt.base_fee_burned
+        aggregate_tips += receipt.validator_tip
+
+    if aggregate_gas != gas_used:
+        raise ProtocolTransitionError("receipt gas total does not match transition")
+    return aggregate_burned, aggregate_tips
 
 
 def compute_state_root(accounts: Mapping[str, AccountState]) -> str:
@@ -335,4 +467,14 @@ def _address(value: str, field: str) -> str:
         int(value[2:], 16)
     except ValueError as exc:
         raise ProtocolTransitionError(f"{field} must be a 20-byte hex address") from exc
+    return value.lower()
+
+
+def _canonical_hash(value: str, field: str) -> str:
+    if not isinstance(value, str) or len(value) != 66 or not value.startswith("0x"):
+        raise ProtocolTransitionError(f"{field} must be a 32-byte hex value")
+    try:
+        int(value[2:], 16)
+    except ValueError as exc:
+        raise ProtocolTransitionError(f"{field} must be a 32-byte hex value") from exc
     return value.lower()

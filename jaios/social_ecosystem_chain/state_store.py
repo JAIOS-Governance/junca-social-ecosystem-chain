@@ -10,7 +10,15 @@ import sqlite3
 from typing import Mapping
 
 from .finality import FinalityCertificate
-from .protocol_kernel import AccountState, BlockTransition, compute_state_root
+from .protocol_kernel import (
+    AccountState,
+    BlockTransition,
+    ProtocolTransitionError,
+    TransactionReceipt,
+    compute_state_root,
+    validate_block_transition,
+    validate_receipt_sequence,
+)
 
 
 class StateStoreError(ValueError):
@@ -156,9 +164,11 @@ class PersistentStateStore:
             raise StateStoreError("block timestamp must be a positive integer")
         if certificate.signed_power * 3 <= certificate.total_power * 2:
             raise StateStoreError("finality certificate is below strict two-thirds quorum")
+        try:
+            validate_block_transition(transition)
+        except ProtocolTransitionError as exc:
+            raise StateStoreError(f"transition integrity failure: {exc}") from exc
         normalized = _normalize_accounts(transition.accounts)
-        if transition.state_root != compute_state_root(normalized):
-            raise StateStoreError("transition state_root does not match account state")
         receipts = [asdict(receipt) for receipt in transition.receipts]
         self.connection.execute("BEGIN IMMEDIATE")
         try:
@@ -521,6 +531,21 @@ class PersistentStateStore:
                 != row["receipts_json"]
             ):
                 raise StateStoreError("stored receipts are not canonical")
+            try:
+                receipt_objects = _decode_receipts(receipts)
+                is_pruned_checkpoint_base = (
+                    offset == 0
+                    and base_height > 0
+                    and not receipt_objects
+                )
+                if not is_pruned_checkpoint_base:
+                    validate_receipt_sequence(
+                        base_fee_per_gas=row["base_fee_per_gas"],
+                        gas_used=row["gas_used"],
+                        receipts=receipt_objects,
+                    )
+            except ProtocolTransitionError as exc:
+                raise StateStoreError(f"stored receipt integrity failure: {exc}") from exc
             if compute_state_root(normalized) != row["state_root"]:
                 raise StateStoreError("stored state_root integrity failure")
             if row["height"] > 0 and (
@@ -626,6 +651,31 @@ def _decode_accounts_json(payload: str) -> dict[str, AccountState]:
     if _accounts_json(accounts) != payload:
         raise StateStoreError("stored account snapshot is not canonical")
     return accounts
+
+
+def _decode_receipts(raw_receipts: object) -> tuple[TransactionReceipt, ...]:
+    required = {
+        "transaction_hash",
+        "transaction_index",
+        "sender",
+        "recipient",
+        "gas_used",
+        "effective_gas_price",
+        "base_fee_burned",
+        "validator_tip",
+        "status",
+    }
+    if not isinstance(raw_receipts, list):
+        raise StateStoreError("stored receipts are invalid")
+    decoded: list[TransactionReceipt] = []
+    for raw_receipt in raw_receipts:
+        if not isinstance(raw_receipt, dict) or set(raw_receipt) != required:
+            raise StateStoreError("stored receipt fields are invalid")
+        try:
+            decoded.append(TransactionReceipt(**raw_receipt))
+        except (TypeError, ValueError) as exc:
+            raise StateStoreError("stored receipt is invalid") from exc
+    return tuple(decoded)
 
 
 def _decode_finality_certificate(payload: str) -> FinalityCertificate:
