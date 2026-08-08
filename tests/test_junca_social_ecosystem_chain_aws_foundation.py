@@ -232,6 +232,28 @@ class AwsFoundationTests(unittest.TestCase):
             )
         )
 
+    def test_block_header_v2_activation_is_wired_to_validator_service(self) -> None:
+        for value in (
+            'variable "block_header_v2_activation_height"',
+            "var.block_header_v2_activation_height == null",
+            "floor(var.block_header_v2_activation_height)",
+        ):
+            self.assertIn(value, self.runtime_variables)
+        self.assertIn(
+            "block_header_v2_activation_height = "
+            "var.block_header_v2_activation_height",
+            self.runtime,
+        )
+        for value in (
+            "block_header_v2_activation_height != null",
+            "cat >/etc/junca/block-header-v2.env",
+            "BLOCK_HEADER_V2_ACTIVATION_HEIGHT=${block_header_v2_activation_height}",
+            "chmod 0640 /etc/junca/block-header-v2.env",
+            "chown root:junca /etc/junca/block-header-v2.env",
+            "EnvironmentFile=-/etc/junca/block-header-v2.env",
+        ):
+            self.assertIn(value, self.validator_user_data)
+
     def test_state_backend_is_private_retained_and_locked(self) -> None:
         for required in (
             'resource "aws_kms_key" "terraform_state"',

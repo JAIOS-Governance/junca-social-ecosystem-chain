@@ -242,6 +242,45 @@ class PersistentStatePipelineTests(unittest.TestCase):
         finally:
             scheduled_store.close()
 
+    def test_scheduled_activation_metadata_loss_fails_closed_before_v2(self) -> None:
+        scheduled_store = PersistentStateStore(
+            Path(self.directory.name, "scheduled-loss.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            scheduled_store.initialize_genesis(
+                block_hash=GENESIS,
+                accounts={ALICE: AccountState(balance=1_000_000_000)},
+                base_fee_per_gas=1_000,
+            )
+            scheduled_config = replace(
+                self.config,
+                block_header_v2_activation_height=10,
+            )
+            NodeExecutionPipeline(
+                config=scheduled_config,
+                pool=TransactionPool(scheduled_config),
+                store=scheduled_store,
+                signature_verifier=self.verify,
+            )
+            scheduled_store.connection.execute(
+                "DELETE FROM metadata WHERE key='block_header_v2_start_height'"
+            )
+            with self.assertRaisesRegex(StateStoreError, "metadata is missing"):
+                NodeExecutionPipeline(
+                    config=replace(
+                        scheduled_config,
+                        block_header_v2_activation_height=None,
+                    ),
+                    pool=TransactionPool(scheduled_config),
+                    store=scheduled_store,
+                    signature_verifier=self.verify,
+                )
+            with self.assertRaisesRegex(StateStoreError, "metadata is missing"):
+                scheduled_store.integrity_check()
+        finally:
+            scheduled_store.close()
+
     def test_wrong_certificate_block_is_rejected(self) -> None:
         self.admit(self.transaction())
         proposal = self.pipeline.execute_candidate()
@@ -353,6 +392,47 @@ class PersistentStatePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(StateStoreError, "V2 block_hash commitment mismatch"):
             self.store.integrity_check()
 
+    def test_v2_history_prevents_metadata_deletion_downgrade(self) -> None:
+        self.admit(self.transaction())
+        proposal = self.pipeline.execute_candidate()
+        self.pipeline.commit_finalized(proposal, self.certificate(proposal))
+        self.store.connection.execute(
+            "DELETE FROM metadata WHERE key='block_header_v2_start_height'"
+        )
+
+        evidence = self.store.integrity_check()
+        self.assertEqual(evidence["block_header_v2_start_height"], 1)
+        self.assertEqual(
+            evidence["block_header_v2_activation_source"],
+            "FINALIZED_BLOCK_HISTORY",
+        )
+        restarted = NodeExecutionPipeline(
+            config=replace(
+                self.config,
+                block_header_v2_activation_height=None,
+            ),
+            pool=TransactionPool(self.config),
+            store=self.store,
+            signature_verifier=self.verify,
+        )
+        self.assertEqual(restarted.config.block_header_v2_activation_height, 1)
+        self.assertEqual(restarted.execute_candidate().header_version, 2)
+
+        row = self.store.connection.execute(
+            "SELECT receipts_json FROM blocks WHERE height=1"
+        ).fetchone()
+        receipts = json.loads(row["receipts_json"])
+        receipts[0]["effective_gas_price"] += 1
+        receipts[0]["validator_tip"] += receipts[0]["gas_used"]
+        self.store.connection.execute(
+            "UPDATE blocks SET receipts_json=? WHERE height=1",
+            (json.dumps(receipts, sort_keys=True, separators=(",", ":")),),
+        )
+        with self.assertRaisesRegex(
+            StateStoreError, "V2 block_hash commitment mismatch"
+        ):
+            self.store.integrity_check()
+
     def test_stale_proposal_cannot_commit_after_head_advances(self) -> None:
         self.admit(self.transaction())
         stale = self.pipeline.execute_candidate()
@@ -367,6 +447,9 @@ class PersistentStatePipelineTests(unittest.TestCase):
 
     def test_checkpoint_round_trip_and_tamper_detection(self) -> None:
         checkpoint = self.store.export_checkpoint()
+        self.assertEqual(checkpoint["schema_version"], "junca-state-checkpoint/v2")
+        self.assertEqual(checkpoint["header_version"], 1)
+        self.assertEqual(checkpoint["block_header_v2_activation_height"], 1)
         evidence = self.store.verify_checkpoint(checkpoint)
         self.assertEqual(evidence["verification_status"], "VERIFIED")
         self.assertEqual(evidence["height"], 0)
@@ -374,6 +457,17 @@ class PersistentStatePipelineTests(unittest.TestCase):
         tampered["state_root"] = "0x" + ("0" * 64)
         with self.assertRaisesRegex(StateStoreError, "digest mismatch"):
             self.store.verify_checkpoint(tampered)
+
+    def test_legacy_checkpoint_v1_remains_verifiable(self) -> None:
+        checkpoint = self.store.export_checkpoint()
+        legacy = dict(checkpoint)
+        legacy["schema_version"] = "junca-state-checkpoint/v1"
+        legacy.pop("header_version")
+        legacy.pop("block_header_v2_activation_height")
+        legacy["checkpoint_digest"] = self._checkpoint_digest(legacy)
+        evidence = self.store.verify_checkpoint(legacy)
+        self.assertEqual(evidence["verification_status"], "VERIFIED")
+        self.assertEqual(evidence["header_version"], 1)
 
     def test_checkpoint_rejects_noncanonical_identity_and_account_schema(self) -> None:
         checkpoint = self.store.export_checkpoint()
@@ -437,6 +531,9 @@ class PersistentStatePipelineTests(unittest.TestCase):
         first = self.pipeline.execute_candidate()
         self.pipeline.commit_finalized(first, self.certificate(first))
         checkpoint = self.store.export_checkpoint()
+        self.assertEqual(checkpoint["schema_version"], "junca-state-checkpoint/v2")
+        self.assertEqual(checkpoint["header_version"], 2)
+        self.assertEqual(checkpoint["block_header_v2_activation_height"], 1)
 
         restored = PersistentStateStore(
             Path(self.directory.name, "restored.sqlite"),
@@ -453,7 +550,7 @@ class PersistentStatePipelineTests(unittest.TestCase):
             integrity = restored.integrity_check()
             self.assertEqual(integrity["base_height"], 1)
             self.assertEqual(integrity["head_height"], 1)
-            self.assertIsNone(integrity["block_header_v2_start_height"])
+            self.assertEqual(integrity["block_header_v2_start_height"], 1)
 
             pipeline = NodeExecutionPipeline(
                 config=self.config,
@@ -463,10 +560,11 @@ class PersistentStatePipelineTests(unittest.TestCase):
             )
             self.assertEqual(
                 restored.integrity_check()["block_header_v2_start_height"],
-                2,
+                1,
             )
             proposal = pipeline.execute_candidate()
             self.assertEqual(proposal.height, 2)
+            self.assertEqual(proposal.header_version, 2)
             machine = FinalityStateMachine(
                 chain_id=CHAIN_ID,
                 validators=self.validators,

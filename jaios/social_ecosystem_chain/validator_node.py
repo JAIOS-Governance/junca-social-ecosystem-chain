@@ -54,6 +54,7 @@ GENESIS_SCHEMA = "junca-public-testnet-genesis/v1"
 CLIENT_VERSION = "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
 ZERO_HASH = "0x" + ("0" * 64)
 MANUAL_BLOCK_INTERVAL_SECONDS = 30
+BLOCK_HEADER_V2_ACTIVATION_ENV = "BLOCK_HEADER_V2_ACTIVATION_HEIGHT"
 
 
 class ValidatorNodeError(ValueError):
@@ -1045,6 +1046,22 @@ def initialize_state(
     )
 
 
+def _block_header_v2_activation_from_environment() -> int | None:
+    raw = os.getenv(BLOCK_HEADER_V2_ACTIVATION_ENV)
+    if raw in (None, ""):
+        return None
+    if not raw.isascii() or not raw.isdecimal():
+        raise ValidatorNodeError(
+            f"{BLOCK_HEADER_V2_ACTIVATION_ENV} must be a positive decimal height"
+        )
+    height = int(raw)
+    if raw != str(height) or not 0 < height <= (2**63 - 1):
+        raise ValidatorNodeError(
+            f"{BLOCK_HEADER_V2_ACTIVATION_ENV} must be a positive decimal height"
+        )
+    return height
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="junca-chain-node")
     result.add_argument("--genesis", required=True)
@@ -1070,7 +1087,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--block-header-v2-activation-height",
         type=int,
-        default=None,
+        default=_block_header_v2_activation_from_environment(),
         help="coordinated future height for receipt-committing V2 block headers",
     )
     result.add_argument(

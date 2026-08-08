@@ -487,6 +487,7 @@ resource "aws_instance" "validator" {
       ? local.validator_bootstrap_slot_epochs[count.index]
       : 0
     )
+    block_header_v2_activation_height = var.block_header_v2_activation_height
     validator_state_required = var.enable_validator_state_volumes
     validator_state_volume_id = (
       var.enable_validator_state_volumes && var.provision_validator_state_volumes

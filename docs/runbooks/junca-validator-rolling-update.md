@@ -20,16 +20,21 @@ stable height alone is never activation evidence.
 
 Receipt-committing V2 block headers are a coordinated consensus upgrade, not a
 per-validator deployment toggle. Keep
-`--block-header-v2-activation-height` absent while the three validators run
+`block_header_v2_activation_height = null` while the three validators run
 different runtime versions. After all three validators run the exact same
 reviewed source and runtime artifact, choose one shared future finalized height
 with enough lead time to complete readback, bind that exact positive integer
-through the separately reviewed immutable service configuration on all three
-validators, and verify each Health response reports the same stored activation
-height before it is reached. A missing, past, unequal, changed or non-integer
-height blocks activation. Never reinterpret an existing finalized V1 block as
-V2. A restored pruned checkpoint begins local V2 integrity checks at its next
-height while preserving the trusted checkpoint block hash.
+through the reviewed Terraform variable on all three validators. The bootstrap
+writes only `BLOCK_HEADER_V2_ACTIVATION_HEIGHT=<height>` to the root-owned,
+mode-`0640` `/etc/junca/block-header-v2.env`; systemd loads that dedicated file
+without changing the canonical 18-field `/etc/junca/runtime.env` contract. The
+validator parser then persists the schedule before proposal work. Verify each
+Health response reports the same stored activation height before it is reached.
+A missing, past, unequal, changed or non-integer height blocks activation. Never
+reinterpret an existing finalized V1 block as V2. Checkpoint v2 commits the
+header version and activation height to its digest; a restored V2 checkpoint
+continues V2 at its next height while preserving the independently trusted
+checkpoint block hash.
 
 At the activation height, require all three proposals and votes to use header
 version `2`; the header commits the versioned transition root, ordered

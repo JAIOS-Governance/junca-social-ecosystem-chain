@@ -201,6 +201,7 @@ class NodeExecutionPipeline:
             transition=proposal.transition,
             certificate=certificate,
             block_timestamp=proposal.block_timestamp,
+            header_version=proposal.header_version,
         )
         self.pool.remove_included(proposal.candidate.transactions)
         return stored

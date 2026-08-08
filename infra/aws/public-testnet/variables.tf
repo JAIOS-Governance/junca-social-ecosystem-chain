@@ -172,6 +172,25 @@ variable "validator_bootstrap_slot_epoch_seconds" {
   }
 }
 
+variable "block_header_v2_activation_height" {
+  description = "Optional coordinated future height for receipt-committing V2 block headers. Set the same value for all three validators before rollout."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.block_header_v2_activation_height == null ||
+      (
+        var.block_header_v2_activation_height > 0 &&
+        var.block_header_v2_activation_height <= 9223372036854775807 &&
+        floor(var.block_header_v2_activation_height) == var.block_header_v2_activation_height
+      )
+    )
+    error_message = "block_header_v2_activation_height must be null or a positive integer."
+  }
+}
+
 variable "enable_validator_state_volumes" {
   description = "Require the already-provisioned retained EBS volumes to be mounted at /var/lib/junca by the validator runtime."
   type        = bool

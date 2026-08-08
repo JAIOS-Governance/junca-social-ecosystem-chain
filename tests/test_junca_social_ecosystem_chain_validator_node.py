@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
+import os
 import unittest
+from unittest.mock import patch
 
 from jaios.social_ecosystem_chain.validator_node import (
     AuthenticatedVote,
@@ -15,6 +17,7 @@ from jaios.social_ecosystem_chain.validator_node import (
     canonical_json,
     initialize_state,
     load_genesis,
+    parser,
 )
 from jaios.social_ecosystem_chain.finality import FinalityVote
 import hashlib
@@ -137,6 +140,34 @@ class ValidatorNodeTests(unittest.TestCase):
     def test_exactly_three_validators_required(self) -> None:
         with self.assertRaisesRegex(ValidatorNodeError, "exactly 3"):
             build_genesis(chain_id=20260723, validators=["validator-1"])
+
+    def test_header_v2_activation_environment_reaches_parser(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"BLOCK_HEADER_V2_ACTIVATION_HEIGHT": "25000"},
+            clear=False,
+        ):
+            arguments = parser().parse_args(["--genesis", "/tmp/genesis.json"])
+        self.assertEqual(arguments.block_header_v2_activation_height, 25000)
+
+        for invalid in (
+            "0",
+            "-1",
+            "025000",
+            "1_000",
+            " 25000",
+            "２５０００",
+            "9223372036854775808",
+        ):
+            with self.subTest(invalid=invalid), patch.dict(
+                os.environ,
+                {"BLOCK_HEADER_V2_ACTIVATION_HEIGHT": invalid},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(
+                    ValidatorNodeError, "positive decimal height"
+                ):
+                    parser()
 
     def test_kms_adapter_converts_fixed_width_and_fails_closed(self) -> None:
         class FakeKms:
