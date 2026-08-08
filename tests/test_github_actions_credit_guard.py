@@ -7,6 +7,13 @@ RUNTIME = ROOT / ".github/workflows/junca-validator-runtime-artifacts.yml"
 RELEASE_V2 = ROOT / ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
 CONTINUITY = ROOT / ".github/workflows/junca-public-testnet-continuity.yml"
 SAMPLER = ROOT / ".github/workflows/junca-public-testnet-health-sampler.yml"
+DEVELOPER_CI = ROOT / ".github/workflows/junca-developer-environment-ci.yml"
+REPOSITORY_GOVERNANCE = (
+    ROOT / ".github/workflows/junca-social-ecosystem-chain-repository-governance.yml"
+)
+OBSOLETE_HEALTH_MAINTAINER = (
+    ROOT / ".github/workflows/junca-public-testnet-health-maintainer.yml"
+)
 OBSOLETE_LIVE_PREFIX_CONTROLLER = (
     ROOT / ".github/workflows/apply-live-prefix-patch-v2.yml"
 )
@@ -22,6 +29,10 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
         cls.release_v2 = RELEASE_V2.read_text(encoding="utf-8")
         cls.continuity = CONTINUITY.read_text(encoding="utf-8")
         cls.sampler = SAMPLER.read_text(encoding="utf-8")
+        cls.developer_ci = DEVELOPER_CI.read_text(encoding="utf-8")
+        cls.repository_governance = REPOSITORY_GOVERNANCE.read_text(
+            encoding="utf-8"
+        )
 
     def test_main_runtime_build_is_scoped_to_immutable_inputs(self) -> None:
         push_block = self.runtime.split("  pull_request:", 1)[0]
@@ -60,6 +71,7 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
             '(.event == "push" or .event == "workflow_dispatch")',
             '--workflow-name "JUNCA Validator Runtime Artifacts"',
             "for issue in 266 244 248 249",
+            "/rerun",
         ):
             self.assertNotIn(forbidden, self.release_v2)
 
@@ -83,6 +95,7 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
         self.assertIn("if: github.event_name == 'workflow_dispatch'", self.continuity)
         self.assertIn("cancel-in-progress: true", self.continuity)
         self.assertIn("retention-days: 14", self.continuity)
+        self.assertNotIn("/rerun", self.continuity)
 
     def test_periodic_sampler_is_bounded_non_blocking_and_silent(self) -> None:
         for required in (
@@ -99,8 +112,54 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
             "issues: write",
             "actions: write",
             "gh api --method POST",
+            "/rerun",
         ):
             self.assertNotIn(forbidden, self.sampler)
+
+    def test_developer_feedback_lane_stays_fast_and_non_deploying(self) -> None:
+        for required in (
+            "pull_request:",
+            "push:",
+            "branches: [main]",
+            '"jaios/social_ecosystem_chain/**"',
+            '"tests/**"',
+            "cancel-in-progress: true",
+            "timeout-minutes: 12",
+            "actions/checkout@v7.0.1",
+            "actions/setup-python@v7.0.0",
+            "make doctor",
+            "make dev-test",
+        ):
+            self.assertIn(required, self.developer_ci)
+        for forbidden in (
+            "schedule:",
+            "workflow_run:",
+            "actions: write",
+            "issues: write",
+            "id-token: write",
+            "upload-artifact",
+            "environment:",
+            "gh api --method POST",
+        ):
+            self.assertNotIn(forbidden, self.developer_ci)
+
+    def test_repository_governance_is_one_bounded_authoritative_gate(self) -> None:
+        for required in (
+            "pull_request:",
+            "push:",
+            "cancel-in-progress: true",
+            'python -m unittest discover -s tests -p "test_*.py" -v',
+            "actions/checkout@v7.0.1",
+            "actions/setup-python@v7.0.0",
+            "if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+            "retention-days: 14",
+        ):
+            self.assertIn(required, self.repository_governance)
+        self.assertNotIn("retention-days: 30", self.repository_governance)
+        self.assertNotIn("retention-days: 90", self.repository_governance)
+
+    def test_automatic_continuity_rerun_maintainer_is_retired(self) -> None:
+        self.assertFalse(OBSOLETE_HEALTH_MAINTAINER.exists())
 
     def test_obsolete_repository_governance_patch_controller_is_retired(self) -> None:
         self.assertFalse(OBSOLETE_LIVE_PREFIX_CONTROLLER.exists())
