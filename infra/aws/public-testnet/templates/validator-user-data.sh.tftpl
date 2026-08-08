@@ -2,9 +2,11 @@
 set -euo pipefail
 umask 027
 
-getent group junca >/dev/null || groupadd --system junca
-id -u junca >/dev/null 2>&1 || \
-  useradd --system --gid junca --home-dir /var/lib/junca --shell /sbin/nologin junca
+getent group junca >/dev/null || groupadd --system --gid 992 junca
+test "$(getent group junca | cut -d: -f3)" = "992"
+id -u junca >/dev/null 2>&1 || useradd --system --uid 992 --gid 992 --home-dir /var/lib/junca --shell /sbin/nologin --no-create-home junca
+test "$(id -u junca)" = "992"
+test "$(id -g junca)" = "992"
 install -d -o root -g junca -m 0750 /etc/junca
 install -d -m 0750 /var/lib/junca /var/log/junca
 chown root:junca /etc/junca/genesis.json /etc/junca/validator.toml
