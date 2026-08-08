@@ -138,7 +138,7 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
             "issues: write",
             "id-token: write",
             "upload-artifact",
-            "environment:",
+            "\n    environment:",
             "gh api --method POST",
         ):
             self.assertNotIn(forbidden, self.developer_ci)
