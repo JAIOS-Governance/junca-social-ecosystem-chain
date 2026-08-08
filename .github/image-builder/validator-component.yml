@@ -10,7 +10,7 @@ phases:
           commands:
             - set -euo pipefail
             - getent group junca >/dev/null || groupadd --system --gid 992 junca
-            - test "$(getent group junca | cut -d: -f3)" = "992"
+            - 'test "$(getent group junca | cut -d: -f3)" = "992"'
             - id -u junca >/dev/null 2>&1 || useradd --system --uid 992 --gid 992 --home-dir /var/lib/junca --shell /sbin/nologin --no-create-home junca
             - test "$(id -u junca)" = "992"
             - test "$(id -g junca)" = "992"
@@ -39,7 +39,7 @@ phases:
             - test -s /etc/junca/genesis.json
             - test "$(id -u junca)" = "992"
             - test "$(id -g junca)" = "992"
-            - test "$(getent group junca | cut -d: -f3)" = "992"
+            - 'test "$(getent group junca | cut -d: -f3)" = "992"'
             - test "$(stat -c '%U:%G:%a' /etc/junca)" = "root:junca:750"
             - test "$(stat -c '%U:%G:%a:%h' /etc/junca/genesis.json)" = "root:junca:640:1"
             - test "$(stat -c '%U:%G:%a:%h' /etc/junca/validator.toml)" = "root:junca:640:1"
