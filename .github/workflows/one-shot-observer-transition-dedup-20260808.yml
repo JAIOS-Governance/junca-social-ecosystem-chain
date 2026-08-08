@@ -8,7 +8,7 @@ on:
       - .github/workflows/one-shot-observer-transition-dedup-20260808.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: one-shot-release-observer-transition-dedup-20260808
@@ -22,7 +22,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           ref: fix/release-observer-state-transition-dedup-20260808
-          fetch-depth: 0
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
@@ -30,15 +29,12 @@ jobs:
         run: python scripts/ops/apply_release_observer_transition_dedup.py
       - name: Validate focused observer contract
         run: python -m unittest tests.test_junca_hardened_immutable_release_workflow -v
-      - name: Commit repair and retire temporary route
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          rm -f \
-            .github/workflows/one-shot-observer-transition-dedup-20260808.yml \
-            scripts/ops/apply_release_observer_transition_dedup.py
-          git config user.name "JSEC Notification Governance Cell"
-          git config user.email "juncajapan.inc@gmail.com"
-          git add -A
-          git commit -m "fix(observer): notify only on terminal state transitions"
-          git push origin HEAD:fix/release-observer-state-transition-dedup-20260808
+      - name: Export exact verified files
+        uses: actions/upload-artifact@v4
+        with:
+          name: observer-transition-dedup-${{ github.run_id }}
+          path: |
+            .github/workflows/junca-public-testnet-release-observer.yml
+            tests/test_junca_hardened_immutable_release_workflow.py
+          if-no-files-found: error
+          retention-days: 1
