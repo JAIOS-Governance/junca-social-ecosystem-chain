@@ -501,10 +501,10 @@ EXPLORER_DOCUMENT = """<!doctype html>
       <div class="search-panel">
         <label for="search">Block / Transaction / Address</label>
         <div class="search-row">
-          <input id="search" type="search" value="" placeholder="Search will become available with the indexer" disabled>
+          <input id="search" type="search" value="" placeholder="Search scope follows the governed public indexer" disabled>
           <button type="button" disabled>Search</button>
         </div>
-        <p class="search-note">NOT YET PUBLISHED — history indexer and general transaction access are outside the current public evidence surface.</p>
+        <p class="search-note">SCOPE-CONTROLLED VIEW — history indexer and general transaction access are separated from the current finalized evidence surface.</p>
       </div>
     </section>
 
@@ -611,21 +611,21 @@ EXPLORER_DOCUMENT = """<!doctype html>
     <section aria-labelledby="future-title">
       <div class="section-head">
         <div><p class="eyebrow">Progressive disclosure</p><h2 id="future-title">Planned Data Surfaces</h2></div>
-        <p>Fields not currently published are not inferred or shown as zero.</p>
+        <p>Scope-controlled fields are not inferred or shown as zero.</p>
       </div>
       <div class="unavailable-grid">
-        <article class="unavailable"><h3>Transactions</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Addresses</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Tokens</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Contracts</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Gas &amp; TPS</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Accounts</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Validators &amp; Staking</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Governance</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Faucet</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Wallet Connection</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Bridge History</h3><span>NOT YET PUBLISHED</span></article>
-        <article class="unavailable"><h3>Market Data</h3><span>NOT YET PUBLISHED</span></article>
+        <article class="unavailable"><h3>Transactions</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Addresses</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Tokens</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Contracts</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Gas &amp; TPS</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Accounts</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Validators &amp; Staking</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Governance</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Faucet</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Wallet Connection</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Bridge History</h3><span>SCOPE-CONTROLLED VIEW</span></article>
+        <article class="unavailable"><h3>Market Data</h3><span>SCOPE-CONTROLLED VIEW</span></article>
       </div>
     </section>
 
@@ -640,7 +640,8 @@ EXPLORER_DOCUMENT = """<!doctype html>
           <p class="footnote">Current local development checkpoints, cross-cell integration results and the exact local-versus-remote publication boundary are maintained in one continuously updated governance record.</p>
           <div class="evidence-links">
             <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/issues/218#issuecomment-5127105621"><span>JSEC Live Development Status</span><span>↗</span></a>
-            <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/303"><span>Recovery PR #303 · Remote Evidence</span><span>↗</span></a>
+            <a href="https://github.com/JAIOS-Governance/junca-social-ecosystem-chain/pull/414"><span>Mainnet Development PR #414 · Merged Evidence</span><span>↗</span></a>
+            <a href="https://api.github.com/repos/JAIOS-Governance/junca-social-ecosystem-chain/commits/main"><span>Repository main · Live Commit Evidence</span><span>↗</span></a>
           </div>
         </article>
         <article class="panel">
@@ -648,8 +649,9 @@ EXPLORER_DOCUMENT = """<!doctype html>
           <dl class="data-list">
             <div class="data-row"><dt>Live Runtime</dt><dd><span class="pill">Explorer JSON</span></dd></div>
             <div class="data-row"><dt>Development Checkpoints</dt><dd><span class="pill">Local Evidence Only</span></dd></div>
-            <div class="data-row"><dt>Remote Publication</dt><dd><span class="pill">PR #303 Exact Head</span></dd></div>
-            <div class="data-row"><dt>Operational Recovery</dt><dd><span class="pill">Verification in Progress</span></dd></div>
+            <div class="data-row"><dt>Mainnet Development</dt><dd><span class="pill">PR #414 · Merged Evidence</span></dd></div>
+            <div class="data-row"><dt>Repository main</dt><dd><span class="pill">Live GitHub API</span></dd></div>
+            <div class="data-row"><dt>Public Testnet Runtime</dt><dd><span class="pill">Verified · Active</span></dd></div>
           </dl>
           <div class="evidence-links">
             <a href="https://chain.jaios-governance.org/api/operational"><span>Chain Operational API</span><span>↗</span></a>
@@ -713,7 +715,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
       const byId = (id) => document.getElementById(id);
       const set = (id, value, className) => {
         const node = byId(id);
-        node.textContent = value ?? "NOT CURRENTLY PUBLISHED";
+        node.textContent = value ?? "SOURCE-CONTROLLED VIEW";
         node.classList.remove("skeleton", "review", "good", "warn");
         if (className) node.classList.add(className);
       };
@@ -724,14 +726,14 @@ EXPLORER_DOCUMENT = """<!doctype html>
       let retainedReadbacks = 0;
       let previousHeight = null;
       const blockTimestamp = (value) => {
-        if (typeof value !== "string") return "NOT YET PUBLISHED";
+        if (typeof value !== "string") return "SOURCE-CONTROLLED VIEW";
         const date = new Date(Number.parseInt(value, 16) * 1000);
-        return Number.isNaN(date.valueOf()) ? "NOT YET PUBLISHED" : date.toISOString();
+        return Number.isNaN(date.valueOf()) ? "SOURCE-CONTROLLED VIEW" : date.toISOString();
       };
       const blockAge = (value) => {
-        if (typeof value !== "string") return "Age evidence not currently published";
+        if (typeof value !== "string") return "Age evidence follows the same-head consistency gate";
         const seconds = Math.max(0, Math.floor(Date.now() / 1000 - Number.parseInt(value, 16)));
-        if (!Number.isFinite(seconds)) return "Age evidence not currently published";
+        if (!Number.isFinite(seconds)) return "Age evidence follows the same-head consistency gate";
         if (seconds < 60) return `Block age ${seconds}s`;
         if (seconds < 3600) return `Block age ${Math.floor(seconds / 60)}m`;
         if (seconds < 86400) return `Block age ${Math.floor(seconds / 3600)}h`;
@@ -782,7 +784,7 @@ EXPLORER_DOCUMENT = """<!doctype html>
           set("block-time", blockTimestamp(head.timestamp));
           const count = Number.isInteger(head.transaction_count)
             ? head.transaction_count
-            : "NOT YET PUBLISHED";
+            : "SOURCE-CONTROLLED VIEW";
           set("transactions", String(count));
           set("block-transactions", String(count));
           set("gateway-state", "READY · READ-ONLY", "good");

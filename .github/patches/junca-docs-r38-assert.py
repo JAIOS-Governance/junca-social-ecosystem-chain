@@ -26,7 +26,12 @@ patterns = [
     r"no platform guarantee",
 ]
 failures = []
-for path in root.rglob("*.html"):
+for path in [
+    candidate
+    for candidate in root.rglob("*")
+    if candidate.is_file()
+    and candidate.suffix.lower() in {".html", ".js", ".json", ".txt", ".xml", ".svg", ".webmanifest"}
+]:
     source = path.read_text(encoding="utf-8")
     visible = re.sub(r"<script[\s\S]*?</script>", " ", source, flags=re.I)
     visible = re.sub(r"<style[\s\S]*?</style>", " ", visible, flags=re.I)
