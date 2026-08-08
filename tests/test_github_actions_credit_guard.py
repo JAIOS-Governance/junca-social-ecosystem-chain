@@ -7,6 +7,12 @@ RUNTIME = ROOT / ".github/workflows/junca-validator-runtime-artifacts.yml"
 RELEASE_V2 = ROOT / ".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"
 CONTINUITY = ROOT / ".github/workflows/junca-public-testnet-continuity.yml"
 SAMPLER = ROOT / ".github/workflows/junca-public-testnet-health-sampler.yml"
+OBSOLETE_LIVE_PREFIX_CONTROLLER = (
+    ROOT / ".github/workflows/apply-live-prefix-patch-v2.yml"
+)
+OBSOLETE_LIVE_PREFIX_PATCH = (
+    ROOT / ".github/patches/evidence-bound-live-prefix.patch"
+)
 
 
 class GitHubActionsCreditGuardTests(unittest.TestCase):
@@ -95,6 +101,10 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
             "gh api --method POST",
         ):
             self.assertNotIn(forbidden, self.sampler)
+
+    def test_obsolete_repository_governance_patch_controller_is_retired(self) -> None:
+        self.assertFalse(OBSOLETE_LIVE_PREFIX_CONTROLLER.exists())
+        self.assertFalse(OBSOLETE_LIVE_PREFIX_PATCH.exists())
 
 
 if __name__ == "__main__":
