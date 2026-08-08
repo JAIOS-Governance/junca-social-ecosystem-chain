@@ -1,19 +1,12 @@
 # Fail-closed release acceptance. Periodic monitoring is isolated in
 # junca-public-testnet-health-sampler.yml so scheduled health degradation
 # never creates release failures, retry storms or incident-email fanout.
+# Main-branch pushes do not run this workflow: only an explicit governed
+# workflow_dispatch may produce a live continuity verdict.
 name: JUNCA Public Testnet Continuity Evidence
 
 on:
   pull_request:
-    paths:
-      - "scripts/ops/public_testnet_continuity.py"
-      - "scripts/ops/public_testnet_continuity_entrypoint.py"
-      - "scripts/ops/public_testnet_continuity_health_entrypoint.py"
-      - "tests/test_public_testnet_continuity.py"
-      - "tests/test_public_testnet_continuity_health_entrypoint.py"
-      - ".github/workflows/junca-public-testnet-continuity.yml"
-  push:
-    branches: [main]
     paths:
       - "scripts/ops/public_testnet_continuity.py"
       - "scripts/ops/public_testnet_continuity_entrypoint.py"
