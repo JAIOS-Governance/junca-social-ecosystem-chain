@@ -51,9 +51,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
 
@@ -78,9 +78,9 @@ jobs:
       INTERVAL_SECONDS: ${{ inputs.interval_seconds || '30' }}
       REQUIRE_ADVANCEMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.require_advancement || false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
 
