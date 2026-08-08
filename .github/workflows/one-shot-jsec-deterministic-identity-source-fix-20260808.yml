@@ -29,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Apply bounded source repair
-        run: python scripts/ops/apply_deterministic_identity_patch.py
+        run: python scripts/ops/apply_deterministic_identity_patch_v2.py
 
       - name: Validate deterministic identity contracts
         shell: bash
@@ -55,4 +55,4 @@ jobs:
           git commit -m "fix(runtime): pin and migrate validator system identity"
           git push origin HEAD:fix/jsec-deterministic-system-identity-20260808
 
-# activation: structural-function-boundary-v2
+# activation: structural-bootstrap-v3
