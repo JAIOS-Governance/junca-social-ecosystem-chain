@@ -16,56 +16,56 @@
     {
       "route": "/",
       "file": "index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/protocol",
       "file": "protocol/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/assets",
       "file": "assets/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/interoperability",
       "file": "interoperability/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/implementation",
       "file": "implementation/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/governance",
       "file": "governance/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/evidence",
       "file": "evidence/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     },
     {
       "route": "/glossary",
       "file": "glossary/index.html",
-      "replacements": 1,
+      "replacements": 2,
       "prohibited_visible_terms": [],
       "result": "PASS"
     }
