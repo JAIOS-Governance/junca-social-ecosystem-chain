@@ -3,8 +3,8 @@
   "release": "2026.08.07",
   "revision": "R38",
   "design_source": "Sites Version 15",
-  "chain_source_commit": "8f13af533589e8552c937ae79391ecc36fcc10ea",
-  "development_source_commit": "8f13af533589e8552c937ae79391ecc36fcc10ea",
+  "chain_source_commit": "3ec4e12ca8a59db8adc7cd6d60949ef3fdbc92b1",
+  "development_source_commit": "3ec4e12ca8a59db8adc7cd6d60949ef3fdbc92b1",
   "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
   "runtime_artifact_commit_status": "VERIFIED",
   "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
@@ -16,7 +16,7 @@
   "runtime_status": "VERIFIED_READY_READ_ONLY",
   "public_endpoint_status": "ACTIVE_READ_ONLY",
   "runtime_evidence": {
-    "observed_at": "2026-08-08T15:25:46.213785+00:00",
+    "observed_at": "2026-08-08T15:54:17.747653+00:00",
     "network": "VERIFIED",
     "runtime": "READY_READ_ONLY",
     "finality": "CERTIFICATE_OBSERVED",
@@ -40,7 +40,7 @@
       "explorer_json": "https://explorer.jaios-governance.org/explorer.json",
       "selected_explorer_endpoint": "https://explorer.jaios-governance.org/explorer.json",
       "selected_explorer_source_mode": "CANONICAL EXPLORER",
-      "documentation_source_commit": "8f13af533589e8552c937ae79391ecc36fcc10ea",
+      "documentation_source_commit": "3ec4e12ca8a59db8adc7cd6d60949ef3fdbc92b1",
       "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
       "runtime_artifact_commit_status": "VERIFIED",
       "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
@@ -79,47 +79,47 @@
     {
       "path": "index.html",
       "bytes": 104132,
-      "sha256": "19cf740ed6e52613cb907f6fbfede8bac4301e8f76433af03f4b2d28166d2269"
+      "sha256": "6b5c1bcfb81234cc8bf4dea84801eab056744dc8aa092f174d2516180d94ef15"
     },
     {
       "path": "protocol/index.html",
       "bytes": 106399,
-      "sha256": "a221b2132fb87018729bcc165ec83513eec62813e257769d7ba3bd1f1c57dd22"
+      "sha256": "512474c374880ca082821ebc6d829a64666009c1d3ae48046f3d3599fcee499e"
     },
     {
       "path": "assets/index.html",
       "bytes": 106233,
-      "sha256": "f871b8f30d3f31fbe9e79a22fe36cb782aadb399fc6c4d05bae5139dfab806c4"
+      "sha256": "41136441da891d8e3373dc0089d0650a2d7bf8ff0d45e1c0c63e2fa48273ed32"
     },
     {
       "path": "interoperability/index.html",
       "bytes": 106278,
-      "sha256": "aad6fdd94a2230e4aad6b07b406882e8052c0d03c62079a950b7e63474e7ff33"
+      "sha256": "08bee37336ed338dd8235d8ac8039e46a53391cb558aee5b7f6aa8f2d4027f0b"
     },
     {
       "path": "implementation/index.html",
       "bytes": 106460,
-      "sha256": "d7bc3909394f1b2b5574d91e4989f7b7dc589760215f3660d9f5d6a1708ab4f2"
+      "sha256": "be7bf226de7b59a4fa9c8e9d313909f83ea1994b3d416c7db16a4a60099cc6b9"
     },
     {
       "path": "governance/index.html",
       "bytes": 106493,
-      "sha256": "44de46a04bfb6f52671c7be485d341f9ace0378f9e6111e6a82c2dfaa8c1fd99"
+      "sha256": "d5e22ef1b15c62b7205bb40b90320fe31d91b726f1004925b6f48d0c8840f94d"
     },
     {
       "path": "evidence/index.html",
       "bytes": 106463,
-      "sha256": "c6fb46b565ea972054ba6aa61d2db5bb03676402606c58b276586a7d2c3228f2"
+      "sha256": "38c941bcc137d1e3321ffa2d64bc620ee806a803ad9a988896a5074b47865e6a"
     },
     {
       "path": "glossary/index.html",
       "bytes": 106112,
-      "sha256": "00ef038dc5c07e719412874ce4f404bbb2445903d3f40d91cccc69ad9b87a908"
+      "sha256": "ca0edb5d58d8dc0b3105fa8b6af882d8803ca5d034a131b67ba9393ed7396630"
     },
     {
       "path": "404.html",
       "bytes": 104132,
-      "sha256": "9d7fb4087c5d859eaa821ff618bfd15144c097722899e7af9b60bf1bad58eb4e"
+      "sha256": "66c2eb4d5422ca1d37feb864306e2cde980d3bff7e0bc43dabf9dcfce908a737"
     },
     {
       "path": "apple-touch-icon.png",
