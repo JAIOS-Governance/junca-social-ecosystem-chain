@@ -99,6 +99,47 @@ JAIOS Institutional Governance manages issuance, release control, treasury custo
 
 No public relaunch is classified as complete until runtime evidence, independent readback, and rollback evidence all pass.
 
+## Mainnet controlled-activation authorization evidence
+
+`scripts/junca_mainnet_release_authorization_gate.py` validates a short-lived,
+domain-separated authorization envelope before any Mainnet activation controller
+may become eligible to run. Validation is intentionally separate from execution:
+a successful result records `authorization_evidence_valid=true` and
+`activation_executed=false`.
+
+The envelope must bind the exact repository, source commit and tree, release
+manifest, immutable artifact, SBOM, genesis, release request, Creative
+Constitution revision and Constitution digest. Two unique independent approvals
+must review that same commit and tree before the verified Founder / Chairman /
+CEO identity records final approval. Authorization windows are limited to 15
+minutes; final approval may be at most 24 hours old and reviews at most 72 hours
+old.
+
+Reviewer names are not authority. A separately supplied immutable approval policy
+registers each permitted identity, organizational role and authenticated key
+fingerprint, sets the threshold, and names every required review role. Its
+domain-separated digest is part of the release binding. The gate rejects an
+unregistered reviewer, role substitution, shared key, shared role, threshold
+reduction, approver/reviewer overlap, or any policy whose separation-of-duties
+flags are weaker than the canonical contract.
+
+Each review has its own provenance-bound attestation digest. The complete review
+set is normalized into an order-independent approval-set digest, and final CEO
+approval is bound to that exact set. The authorization envelope then binds all
+three digest layers inside the fixed replay domain
+`junca-mainnet-controlled-activation/v1`. A matching request, manifest,
+authorization or approval set from another replay domain is rejected rather than
+silently treated as unrelated evidence.
+
+An append-only consumed-evidence ledger rejects reuse of the authorization ID,
+authorization digest, request digest, release-manifest digest, or approval-set
+digest. Any mismatch,
+duplicate reviewer, stale or future window, altered digest, or unsafe boundary
+fails closed. Evidence cannot set `Mainnet Changed`, `Assets Moved`, `Bridge
+Activated`, or `Mainnet Activation Authorized` to true. This gate performs no
+merge, workflow dispatch, deployment, AWS mutation, asset movement, bridge
+activation, or Mainnet activation.
+
 ## Scalable architecture baseline / 拡張基準
 
 | Area | Initial baseline |

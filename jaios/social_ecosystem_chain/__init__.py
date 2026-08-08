@@ -124,6 +124,16 @@ from .release import (
     ChainReleasePolicyError,
     load_release_policy,
 )
+from .mainnet_release_authorization import (
+    MainnetReleaseAuthorizationError,
+    ValidatedMainnetReleaseAuthorization,
+    compute_approval_policy_digest,
+    compute_approval_set_digest,
+    compute_authorization_digest,
+    compute_final_approval_attestation_digest,
+    compute_review_attestation_digest,
+    validate_mainnet_release_authorization,
+)
 from .public_testnet import (
     REQUIRED_SERVICES,
     PublicTestnetError,
@@ -250,6 +260,14 @@ __all__ = [
     "ChainReleasePolicy",
     "ChainReleasePolicyError",
     "load_release_policy",
+    "MainnetReleaseAuthorizationError",
+    "ValidatedMainnetReleaseAuthorization",
+    "compute_approval_policy_digest",
+    "compute_approval_set_digest",
+    "compute_authorization_digest",
+    "compute_final_approval_attestation_digest",
+    "compute_review_attestation_digest",
+    "validate_mainnet_release_authorization",
     "REQUIRED_GATES",
     "ChainReadiness",
     "ChainReadinessError",
