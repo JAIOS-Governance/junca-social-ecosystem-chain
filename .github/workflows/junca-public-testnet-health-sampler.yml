@@ -1,0 +1,89 @@
+name: JUNCA Public Testnet Health Sampler
+
+# Low-cost, non-blocking operational sampling.
+# Release acceptance remains fail-closed in JUNCA Public Testnet Continuity Evidence.
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: junca-public-testnet-health-sampler
+  cancel-in-progress: true
+
+jobs:
+  sample:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout current monitor contract
+        id: checkout
+        uses: actions/checkout@v7.0.1
+        continue-on-error: true
+
+      - name: Record provider checkout degradation without a failed run
+        if: steps.checkout.outcome != 'success'
+        run: |
+          echo "::warning title=Health sampler checkout unavailable::No retry was started; the next bounded schedule remains authoritative."
+          {
+            echo "## Public Testnet health sampler"
+            echo "- State: PROVIDER_CHECKOUT_UNAVAILABLE"
+            echo "- Retry started: false"
+            echo "- Release verdict changed: false"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect one bounded Public Testnet health sample
+        id: health
+        if: steps.checkout.outcome == 'success'
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts/public-testnet-health-sampler
+          python3 scripts/ops/public_testnet_continuity_health_entrypoint.py \
+            --operational-url https://health.jaios-governance.org/health \
+            --explorer-url https://explorer.jaios-governance.org/explorer.json \
+            --source-sha "${GITHUB_SHA}" \
+            --expected-chain-id 20260723 \
+            --expected-peer-count 2 \
+            --expected-signed-power 3 \
+            --expected-total-power 3 \
+            --max-head-age-seconds 300 \
+            --samples 1 \
+            --interval-seconds 1 \
+            --output artifacts/public-testnet-health-sampler/evidence.json
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            state="HEALTHY"
+          else
+            state="DEGRADED"
+            echo "::warning title=Public Testnet health degradation::Evidence was retained without failing or retrying the scheduled sampler."
+          fi
+
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Public Testnet health sampler"
+            echo "- State: $state"
+            echo "- Exit status: $status"
+            echo "- Automatic retry: false"
+            echo "- Incident email: false"
+            echo "- Release verdict changed: false"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Scheduled sampling is evidence collection, not release acceptance.
+          # A degraded sample must not create a GitHub failure/retry storm.
+          exit 0
+
+      - name: Retain degraded evidence only
+        if: steps.health.outputs.state == 'DEGRADED'
+        uses: actions/upload-artifact@v4
+        with:
+          name: junca-public-testnet-health-degraded-${{ github.run_id }}
+          path: artifacts/public-testnet-health-sampler/
+          if-no-files-found: warn
+          retention-days: 7
