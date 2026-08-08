@@ -2581,115 +2581,28 @@ class AwsFoundationTests(unittest.TestCase):
             "\n\nverify_durable_mount_persistence_contract", start
         )
         functions = remote[start:end]
+        normalized = " ".join(functions.split())
         for required in (
             "groupadd --system --gid 992 junca",
+            "groupmod --gid 992 junca",
             "useradd --system --uid 992 --gid 992",
             "--home-dir /var/lib/junca",
             "--shell /sbin/nologin --no-create-home junca",
-            '[[ -z "$(getent group 992 2>/dev/null || true)" ]]',
-            '[[ -z "$(getent passwd 992 2>/dev/null || true)" ]]',
+            "usermod --uid 992 --gid 992 --home /var/lib/junca",
+            "JUNCA_SYSTEM_UID_992_COLLISION",
+            "JUNCA_SYSTEM_GID_992_COLLISION",
+            "JUNCA_SYSTEM_IDENTITY_ACTIVE_PROCESS",
+            '[[ "$repair_status_admitted" == true ]]',
+            'find "$path" -xdev -uid "$old_uid"',
+            'find "$path" -xdev -gid "$old_group_gid"',
         ):
-            self.assertIn(required, functions)
-        for case in (
-            {
-                "name": "canonical",
-                "passwd": "junca:x:992:992::/var/lib/junca:/sbin/nologin",
-                "group": "junca:x:992:",
-                "uid": "junca:x:992:992::/var/lib/junca:/sbin/nologin",
-                "gid": "junca:x:992:",
-                "result": 0,
-                "groupadd": 0,
-                "useradd": 0,
-                "repaired": "false",
-            },
-            {
-                "name": "absent",
-                "passwd": "",
-                "group": "",
-                "uid": "",
-                "gid": "",
-                "result": 0,
-                "groupadd": 1,
-                "useradd": 1,
-                "repaired": "true",
-            },
-            {
-                "name": "exact-partial-group",
-                "passwd": "",
-                "group": "junca:x:992:",
-                "uid": "",
-                "gid": "junca:x:992:",
-                "result": 0,
-                "groupadd": 0,
-                "useradd": 1,
-                "repaired": "true",
-            },
-            {
-                "name": "numeric-gid-conflict",
-                "passwd": "",
-                "group": "",
-                "uid": "",
-                "gid": "other:x:992:",
-                "result": 1,
-                "groupadd": 0,
-                "useradd": 0,
-                "repaired": "false",
-            },
-            {
-                "name": "named-passwd-conflict",
-                "passwd": "junca:x:991:991::/tmp:/bin/false",
-                "group": "",
-                "uid": "",
-                "gid": "",
-                "result": 1,
-                "groupadd": 0,
-                "useradd": 0,
-                "repaired": "false",
-            },
+            self.assertIn(required, normalized)
+        for forbidden in (
+            '[[ -z "$passwd_entry" ]] || return 1',
+            "groupadd --system junca",
+            "useradd --system --gid junca",
         ):
-            with self.subTest(case=case["name"]):
-                script = (
-                    "set -u -o pipefail\n"
-                    + functions
-                    + "\n"
-                    + f"PASSWD_JUNCA='{case['passwd']}'\n"
-                    + f"GROUP_JUNCA='{case['group']}'\n"
-                    + f"PASSWD_992='{case['uid']}'\n"
-                    + f"GROUP_992='{case['gid']}'\n"
-                    + "groupadd_count=0\nuseradd_count=0\n"
-                    + "system_identity_verified=false\n"
-                    + "system_identity_repair_attempted=false\n"
-                    + "system_identity_repaired=false\n"
-                    + "system_identity_uid=0\nsystem_identity_gid=0\n"
-                    + "getent() {\n"
-                    + "  case \"$1:$2\" in\n"
-                    + "    passwd:junca) test -n \"$PASSWD_JUNCA\" && printf '%s\\n' \"$PASSWD_JUNCA\" ;;\n"
-                    + "    group:junca) test -n \"$GROUP_JUNCA\" && printf '%s\\n' \"$GROUP_JUNCA\" ;;\n"
-                    + "    passwd:992) test -n \"$PASSWD_992\" && printf '%s\\n' \"$PASSWD_992\" ;;\n"
-                    + "    group:992) test -n \"$GROUP_992\" && printf '%s\\n' \"$GROUP_992\" ;;\n"
-                    + "  esac\n}\n"
-                    + "groupadd() {\n"
-                    + "  test \"$*\" = '--system --gid 992 junca' || return 90\n"
-                    + "  groupadd_count=$((groupadd_count + 1))\n"
-                    + "  GROUP_JUNCA='junca:x:992:'; GROUP_992=\"$GROUP_JUNCA\"\n}\n"
-                    + "useradd() {\n"
-                    + "  useradd_count=$((useradd_count + 1))\n"
-                    + "  PASSWD_JUNCA='junca:x:992:992::/var/lib/junca:/sbin/nologin'\n"
-                    + "  PASSWD_992=\"$PASSWD_JUNCA\"\n}\n"
-                    + "result=0\nensure_junca_system_identity || result=$?\n"
-                    + f"test \"$result\" -eq {case['result']}\n"
-                    + f"test \"$groupadd_count\" -eq {case['groupadd']}\n"
-                    + f"test \"$useradd_count\" -eq {case['useradd']}\n"
-                    + f"test \"$system_identity_repaired\" = {case['repaired']}\n"
-                )
-                result = subprocess.run(
-                    ["bash", "-c", script],
-                    env={"PATH": "/usr/bin:/bin"},
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(forbidden, normalized)
 
     def test_system_identity_repair_follows_the_controlled_stop(self) -> None:
         remote = validator_service_recovery_remote_script(

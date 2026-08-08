@@ -1985,25 +1985,86 @@ verify_junca_system_identity() {
 ensure_junca_system_identity() {
   local passwd_entry=""
   local group_entry=""
+  local occupied_entry=""
+  local passwd_name=""
+  local old_uid=""
+  local old_primary_gid=""
+  local old_home=""
+  local old_shell=""
   local group_name=""
-  local group_gid=""
+  local old_group_gid=""
+  local path=""
   if verify_junca_system_identity; then
     return 0
   fi
+  [[ "$repair_status_admitted" == true ]] || return 1
   system_identity_repair_attempted=true
   passwd_entry="$(getent passwd junca 2>/dev/null || true)"
   group_entry="$(getent group junca 2>/dev/null || true)"
-  [[ -z "$passwd_entry" ]] || return 1
+
   if [[ -n "$group_entry" ]]; then
-    IFS=: read -r group_name _ group_gid _ <<<"$group_entry"
-    [[ "$group_name" == junca && "$group_gid" == 992 ]] || return 1
+    IFS=: read -r group_name _ old_group_gid _ <<<"$group_entry"
+    [[ "$group_name" == junca ]] || return 1
+    if [[ "$old_group_gid" != 992 ]]; then
+      occupied_entry="$(getent group 992 2>/dev/null || true)"
+      if [[ -n "$occupied_entry" && "$occupied_entry" != "$group_entry" ]]; then
+        echo "JUNCA_SYSTEM_GID_992_COLLISION entry=${occupied_entry%%:*}" >&2
+        return 1
+      fi
+      groupmod --gid 992 junca || return 1
+    fi
   else
-    [[ -z "$(getent group 992 2>/dev/null || true)" ]] || return 1
+    occupied_entry="$(getent group 992 2>/dev/null || true)"
+    if [[ -n "$occupied_entry" ]]; then
+      echo "JUNCA_SYSTEM_GID_992_COLLISION entry=${occupied_entry%%:*}" >&2
+      return 1
+    fi
     groupadd --system --gid 992 junca || return 1
   fi
-  [[ -z "$(getent passwd 992 2>/dev/null || true)" ]] || return 1
-  useradd --system --uid 992 --gid 992 --home-dir /var/lib/junca \
-    --shell /sbin/nologin --no-create-home junca || return 1
+
+  if [[ -n "$passwd_entry" ]]; then
+    IFS=: read -r passwd_name _ old_uid old_primary_gid _ old_home       old_shell <<<"$passwd_entry"
+    [[ "$passwd_name" == junca ]] || return 1
+    systemctl stop junca-public-rpc.service       junca-public-explorer.service >/dev/null 2>&1 || true
+    if [[ "$old_uid" != 992 ]]; then
+      occupied_entry="$(getent passwd 992 2>/dev/null || true)"
+      if [[ -n "$occupied_entry" && "$occupied_entry" != "$passwd_entry" ]]; then
+        echo "JUNCA_SYSTEM_UID_992_COLLISION entry=${occupied_entry%%:*}" >&2
+        return 1
+      fi
+      for attempt in $(seq 1 20); do
+        if ! pgrep -u "$old_uid" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+      if pgrep -u "$old_uid" >/dev/null 2>&1; then
+        echo "JUNCA_SYSTEM_IDENTITY_ACTIVE_PROCESS uid=${old_uid}" >&2
+        return 1
+      fi
+    fi
+    usermod --uid 992 --gid 992 --home /var/lib/junca       --shell /sbin/nologin junca || return 1
+  else
+    occupied_entry="$(getent passwd 992 2>/dev/null || true)"
+    if [[ -n "$occupied_entry" ]]; then
+      echo "JUNCA_SYSTEM_UID_992_COLLISION entry=${occupied_entry%%:*}" >&2
+      return 1
+    fi
+    useradd --system --uid 992 --gid 992       --home-dir /var/lib/junca --shell /sbin/nologin       --no-create-home junca || return 1
+  fi
+
+  for path in /etc/junca /var/lib/junca /var/log/junca /opt/junca; do
+    [[ -e "$path" && ! -L "$path" ]] || continue
+    if [[ -n "$old_uid" && "$old_uid" != 992 ]]; then
+      find "$path" -xdev -uid "$old_uid" -exec chown -h 992 {} + ||
+        return 1
+    fi
+    if [[ -n "$old_group_gid" && "$old_group_gid" != 992 ]]; then
+      find "$path" -xdev -gid "$old_group_gid" -exec chgrp -h 992 {} + ||
+        return 1
+    fi
+  done
+  sync
   verify_junca_system_identity || return 1
   system_identity_repaired=true
 }
@@ -3097,7 +3158,10 @@ if [[ "$accepted" != true &&
         )"
         if [[ "$containment_health_status" == "healthy" &&
               "$containment_validator_id" == "$expected_validator_id" ]]; then
-          containment_recovered=true
+          if systemctl start junca-public-rpc.service \
+              junca-public-explorer.service >/dev/null 2>&1; then
+            containment_recovered=true
+          fi
           break
         fi
       fi
