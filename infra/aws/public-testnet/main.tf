@@ -488,7 +488,7 @@ resource "aws_instance" "validator" {
       : 0
     )
     block_header_v2_activation_height = var.block_header_v2_activation_height
-    validator_state_required = var.enable_validator_state_volumes
+    validator_state_required          = var.enable_validator_state_volumes
     validator_state_volume_id = (
       var.enable_validator_state_volumes && var.provision_validator_state_volumes
       ? aws_ebs_volume.validator_state[count.index].id
