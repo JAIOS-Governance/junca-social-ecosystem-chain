@@ -255,6 +255,9 @@ if ((await readFile(join(dist, "googlebc356aae986ed066.html"), "utf8")).trim() !
 }
 await readFile(join(dist, "404.html"), "utf8");
 const releaseManifest = JSON.parse(await readFile(join(dist, "release-manifest.json"), "utf8"));
+if (/No Monetary Value|金銭的価値|金銭価値|資金価値/i.test(JSON.stringify(releaseManifest))) {
+  failures.push("release manifest must not republish unapproved value-disclaimer wording");
+}
 if (releaseManifest.revision !== "R38") failures.push("release manifest revision must be R38");
 if (!/^[0-9a-f]{40}$/.test(releaseManifest.chain_source_commit ?? "")) {
   failures.push("release manifest must bind the exact development source commit");

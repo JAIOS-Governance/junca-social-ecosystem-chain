@@ -3,8 +3,8 @@
   "release": "2026.08.07",
   "revision": "R38",
   "design_source": "Sites Version 15",
-  "chain_source_commit": "8738e791a47b54b15b8bb65774f8d482e0267b57",
-  "development_source_commit": "8738e791a47b54b15b8bb65774f8d482e0267b57",
+  "chain_source_commit": "3ec4e12ca8a59db8adc7cd6d60949ef3fdbc92b1",
+  "development_source_commit": "3ec4e12ca8a59db8adc7cd6d60949ef3fdbc92b1",
   "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
   "runtime_artifact_commit_status": "VERIFIED",
   "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
@@ -16,14 +16,14 @@
   "runtime_status": "VERIFIED_READY_READ_ONLY",
   "public_endpoint_status": "ACTIVE_READ_ONLY",
   "runtime_evidence": {
-    "observed_at": "2026-08-07T07:23:11.751346+00:00",
+    "observed_at": "2026-08-08T15:54:17.747653+00:00",
     "network": "VERIFIED",
     "runtime": "READY_READ_ONLY",
     "finality": "CERTIFICATE_OBSERVED",
     "explorer_schema": "junca-public-explorer/v4",
-    "finalized_height": 15789,
-    "finalized_hash": "0x4e3bf3be298a016613d28bd0983a977f281fcf3dbd36f8ee6b01fe4522cfb887",
-    "certificate_hash": "0x40e8c19f33471384f74c52862ca61c1a71838aa3623173c28beb20f952756cda",
+    "finalized_height": 19184,
+    "finalized_hash": "0x9fba0dfba0d20f9042077f713263041edd66b4f18f8eaca85fe97b0615e6363d",
+    "certificate_hash": "0x6ef05870e41a1e3cdb6469b03fcca50828991fd8bec7142e04dd050569548d68",
     "state_root": "0x4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     "signed_power": 3,
     "total_power": 3,
@@ -31,8 +31,8 @@
     "client_version": "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1",
     "transaction_count": 0,
     "peer_count": 2,
-    "block_timestamp": "0x6a7587d4",
-    "block_timestamp_public_label": "2026-08-07T07:23:00.000Z",
+    "block_timestamp": "0x6a7715ae",
+    "block_timestamp_public_label": "2026-08-08T11:40:30.000Z",
     "block_timestamp_public_label_ja": "公開時点の確定Block時刻",
     "block_activity_conclusion": "PUBLICATION_SNAPSHOT_ONLY",
     "source_evidence": {
@@ -40,7 +40,7 @@
       "explorer_json": "https://explorer.jaios-governance.org/explorer.json",
       "selected_explorer_endpoint": "https://explorer.jaios-governance.org/explorer.json",
       "selected_explorer_source_mode": "CANONICAL EXPLORER",
-      "documentation_source_commit": "8738e791a47b54b15b8bb65774f8d482e0267b57",
+      "documentation_source_commit": "3ec4e12ca8a59db8adc7cd6d60949ef3fdbc92b1",
       "runtime_artifact_commit": "42a64411ee406dfda814cf519a74478f5669cb7b",
       "runtime_artifact_commit_status": "VERIFIED",
       "runtime_genesis_sha256": "285f1aa2610ec98fba598aa3c8e721b54daeeddf2047b7f809f57c63db98dc95",
@@ -78,48 +78,48 @@
   "files": [
     {
       "path": "index.html",
-      "bytes": 104123,
-      "sha256": "537688168e9c22bced11ed4ccfd3a1ccc31ad7fa71d1c6d5081fb90c509e97f4"
+      "bytes": 104132,
+      "sha256": "6b5c1bcfb81234cc8bf4dea84801eab056744dc8aa092f174d2516180d94ef15"
     },
     {
       "path": "protocol/index.html",
-      "bytes": 106390,
-      "sha256": "d43349214501b008ce2206585bce787930a9340e9678e37caf2e02431696f751"
+      "bytes": 106399,
+      "sha256": "512474c374880ca082821ebc6d829a64666009c1d3ae48046f3d3599fcee499e"
     },
     {
       "path": "assets/index.html",
-      "bytes": 106224,
-      "sha256": "1d9bf8d88aa83da11bede0564d452efe07634bb6a254f4adce96f4232674ec4c"
+      "bytes": 106233,
+      "sha256": "41136441da891d8e3373dc0089d0650a2d7bf8ff0d45e1c0c63e2fa48273ed32"
     },
     {
       "path": "interoperability/index.html",
-      "bytes": 106269,
-      "sha256": "35566c89533312b881cec685cc0bb66b7389323a5904c594dcc6cb6ddaf6437f"
+      "bytes": 106278,
+      "sha256": "08bee37336ed338dd8235d8ac8039e46a53391cb558aee5b7f6aa8f2d4027f0b"
     },
     {
       "path": "implementation/index.html",
-      "bytes": 106451,
-      "sha256": "e24af975739d890c6f74c10e7ce0a4ff6a52663557854783d05e66a4ff5c7116"
+      "bytes": 106460,
+      "sha256": "be7bf226de7b59a4fa9c8e9d313909f83ea1994b3d416c7db16a4a60099cc6b9"
     },
     {
       "path": "governance/index.html",
-      "bytes": 106484,
-      "sha256": "39a8aa8533d3a40c3aebf9700a7a6d6e1a14a3c2f9305884dea92a89c30d8cf6"
+      "bytes": 106493,
+      "sha256": "d5e22ef1b15c62b7205bb40b90320fe31d91b726f1004925b6f48d0c8840f94d"
     },
     {
       "path": "evidence/index.html",
-      "bytes": 106454,
-      "sha256": "e3233ad433b7052c84c8def89b02b0eddc5f62b6a7cf96c9c14dd34b59bde1bb"
+      "bytes": 106463,
+      "sha256": "38c941bcc137d1e3321ffa2d64bc620ee806a803ad9a988896a5074b47865e6a"
     },
     {
       "path": "glossary/index.html",
-      "bytes": 106103,
-      "sha256": "5315f536c5edd4271d4046d02cdb599c120e4bbadb361293857d413d94e6f953"
+      "bytes": 106112,
+      "sha256": "ca0edb5d58d8dc0b3105fa8b6af882d8803ca5d034a131b67ba9393ed7396630"
     },
     {
       "path": "404.html",
-      "bytes": 104123,
-      "sha256": "899ee3596b2a6e573f66bb73fcd6ee12a019966f7a156c6f464b04c67b2c9b5c"
+      "bytes": 104132,
+      "sha256": "66c2eb4d5422ca1d37feb864306e2cde980d3bff7e0bc43dabf9dcfce908a737"
     },
     {
       "path": "apple-touch-icon.png",
@@ -298,8 +298,8 @@
     },
     {
       "path": "secondary-language.js",
-      "bytes": 49707,
-      "sha256": "59c0ec94ccd84d687fe8d4ff7183448701f2e01bc22b23b4592351a586289c96"
+      "bytes": 49816,
+      "sha256": "03540f6efe84a913166ef9846537981d64a61d5ff2140b3063dbc73fd3e223b8"
     },
     {
       "path": "sitemap.xml",
@@ -324,21 +324,10 @@
   ],
   "public_status_language_policy": {
     "authority": "Latest CEO directive and Creative Constitution",
-    "effective_date": "2026-08-07",
+    "effective_date": "2026-08-08",
     "routes_audited": 8,
-    "prohibited_public_terms": [
-      "PENDING",
-      "BLOCKED",
-      "No Monetary Value",
-      "No Active",
-      "Not Activated",
-      "Not Yet Published",
-      "NOT CURRENTLY PUBLISHED",
-      "EVIDENCE REFRESHING",
-      "Not Launched",
-      "not-activated",
-      "保留中"
-    ],
+    "policy_scope": "APPROVED PUBLIC STATUS FAMILIES ONLY",
+    "rule_vocabulary_republished": false,
     "approved_status_families": [
       "Implemented / CI Verified",
       "Verification in Progress",

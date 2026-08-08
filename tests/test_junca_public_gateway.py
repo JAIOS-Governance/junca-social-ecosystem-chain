@@ -158,7 +158,7 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("Network Overview", document)
         self.assertIn("Finality Overview", document)
         self.assertIn("Latest Finalized Block", document)
-        self.assertIn("NOT YET PUBLISHED", document)
+        self.assertIn("SCOPE-CONTROLLED VIEW", document)
         self.assertNotIn("Not Available Yet", document)
         self.assertIn("Public Testnet / Protocol Validation Environment", document)
         self.assertIn("https://explorer.jaios-governance.org/", document)
@@ -169,12 +169,16 @@ class PublicGatewayTests(unittest.TestCase):
         self.assertIn("footer-destinations", document)
         self.assertIn("JSEC Development Evidence", document)
         self.assertIn("issuecomment-5127105621", document)
-        self.assertIn("Recovery PR #303", document)
+        self.assertIn("Mainnet Development PR #414", document)
+        self.assertNotIn("PR #303", document)
+        self.assertIn("Repository main · Live Commit Evidence", document)
+        self.assertIn("/commits/main", document)
         self.assertIn("https://chain.jaios-governance.org/api/operational", document)
         self.assertIn("Local Evidence Only", document)
-        self.assertIn("Verification in Progress", document)
+        self.assertIn("Public Testnet Runtime", document)
+        self.assertIn("Verified · Active", document)
         self.assertIn(
-            "Fields not currently published are not inferred or shown as zero.",
+            "Scope-controlled fields are not inferred or shown as zero.",
             document,
         )
         self.assertNotIn(

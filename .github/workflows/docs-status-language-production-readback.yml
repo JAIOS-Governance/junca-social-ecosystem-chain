@@ -101,7 +101,9 @@ jobs:
           jq -e --arg sha "${SOURCE_SHA}" '
             .development_source_commit == $sha and
             .public_status_language_policy.result == "PASS" and
-            .public_status_language_policy.routes_audited == 8
+            .public_status_language_policy.routes_audited == 8 and
+            .public_status_language_policy.rule_vocabulary_republished == false and
+            ((tostring | test("No Monetary Value|金銭的価値|金銭価値|資金価値"; "i")) | not)
           ' /tmp/docs-readback/release-manifest.json >/dev/null
 
           printf 'audit_sha256=%s\n' "$(sha256sum /tmp/docs-readback/status-language-audit.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
