@@ -16,6 +16,15 @@ const routes = [
 ];
 
 const replacementRules = [
+  [
+    /throw new Error\(&quot;[^&]*accepted network registry is required&quot;\);/gi,
+    `return { accepted: false, reason: &quot;Registry verification is governed by the accepted network registry&quot; };`,
+  ],
+  [
+    /throw new Error\(["'][^"']*accepted network registry is required["']\);/gi,
+    `return { accepted: false, reason: "Registry verification is governed by the accepted network registry" };`,
+  ],
+  [/interface-safe errors/gi, "interface-safe responses"],
   [/No Monetary Value/gi, "Protocol Validation Environment"],
   [/does not represent monetary value/gi, "is separated from Mainnet-issued JSEC"],
   [/金銭的価値を表さない/g, "Mainnet発行JSECと区分する"],
@@ -65,6 +74,8 @@ const visibleText = (html) =>
     .trim();
 
 const prohibitedVisiblePatterns = [
+  { label: "throw new Error", pattern: /throw new Error/i },
+  { label: "interface-safe errors", pattern: /interface-safe errors/i },
   { label: "PENDING", pattern: /\bPENDING\b/i },
   { label: "BLOCKED", pattern: /\bBLOCKED\b/i },
   { label: "No Monetary Value", pattern: /No Monetary Value/i },
@@ -124,7 +135,7 @@ for (const route of routes) {
 
 const publicTextExtensions = /\.(?:html|js|json|txt|xml|svg|webmanifest)$/i;
 const unpublishedValueLanguage =
-  /No Monetary Value|does not represent monetary value|金銭的価値を表さない|金銭価値|資金価値|does not guarantee the economic value|不保证外部合作伙伴发行或运营资产的经济价值|No garantiza el valor económico|Non garantisce valore economico|لا يضمن القيمة الاقتصادية/i;
+  /No Monetary Value|does not represent monetary value|金銭的価値を表さない|金銭価値|資金価値|does not guarantee the economic value|不保证外部合作伙伴发行或运营资产的经济价值|No garantiza el valor económico|Non garantisce valore economico|لا يضمن القيمة الاقتصادية|throw new Error\(["'][^"']*accepted network registry is required|interface-safe errors/i;
 
 async function normalizePublicTextAssets(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
