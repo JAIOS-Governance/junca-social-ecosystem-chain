@@ -126,7 +126,14 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             'if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then',
             '"repos/${GITHUB_REPOSITORY}/issues/269"',
             "publish_with_retry PATCH",
-            'incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"',
+            "group: junca-public-testnet-release-observer-${{ github.event.action == 'completed' && 'terminal-publication' || github.event.workflow_run.id }}",
+            'prior_current_state=""',
+            'prior_phase=""',
+            'prior_result=""',
+            'state_transition=false',
+            'hard_terminal_result=false',
+            'hard_terminal_phase=false',
+            'incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${result} -->"',
             '"repos/${GITHUB_REPOSITORY}/issues/266/comments?per_page=100"',
             '"repos/${GITHUB_REPOSITORY}/issues/266/comments"',
             'incident_duplicate=true',
@@ -146,6 +153,10 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn('in_progress) result="RUNNING"', self.observer_workflow)
         self.assertNotIn('for issue in 266 $related_issues; do', self.observer_workflow)
         self.assertNotIn('issues/${issue}/comments', self.observer_workflow)
+        self.assertNotIn(
+            'incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"',
+            self.observer_workflow,
+        )
 
     def test_environment_review_is_exact_main_and_fail_closed(self) -> None:
         for value in (

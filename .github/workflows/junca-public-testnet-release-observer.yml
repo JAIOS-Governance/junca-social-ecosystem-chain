@@ -19,7 +19,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: junca-public-testnet-release-observer-${{ github.event.workflow_run.id }}-${{ github.event.action }}
+  group: junca-public-testnet-release-observer-${{ github.event.action == 'completed' && 'terminal-publication' || github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
@@ -288,34 +288,51 @@ jobs:
           }
 
           publish_failures=0
+          prior_current_state=""
+          prior_phase=""
+          prior_result=""
           if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
+            prior_current_state="$(
+              gh api "repos/${GITHUB_REPOSITORY}/issues/269"                 --jq '.body // ""' 2>/dev/null || true
+            )"
+            prior_phase="$(
+              sed -n 's/^- Phase: `\([^`]*\)`.*/\1/p'                 <<<"$prior_current_state" | head -1
+            )"
+            prior_result="$(
+              sed -n 's/^- Result: \*\*\([^*]*\)\*\*.*/\1/p'                 <<<"$prior_current_state" | head -1
+            )"
             if ! publish_with_retry PATCH "repos/${GITHUB_REPOSITORY}/issues/269"; then
               publish_failures=$((publish_failures + 1))
               echo "::warning title=Current-state publication deferred::Issue 269 update failed after bounded retries."
             fi
           fi
 
+          hard_terminal_result=false
+          case "$result" in
+            REJECTED|TIMED_OUT|ACTION_REQUIRED) hard_terminal_result=true ;;
+          esac
+
+          hard_terminal_phase=false
+          case "$phase" in
+            IMMUTABLE_RELEASE_CHAIN|IMMUTABLE_RELEASE_CHAIN_V2|FINALITY_CONTINUITY_READBACK)
+              hard_terminal_phase=true
+              ;;
+          esac
+
+          state_transition=false
+          if [ "$prior_phase" != "$phase" ] || [ "$prior_result" != "$result" ]; then
+            state_transition=true
+          fi
+
           incident_notification=false
-          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
-            case "${result}:${phase}" in
-              REJECTED:IMMUTABLE_RELEASE_CHAIN|\
-              TIMED_OUT:IMMUTABLE_RELEASE_CHAIN|\
-              ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN|\
-              REJECTED:IMMUTABLE_RELEASE_CHAIN_V2|\
-              TIMED_OUT:IMMUTABLE_RELEASE_CHAIN_V2|\
-              ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN_V2|\
-              REJECTED:FINALITY_CONTINUITY_READBACK|\
-              TIMED_OUT:FINALITY_CONTINUITY_READBACK|\
-              ACTION_REQUIRED:FINALITY_CONTINUITY_READBACK)
-                incident_notification=true
-                ;;
-            esac
+          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ] &&              [ "$hard_terminal_result" = true ] &&              [ "$hard_terminal_phase" = true ] &&              [ "$state_transition" = true ]; then
+            incident_notification=true
           fi
 
           incident_comment_emitted=false
           incident_duplicate=false
           if [ "$incident_notification" = true ]; then
-            incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"
+            incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${result} -->"
             incident_body="${incident_marker}"$'\n'"${body}"
             existing_comments="$(
               gh api --paginate \
@@ -341,6 +358,9 @@ jobs:
             echo "- Result: ${result}"
             echo "- Source binding: ${source_binding}"
             echo "- Current-state issue updated: $([ "$source_binding" = "EXACT_CURRENT_MAIN" ] && echo attempted || echo not-applicable)"
+            echo "- Prior phase: ${prior_phase:-NONE}"
+            echo "- Prior result: ${prior_result:-NONE}"
+            echo "- Terminal state transition: ${state_transition}"
             echo "- Incident notification eligible: ${incident_notification}"
             echo "- Incident comment emitted: ${incident_comment_emitted}"
             echo "- Duplicate incident suppressed: ${incident_duplicate}"
