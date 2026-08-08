@@ -1,0 +1,48 @@
+name: Apply Evidence-bound Rolling Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - ".github/patches/apply_rolling_volume_lineage_readback.py"
+      - ".github/workflows/apply-evidence-bound-rolling-lifecycle.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout controller source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/rolling-volume-lineage-readback
+          path: target
+          fetch-depth: 0
+
+      - name: Apply retained-volume lineage readback
+        run: |
+          set -euo pipefail
+          python controller/.github/patches/apply_rolling_volume_lineage_readback.py \
+            target/scripts/junca_public_testnet_foundation.sh
+          bash -n target/scripts/junca_public_testnet_foundation.sh
+          git -C target diff --check
+
+      - name: Commit target branch patch
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/junca_public_testnet_foundation.sh
+          git commit -m "Bind rolling observations to retained state volumes"
+          git push origin HEAD:fix/rolling-volume-lineage-readback
