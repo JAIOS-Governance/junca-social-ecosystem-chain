@@ -1,6 +1,9 @@
 name: JAIOS Root Route Audit
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/jaios-root-route-audit.yml"
   push:
     branches: [main]
     paths:
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: jaios-root-route-audit
+  group: jaios-root-route-audit-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -27,10 +30,9 @@ jobs:
       ROOT_DOMAIN: jaios-governance.org
       RECOVERY_ROLE_ARN: arn:aws:iam::595710543956:role/JuncaChainDocsProductionDeployment
     steps:
-      - name: Checkout exact main
+      - name: Checkout exact source
         uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
       - name: Configure verified AWS audit identity
@@ -72,9 +74,28 @@ jobs:
           curl --fail-with-body --silent --show-error --location \
             --max-time 30 --dump-header /tmp/headers.txt \
             --output /tmp/home.html "https://${ROOT_DOMAIN}/"
-          grep -Eo '<title>[^<]+' /tmp/home.html | head -1 > /tmp/title.txt || true
-          grep -Eo 'https://[^"'"' ]+\.chatgpt\.site[^"'"' ]*' /tmp/home.html | sort -u > /tmp/native-site-urls.txt || true
-          grep -Eo 'https://[^"'"' ]+\.(cloudfront\.net|run\.app|pages\.dev|vercel\.app|netlify\.app)[^"'"' ]*' /tmp/home.html | sort -u > /tmp/provider-urls.txt || true
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          html = Path('/tmp/home.html').read_text(encoding='utf-8', errors='replace')
+          title = re.search(r'<title>([^<]*)', html, flags=re.IGNORECASE)
+          Path('/tmp/title.txt').write_text(
+              f"<title>{title.group(1)}\n" if title else '', encoding='utf-8'
+          )
+          urls = sorted(set(re.findall(r'https://[^\s"\'<>]+', html)))
+          native = [url for url in urls if '.chatgpt.site' in url]
+          provider_markers = (
+              '.cloudfront.net', '.run.app', '.pages.dev', '.vercel.app', '.netlify.app'
+          )
+          providers = [url for url in urls if any(marker in url for marker in provider_markers)]
+          Path('/tmp/native-site-urls.txt').write_text(
+              ('\n'.join(native) + '\n') if native else '', encoding='utf-8'
+          )
+          Path('/tmp/provider-urls.txt').write_text(
+              ('\n'.join(providers) + '\n') if providers else '', encoding='utf-8'
+          )
+          PY
           openssl s_client -connect "${ROOT_DOMAIN}:443" -servername "$ROOT_DOMAIN" </dev/null 2>/dev/null \
             | openssl x509 -noout -subject -issuer -serial -dates -ext subjectAltName \
             > /tmp/tls.txt
@@ -83,21 +104,21 @@ jobs:
       - name: Inventory existing AWS web resources
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           aws cloudfront list-distributions \
             --query "DistributionList.Items[?Aliases.Items && contains(Aliases.Items, '${ROOT_DOMAIN}')].[Id,DomainName,Status,Aliases.Items,Origins.Items[*].DomainName]" \
-            --output json > /tmp/cloudfront.json
+            --output json > /tmp/cloudfront.json 2>/tmp/cloudfront-error.txt || echo '[]' > /tmp/cloudfront.json
           aws s3api list-buckets \
             --query "Buckets[?contains(Name, 'jaios') || contains(Name, 'junca')].[Name,CreationDate]" \
-            --output json > /tmp/buckets.json
+            --output json > /tmp/buckets.json 2>/tmp/buckets-error.txt || echo '[]' > /tmp/buckets.json
           aws acm list-certificates --region us-east-1 \
             --query "CertificateSummaryList[?contains(DomainName, '${ROOT_DOMAIN}') || contains(DomainName, 'jaios-governance.org')].[CertificateArn,DomainName,Status]" \
-            --output json > /tmp/certificates.json
+            --output json > /tmp/certificates.json 2>/tmp/certificates-error.txt || echo '[]' > /tmp/certificates.json
           aws iam list-roles \
             --query "Roles[?contains(RoleName, 'Junca') || contains(RoleName, 'JAIOS')].[RoleName,Arn]" \
-            --output json > /tmp/roles.json
+            --output json > /tmp/roles.json 2>/tmp/roles-error.txt || echo '[]' > /tmp/roles.json
 
-      - name: Build persistent audit evidence
+      - name: Build audit evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -109,10 +130,11 @@ jobs:
           from pathlib import Path
 
           def text(path):
-              return Path(path).read_text(encoding='utf-8', errors='replace').strip()
+              p = Path(path)
+              return p.read_text(encoding='utf-8', errors='replace').strip() if p.exists() else ''
 
           def load(path):
-              return json.loads(Path(path).read_text(encoding='utf-8'))
+              return json.loads(text(path) or '[]')
 
           evidence = {
               'schema': 'jaios-root-route-audit/v1',
@@ -144,6 +166,12 @@ jobs:
                   'certificates': load('/tmp/certificates.json'),
                   'roles': load('/tmp/roles.json'),
               },
+              'inventory_errors': {
+                  'cloudfront': text('/tmp/cloudfront-error.txt'),
+                  'buckets': text('/tmp/buckets-error.txt'),
+                  'certificates': text('/tmp/certificates-error.txt'),
+                  'roles': text('/tmp/roles-error.txt'),
+              },
               'mutations': {
                   'route53': False,
                   'cloudfront': False,
@@ -153,51 +181,22 @@ jobs:
               },
               'result': 'PASS',
           }
-          out = Path('evidence/production/jaios-root-route-audit-latest.json')
-          out.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-
-          md = [
-              '# JAIOS Root Route Audit',
-              '',
-              f"Observed: {evidence['observed_at']}",
-              f"Domain: https://{evidence['domain']}/",
-              f"Workflow run: {evidence['workflow_run_id']}",
-              f"Source commit: `{evidence['source_commit']}`",
-              f"Current HTML SHA-256: `{evidence['http']['html_sha256']}`",
-              '',
-              '## Route 53',
-              '```json',
-              json.dumps(evidence['route53_records'], ensure_ascii=False, indent=2),
-              '```',
-              '',
-              '## CloudFront',
-              '```json',
-              json.dumps(evidence['aws_resources']['cloudfront'], ensure_ascii=False, indent=2),
-              '```',
-              '',
-              '## Native / Provider URLs',
-              '```text',
-              '\n'.join(evidence['http']['native_site_urls'] + evidence['http']['provider_urls']) or 'none found in HTML',
-              '```',
-              '',
-              '## TLS',
-              '```text',
-              evidence['tls'],
-              '```',
-              '',
-              'No DNS, hosting, certificate or IAM mutation was performed.',
-          ]
-          Path('evidence/production/jaios-root-route-audit-latest.md').write_text('\n'.join(md) + '\n', encoding='utf-8')
+          Path('evidence/production/jaios-root-route-audit-latest.json').write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+          )
+          print('JAIOS_ROOT_ROUTE_AUDIT_JSON_BEGIN')
+          print(json.dumps(evidence, ensure_ascii=False, indent=2))
+          print('JAIOS_ROOT_ROUTE_AUDIT_JSON_END')
           PY
 
       - name: Persist audit evidence to main
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add evidence/production/jaios-root-route-audit-latest.json \
-                  evidence/production/jaios-root-route-audit-latest.md
+          git add evidence/production/jaios-root-route-audit-latest.json
           if git diff --cached --quiet; then
             echo "Audit evidence unchanged."
             exit 0
@@ -206,6 +205,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Publish bounded audit summary
+        if: always()
         shell: bash
         run: |
           {
@@ -215,6 +215,20 @@ jobs:
             echo "- Hosted zone: ${HOSTED_ZONE_ID}"
             echo "- Route 53 mutation: false"
             echo "- CloudFront mutation: false"
-            echo "- Current HTML SHA-256: $(cut -d' ' -f1 /tmp/home-sha256.txt)"
-            echo "- Persistent evidence: evidence/production/jaios-root-route-audit-latest.json"
+            if [[ -s /tmp/home-sha256.txt ]]; then
+              echo "- Current HTML SHA-256: $(cut -d' ' -f1 /tmp/home-sha256.txt)"
+            fi
+            echo ""
+            echo "#### Route 53"
+            echo '```json'
+            cat /tmp/route53-root-records.json 2>/dev/null || true
+            echo '```'
+            echo "#### CloudFront"
+            echo '```json'
+            cat /tmp/cloudfront.json 2>/dev/null || true
+            echo '```'
+            echo "#### Native/provider URLs"
+            echo '```text'
+            cat /tmp/native-site-urls.txt /tmp/provider-urls.txt 2>/dev/null || true
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
