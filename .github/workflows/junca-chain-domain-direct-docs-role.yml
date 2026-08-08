@@ -47,7 +47,7 @@ jobs:
           docs_count="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.'] | length(@)" --output text)"
           test "$docs_count" -ge 1
           explorer_count="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='explorer.jaios-governance.org.'] | length(@)" --output text)"
-          test "$explorer_count" = "0"
+          test "$explorer_count" -ge 1
 
       - name: Apply Sites-issued chain custom-domain records
         id: dns
@@ -117,7 +117,7 @@ jobs:
           docs_count="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='docs.jaios-governance.org.'] | length(@)" --output text)"
           test "$docs_count" -ge 1
           explorer_count="$(aws route53 list-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --query "ResourceRecordSets[?Name=='explorer.jaios-governance.org.'] | length(@)" --output text)"
-          test "$explorer_count" = "0"
+          test "$explorer_count" -ge 1
 
       - name: DNS and HTTPS acceptance
         shell: bash
