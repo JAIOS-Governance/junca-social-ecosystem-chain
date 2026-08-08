@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,6 +12,10 @@ FOUNDATION = ROOT / "scripts/junca_public_testnet_foundation.sh"
 COMPONENT = ROOT / ".github/image-builder/validator-component.yml"
 USER_DATA = ROOT / "infra/aws/public-testnet/templates/validator-user-data.sh.tftpl"
 TEST = ROOT / "tests/test_junca_deterministic_system_identity.py"
+
+SHELL_FUNCTION = re.compile(
+    r"(?m)^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\(\) \{\n"
+)
 
 
 def replace_once(text: str, old: str, new: str, signature: str) -> str:
@@ -20,35 +25,34 @@ def replace_once(text: str, old: str, new: str, signature: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_shell_function(
+    text: str,
+    name: str,
+    replacement: str,
+    signature: str,
+) -> str:
+    matches = list(SHELL_FUNCTION.finditer(text))
+    selected_index = next(
+        (index for index, match in enumerate(matches) if match.group("name") == name),
+        None,
+    )
+    if selected_index is None:
+        raise SystemExit(f"{signature} function={name} missing")
+    if sum(match.group("name") == name for match in matches) != 1:
+        raise SystemExit(f"{signature} function={name} duplicate")
+    start = matches[selected_index].start()
+    end = (
+        matches[selected_index + 1].start()
+        if selected_index + 1 < len(matches)
+        else len(text)
+    )
+    normalized = replacement.rstrip() + "\n\n"
+    return text[:start] + normalized + text[end:]
+
+
 def patch_foundation() -> None:
     text = FOUNDATION.read_text(encoding="utf-8")
-    old = '''ensure_junca_system_identity() {
-  local passwd_entry=""
-  local group_entry=""
-  local group_name=""
-  local group_gid=""
-  if verify_junca_system_identity; then
-    return 0
-  fi
-  system_identity_repair_attempted=true
-  passwd_entry="$(getent passwd junca 2>/dev/null || true)"
-  group_entry="$(getent group junca 2>/dev/null || true)"
-  [[ -z "$passwd_entry" ]] || return 1
-  if [[ -n "$group_entry" ]]; then
-    IFS=: read -r group_name _ group_gid _ <<<"$group_entry"
-    [[ "$group_name" == junca && "$group_gid" == 992 ]] || return 1
-  else
-    [[ -z "$(getent group 992 2>/dev/null || true)" ]] || return 1
-    groupadd --system --gid 992 junca || return 1
-  fi
-  [[ -z "$(getent passwd 992 2>/dev/null || true)" ]] || return 1
-  useradd --system --uid 992 --gid 992 --home-dir /var/lib/junca \
-    --shell /sbin/nologin --no-create-home junca || return 1
-  verify_junca_system_identity || return 1
-  system_identity_repaired=true
-}
-'''
-    new = '''ensure_junca_system_identity() {
+    new_ensure = '''ensure_junca_system_identity() {
   local passwd_entry=""
   local group_entry=""
   local occupied_entry=""
@@ -124,7 +128,7 @@ def patch_foundation() -> None:
       --no-create-home junca || return 1
   fi
 
-  for path in /etc/junca /var/lib/junca /opt/junca; do
+  for path in /etc/junca /var/lib/junca /var/log/junca /opt/junca; do
     [[ -e "$path" && ! -L "$path" ]] || continue
     if [[ -n "$old_uid" && "$old_uid" != 992 ]]; then
       find "$path" -xdev -uid "$old_uid" -exec chown -h 992 {} + ||
@@ -138,31 +142,45 @@ def patch_foundation() -> None:
   sync
   verify_junca_system_identity || return 1
   system_identity_repaired=true
-}
-'''
-    text = replace_once(text, old, new, "FOUNDATION_ENSURE_IDENTITY_SIGNATURE_MISMATCH")
-
-    old_containment = '''        if [[ "$containment_health_status" == "healthy" &&
-              "$containment_validator_id" == "$expected_validator_id" ]]; then
-          containment_recovered=true
-          break
-        fi
-'''
-    new_containment = '''        if [[ "$containment_health_status" == "healthy" &&
-              "$containment_validator_id" == "$expected_validator_id" ]]; then
-          if systemctl start junca-public-rpc.service \
-              junca-public-explorer.service >/dev/null 2>&1; then
-            containment_recovered=true
-          fi
-          break
-        fi
-'''
-    text = replace_once(
+}'''
+    text = replace_shell_function(
         text,
-        old_containment,
-        new_containment,
-        "FOUNDATION_CONTAINMENT_SIGNATURE_MISMATCH",
+        "ensure_junca_system_identity",
+        new_ensure,
+        "FOUNDATION_ENSURE_IDENTITY_SIGNATURE_MISMATCH",
     )
+
+    containment_pattern = re.compile(
+        r'''(?m)^(?P<indent>[ \t]+)if \[\[ "\$containment_health_status" == "healthy" &&\n'''
+        r'''[ \t]+"\$containment_validator_id" == "\$expected_validator_id" \]\]; then\n'''
+        r'''(?P=indent)  containment_recovered=true\n'''
+        r'''(?P=indent)  break\n'''
+        r'''(?P=indent)fi\n'''
+    )
+
+    def containment_replacement(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f'{indent}if [[ "$containment_health_status" == "healthy" &&\n'
+            f'{indent}      "$containment_validator_id" == "$expected_validator_id" ]]; then\n'
+            f'{indent}  if systemctl start junca-public-rpc.service \\\n'
+            f'{indent}      junca-public-explorer.service >/dev/null 2>&1; then\n'
+            f'{indent}    containment_recovered=true\n'
+            f'{indent}  fi\n'
+            f'{indent}  break\n'
+            f'{indent}fi\n'
+        )
+
+    text, containment_changes = containment_pattern.subn(
+        containment_replacement,
+        text,
+        count=1,
+    )
+    if containment_changes != 1:
+        raise SystemExit(
+            "FOUNDATION_CONTAINMENT_SIGNATURE_MISMATCH "
+            f"count={containment_changes}"
+        )
     FOUNDATION.write_text(text, encoding="utf-8")
 
 
