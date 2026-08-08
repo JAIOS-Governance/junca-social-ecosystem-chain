@@ -1,5 +1,7 @@
 name: JUNCA Social Ecosystem Chain Repository Governance
 
+# One authoritative repository-wide quality gate. Pull requests receive the
+# complete test result immediately; persistent evidence is retained only for main.
 on:
   pull_request:
   push:
@@ -33,10 +35,11 @@ jobs:
           grep -q '"repository_owner_binding": "JAIOS-Governance"' artifacts/junca-social-ecosystem-chain-repository-governance.json
           grep -q '"corporate_ownership_represented": false' artifacts/junca-social-ecosystem-chain-repository-governance.json
           grep -q '"personal_control_represented": false' artifacts/junca-social-ecosystem-chain-repository-governance.json
-      - name: Upload repository governance evidence
+      - name: Upload bounded main-branch governance evidence
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: junca-social-ecosystem-chain-repository-governance-${{ github.run_id }}
           path: artifacts/junca-social-ecosystem-chain-repository-governance.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14

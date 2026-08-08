@@ -1,5 +1,7 @@
 name: JUNCA Developer Environment CI
 
+# Fast development lane only. This workflow validates developer tooling and
+# core changes without dispatching release, deployment, recovery, or monitoring jobs.
 on:
   pull_request:
     paths:
@@ -32,11 +34,11 @@ concurrency:
 jobs:
   developer-environment:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
 
