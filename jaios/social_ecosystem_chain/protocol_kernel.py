@@ -15,7 +15,11 @@ from typing import Callable, Iterable, Mapping
 
 
 ZERO_ADDRESS = "0x" + ("0" * 40)
-SCHEMA_VERSION = "junca-protocol-kernel/v1"
+SCHEMA_VERSION = "junca-protocol-kernel/v2"
+TRANSITION_COMMITMENT_SCHEMA_VERSION = "junca-block-transition-commitment/v1"
+BLOCK_HEADER_SCHEMA_VERSION = "junca-block-header/v2"
+_ASCII_HEX = frozenset("0123456789abcdefABCDEF")
+_ASCII_LOWER_HEX = frozenset("0123456789abcdef")
 
 
 class ProtocolTransitionError(ValueError):
@@ -31,6 +35,7 @@ class ProtocolConfig:
     base_fee_change_denominator: int = 8
     intrinsic_gas: int = 21_000
     max_transaction_data_bytes: int = 131_072
+    block_header_v2_activation_height: int | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -46,6 +51,15 @@ class ProtocolConfig:
             raise ProtocolTransitionError("protocol configuration values must be positive integers")
         if self.target_gas > self.block_gas_limit:
             raise ProtocolTransitionError("target_gas cannot exceed block_gas_limit")
+        activation = self.block_header_v2_activation_height
+        if activation is not None and (
+            isinstance(activation, bool)
+            or not isinstance(activation, int)
+            or activation <= 0
+        ):
+            raise ProtocolTransitionError(
+                "block_header_v2_activation_height must be a positive integer"
+            )
 
 
 @dataclass(frozen=True)
@@ -130,6 +144,7 @@ class BlockTransition:
             "total_base_fee_burned": self.total_base_fee_burned,
             "total_validator_tips": self.total_validator_tips,
             "state_root": self.state_root,
+            "transition_root": compute_transition_root(self),
             "transaction_count": len(self.receipts),
             "transition_status": "VERIFIED",
             "mainnet_changed": False,
@@ -254,7 +269,7 @@ def execute_block(
             )
         )
 
-    return BlockTransition(
+    transition = BlockTransition(
         chain_id=config.chain_id,
         base_fee_per_gas=base_fee,
         gas_used=block_gas_used,
@@ -264,6 +279,319 @@ def execute_block(
         accounts=dict(sorted(state.items())),
         receipts=tuple(receipts),
     )
+    validate_block_transition(transition)
+    return transition
+
+
+def validate_block_transition(transition: BlockTransition) -> None:
+    """Fail closed when execution evidence is internally inconsistent.
+
+    This validator deliberately runs independently from transaction execution so
+    persistence and recovery boundaries do not need to trust an in-memory
+    ``BlockTransition`` merely because it has the expected dataclass type.
+    """
+    if not isinstance(transition, BlockTransition):
+        raise ProtocolTransitionError("transition must be a BlockTransition")
+    if (
+        isinstance(transition.chain_id, bool)
+        or not isinstance(transition.chain_id, int)
+        or transition.chain_id <= 0
+    ):
+        raise ProtocolTransitionError("transition chain_id must be a positive integer")
+    integer_fields = {
+        "base_fee_per_gas": transition.base_fee_per_gas,
+        "gas_used": transition.gas_used,
+        "total_base_fee_burned": transition.total_base_fee_burned,
+        "total_validator_tips": transition.total_validator_tips,
+    }
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in integer_fields.values()
+    ):
+        raise ProtocolTransitionError(
+            "transition execution values must be non-negative integers"
+        )
+    if transition.base_fee_per_gas == 0:
+        raise ProtocolTransitionError("transition base_fee_per_gas must be positive")
+
+    normalized = _normalize_accounts(transition.accounts)
+    if transition.state_root != compute_state_root(normalized):
+        raise ProtocolTransitionError(
+            "transition state_root does not match account state"
+        )
+    _canonical_hash(transition.state_root, "transition state_root")
+    if transition.state_root != transition.state_root.lower():
+        raise ProtocolTransitionError("transition state_root must be canonical")
+
+    burned, tips = validate_receipt_sequence(
+        base_fee_per_gas=transition.base_fee_per_gas,
+        gas_used=transition.gas_used,
+        receipts=transition.receipts,
+    )
+    if burned != transition.total_base_fee_burned:
+        raise ProtocolTransitionError("transition total base fee burn mismatch")
+    if tips != transition.total_validator_tips:
+        raise ProtocolTransitionError("transition total validator tip mismatch")
+
+
+def validate_transition_transaction_binding(
+    config: ProtocolConfig,
+    *,
+    transactions: Iterable[TransactionEnvelope],
+    transition: BlockTransition,
+    candidate_gas_used: int | None = None,
+) -> None:
+    """Bind every ordered receipt to the transaction that produced it."""
+    validate_block_transition(transition)
+    if transition.chain_id != config.chain_id:
+        raise ProtocolTransitionError("transition and protocol chain_id mismatch")
+    try:
+        ordered = tuple(transactions)
+    except TypeError as exc:
+        raise ProtocolTransitionError("candidate transactions must be iterable") from exc
+    if len(ordered) != len(transition.receipts):
+        raise ProtocolTransitionError("candidate and receipt counts do not match")
+    expected_gas_used = len(ordered) * config.intrinsic_gas
+    if transition.gas_used != expected_gas_used:
+        raise ProtocolTransitionError("candidate and transition gas totals do not match")
+    if candidate_gas_used is not None:
+        if isinstance(candidate_gas_used, bool) or not isinstance(candidate_gas_used, int):
+            raise ProtocolTransitionError("candidate gas_used must be an integer")
+        if candidate_gas_used != expected_gas_used:
+            raise ProtocolTransitionError(
+                "candidate gas_used does not match its transactions"
+            )
+
+    for index, (transaction, receipt) in enumerate(
+        zip(ordered, transition.receipts, strict=True)
+    ):
+        _validate_transaction(config, transaction, transition.base_fee_per_gas)
+        if receipt.transaction_index != index:
+            raise ProtocolTransitionError("candidate and receipt indexes do not match")
+        if receipt.transaction_hash != transaction.transaction_hash:
+            raise ProtocolTransitionError("receipt transaction_hash does not bind candidate")
+        if receipt.sender != _address(transaction.sender, "transaction sender"):
+            raise ProtocolTransitionError("receipt sender does not bind candidate")
+        if receipt.recipient != _address(transaction.recipient, "transaction recipient"):
+            raise ProtocolTransitionError("receipt recipient does not bind candidate")
+        priority_fee = min(
+            transaction.max_priority_fee_per_gas,
+            transaction.max_fee_per_gas - transition.base_fee_per_gas,
+        )
+        if receipt.gas_used != config.intrinsic_gas:
+            raise ProtocolTransitionError("receipt gas_used does not bind protocol")
+        if receipt.effective_gas_price != transition.base_fee_per_gas + priority_fee:
+            raise ProtocolTransitionError("receipt gas price does not bind candidate")
+
+
+def compute_transition_root(transition: BlockTransition) -> str:
+    """Commit all consensus-relevant state, receipt, burn, and tip evidence."""
+    validate_block_transition(transition)
+    body = {
+        "schema_version": TRANSITION_COMMITMENT_SCHEMA_VERSION,
+        "chain_id": transition.chain_id,
+        "base_fee_per_gas": transition.base_fee_per_gas,
+        "gas_used": transition.gas_used,
+        "total_base_fee_burned": transition.total_base_fee_burned,
+        "total_validator_tips": transition.total_validator_tips,
+        "state_root": transition.state_root,
+        "receipts": [
+            {
+                "transaction_hash": receipt.transaction_hash,
+                "transaction_index": receipt.transaction_index,
+                "sender": receipt.sender,
+                "recipient": receipt.recipient,
+                "gas_used": receipt.gas_used,
+                "effective_gas_price": receipt.effective_gas_price,
+                "base_fee_burned": receipt.base_fee_burned,
+                "validator_tip": receipt.validator_tip,
+                "status": receipt.status,
+            }
+            for receipt in transition.receipts
+        ],
+    }
+    encoded = json.dumps(
+        body,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "0x" + hashlib.sha256(
+        b"JUNCA_BLOCK_TRANSITION_V1\x00" + encoded
+    ).hexdigest()
+
+
+def compute_finalized_block_hash(
+    *,
+    chain_id: int,
+    height: int,
+    parent_hash: str,
+    transition: BlockTransition,
+    block_timestamp: int | None = None,
+) -> str:
+    """Compute the V2 block identity that finality validators must sign."""
+    if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
+        raise ProtocolTransitionError("block chain_id must be a positive integer")
+    if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
+        raise ProtocolTransitionError("block height must be a positive integer")
+    if transition.chain_id != chain_id:
+        raise ProtocolTransitionError("block and transition chain_id mismatch")
+    _canonical_hash(parent_hash, "block parent_hash")
+    if parent_hash != parent_hash.lower():
+        raise ProtocolTransitionError("block parent_hash must be canonical")
+    if (
+        block_timestamp is not None
+        and (
+            isinstance(block_timestamp, bool)
+            or not isinstance(block_timestamp, int)
+            or block_timestamp <= 0
+        )
+    ):
+        raise ProtocolTransitionError("block timestamp must be a positive integer")
+    transition_root = compute_transition_root(transition)
+    header: dict[str, object] = {
+        "schema_version": BLOCK_HEADER_SCHEMA_VERSION,
+        "chain_id": chain_id,
+        "height": height,
+        "parent_hash": parent_hash,
+        "state_root": transition.state_root,
+        "transition_root": transition_root,
+    }
+    if block_timestamp is not None:
+        header["timestamp"] = block_timestamp
+    encoded = json.dumps(
+        header,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "0x" + hashlib.sha256(b"JUNCA_BLOCK_HEADER_V2\x00" + encoded).hexdigest()
+
+
+def compute_legacy_block_hash(
+    *,
+    chain_id: int,
+    height: int,
+    parent_hash: str,
+    state_root: str,
+    candidate_digest: str,
+    block_timestamp: int | None = None,
+) -> str:
+    """Reproduce the V1 header exactly during a coordinated rolling upgrade."""
+    if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
+        raise ProtocolTransitionError("block chain_id must be a positive integer")
+    if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
+        raise ProtocolTransitionError("block height must be a positive integer")
+    for value, field in (
+        (parent_hash, "block parent_hash"),
+        (state_root, "block state_root"),
+        (candidate_digest, "candidate_digest"),
+    ):
+        _canonical_hash(value, field)
+    if (
+        block_timestamp is not None
+        and (
+            isinstance(block_timestamp, bool)
+            or not isinstance(block_timestamp, int)
+            or block_timestamp <= 0
+        )
+    ):
+        raise ProtocolTransitionError("block timestamp must be a positive integer")
+    header: dict[str, object] = {
+        "candidate_digest": candidate_digest,
+        "chain_id": chain_id,
+        "height": height,
+        "parent_hash": parent_hash,
+        "state_root": state_root,
+    }
+    if block_timestamp is not None:
+        header["timestamp"] = block_timestamp
+    encoded = json.dumps(
+        header,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "0x" + hashlib.sha256(b"JUNCA_BLOCK_HEADER_V1\x00" + encoded).hexdigest()
+
+
+def validate_receipt_sequence(
+    *,
+    base_fee_per_gas: int,
+    gas_used: int,
+    receipts: Iterable[TransactionReceipt],
+) -> tuple[int, int]:
+    """Validate ordered receipt accounting and return aggregate burn and tips."""
+    if (
+        isinstance(base_fee_per_gas, bool)
+        or not isinstance(base_fee_per_gas, int)
+        or base_fee_per_gas <= 0
+    ):
+        raise ProtocolTransitionError("receipt base_fee_per_gas must be positive")
+    if isinstance(gas_used, bool) or not isinstance(gas_used, int) or gas_used < 0:
+        raise ProtocolTransitionError("receipt aggregate gas_used is invalid")
+    try:
+        sequence = tuple(receipts)
+    except TypeError as exc:
+        raise ProtocolTransitionError("transition receipts must be iterable") from exc
+
+    seen_hashes: set[str] = set()
+    aggregate_gas = 0
+    aggregate_burned = 0
+    aggregate_tips = 0
+    for expected_index, receipt in enumerate(sequence):
+        if not isinstance(receipt, TransactionReceipt):
+            raise ProtocolTransitionError(
+                "transition receipts must contain TransactionReceipt values"
+            )
+        if receipt.transaction_index != expected_index:
+            raise ProtocolTransitionError("receipt transaction indexes are not contiguous")
+        _canonical_hash(receipt.transaction_hash, "receipt transaction_hash")
+        if receipt.transaction_hash != receipt.transaction_hash.lower():
+            raise ProtocolTransitionError("receipt transaction_hash must be canonical")
+        if receipt.transaction_hash in seen_hashes:
+            raise ProtocolTransitionError("duplicate receipt transaction hash")
+        if _address(receipt.sender, "receipt sender") != receipt.sender:
+            raise ProtocolTransitionError("receipt sender must be canonical")
+        if _address(receipt.recipient, "receipt recipient") != receipt.recipient:
+            raise ProtocolTransitionError("receipt recipient must be canonical")
+        receipt_integers = {
+            "transaction_index": receipt.transaction_index,
+            "gas_used": receipt.gas_used,
+            "effective_gas_price": receipt.effective_gas_price,
+            "base_fee_burned": receipt.base_fee_burned,
+            "validator_tip": receipt.validator_tip,
+        }
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in receipt_integers.values()
+        ):
+            raise ProtocolTransitionError(
+                "receipt execution values must be non-negative integers"
+            )
+        if receipt.gas_used == 0:
+            raise ProtocolTransitionError("receipt gas_used must be positive")
+        if receipt.status != "SUCCESS":
+            raise ProtocolTransitionError("unsupported receipt status")
+        if receipt.effective_gas_price < base_fee_per_gas:
+            raise ProtocolTransitionError("receipt effective gas price is below base fee")
+        expected_burn = receipt.gas_used * base_fee_per_gas
+        expected_tip = receipt.gas_used * (
+            receipt.effective_gas_price - base_fee_per_gas
+        )
+        if receipt.base_fee_burned != expected_burn:
+            raise ProtocolTransitionError("receipt base fee burn mismatch")
+        if receipt.validator_tip != expected_tip:
+            raise ProtocolTransitionError("receipt validator tip mismatch")
+
+        seen_hashes.add(receipt.transaction_hash)
+        aggregate_gas += receipt.gas_used
+        aggregate_burned += receipt.base_fee_burned
+        aggregate_tips += receipt.validator_tip
+
+    if aggregate_gas != gas_used:
+        raise ProtocolTransitionError("receipt gas total does not match transition")
+    return aggregate_burned, aggregate_tips
 
 
 def compute_state_root(accounts: Mapping[str, AccountState]) -> str:
@@ -331,8 +659,14 @@ def _validate_transaction(
 def _address(value: str, field: str) -> str:
     if not isinstance(value, str) or len(value) != 42 or not value.startswith("0x"):
         raise ProtocolTransitionError(f"{field} must be a 20-byte hex address")
-    try:
-        int(value[2:], 16)
-    except ValueError as exc:
-        raise ProtocolTransitionError(f"{field} must be a 20-byte hex address") from exc
+    if any(character not in _ASCII_HEX for character in value[2:]):
+        raise ProtocolTransitionError(f"{field} must be a 20-byte hex address")
     return value.lower()
+
+
+def _canonical_hash(value: str, field: str) -> str:
+    if not isinstance(value, str) or len(value) != 66 or not value.startswith("0x"):
+        raise ProtocolTransitionError(f"{field} must be a 32-byte hex value")
+    if any(character not in _ASCII_LOWER_HEX for character in value[2:]):
+        raise ProtocolTransitionError(f"{field} must be a canonical 32-byte hex value")
+    return value

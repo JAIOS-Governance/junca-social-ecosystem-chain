@@ -54,6 +54,7 @@ GENESIS_SCHEMA = "junca-public-testnet-genesis/v1"
 CLIENT_VERSION = "JUNCA-Social-Ecosystem-Chain/public-testnet-python-v1"
 ZERO_HASH = "0x" + ("0" * 64)
 MANUAL_BLOCK_INTERVAL_SECONDS = 30
+BLOCK_HEADER_V2_ACTIVATION_ENV = "BLOCK_HEADER_V2_ACTIVATION_HEIGHT"
 
 
 class ValidatorNodeError(ValueError):
@@ -266,6 +267,7 @@ class PublicTestnetConsensus:
         consensus_verifier: ConsensusVerifier,
         peer_verifier: PeerVerifier,
         consensus_signer: Callable[[str, bytes], bytes] | None = None,
+        block_header_v2_activation_height: int | None = None,
     ) -> None:
         if not callable(consensus_verifier) or not callable(peer_verifier):
             raise ValidatorNodeError("consensus and peer verifiers are required")
@@ -287,9 +289,13 @@ class PublicTestnetConsensus:
         schedule = ValidatorSetSchedule(
             ValidatorSet(epoch=0, activation_height=0, validators=validators)
         )
+        protocol_config = ProtocolConfig(
+            chain_id=store.chain_id,
+            block_header_v2_activation_height=block_header_v2_activation_height,
+        )
         pipeline = NodeExecutionPipeline(
-            config=ProtocolConfig(chain_id=store.chain_id),
-            pool=TransactionPool(ProtocolConfig(chain_id=store.chain_id)),
+            config=protocol_config,
+            pool=TransactionPool(protocol_config),
             store=store,
             signature_verifier=lambda transaction: bool(transaction.signature),
         )
@@ -381,6 +387,9 @@ class PublicTestnetConsensus:
             "authenticated_vote_count": len(self._accepted_peer_votes),
             "required_vote_count": 3,
             "quorum_rule": "strictly-greater-than-two-thirds",
+            "block_header_v2_activation_height": (
+                self.runtime.pipeline.config.block_header_v2_activation_height
+            ),
             "last_certificate_hash": (
                 None if last is None else last.certificate_hash
             ),
@@ -1037,6 +1046,22 @@ def initialize_state(
     )
 
 
+def _block_header_v2_activation_from_environment() -> int | None:
+    raw = os.getenv(BLOCK_HEADER_V2_ACTIVATION_ENV)
+    if raw in (None, ""):
+        return None
+    if not raw.isascii() or not raw.isdecimal():
+        raise ValidatorNodeError(
+            f"{BLOCK_HEADER_V2_ACTIVATION_ENV} must be a positive decimal height"
+        )
+    height = int(raw)
+    if raw != str(height) or not 0 < height <= (2**63 - 1):
+        raise ValidatorNodeError(
+            f"{BLOCK_HEADER_V2_ACTIVATION_ENV} must be a positive decimal height"
+        )
+    return height
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="junca-chain-node")
     result.add_argument("--genesis", required=True)
@@ -1058,6 +1083,12 @@ def parser() -> argparse.ArgumentParser:
         "--slot-epoch-seconds",
         type=int,
         default=int(os.getenv("TESTNET_SLOT_EPOCH_SECONDS", "0")),
+    )
+    result.add_argument(
+        "--block-header-v2-activation-height",
+        type=int,
+        default=_block_header_v2_activation_from_environment(),
+        help="coordinated future height for receipt-committing V2 block headers",
     )
     result.add_argument(
         "--validator-signer",
@@ -1117,6 +1148,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resources[validator_id], payload, signature
             ),
             consensus_signer=kms.sign,
+            block_header_v2_activation_height=(
+                args.block_header_v2_activation_height
+            ),
         )
         sync_recovery = ValidatorSyncRecovery(
             store=state.store,

@@ -38,8 +38,12 @@ The AWS provider uses `allowed_account_ids`, and Terraform preconditions reject 
    signer resources, binary and genesis digests, and approved AMI identifier.
    Its `READY_FOR_AWS_AMI_READBACK` state is a packaging state only; it does not
    claim that an AMI or live validator has passed AWS readback.
-8. Run `terraform init -backend-config=...`, `terraform validate`, `terraform plan`.
-9. Apply validators 01, 02 and 03; verify quorum before enabling public endpoints.
-10. Run Runtime Acceptance v2 and non-production rollback acceptance.
+8. For a reviewed header V2 rollout only, set the same future positive integer
+   `block_header_v2_activation_height` for all three validators. Keep it `null`
+   during mixed-version rollout and never change it after the schedule is
+   persisted.
+9. Run `terraform init -backend-config=...`, `terraform validate`, `terraform plan`.
+10. Apply validators 01, 02 and 03; verify quorum before enabling public endpoints.
+11. Run Runtime Acceptance v2 and non-production rollback acceptance.
 
 Do not record deployment as accepted until every live acceptance gate passes.

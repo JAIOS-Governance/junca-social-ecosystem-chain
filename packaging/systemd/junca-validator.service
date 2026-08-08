@@ -8,6 +8,7 @@ Type=simple
 User=junca
 Group=junca
 EnvironmentFile=/etc/junca/runtime.env
+EnvironmentFile=-/etc/junca/block-header-v2.env
 ExecStart=/usr/local/bin/junca-chain-node --genesis /etc/junca/genesis.json --data-dir /var/lib/junca --validator-id ${VALIDATOR_ID} --signer-resource ${SIGNER_RESOURCE_ARN} --http.addr 127.0.0.1 --http.port 8545 --mine
 Restart=on-failure
 RestartSec=5

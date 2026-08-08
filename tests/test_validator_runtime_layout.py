@@ -110,6 +110,13 @@ class ValidatorRuntimeLayoutTests(unittest.TestCase):
         ):
             verify(self.output)
 
+    def test_validator_service_accepts_dedicated_v2_activation_binding(self) -> None:
+        service = self.output / "etc/systemd/system/junca-validator.service"
+        self.assertIn(
+            "EnvironmentFile=-/etc/junca/block-header-v2.env",
+            service.read_text(encoding="utf-8"),
+        )
+
     def test_tampered_runtime_fails_closed(self) -> None:
         gateway = self.output / "usr/local/bin/junca-public-gateway"
         gateway.write_text(gateway.read_text(encoding="utf-8") + "\n# changed\n")

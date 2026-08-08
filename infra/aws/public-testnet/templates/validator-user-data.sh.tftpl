@@ -100,6 +100,14 @@ EOF
 chmod 0640 /etc/junca/runtime.env
 chown root:junca /etc/junca/runtime.env
 
+%{ if block_header_v2_activation_height != null ~}
+cat >/etc/junca/block-header-v2.env <<'EOF'
+BLOCK_HEADER_V2_ACTIVATION_HEIGHT=${block_header_v2_activation_height}
+EOF
+chmod 0640 /etc/junca/block-header-v2.env
+chown root:junca /etc/junca/block-header-v2.env
+%{ endif ~}
+
 # The approved AMI must provide /usr/local/bin/junca-chain-node and /etc/junca/genesis.json.
 # No private key, mnemonic or signer secret is written by this bootstrap.
 test -x /usr/local/bin/junca-chain-node
@@ -123,6 +131,7 @@ Type=simple
 User=junca
 Group=junca
 EnvironmentFile=/etc/junca/runtime.env
+EnvironmentFile=-/etc/junca/block-header-v2.env
 %{ if validator_state_required ~}
 ExecStartPre=/usr/bin/test -f /var/lib/junca/state.sqlite
 ExecStartPre=/usr/bin/test ! -L /var/lib/junca/state.sqlite
