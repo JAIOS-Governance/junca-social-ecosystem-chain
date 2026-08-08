@@ -8,6 +8,9 @@ import json
 from typing import Callable, Iterable
 
 
+_ASCII_HEX = frozenset("0123456789abcdefABCDEF")
+
+
 class FinalityError(ValueError):
     """Raised when a finality message violates a consensus invariant."""
 
@@ -264,7 +267,5 @@ class FinalityStateMachine:
 def _validate_block_hash(value: str) -> None:
     if not isinstance(value, str) or len(value) != 66 or not value.startswith("0x"):
         raise FinalityError("block_hash must be a 32-byte hex value")
-    try:
-        int(value[2:], 16)
-    except ValueError as exc:
-        raise FinalityError("block_hash must be a 32-byte hex value") from exc
+    if any(character not in _ASCII_HEX for character in value[2:]):
+        raise FinalityError("block_hash must be a 32-byte hex value")

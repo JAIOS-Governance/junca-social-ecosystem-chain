@@ -16,6 +16,30 @@ fresh matching finalized timestamps, matching head and certificate hashes, and
 exact finality power `3/3`. An HTTP 200 response, a parseable payload, or a
 stable height alone is never activation evidence.
 
+## Block header V2 activation safety
+
+Receipt-committing V2 block headers are a coordinated consensus upgrade, not a
+per-validator deployment toggle. Keep
+`--block-header-v2-activation-height` absent while the three validators run
+different runtime versions. After all three validators run the exact same
+reviewed source and runtime artifact, choose one shared future finalized height
+with enough lead time to complete readback, bind that exact positive integer
+through the separately reviewed immutable service configuration on all three
+validators, and verify each Health response reports the same stored activation
+height before it is reached. A missing, past, unequal, changed or non-integer
+height blocks activation. Never reinterpret an existing finalized V1 block as
+V2. A restored pruned checkpoint begins local V2 integrity checks at its next
+height while preserving the trusted checkpoint block hash.
+
+At the activation height, require all three proposals and votes to use header
+version `2`; the header commits the versioned transition root, ordered
+transaction hashes, sender and recipient binding, gas price, base-fee burn,
+validator tip, aggregate execution values and state root. Any validator still
+reporting header version `1` is a consensus-safety stop condition. Rollback may
+return to the prior runtime only before the activation height. After a V2 block
+is finalized, use forward repair with the same activation record; never roll
+back the header rule or rewrite finalized state.
+
 1. Record the target runtime version, its exact 40-character lowercase source
    commit, immutable artifact SHA-256, rollback version and rollback artifact
    SHA-256. Pass the recorded runtime commit as the release manifest gate's

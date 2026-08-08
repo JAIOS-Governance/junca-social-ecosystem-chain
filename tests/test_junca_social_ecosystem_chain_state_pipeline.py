@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -36,6 +37,7 @@ class PersistentStatePipelineTests(unittest.TestCase):
             block_gas_limit=42_000,
             target_gas=21_000,
             initial_base_fee=1_000,
+            block_header_v2_activation_height=1,
         )
         self.store = PersistentStateStore(
             Path(self.directory.name, "state.sqlite"),
@@ -71,6 +73,24 @@ class PersistentStatePipelineTests(unittest.TestCase):
             max_fee_per_gas=2_000,
             max_priority_fee_per_gas=100,
             signature=f"tx-{nonce}".encode(),
+        )
+
+    @staticmethod
+    def coherent_receipt_tamper(transition):
+        receipt = transition.receipts[0]
+        return replace(
+            transition,
+            total_validator_tips=transition.total_validator_tips + receipt.gas_used,
+            receipts=(
+                replace(
+                    receipt,
+                    transaction_hash="0x" + ("c" * 64),
+                    sender=BOB,
+                    recipient=ALICE,
+                    effective_gas_price=receipt.effective_gas_price + 1,
+                    validator_tip=receipt.validator_tip + receipt.gas_used,
+                ),
+            ),
         )
 
     def admit(self, transaction: TransactionEnvelope) -> None:
@@ -137,6 +157,11 @@ class PersistentStatePipelineTests(unittest.TestCase):
         evidence = self.store.integrity_check()
         self.assertEqual(evidence["integrity_status"], "VERIFIED")
         self.assertEqual(evidence["head_height"], 1)
+        self.assertEqual(evidence["block_header_v2_start_height"], 1)
+        self.assertEqual(
+            proposal.as_evidence()["transition_root"],
+            proposal.transition_root,
+        )
 
     def test_proposal_is_deterministic_without_state_mutation(self) -> None:
         self.admit(self.transaction())
@@ -145,6 +170,77 @@ class PersistentStatePipelineTests(unittest.TestCase):
         self.assertEqual(first.block_hash, second.block_hash)
         self.assertEqual(self.store.head_height, 0)
         self.assertEqual(len(self.pool), 1)
+
+    def test_v2_activation_is_future_scheduled_and_restart_stable(self) -> None:
+        scheduled_store = PersistentStateStore(
+            Path(self.directory.name, "scheduled.sqlite"),
+            chain_id=CHAIN_ID,
+        )
+        try:
+            scheduled_store.initialize_genesis(
+                block_hash=GENESIS,
+                accounts={ALICE: AccountState(balance=1_000_000_000)},
+                base_fee_per_gas=1_000,
+            )
+            scheduled_config = replace(
+                self.config,
+                block_header_v2_activation_height=2,
+            )
+            scheduled_pool = TransactionPool(scheduled_config)
+            scheduled_pipeline = NodeExecutionPipeline(
+                config=scheduled_config,
+                pool=scheduled_pool,
+                store=scheduled_store,
+                signature_verifier=self.verify,
+            )
+            first_transaction = self.transaction()
+            scheduled_pool.admit(
+                first_transaction,
+                account=scheduled_store.accounts_at()[ALICE],
+                current_base_fee=scheduled_store.head().base_fee_per_gas,
+                signature_verifier=self.verify,
+            )
+            first = scheduled_pipeline.execute_candidate()
+            self.assertEqual(first.header_version, 1)
+            legacy_header = {
+                "candidate_digest": first.candidate.candidate_digest,
+                "chain_id": CHAIN_ID,
+                "height": first.height,
+                "parent_hash": first.parent_hash,
+                "state_root": first.transition.state_root,
+            }
+            expected_legacy_hash = "0x" + hashlib.sha256(
+                b"JUNCA_BLOCK_HEADER_V1\x00"
+                + json.dumps(
+                    legacy_header,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(first.block_hash, expected_legacy_hash)
+            scheduled_pipeline.commit_finalized(first, self.certificate(first))
+
+            restarted_pipeline = NodeExecutionPipeline(
+                config=replace(
+                    scheduled_config,
+                    block_header_v2_activation_height=None,
+                ),
+                pool=TransactionPool(scheduled_config),
+                store=scheduled_store,
+                signature_verifier=self.verify,
+            )
+            second = restarted_pipeline.execute_candidate()
+            self.assertEqual(
+                restarted_pipeline.config.block_header_v2_activation_height,
+                2,
+            )
+            self.assertEqual(second.header_version, 2)
+            self.assertEqual(
+                scheduled_store.integrity_check()["block_header_v2_start_height"],
+                2,
+            )
+        finally:
+            scheduled_store.close()
 
     def test_wrong_certificate_block_is_rejected(self) -> None:
         self.admit(self.transaction())
@@ -202,6 +298,24 @@ class PersistentStatePipelineTests(unittest.TestCase):
             )
         self.assertEqual(self.store.head_height, 0)
 
+    def test_coherent_tamper_cannot_reuse_finalized_hash_and_certificate(self) -> None:
+        self.admit(self.transaction())
+        proposal = self.pipeline.execute_candidate()
+        certificate = self.certificate(proposal)
+        tampered = self.coherent_receipt_tamper(proposal.transition)
+        with self.assertRaisesRegex(
+            StateStoreError,
+            "block_hash does not match transition commitment",
+        ):
+            self.store.commit_finalized_block(
+                height=proposal.height,
+                block_hash=proposal.block_hash,
+                parent_hash=proposal.parent_hash,
+                transition=tampered,
+                certificate=certificate,
+            )
+        self.assertEqual(self.store.head_height, 0)
+
     def test_integrity_check_rejects_semantically_tampered_receipt(self) -> None:
         self.admit(self.transaction())
         proposal = self.pipeline.execute_candidate()
@@ -216,6 +330,27 @@ class PersistentStatePipelineTests(unittest.TestCase):
             (json.dumps(receipts, sort_keys=True, separators=(",", ":")),),
         )
         with self.assertRaisesRegex(StateStoreError, "stored receipt integrity failure"):
+            self.store.integrity_check()
+
+    def test_integrity_check_rejects_coherent_finalized_receipt_tamper(self) -> None:
+        self.admit(self.transaction())
+        proposal = self.pipeline.execute_candidate()
+        self.pipeline.commit_finalized(proposal, self.certificate(proposal))
+        row = self.store.connection.execute(
+            "SELECT receipts_json FROM blocks WHERE height=1"
+        ).fetchone()
+        receipts = json.loads(row["receipts_json"])
+        receipt = receipts[0]
+        receipt["transaction_hash"] = "0x" + ("c" * 64)
+        receipt["sender"] = BOB
+        receipt["recipient"] = ALICE
+        receipt["effective_gas_price"] += 1
+        receipt["validator_tip"] += receipt["gas_used"]
+        self.store.connection.execute(
+            "UPDATE blocks SET receipts_json=? WHERE height=1",
+            (json.dumps(receipts, sort_keys=True, separators=(",", ":")),),
+        )
+        with self.assertRaisesRegex(StateStoreError, "V2 block_hash commitment mismatch"):
             self.store.integrity_check()
 
     def test_stale_proposal_cannot_commit_after_head_advances(self) -> None:
@@ -318,12 +453,17 @@ class PersistentStatePipelineTests(unittest.TestCase):
             integrity = restored.integrity_check()
             self.assertEqual(integrity["base_height"], 1)
             self.assertEqual(integrity["head_height"], 1)
+            self.assertIsNone(integrity["block_header_v2_start_height"])
 
             pipeline = NodeExecutionPipeline(
                 config=self.config,
                 pool=TransactionPool(self.config),
                 store=restored,
                 signature_verifier=self.verify,
+            )
+            self.assertEqual(
+                restored.integrity_check()["block_header_v2_start_height"],
+                2,
             )
             proposal = pipeline.execute_candidate()
             self.assertEqual(proposal.height, 2)

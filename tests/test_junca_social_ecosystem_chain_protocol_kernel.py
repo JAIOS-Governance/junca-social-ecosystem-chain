@@ -8,10 +8,12 @@ from jaios.social_ecosystem_chain.protocol_kernel import (
     ProtocolConfig,
     ProtocolTransitionError,
     TransactionEnvelope,
+    compute_transition_root,
     compute_state_root,
     execute_block,
     next_base_fee,
     validate_block_transition,
+    validate_transition_transaction_binding,
 )
 
 
@@ -112,6 +114,58 @@ class ProtocolKernelTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ProtocolTransitionError, "canonical"):
             validate_block_transition(uppercase)
+
+    def test_transition_root_and_candidate_binding_reject_coherent_tamper(self) -> None:
+        envelope = transaction()
+        result = self.execute(envelope)
+        receipt = result.receipts[0]
+        tampered = replace(
+            result,
+            total_validator_tips=result.total_validator_tips + receipt.gas_used,
+            receipts=(
+                replace(
+                    receipt,
+                    transaction_hash="0x" + ("c" * 64),
+                    sender=BOB,
+                    recipient=ALICE,
+                    effective_gas_price=receipt.effective_gas_price + 1,
+                    validator_tip=receipt.validator_tip + receipt.gas_used,
+                ),
+            ),
+        )
+        validate_block_transition(tampered)
+        self.assertNotEqual(
+            compute_transition_root(result),
+            compute_transition_root(tampered),
+        )
+        with self.assertRaisesRegex(ProtocolTransitionError, "does not bind candidate"):
+            validate_transition_transaction_binding(
+                self.config,
+                transactions=(envelope,),
+                transition=tampered,
+                candidate_gas_used=result.gas_used,
+            )
+
+    def test_consensus_hex_rejects_python_underscore_separator(self) -> None:
+        result = self.execute(transaction())
+        malformed_hash = "0x" + ("0" * 31) + "_" + ("0" * 32)
+        malformed_address = "0x" + ("a" * 19) + "_" + ("a" * 20)
+        self.assertEqual(len(malformed_hash), 66)
+        self.assertEqual(len(malformed_address), 42)
+        with self.assertRaisesRegex(ProtocolTransitionError, "32-byte hex"):
+            validate_block_transition(
+                replace(
+                    result,
+                    receipts=(
+                        replace(
+                            result.receipts[0],
+                            transaction_hash=malformed_hash,
+                        ),
+                    ),
+                )
+            )
+        with self.assertRaisesRegex(ProtocolTransitionError, "20-byte hex"):
+            self.execute(transaction(sender=malformed_address))
 
     def test_chain_replay_is_rejected(self) -> None:
         with self.assertRaisesRegex(ProtocolTransitionError, "chain_id mismatch"):

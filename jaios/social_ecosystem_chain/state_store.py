@@ -15,10 +15,15 @@ from .protocol_kernel import (
     BlockTransition,
     ProtocolTransitionError,
     TransactionReceipt,
+    compute_finalized_block_hash,
     compute_state_root,
     validate_block_transition,
     validate_receipt_sequence,
 )
+
+
+BLOCK_HEADER_V2_START_KEY = "block_header_v2_start_height"
+_ASCII_HEX = frozenset("0123456789abcdefABCDEF")
 
 
 class StateStoreError(ValueError):
@@ -86,6 +91,68 @@ class PersistentStateStore:
     def close(self) -> None:
         self.connection.close()
 
+    def bind_block_header_v2_activation(
+        self, requested_height: int | None
+    ) -> int | None:
+        """Persist one no-downtime V2 activation boundary before proposal work."""
+        if requested_height is not None and (
+            isinstance(requested_height, bool)
+            or not isinstance(requested_height, int)
+            or requested_height <= 0
+        ):
+            raise StateStoreError("block header V2 activation height is invalid")
+        existing = self.connection.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (BLOCK_HEADER_V2_START_KEY,),
+        ).fetchone()
+        if existing is not None:
+            stored = existing["value"]
+            if not stored.isdigit() or int(stored) <= 0:
+                raise StateStoreError("block header V2 activation metadata is invalid")
+            stored_height = int(stored)
+            if requested_height is None or requested_height == stored_height:
+                return stored_height
+            base_row = self.connection.execute(
+                "SELECT value FROM metadata WHERE key='base_height'"
+            ).fetchone()
+            base_height = (
+                -1
+                if base_row is None or not base_row["value"].isdigit()
+                else int(base_row["value"])
+            )
+            if (
+                base_height > 0
+                and self.head_height == base_height
+                and stored_height == base_height + 1
+                and requested_height <= stored_height
+            ):
+                return stored_height
+            raise StateStoreError("block header V2 activation schedule mismatch")
+        if requested_height is None:
+            return None
+
+        local_start_height = requested_height
+        base_row = self.connection.execute(
+            "SELECT value FROM metadata WHERE key='base_height'"
+        ).fetchone()
+        base_height = (
+            -1
+            if base_row is None or not base_row["value"].isdigit()
+            else int(base_row["value"])
+        )
+        if requested_height <= self.head_height:
+            if base_height > 0 and self.head_height == base_height:
+                local_start_height = base_height + 1
+            else:
+                raise StateStoreError(
+                    "block header V2 activation cannot be applied retrospectively"
+                )
+        self.connection.execute(
+            "INSERT INTO metadata(key,value) VALUES(?,?)",
+            (BLOCK_HEADER_V2_START_KEY, str(local_start_height)),
+        )
+        return local_start_height
+
     def initialize_genesis(
         self,
         *,
@@ -151,8 +218,6 @@ class PersistentStateStore:
             raise StateStoreError("parent_hash does not match current head")
         if transition.chain_id != self.chain_id or certificate.chain_id != self.chain_id:
             raise StateStoreError("chain_id mismatch")
-        if certificate.height != height or certificate.block_hash != block_hash.lower():
-            raise StateStoreError("finality certificate does not bind the committed block")
         if (
             block_timestamp is not None
             and (
@@ -164,10 +229,29 @@ class PersistentStateStore:
             raise StateStoreError("block timestamp must be a positive integer")
         if certificate.signed_power * 3 <= certificate.total_power * 2:
             raise StateStoreError("finality certificate is below strict two-thirds quorum")
+        activation_height = self._block_header_v2_start_height()
+        uses_v2_header = (
+            activation_height is not None and height >= activation_height
+        )
         try:
             validate_block_transition(transition)
+            expected_block_hash = (
+                compute_finalized_block_hash(
+                    chain_id=self.chain_id,
+                    height=height,
+                    parent_hash=parent_hash.lower(),
+                    transition=transition,
+                    block_timestamp=block_timestamp,
+                )
+                if uses_v2_header
+                else block_hash.lower()
+            )
         except ProtocolTransitionError as exc:
             raise StateStoreError(f"transition integrity failure: {exc}") from exc
+        if uses_v2_header and block_hash.lower() != expected_block_hash:
+            raise StateStoreError("block_hash does not match transition commitment")
+        if certificate.height != height or certificate.block_hash != block_hash.lower():
+            raise StateStoreError("finality certificate does not bind the committed block")
         normalized = _normalize_accounts(transition.accounts)
         receipts = [asdict(receipt) for receipt in transition.receipts]
         self.connection.execute("BEGIN IMMEDIATE")
@@ -181,6 +265,9 @@ class PersistentStateStore:
                 or locked_head["block_hash"] != parent_hash.lower()
             ):
                 raise StateStoreError("block no longer extends the locked head")
+            locked_activation_height = self._block_header_v2_start_height()
+            if locked_activation_height != activation_height:
+                raise StateStoreError("block header V2 activation metadata is invalid")
             self.connection.execute(
                 """
                 INSERT INTO blocks(
@@ -494,6 +581,16 @@ class PersistentStateStore:
             raise StateStoreError("stored base_height metadata is invalid")
         previous_hash = rows[0]["parent_hash"]
         _hash(previous_hash, "base parent_hash")
+        activation = self.connection.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (BLOCK_HEADER_V2_START_KEY,),
+        ).fetchone()
+        activation_height: int | None = None
+        if activation is not None:
+            value = activation["value"]
+            if not value.isdigit() or int(value) <= 0:
+                raise StateStoreError("block header V2 activation metadata is invalid")
+            activation_height = int(value)
         for offset, row in enumerate(rows):
             expected_height = base_height + offset
             if row["height"] != expected_height:
@@ -539,7 +636,7 @@ class PersistentStateStore:
                     and not receipt_objects
                 )
                 if not is_pruned_checkpoint_base:
-                    validate_receipt_sequence(
+                    total_burned, total_tips = validate_receipt_sequence(
                         base_fee_per_gas=row["base_fee_per_gas"],
                         gas_used=row["gas_used"],
                         receipts=receipt_objects,
@@ -548,6 +645,41 @@ class PersistentStateStore:
                 raise StateStoreError(f"stored receipt integrity failure: {exc}") from exc
             if compute_state_root(normalized) != row["state_root"]:
                 raise StateStoreError("stored state_root integrity failure")
+            if activation_height is not None and row["height"] >= activation_height:
+                if is_pruned_checkpoint_base:
+                    raise StateStoreError(
+                        "V2 block commitment cannot use a pruned receipt payload"
+                    )
+                transition = BlockTransition(
+                    chain_id=self.chain_id,
+                    base_fee_per_gas=row["base_fee_per_gas"],
+                    gas_used=row["gas_used"],
+                    total_base_fee_burned=total_burned,
+                    total_validator_tips=total_tips,
+                    state_root=row["state_root"],
+                    accounts=normalized,
+                    receipts=receipt_objects,
+                )
+                timestamp = self.connection.execute(
+                    "SELECT timestamp FROM block_timestamps WHERE height=?",
+                    (row["height"],),
+                ).fetchone()
+                try:
+                    expected_block_hash = compute_finalized_block_hash(
+                        chain_id=self.chain_id,
+                        height=row["height"],
+                        parent_hash=row["parent_hash"],
+                        transition=transition,
+                        block_timestamp=(
+                            None if timestamp is None else int(timestamp["timestamp"])
+                        ),
+                    )
+                except ProtocolTransitionError as exc:
+                    raise StateStoreError(
+                        f"stored V2 commitment integrity failure: {exc}"
+                    ) from exc
+                if expected_block_hash != row["block_hash"]:
+                    raise StateStoreError("stored V2 block_hash commitment mismatch")
             if row["height"] > 0 and (
                 not row["finalized"] or not row["certificate_hash"]
             ):
@@ -563,6 +695,7 @@ class PersistentStateStore:
             "head_hash": rows[-1]["block_hash"],
             "state_root": rows[-1]["state_root"],
             "block_count": len(rows),
+            "block_header_v2_start_height": activation_height,
             "integrity_status": "VERIFIED",
             "mainnet_changed": False,
             "assets_moved": False,
@@ -580,6 +713,18 @@ class PersistentStateStore:
             )
         elif row["value"] != str(self.chain_id):
             raise StateStoreError("database is bound to a different chain_id")
+
+    def _block_header_v2_start_height(self) -> int | None:
+        row = self.connection.execute(
+            "SELECT value FROM metadata WHERE key=?",
+            (BLOCK_HEADER_V2_START_KEY,),
+        ).fetchone()
+        if row is None:
+            return None
+        value = row["value"]
+        if not value.isdigit() or int(value) <= 0:
+            raise StateStoreError("block header V2 activation metadata is invalid")
+        return int(value)
 
     @staticmethod
     def _stored_block(row: sqlite3.Row) -> StoredBlock:
@@ -601,10 +746,8 @@ def _normalize_accounts(accounts: Mapping[str, AccountState]) -> dict[str, Accou
         key = address.lower()
         if len(key) != 42 or not key.startswith("0x"):
             raise StateStoreError("account address must be a 20-byte hex value")
-        try:
-            int(key[2:], 16)
-        except ValueError as exc:
-            raise StateStoreError("account address must be a 20-byte hex value") from exc
+        if any(character not in _ASCII_HEX for character in key[2:]):
+            raise StateStoreError("account address must be a 20-byte hex value")
         if key in normalized or not isinstance(account, AccountState):
             raise StateStoreError("account snapshot is invalid")
         normalized[key] = account
@@ -806,7 +949,5 @@ def _checkpoint_digest(body: Mapping[str, object]) -> str:
 def _hash(value: str, field: str) -> None:
     if not isinstance(value, str) or len(value) != 66 or not value.startswith("0x"):
         raise StateStoreError(f"{field} must be a 32-byte hex value")
-    try:
-        int(value[2:], 16)
-    except ValueError as exc:
-        raise StateStoreError(f"{field} must be a 32-byte hex value") from exc
+    if any(character not in _ASCII_HEX for character in value[2:]):
+        raise StateStoreError(f"{field} must be a 32-byte hex value")
