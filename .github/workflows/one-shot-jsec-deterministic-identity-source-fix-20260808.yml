@@ -54,3 +54,5 @@ jobs:
             tests/test_junca_deterministic_system_identity.py
           git commit -m "fix(runtime): pin and migrate validator system identity"
           git push origin HEAD:fix/jsec-deterministic-system-identity-20260808
+
+# activation: structural-function-boundary-v2
