@@ -1,4 +1,6 @@
-# Permanent post-recovery control. Transient repair workflows retired 2026-08-07.
+# Fail-closed release acceptance. Periodic monitoring is isolated in
+# junca-public-testnet-health-sampler.yml so scheduled health degradation
+# never creates release failures, retry storms or incident-email fanout.
 name: JUNCA Public Testnet Continuity Evidence
 
 on:
@@ -19,8 +21,6 @@ on:
       - "tests/test_public_testnet_continuity.py"
       - "tests/test_public_testnet_continuity_health_entrypoint.py"
       - ".github/workflows/junca-public-testnet-continuity.yml"
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       require_advancement:
@@ -44,7 +44,7 @@ permissions:
 
 concurrency:
   group: junca-public-testnet-continuity-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   contract-tests:
@@ -69,14 +69,14 @@ jobs:
             -v
 
   live-continuity-readback:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     needs: contract-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       SAMPLES: ${{ inputs.samples || '3' }}
       INTERVAL_SECONDS: ${{ inputs.interval_seconds || '30' }}
-      REQUIRE_ADVANCEMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.require_advancement || false }}
+      REQUIRE_ADVANCEMENT: ${{ inputs.require_advancement || false }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -113,4 +113,4 @@ jobs:
           name: junca-public-testnet-continuity-${{ github.run_id }}
           path: artifacts/public-testnet-continuity/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14

@@ -23,6 +23,7 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         for value in (
             "JUNCA Validator Runtime Artifacts",
             "workflow_run.conclusion == 'success'",
+            "workflow_run.event == 'push'",
             "workflow_run.head_branch == 'main'",
             'test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_COMMIT"',
             ".github/workflows/junca-validator-ami-build.yml",
@@ -36,16 +37,17 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         ):
             self.assertIn(value, self.parent)
 
-    def test_parent_rebinds_a_superseded_release_without_deploying_it(self) -> None:
+    def test_parent_stops_a_superseded_release_without_recursive_dispatch(self) -> None:
         for value in (
             'current_main="$(\n            gh api',
             'git merge-base --is-ancestor "$SOURCE_COMMIT" "$current_main"',
-            '--workflow-name "JUNCA Validator Runtime Artifacts"',
-            '--expected-head "$current_main"',
             'state: "SUPERSEDED_BY_NEW_MAIN"',
+            "successor_runtime_run_id: null",
+            "automatic_successor_dispatch: false",
             "candidate_accepted: false",
             'echo "superseded=true"',
             "if: steps.evidence.outputs.superseded != 'true'",
+            "Automatic successor runtime dispatch is disabled",
         ):
             self.assertIn(value, self.parent)
         self.assertEqual(
@@ -54,36 +56,53 @@ class HardenedReleaseV2Tests(unittest.TestCase):
             ),
             4,
         )
-        self.assertIn(
-            '(.event == "push" or .event == "workflow_dispatch")',
+        self.assertNotIn(
+            '--workflow-name "JUNCA Validator Runtime Artifacts"',
             self.parent,
         )
+        self.assertNotIn('--expected-head "$current_main"', self.parent)
+        self.assertIn('.event == "push" and', self.parent)
         self.assertIn(
             ".head_repository.full_name == $repository",
             self.parent,
         )
 
-    def test_job_filter_defers_exact_provenance_to_api_readback(self) -> None:
+    def test_job_filter_and_api_readback_reject_manual_release_sources(self) -> None:
         job_filter = self.parent.split("    if: >-", 1)[1].split(
             "    runs-on:", 1
         )[0]
         self.assertIn("workflow_run.conclusion == 'success'", job_filter)
+        self.assertIn("workflow_run.event == 'push'", job_filter)
         self.assertIn("workflow_run.head_branch == 'main'", job_filter)
-        self.assertNotIn("workflow_run.event", job_filter)
         self.assertNotIn("head_repository", job_filter)
-        self.assertIn(
+        for value in (
             '.name == "JUNCA Validator Runtime Artifacts"',
-            self.parent,
-        )
-        self.assertIn(
             '.path == ".github/workflows/junca-validator-runtime-artifacts.yml"',
+            '.event == "push" and',
+            ".head_repository.full_name == $repository",
+        ):
+            self.assertIn(value, self.parent)
+        self.assertNotIn(
+            '(.event == "push" or .event == "workflow_dispatch")',
             self.parent,
         )
 
-    def test_issue_218_is_not_appended_by_release_acceptance(self) -> None:
-        self.assertIn("for issue in 266 244 248 249; do", self.parent)
-        self.assertNotIn("for issue in 266 244 248 249 218; do", self.parent)
-        self.assertIn("one canonical persistent comment", self.parent)
+    def test_release_acceptance_has_one_publication_owner(self) -> None:
+        self.assertIn(
+            "The release observer owns the single current-state record.",
+            self.parent,
+        )
+        self.assertIn(
+            "no multi-Issue comment or email fanout is emitted here.",
+            self.parent,
+        )
+        self.assertIn(
+            'printf \'%s\\n\' "$body" >> "$GITHUB_STEP_SUMMARY"',
+            self.parent,
+        )
+        self.assertNotIn("for issue in 266 244 248 249; do", self.parent)
+        self.assertNotIn("issues/${issue}/comments", self.parent)
+        self.assertNotIn("issues: write", self.parent)
 
     def test_parent_preserves_activation_boundaries(self) -> None:
         for value in (
@@ -146,7 +165,11 @@ class HardenedReleaseV2Tests(unittest.TestCase):
         self.assertIn('.name == "JUNCA Runtime Release Evidence Collector"', self.manifest)
         self.assertIn('.conclusion == "success"', self.manifest)
 
-    def test_runtime_artifact_rebinds_v2_release_changes(self) -> None:
+    def test_runtime_artifact_verifies_controls_without_auto_releasing_them(self) -> None:
+        push_block = self.runtime.split("  pull_request:", 1)[0]
+        pull_request_block = self.runtime.split("  pull_request:", 1)[1].split(
+            "  workflow_dispatch:", 1
+        )[0]
         for path in (
             '"scripts/junca_runtime_release_evidence_collector_drift.py"',
             '"tests/test_junca_runtime_release_ami_drift.py"',
@@ -156,13 +179,16 @@ class HardenedReleaseV2Tests(unittest.TestCase):
             '".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"',
             '".github/workflows/junca-runtime-release-manifest-gate.yml"',
         ):
-            self.assertGreaterEqual(self.runtime.count(path), 2)
+            self.assertEqual(self.runtime.count(path), 1)
+            self.assertIn(path, pull_request_block)
+            self.assertNotIn(path, push_block)
         self.assertIn("tests.test_junca_hardened_release_v2", self.runtime)
         self.assertIn(
             "tests.test_junca_public_testnet_endpoint_test",
             self.runtime,
         )
         self.assertIn("tests.test_junca_runtime_release_ami_drift", self.runtime)
+        self.assertIn("cancel-in-progress: true", self.runtime)
 
 
 if __name__ == "__main__":

@@ -78,17 +78,35 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("if: always()", self.v2_workflow)
 
-    def test_runtime_artifact_contract_triggers_new_release_chain(self) -> None:
-        for workflow_path in (
-            ".github/workflows/junca-hardened-immutable-candidate-release.yml",
-            ".github/workflows/junca-public-testnet-release-observer.yml",
+    def test_runtime_artifact_contract_separates_release_inputs_from_controls(self) -> None:
+        push_block = self.runtime_workflow.split("  pull_request:", 1)[0]
+        pull_request_block = self.runtime_workflow.split("  pull_request:", 1)[1].split(
+            "  workflow_dispatch:", 1
+        )[0]
+        for immutable_input in (
+            '"jaios/social_ecosystem_chain/**"',
+            '"packaging/systemd/**"',
+            '"scripts/build_validator_runtime.sh"',
+            '".github/image-builder/validator-component.yml"',
+            '"infra/aws/public-testnet/templates/validator-user-data.sh.tftpl"',
         ):
-            self.assertIn(workflow_path, self.runtime_workflow)
+            self.assertIn(immutable_input, push_block)
+        for control_only_path in (
+            '".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"',
+            '".github/workflows/junca-public-testnet-release-observer.yml"',
+            '"tests/test_junca_hardened_release_v2.py"',
+        ):
+            self.assertNotIn(control_only_path, push_block)
+        self.assertIn(
+            '".github/workflows/junca-hardened-immutable-candidate-release-v2.yml"',
+            pull_request_block,
+        )
         self.assertIn(
             "tests.test_junca_hardened_immutable_candidate_policy",
             self.runtime_workflow,
         )
         self.assertIn("hardened_candidate_policy_sha256", self.runtime_workflow)
+        self.assertIn("cancel-in-progress: true", self.runtime_workflow)
 
     def test_runtime_evidence_checksum_is_artifact_portable(self) -> None:
         self.assertIn("cd artifacts/evidence", self.runtime_workflow)
