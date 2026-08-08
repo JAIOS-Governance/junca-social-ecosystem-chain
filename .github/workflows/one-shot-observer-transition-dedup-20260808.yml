@@ -1,0 +1,44 @@
+name: One-shot Release Observer Transition Dedup 2026-08-08
+
+on:
+  push:
+    branches:
+      - fix/release-observer-state-transition-dedup-20260808
+    paths:
+      - .github/workflows/one-shot-observer-transition-dedup-20260808.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-release-observer-transition-dedup-20260808
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: fix/release-observer-state-transition-dedup-20260808
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Apply transition-based terminal notification control
+        run: python scripts/ops/apply_release_observer_transition_dedup.py
+      - name: Validate focused observer contract
+        run: python -m unittest tests.test_junca_hardened_immutable_release_workflow -v
+      - name: Commit repair and retire temporary route
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f \
+            .github/workflows/one-shot-observer-transition-dedup-20260808.yml \
+            scripts/ops/apply_release_observer_transition_dedup.py
+          git config user.name "JSEC Notification Governance Cell"
+          git config user.email "juncajapan.inc@gmail.com"
+          git add -A
+          git commit -m "fix(observer): notify only on terminal state transitions"
+          git push origin HEAD:fix/release-observer-state-transition-dedup-20260808
