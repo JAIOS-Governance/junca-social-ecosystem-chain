@@ -11,7 +11,7 @@ on:
       - "JUNCA Runtime Release Manifest Gate"
       - "JUNCA Validator Foundation Release"
       - "JUNCA Public Testnet Continuity Evidence"
-    types: [requested, in_progress, completed]
+    types: [requested, completed]
 
 permissions:
   actions: write
@@ -28,7 +28,7 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 5
     env:
       OBSERVED_ACTION: ${{ github.event.action }}
       OBSERVED_NAME: ${{ github.event.workflow_run.name }}
@@ -40,105 +40,63 @@ jobs:
       OBSERVED_CREATED_AT: ${{ github.event.workflow_run.created_at }}
       OBSERVED_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
     steps:
-      - name: Record and authorize governed workflow evidence
+      - name: Authorize requested releases or record final evidence
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           [[ "$OBSERVED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$OBSERVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$OBSERVED_RUN_URL" == "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}" ]]
 
-          live_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}")"
-          live_status="$(jq -er '.status' <<<"$live_run")"
-          live_conclusion="$(jq -r '.conclusion // ""' <<<"$live_run")"
-          live_updated_at="$(jq -er '.updated_at' <<<"$live_run")"
-          live_attempt="$(jq -er '.run_attempt' <<<"$live_run")"
-          case "$live_status" in
-            queued|requested|pending|waiting)
-              OBSERVED_ACTION="requested"
-              OBSERVED_CONCLUSION=""
-              ;;
-            in_progress)
-              OBSERVED_ACTION="in_progress"
-              OBSERVED_CONCLUSION=""
-              ;;
-            completed)
-              OBSERVED_ACTION="completed"
-              OBSERVED_CONCLUSION="$live_conclusion"
-              ;;
-            *)
-              echo "Unsupported authoritative workflow status: $live_status" >&2
-              exit 1
-              ;;
-          esac
-          OBSERVED_UPDATED_AT="$live_updated_at"
-
-          case "$OBSERVED_ACTION" in
-            requested) result="RUN_REQUESTED" ;;
-            in_progress) result="RUNNING" ;;
-            completed)
-              case "$OBSERVED_CONCLUSION" in
-                success) result="VERIFIED" ;;
-                failure) result="REJECTED" ;;
-                cancelled) result="CANCELLED" ;;
-                timed_out) result="TIMED_OUT" ;;
-                action_required) result="ACTION_REQUIRED" ;;
-                skipped) result="SKIPPED" ;;
-                neutral) result="NEUTRAL" ;;
-                *) echo "Unsupported workflow conclusion: $OBSERVED_CONCLUSION" >&2; exit 1 ;;
-              esac
-              ;;
-            *) echo "Unsupported workflow action: $OBSERVED_ACTION" >&2; exit 1 ;;
-          esac
-
           case "$OBSERVED_NAME" in
             "JUNCA Validator Runtime Artifacts")
               test "$OBSERVED_EVENT" = "push"
               phase="IMMUTABLE_RUNTIME_ARTIFACT"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="NOT_APPLICABLE"
               workflow_path=""
               ;;
             "JUNCA Hardened Immutable Candidate Release")
               phase="IMMUTABLE_RELEASE_CHAIN"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-hardened-immutable-candidate-release.yml"
               ;;
             "JUNCA Hardened Immutable Candidate Release V2")
               phase="IMMUTABLE_RELEASE_CHAIN_V2"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-hardened-immutable-candidate-release-v2.yml"
               ;;
             "JUNCA Validator Immutable AMI Build")
               phase="NEW_IMMUTABLE_AMI"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-validator-ami-build.yml"
               ;;
             "JUNCA Runtime Release Evidence Collector")
               phase="PRE_ROLLOUT_BASELINE"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-runtime-release-evidence-collector.yml"
               ;;
             "JUNCA Runtime Release Manifest Gate")
               phase="RELEASE_MANIFEST_GATE"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-runtime-release-manifest-gate.yml"
               ;;
             "JUNCA Validator Foundation Release")
               phase="SERIAL_VALIDATOR_ROLLOUT"
-              issues="244 248"
+              related_issues="244 248"
               environment_review="REVIEW_IF_REQUESTED"
               workflow_path="junca-validator-foundation-release.yml"
               ;;
             "JUNCA Public Testnet Continuity Evidence")
               phase="FINALITY_CONTINUITY_READBACK"
-              issues="244 249"
+              related_issues="244 249"
               environment_review="NOT_APPLICABLE"
               workflow_path="junca-public-testnet-continuity.yml"
               ;;
@@ -148,8 +106,6 @@ jobs:
               ;;
           esac
 
-          issues="266 ${issues}"
-
           main_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           if [ "$main_head" = "$OBSERVED_HEAD_SHA" ]; then
             source_binding="EXACT_CURRENT_MAIN"
@@ -157,88 +113,142 @@ jobs:
             source_binding="HISTORIC_EXACT_SHA"
           fi
 
-          stale_run_cancellations=0
-          if [ "$OBSERVED_ACTION" = "requested" ] && \
-             [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
-             [ -n "$workflow_path" ]; then
-            runs="$(gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_path}/runs?branch=main&per_page=100")"
-            mapfile -t stale_run_ids < <(
-              jq -r \
-                --argjson current_id "$OBSERVED_RUN_ID" \
-                --arg main_head "$main_head" '
-                  .workflow_runs[] |
-                  select(.id != $current_id) |
-                  select(.head_sha != $main_head) |
-                  select(
-                    .status == "queued" or
-                    .status == "in_progress" or
-                    .status == "waiting" or
-                    .status == "requested" or
-                    .status == "pending"
-                  ) |
-                  .id
-                ' <<<"$runs" | sort -u
-            )
-            for stale_run_id in "${stale_run_ids[@]}"; do
-              [[ "$stale_run_id" =~ ^[1-9][0-9]*$ ]]
-              if gh api --method POST \
-                "repos/${GITHUB_REPOSITORY}/actions/runs/${stale_run_id}/cancel" \
-                >/dev/null 2>&1; then
-                stale_run_cancellations=$((stale_run_cancellations + 1))
-                continue
-              fi
-              stale_status="$(gh api \
-                "repos/${GITHUB_REPOSITORY}/actions/runs/${stale_run_id}" \
-                --jq .status)"
-              test "$stale_status" = "completed"
-            done
+          live_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}")"
+          live_status="$(jq -er '.status' <<<"$live_run")"
+          live_conclusion="$(jq -r '.conclusion // ""' <<<"$live_run")"
+          live_updated_at="$(jq -er '.updated_at' <<<"$live_run")"
+          live_attempt="$(jq -er '.run_attempt' <<<"$live_run")"
+
+          if [ "$OBSERVED_ACTION" = "requested" ]; then
+            if [ "$live_status" = "completed" ]; then
+              echo "Requested-event observer was superseded by authoritative completion."
+              exit 0
+            fi
+
+            stale_run_cancellations=0
+            stale_run_isolations=0
+            if [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && [ -n "$workflow_path" ]; then
+              runs="$(gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_path}/runs?branch=main&per_page=100")"
+              mapfile -t stale_run_ids < <(
+                jq -r \
+                  --argjson current_id "$OBSERVED_RUN_ID" \
+                  --arg main_head "$main_head" '
+                    .workflow_runs[] |
+                    select(.id != $current_id) |
+                    select(.head_sha != $main_head) |
+                    select(
+                      .status == "queued" or
+                      .status == "in_progress" or
+                      .status == "waiting" or
+                      .status == "requested" or
+                      .status == "pending"
+                    ) |
+                    .id
+                  ' <<<"$runs" | sort -u
+              )
+              for stale_run_id in "${stale_run_ids[@]}"; do
+                [[ "$stale_run_id" =~ ^[1-9][0-9]*$ ]]
+                if gh api --method POST \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${stale_run_id}/cancel" \
+                  >/dev/null 2>&1; then
+                  stale_run_cancellations=$((stale_run_cancellations + 1))
+                elif gh api --method POST \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${stale_run_id}/force-cancel" \
+                  >/dev/null 2>&1; then
+                  stale_run_cancellations=$((stale_run_cancellations + 1))
+                else
+                  stale_run_isolations=$((stale_run_isolations + 1))
+                  echo "::warning title=Provider-isolated stale run::Run ${stale_run_id} could not be cancelled and is excluded from the active release gate."
+                fi
+              done
+            fi
+
+            approval_state="$environment_review"
+            if [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
+               [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
+              approval_state="NO_REVIEW_DISCOVERED"
+              for attempt in $(seq 1 30); do
+                current_status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}" --jq .status)"
+                if [ "$current_status" = "completed" ]; then
+                  approval_state="COMPLETED_BEFORE_REVIEW"
+                  break
+                fi
+                if deployments="$(gh api \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
+                  2>/dev/null)"; then
+                  count="$(jq 'length' <<<"$deployments")"
+                  if [ "$count" -eq 0 ]; then
+                    sleep 2
+                    continue
+                  fi
+                  jq -e '
+                    length == 1 and
+                    .[0].environment.name == "public-testnet" and
+                    (.[] | .environment.id | type == "number")
+                  ' <<<"$deployments" >/dev/null
+                  environment_id="$(jq -er '.[0].environment.id' <<<"$deployments")"
+                  jq -n \
+                    --argjson environment_id "$environment_id" \
+                    --arg comment "CEO-authorized exact-current-main Public Testnet release ${OBSERVED_HEAD_SHA}" '{
+                      environment_ids: [$environment_id],
+                      state: "approved",
+                      comment: $comment
+                    }' | gh api --method POST \
+                      "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
+                      --input - >/dev/null
+                  approval_state="APPROVED_EXACT_CURRENT_MAIN"
+                  break
+                fi
+                sleep 2
+              done
+            fi
+
+            {
+              echo "## Requested release control"
+              echo "- Workflow: ${OBSERVED_NAME}"
+              echo "- Run: ${OBSERVED_RUN_URL}"
+              echo "- Source binding: ${source_binding}"
+              echo "- Stale runs cancelled: ${stale_run_cancellations}"
+              echo "- Provider-isolated stale runs: ${stale_run_isolations}"
+              echo "- Environment review: ${approval_state}"
+              echo "- Issue notifications emitted: 0"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
 
-          approval_state="$environment_review"
-          if [ "$OBSERVED_ACTION" = "requested" ] && \
-             [ "$source_binding" = "EXACT_CURRENT_MAIN" ] && \
-             [ "$environment_review" = "REVIEW_IF_REQUESTED" ]; then
-            approval_state="NO_REVIEW_DISCOVERED"
-            for attempt in $(seq 1 60); do
-              if deployments="$(
-                gh api \
-                  "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
-                  2>/dev/null
-              )"; then
-                count="$(jq 'length' <<<"$deployments")"
-                if [ "$count" -eq 0 ]; then
-                  sleep 2
-                  continue
-                fi
-                jq -e '
-                  length == 1 and
-                  .[0].environment.name == "public-testnet" and
-                  (.[] | .environment.id | type == "number")
-                ' <<<"$deployments" >/dev/null
-                environment_id="$(jq -er '.[0].environment.id' <<<"$deployments")"
-                jq -n \
-                  --argjson environment_id "$environment_id" \
-                  --arg comment "CEO-authorized exact-current-main Public Testnet release ${OBSERVED_HEAD_SHA}" '{
-                    environment_ids: [$environment_id],
-                    state: "approved",
-                    comment: $comment
-                  }' | gh api --method POST \
-                    "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}/pending_deployments" \
-                    --input - >/dev/null
-                approval_state="APPROVED_EXACT_CURRENT_MAIN"
-                break
-              fi
-              sleep 2
-            done
+          test "$OBSERVED_ACTION" = "completed"
+          for attempt in $(seq 1 10); do
+            live_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OBSERVED_RUN_ID}")"
+            live_status="$(jq -er '.status' <<<"$live_run")"
+            live_conclusion="$(jq -r '.conclusion // ""' <<<"$live_run")"
+            live_updated_at="$(jq -er '.updated_at' <<<"$live_run")"
+            live_attempt="$(jq -er '.run_attempt' <<<"$live_run")"
+            [ "$live_status" = "completed" ] && break
+            sleep 2
+          done
+          if [ "$live_status" != "completed" ]; then
+            echo "::warning title=Completion propagation delay::Authoritative run was not yet completed; reporting was deferred without rejecting the underlying workflow."
+            exit 0
           fi
+
+          case "$live_conclusion" in
+            success) result="VERIFIED" ;;
+            failure) result="REJECTED" ;;
+            cancelled) result="CANCELLED" ;;
+            timed_out) result="TIMED_OUT" ;;
+            action_required) result="ACTION_REQUIRED" ;;
+            skipped) result="SKIPPED" ;;
+            neutral) result="NEUTRAL" ;;
+            *) echo "Unsupported workflow conclusion: $live_conclusion" >&2; exit 1 ;;
+          esac
 
           body="$(cat <<EOF
           ## Current Public Testnet release state
 
           - Phase: \`${phase}\`
           - Result: **${result}**
-          - Workflow action: \`${OBSERVED_ACTION}\`
+          - Workflow action: \`completed\`
           - Workflow: \`${OBSERVED_NAME}\`
           - Run ID: \`${OBSERVED_RUN_ID}\`
           - Run attempt: \`${live_attempt}\`
@@ -246,12 +256,11 @@ jobs:
           - Trigger event: \`${OBSERVED_EVENT}\`
           - Source SHA: \`${OBSERVED_HEAD_SHA}\`
           - Source binding: \`${source_binding}\`
-          - Stale release runs cancelled: \`${stale_run_cancellations}\`
-          - Environment review: \`${approval_state}\`
+          - Environment review: \`${environment_review}\`
           - Created: \`${OBSERVED_CREATED_AT}\`
-          - Updated: \`${OBSERVED_UPDATED_AT}\`
+          - Updated: \`${live_updated_at}\`
 
-          RUN_REQUESTED and RUNNING indicate execution state only. VERIFIED is recorded only after the authoritative current attempt completes successfully. Historical non-current release runs may be cancelled only when an allowlisted workflow is requested for the exact current-main SHA. Environment approval is permitted only for the exact current-main SHA, the fixed public-testnet environment and the allowlisted release workflows. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
+          VERIFIED is recorded only after the authoritative current attempt completes successfully. Normal RUNNING transitions are not published to Issues or email. Provider-isolated historical queue metadata is excluded from the current release verdict. Continuous Public Testnet operation requires successful serial validator rollout and finality continuity acceptance.
 
           ## Safety boundary
 
@@ -264,14 +273,46 @@ jobs:
           EOF
           )"
 
+          publish_with_retry() {
+            local method="$1"
+            local endpoint="$2"
+            local attempt
+            for attempt in 1 2 3; do
+              if gh api --method "$method" "$endpoint" -f body="$body" >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep $((attempt * 2))
+            done
+            return 1
+          }
+
+          publish_failures=0
           if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/269" \
-              -f body="$body" >/dev/null
+            if ! publish_with_retry PATCH "repos/${GITHUB_REPOSITORY}/issues/269"; then
+              publish_failures=$((publish_failures + 1))
+              echo "::warning title=Current-state publication deferred::Issue 269 update failed after bounded retries."
+            fi
           fi
 
-          for issue in $issues; do
-            gh api --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" \
-              -f body="$body" >/dev/null
-          done
+          if [ "$result" != "VERIFIED" ]; then
+            for issue in 266 $related_issues; do
+              if ! publish_with_retry POST "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments"; then
+                publish_failures=$((publish_failures + 1))
+                echo "::warning title=Incident publication deferred::Issue ${issue} comment failed after bounded retries."
+              fi
+            done
+          fi
+
+          {
+            echo "## Final release observer readback"
+            echo "- Workflow: ${OBSERVED_NAME}"
+            echo "- Run: ${OBSERVED_RUN_URL}"
+            echo "- Result: ${result}"
+            echo "- Source binding: ${source_binding}"
+            echo "- Current-state issue updated: $([ "$source_binding" = "EXACT_CURRENT_MAIN" ] && echo attempted || echo not-applicable)"
+            echo "- Incident comments emitted: $([ "$result" = "VERIFIED" ] && echo 0 || echo bounded)"
+            echo "- Publication failures: ${publish_failures}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Reporting degradation must not convert a valid underlying release into a failed release verdict.
+          exit 0
