@@ -65,8 +65,15 @@ class GitHubActionsCreditGuardTests(unittest.TestCase):
         self.assertIn('printf \'%s\\n\' "$body" >> "$GITHUB_STEP_SUMMARY"', self.release_v2)
         self.assertNotIn("issues: write", self.release_v2)
 
-    def test_continuity_acceptance_is_not_a_periodic_failure_source(self) -> None:
+    def test_continuity_acceptance_requires_governed_dispatch(self) -> None:
         self.assertNotIn("  schedule:", self.continuity)
+        self.assertNotIn("  push:", self.continuity)
+        self.assertIn("  pull_request:", self.continuity)
+        self.assertIn("  workflow_dispatch:", self.continuity)
+        self.assertIn(
+            "only an explicit governed\n# workflow_dispatch may produce a live continuity verdict",
+            self.continuity,
+        )
         self.assertIn("if: github.event_name == 'workflow_dispatch'", self.continuity)
         self.assertIn("cancel-in-progress: true", self.continuity)
         self.assertIn("retention-days: 14", self.continuity)
