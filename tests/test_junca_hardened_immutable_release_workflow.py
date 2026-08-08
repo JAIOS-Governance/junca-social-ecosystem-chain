@@ -102,7 +102,7 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             self.runtime_workflow,
         )
 
-    def test_release_observer_records_governed_workflow_evidence(self) -> None:
+    def test_release_observer_records_governed_terminal_evidence(self) -> None:
         for workflow_name in (
             "JUNCA Validator Runtime Artifacts",
             "JUNCA Hardened Immutable Candidate Release",
@@ -114,28 +114,33 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(workflow_name, self.observer_workflow)
         for value in (
-            "types: [requested, in_progress, completed]",
-            'requested) result="RUN_REQUESTED"',
-            'in_progress) result="RUNNING"',
-            'completed)',
+            "types: [requested, completed]",
+            '[ "$OBSERVED_ACTION" = "requested" ]',
+            'test "$OBSERVED_ACTION" = "completed"',
             "actions: write",
             "issues: write",
             "head_repository.full_name == github.repository",
             "head_branch == 'main'",
-            'issues="244 248"',
-            'issues="244 249"',
-            'issues="266 ${issues}"',
+            'related_issues="244 248"',
+            'related_issues="244 249"',
+            'for issue in 266 $related_issues; do',
             'if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then',
             '"repos/${GITHUB_REPOSITORY}/issues/269"',
             "--method PATCH",
             "issues/${issue}/comments",
             "EXACT_CURRENT_MAIN",
             "HISTORIC_EXACT_SHA",
+            "Issue notifications emitted: 0",
+            "Provider-isolated stale run",
+            "Normal RUNNING transitions are not published to Issues or email.",
+            "Reporting degradation must not convert a valid underlying release into a failed release verdict.",
             "Mainnet Changed: false",
             "Assets Moved: false",
             "Bridge Activated: false",
         ):
             self.assertIn(value, self.observer_workflow)
+        self.assertNotIn("types: [requested, in_progress, completed]", self.observer_workflow)
+        self.assertNotIn('in_progress) result="RUNNING"', self.observer_workflow)
 
     def test_environment_review_is_exact_main_and_fail_closed(self) -> None:
         for value in (
@@ -164,7 +169,9 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             '.status == "in_progress"',
             '.status == "waiting"',
             'actions/runs/${stale_run_id}/cancel',
+            'actions/runs/${stale_run_id}/force-cancel',
             'stale_run_cancellations',
+            'stale_run_isolations',
         ):
             self.assertIn(value, self.observer_workflow)
         self.assertIn('select(.id != $current_id)', self.observer_workflow)
