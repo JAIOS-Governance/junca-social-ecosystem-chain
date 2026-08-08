@@ -123,11 +123,14 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             "head_branch == 'main'",
             'related_issues="244 248"',
             'related_issues="244 249"',
-            'for issue in 266 $related_issues; do',
             'if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then',
             '"repos/${GITHUB_REPOSITORY}/issues/269"',
             "publish_with_retry PATCH",
-            "issues/${issue}/comments",
+            'incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"',
+            '"repos/${GITHUB_REPOSITORY}/issues/266/comments?per_page=100"',
+            '"repos/${GITHUB_REPOSITORY}/issues/266/comments"',
+            'incident_duplicate=true',
+            'Incident issue: 266 only',
             "EXACT_CURRENT_MAIN",
             "HISTORIC_EXACT_SHA",
             "Issue notifications emitted: 0",
@@ -141,6 +144,8 @@ class HardenedImmutableReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(value, self.observer_workflow)
         self.assertNotIn("types: [requested, in_progress, completed]", self.observer_workflow)
         self.assertNotIn('in_progress) result="RUNNING"', self.observer_workflow)
+        self.assertNotIn('for issue in 266 $related_issues; do', self.observer_workflow)
+        self.assertNotIn('issues/${issue}/comments', self.observer_workflow)
 
     def test_environment_review_is_exact_main_and_fail_closed(self) -> None:
         for value in (

@@ -276,9 +276,10 @@ jobs:
           publish_with_retry() {
             local method="$1"
             local endpoint="$2"
+            local payload="${3:-$body}"
             local attempt
             for attempt in 1 2 3; do
-              if gh api --method "$method" "$endpoint" -f body="$body" >/dev/null 2>&1; then
+              if gh api --method "$method" "$endpoint" -f body="$payload" >/dev/null 2>&1; then
                 return 0
               fi
               sleep $((attempt * 2))
@@ -294,13 +295,43 @@ jobs:
             fi
           fi
 
-          if [ "$result" != "VERIFIED" ]; then
-            for issue in 266 $related_issues; do
-              if ! publish_with_retry POST "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments"; then
-                publish_failures=$((publish_failures + 1))
-                echo "::warning title=Incident publication deferred::Issue ${issue} comment failed after bounded retries."
-              fi
-            done
+          incident_notification=false
+          if [ "$source_binding" = "EXACT_CURRENT_MAIN" ]; then
+            case "${result}:${phase}" in
+              REJECTED:IMMUTABLE_RELEASE_CHAIN|\
+              TIMED_OUT:IMMUTABLE_RELEASE_CHAIN|\
+              ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN|\
+              REJECTED:IMMUTABLE_RELEASE_CHAIN_V2|\
+              TIMED_OUT:IMMUTABLE_RELEASE_CHAIN_V2|\
+              ACTION_REQUIRED:IMMUTABLE_RELEASE_CHAIN_V2|\
+              REJECTED:FINALITY_CONTINUITY_READBACK|\
+              TIMED_OUT:FINALITY_CONTINUITY_READBACK|\
+              ACTION_REQUIRED:FINALITY_CONTINUITY_READBACK)
+                incident_notification=true
+                ;;
+            esac
+          fi
+
+          incident_comment_emitted=false
+          incident_duplicate=false
+          if [ "$incident_notification" = true ]; then
+            incident_marker="<!-- junca-release-observer:${OBSERVED_RUN_ID}:${live_attempt}:${result} -->"
+            incident_body="${incident_marker}"$'\n'"${body}"
+            existing_comments="$(
+              gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/issues/266/comments?per_page=100" \
+                --jq '.[].body' 2>/dev/null || true
+            )"
+            if grep -Fq "$incident_marker" <<<"$existing_comments"; then
+              incident_duplicate=true
+            elif publish_with_retry POST \
+              "repos/${GITHUB_REPOSITORY}/issues/266/comments" \
+              "$incident_body"; then
+              incident_comment_emitted=true
+            else
+              publish_failures=$((publish_failures + 1))
+              echo "::warning title=Incident publication deferred::Issue 266 comment failed after bounded retries."
+            fi
           fi
 
           {
@@ -310,7 +341,10 @@ jobs:
             echo "- Result: ${result}"
             echo "- Source binding: ${source_binding}"
             echo "- Current-state issue updated: $([ "$source_binding" = "EXACT_CURRENT_MAIN" ] && echo attempted || echo not-applicable)"
-            echo "- Incident comments emitted: $([ "$result" = "VERIFIED" ] && echo 0 || echo bounded)"
+            echo "- Incident notification eligible: ${incident_notification}"
+            echo "- Incident comment emitted: ${incident_comment_emitted}"
+            echo "- Duplicate incident suppressed: ${incident_duplicate}"
+            echo "- Incident issue: 266 only"
             echo "- Publication failures: ${publish_failures}"
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -2684,10 +2684,12 @@ if [[ -d /etc/junca &&
     runuser -u junca -- test -r /etc/junca/validator.toml; then
   runtime_config_access_verified=true
 fi
-if [[ "$runtime_config_access_verified" != true ]]; then
+verify_junca_system_identity || true
+if [[ "$repair_status_admitted" != true &&
+      ( "$runtime_config_access_verified" != true ||
+        "$system_identity_verified" != true ) ]]; then
   admit_controlled_active_repair || true
 fi
-verify_junca_system_identity || true
 if [[ "$repair_status_admitted" == true &&
       "$system_identity_verified" != true ]]; then
   ensure_junca_system_identity || true
