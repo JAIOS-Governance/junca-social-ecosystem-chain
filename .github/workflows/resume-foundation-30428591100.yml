@@ -1,0 +1,264 @@
+name: Resume Foundation 30428591100
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/resume-foundation-30428591100.yml"
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: resume-foundation-30428591100
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      MAIN_SHA: cb8c3c0494b04c8e99b01ba9525db3b899f0d075
+      CANDIDATE_SHA: beea0c2e7b0a0f579dc335fffd5d829a90467f1d
+      AMI_RUN_ID: "30427620603"
+      MANIFEST_GATE_RUN_ID: "30428572546"
+      RESUME_RUN_ID: "30428591100"
+      RETAINED_RESUME_ARTIFACT_ID: "8714646236"
+      RETAINED_RESUME_ARTIFACT_DIGEST: sha256:572f451e5e555786bcbcf4943a014e219f914e82e83d94767e4ddc215166a0b4
+      DUPLICATE_ATTEMPT_ARTIFACT_ID: "8714715997"
+      DUPLICATE_ATTEMPT_ARTIFACT_DIGEST: sha256:9f930ec4eee127cbfef9638da6d65755e863222dcc0a75002a6aa8c323149c32
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.MAIN_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact resume and recovery lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$MAIN_SHA"
+          test "$MAIN_SHA" != "$CANDIDATE_SHA"
+          git merge-base --is-ancestor "$CANDIDATE_SHA" "$MAIN_SHA"
+          for run_id in "$AMI_RUN_ID" "$MANIFEST_GATE_RUN_ID" "$RESUME_RUN_ID"; do
+            [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          done
+          ami="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${AMI_RUN_ID}")"
+          jq -e --arg candidate "$CANDIDATE_SHA" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Validator Immutable AMI Build" and
+            .head_sha == $candidate and
+            .head_branch == "main"
+          ' <<<"$ami"
+          manifest="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${MANIFEST_GATE_RUN_ID}")"
+          jq -e --arg candidate "$CANDIDATE_SHA" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .name == "JUNCA Runtime Release Manifest Gate" and
+            .head_sha == $candidate and
+            .head_branch == "main"
+          ' <<<"$manifest"
+          resume="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}")"
+          jq -e --arg candidate "$CANDIDATE_SHA" '
+            .status == "completed" and
+            .conclusion == "failure" and
+            .name == "JUNCA Validator Foundation Release" and
+            .head_sha == $candidate and
+            .head_branch == "main"
+          ' <<<"$resume"
+
+      - name: Preserve exact resume artifact and remove duplicate idempotently
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          retained="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETAINED_RESUME_ARTIFACT_ID}")"
+          jq -e \
+            --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
+            --arg digest "$RETAINED_RESUME_ARTIFACT_DIGEST" \
+            --argjson run_id "$RESUME_RUN_ID" '
+              .id == 8714646236 and
+              .name == $name and
+              .digest == $digest and
+              .expired == false and
+              .workflow_run.id == $run_id
+            ' <<<"$retained"
+
+          set +e
+          duplicate="$({
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
+              2>artifacts/duplicate-artifact-read-error.txt
+          })"
+          duplicate_status=$?
+          set -e
+          if [[ "$duplicate_status" == 0 ]]; then
+            jq -e \
+              --arg name "junca-validator-foundation-release-${RESUME_RUN_ID}" \
+              --arg digest "$DUPLICATE_ATTEMPT_ARTIFACT_DIGEST" \
+              --argjson run_id "$RESUME_RUN_ID" '
+                .id == 8714715997 and
+                .name == $name and
+                .digest == $digest and
+                .expired == false and
+                .workflow_run.id == $run_id
+              ' <<<"$duplicate"
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}"
+            if gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DUPLICATE_ATTEMPT_ARTIFACT_ID}" \
+              >/dev/null 2>&1
+            then
+              echo "duplicate attempt artifact still exists" >&2
+              exit 1
+            fi
+          elif grep -Fq "HTTP 404" artifacts/duplicate-artifact-read-error.txt; then
+            echo "duplicate attempt artifact is already absent"
+          else
+            cat artifacts/duplicate-artifact-read-error.txt >&2
+            exit "$duplicate_status"
+          fi
+
+          retained_after="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RETAINED_RESUME_ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "$RETAINED_RESUME_ARTIFACT_DIGEST" \
+            --argjson run_id "$RESUME_RUN_ID" '
+              .id == 8714646236 and
+              .digest == $digest and
+              .expired == false and
+              .workflow_run.id == $run_id
+            ' <<<"$retained_after"
+
+      - name: Resume exact serial validator rollout with renewed epoch
+        id: foundation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          foundation_run_id="$({
+            bash scripts/junca_dispatch_workflow_and_wait.sh \
+              --workflow-name "JUNCA Validator Foundation Release" \
+              --workflow-path ".github/workflows/junca-validator-foundation-release.yml" \
+              --expected-head "$MAIN_SHA" \
+              --attempts 900 \
+              --sleep-seconds 15 \
+              --input "ami_run_id=$AMI_RUN_ID" \
+              --input "manifest_gate_run_id=$MANIFEST_GATE_RUN_ID" \
+              --input "resume_run_id=$RESUME_RUN_ID" \
+              --input "renew_expired_epoch=RENEW_EXPIRED_QUIESCED_EPOCH" \
+              --input "renewal_preserve_prefix_count=1" \
+              --input "authorize_rollout=PUBLIC_TESTNET_ROLLOUT"
+          })"
+          echo "foundation_run_id=$foundation_run_id" >> "$GITHUB_OUTPUT"
+          mkdir -p artifacts/foundation
+          gh run download "$foundation_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-validator-foundation-release-${foundation_run_id}" \
+            --dir artifacts/foundation
+          test -f artifacts/foundation/rolling-resume-evidence.json
+          jq -e \
+            --arg candidate "$CANDIDATE_SHA" \
+            --arg main "$MAIN_SHA" '
+              .schema_version == "junca-validator-rolling-resume/v1" and
+              .head_sha == $main and
+              .candidate.provenance_head_sha == $candidate and
+              .candidate.source_commit == $candidate and
+              .epoch_renewal.performed == true and
+              .epoch_renewal.preserved_target_prefix_count == 1 and
+              .epoch_renewal.prior_slot_epoch_seconds == 1785314070 and
+              (.automatic_finality.slot_epoch_seconds >
+                .epoch_renewal.prior_slot_epoch_seconds) and
+              (.terraform_bootstrap.slot_epoch_seconds | length) == 3 and
+              .terraform_bootstrap.slot_epoch_seconds[0] == 1785314070 and
+              .terraform_bootstrap.slot_epoch_seconds[1] ==
+                .automatic_finality.slot_epoch_seconds and
+              .terraform_bootstrap.slot_epoch_seconds[2] ==
+                .automatic_finality.slot_epoch_seconds and
+              .updated_count == 3 and
+              .updated_validator_ids == ["validator-01","validator-02","validator-03"] and
+              .mainnet_changed == false and
+              .assets_moved == false and
+              .bridge_activated == false
+          ' artifacts/foundation/rolling-resume-evidence.json
+
+      - name: Verify advancing Public Testnet continuity
+        id: continuity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          continuity_run_id="$({
+            bash scripts/junca_dispatch_workflow_and_wait.sh \
+              --workflow-name "JUNCA Public Testnet Continuity Evidence" \
+              --workflow-path ".github/workflows/junca-public-testnet-continuity.yml" \
+              --expected-head "$MAIN_SHA" \
+              --attempts 120 \
+              --sleep-seconds 15 \
+              --input "require_advancement=true" \
+              --input "samples=3" \
+              --input "interval_seconds=30"
+          })"
+          echo "continuity_run_id=$continuity_run_id" >> "$GITHUB_OUTPUT"
+          mkdir -p artifacts/continuity
+          gh run download "$continuity_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "junca-public-testnet-continuity-${continuity_run_id}" \
+            --dir artifacts/continuity
+          jq -e --arg main "$MAIN_SHA" '
+            .schema_version == "junca-public-testnet-continuity/v1" and
+            .state == "ACTIVE_ADVANCING" and
+            .source_sha == $main and
+            .advancement_required == true and
+            .sample_count == 3 and
+            .transaction_submission_enabled == false and
+            .mainnet_changed == false and
+            .assets_moved == false and
+            .bridge_activated == false
+          ' artifacts/continuity/evidence.json
+          echo "finalized_height=$(jq -er '.observations[-1].operational.finalized_height' artifacts/continuity/evidence.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Record resumed activation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body="$(cat <<EOF
+          ## Public Testnet resumed activation acceptance
+
+          - State: **ACTIVE_ADVANCING**
+          - Workflow Source SHA: \`$MAIN_SHA\`
+          - Immutable Candidate SHA: \`$CANDIDATE_SHA\`
+          - Resume parent run: \`$RESUME_RUN_ID\`
+          - Successful Foundation run: \`${{ steps.foundation.outputs.foundation_run_id }}\`
+          - Continuity run: \`${{ steps.continuity.outputs.continuity_run_id }}\`
+          - Finalized height: \`${{ steps.continuity.outputs.finalized_height }}\`
+          - Expired epoch renewed: \`true\`
+          - Preserved candidate prefix: \`1\`
+
+          Safety boundary:
+          - Public Testnet / No Monetary Value
+          - Transaction submission disabled
+          - Mainnet Changed: false
+          - Assets Moved: false
+          - Bridge Activated: false
+          - Mainnet Activation Authorized: false
+          EOF
+          )"
+          for issue in 266 244 248 249 218; do
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" \
+              -f body="$body" >/dev/null
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junca-resumed-public-testnet-activation-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 90
