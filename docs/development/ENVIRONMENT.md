@@ -26,6 +26,23 @@ loop is therefore:
 
 Use `make dev-test` as the canonical local acceptance command.
 
+The transfer-only protocol kernel charges deterministic intrinsic gas for the
+transaction envelope before signature admission or block selection: `21,000`
+base gas plus `4` for each zero calldata byte and `16` for each non-zero
+calldata byte. The same calculation is used by mempool admission, deterministic
+candidate capacity, execution fee/burn/tip accounting, and receipts. A declared
+gas limit below that amount fails closed; calldata can never consume fixed base
+gas while bypassing block capacity. These are Candidate Mainnet correctness
+controls only and do not authorize Mainnet activation.
+
+Canonical envelope sizing is a second, independent admission boundary. It
+counts the canonical signing payload, signature, and two fixed length prefixes;
+the default limits are `4,096` signature bytes, `384 KiB` per transaction, and
+`2 MiB` per block. Mempool selection and protocol execution use the identical
+size function, include the selected byte count in deterministic candidate and
+transition evidence, and fail closed when either boundary is exceeded. Gas
+capacity cannot be used to smuggle an oversized signature or encoded block.
+
 ### 2. Runtime and infrastructure — primary
 
 The development container includes Docker, GitHub CLI, AWS CLI and Terraform

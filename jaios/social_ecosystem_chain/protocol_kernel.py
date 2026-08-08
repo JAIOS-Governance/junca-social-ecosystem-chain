@@ -30,7 +30,12 @@ class ProtocolConfig:
     initial_base_fee: int = 1_000_000_000
     base_fee_change_denominator: int = 8
     intrinsic_gas: int = 21_000
+    zero_data_byte_gas: int = 4
+    nonzero_data_byte_gas: int = 16
     max_transaction_data_bytes: int = 131_072
+    max_signature_bytes: int = 4_096
+    max_transaction_encoded_bytes: int = 384 * 1024
+    max_block_encoded_bytes: int = 2 * 1024 * 1024
 
     def __post_init__(self) -> None:
         values = (
@@ -40,12 +45,21 @@ class ProtocolConfig:
             self.initial_base_fee,
             self.base_fee_change_denominator,
             self.intrinsic_gas,
+            self.zero_data_byte_gas,
+            self.nonzero_data_byte_gas,
             self.max_transaction_data_bytes,
+            self.max_signature_bytes,
+            self.max_transaction_encoded_bytes,
+            self.max_block_encoded_bytes,
         )
         if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in values):
             raise ProtocolTransitionError("protocol configuration values must be positive integers")
         if self.target_gas > self.block_gas_limit:
             raise ProtocolTransitionError("target_gas cannot exceed block_gas_limit")
+        if self.max_transaction_encoded_bytes > self.max_block_encoded_bytes:
+            raise ProtocolTransitionError(
+                "transaction encoded boundary cannot exceed block encoded boundary"
+            )
 
 
 @dataclass(frozen=True)
@@ -115,6 +129,7 @@ class BlockTransition:
     chain_id: int
     base_fee_per_gas: int
     gas_used: int
+    encoded_bytes: int
     total_base_fee_burned: int
     total_validator_tips: int
     state_root: str
@@ -127,6 +142,7 @@ class BlockTransition:
             "chain_id": self.chain_id,
             "base_fee_per_gas": self.base_fee_per_gas,
             "gas_used": self.gas_used,
+            "encoded_bytes": self.encoded_bytes,
             "total_base_fee_burned": self.total_base_fee_burned,
             "total_validator_tips": self.total_validator_tips,
             "state_root": self.state_root,
@@ -195,18 +211,23 @@ def execute_block(
     receipts: list[TransactionReceipt] = []
     seen_hashes: set[str] = set()
     block_gas_used = 0
+    block_encoded_bytes = 0
     total_burned = 0
     total_tips = 0
 
     for index, transaction in enumerate(transactions):
         _validate_transaction(config, transaction, base_fee)
+        transaction_gas = transaction_intrinsic_gas(config, transaction)
+        transaction_bytes = transaction_encoded_size(config, transaction)
         tx_hash = transaction.transaction_hash
         if tx_hash in seen_hashes:
             raise ProtocolTransitionError("duplicate transaction hash")
         if not signature_verifier(transaction):
             raise ProtocolTransitionError("transaction signature verification failed")
-        if block_gas_used + config.intrinsic_gas > config.block_gas_limit:
+        if block_gas_used + transaction_gas > config.block_gas_limit:
             raise ProtocolTransitionError("block gas limit exceeded")
+        if block_encoded_bytes + transaction_bytes > config.max_block_encoded_bytes:
+            raise ProtocolTransitionError("block encoded byte limit exceeded")
 
         sender_key = transaction.sender.lower()
         recipient_key = transaction.recipient.lower()
@@ -219,7 +240,7 @@ def execute_block(
             transaction.max_fee_per_gas - base_fee,
         )
         effective_gas_price = base_fee + priority_fee
-        fee = config.intrinsic_gas * effective_gas_price
+        fee = transaction_gas * effective_gas_price
         total_debit = transaction.value + fee
         if sender.balance < total_debit:
             raise ProtocolTransitionError("insufficient sender balance")
@@ -235,9 +256,10 @@ def execute_block(
             balance=recipient.balance + transaction.value,
         )
 
-        burned = config.intrinsic_gas * base_fee
-        tip = config.intrinsic_gas * priority_fee
-        block_gas_used += config.intrinsic_gas
+        burned = transaction_gas * base_fee
+        tip = transaction_gas * priority_fee
+        block_gas_used += transaction_gas
+        block_encoded_bytes += transaction_bytes
         total_burned += burned
         total_tips += tip
         seen_hashes.add(tx_hash)
@@ -247,7 +269,7 @@ def execute_block(
                 transaction_index=index,
                 sender=sender_key,
                 recipient=recipient_key,
-                gas_used=config.intrinsic_gas,
+                gas_used=transaction_gas,
                 effective_gas_price=effective_gas_price,
                 base_fee_burned=burned,
                 validator_tip=tip,
@@ -258,6 +280,7 @@ def execute_block(
         chain_id=config.chain_id,
         base_fee_per_gas=base_fee,
         gas_used=block_gas_used,
+        encoded_bytes=block_encoded_bytes,
         total_base_fee_burned=total_burned,
         total_validator_tips=total_tips,
         state_root=compute_state_root(state),
@@ -277,6 +300,60 @@ def compute_state_root(accounts: Mapping[str, AccountState]) -> str:
     ]
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "0x" + hashlib.sha256(encoded).hexdigest()
+
+
+def transaction_intrinsic_gas(
+    config: ProtocolConfig,
+    transaction: TransactionEnvelope,
+) -> int:
+    """Return deterministic admission gas for a transfer transaction.
+
+    The transfer-only kernel has no execution-client gas result yet.  It still
+    must charge every byte carried through consensus so non-empty calldata
+    cannot bypass block capacity or fee accounting.
+    """
+    if not isinstance(config, ProtocolConfig):
+        raise ProtocolTransitionError("protocol configuration is required")
+    if not isinstance(transaction, TransactionEnvelope):
+        raise ProtocolTransitionError("intrinsic gas requires a transaction")
+    if (
+        not isinstance(transaction.data, bytes)
+        or len(transaction.data) > config.max_transaction_data_bytes
+    ):
+        raise ProtocolTransitionError("transaction data exceeds the protocol boundary")
+    zero_bytes = transaction.data.count(0)
+    nonzero_bytes = len(transaction.data) - zero_bytes
+    return (
+        config.intrinsic_gas
+        + zero_bytes * config.zero_data_byte_gas
+        + nonzero_bytes * config.nonzero_data_byte_gas
+    )
+
+
+def transaction_encoded_size(
+    config: ProtocolConfig,
+    transaction: TransactionEnvelope,
+) -> int:
+    """Return the canonical consensus envelope size with fixed length prefixes."""
+    if not isinstance(config, ProtocolConfig):
+        raise ProtocolTransitionError("protocol configuration is required")
+    if not isinstance(transaction, TransactionEnvelope):
+        raise ProtocolTransitionError("encoded size requires a transaction")
+    if (
+        not isinstance(transaction.data, bytes)
+        or len(transaction.data) > config.max_transaction_data_bytes
+    ):
+        raise ProtocolTransitionError("transaction data exceeds the protocol boundary")
+    if (
+        not isinstance(transaction.signature, bytes)
+        or not transaction.signature
+        or len(transaction.signature) > config.max_signature_bytes
+    ):
+        raise ProtocolTransitionError("transaction signature exceeds the protocol boundary")
+    encoded_size = 8 + len(transaction.signing_payload()) + len(transaction.signature)
+    if encoded_size > config.max_transaction_encoded_bytes:
+        raise ProtocolTransitionError("transaction encoded size exceeds the protocol boundary")
+    return encoded_size
 
 
 def _normalize_accounts(accounts: Mapping[str, AccountState]) -> dict[str, AccountState]:
@@ -314,7 +391,9 @@ def _validate_transaction(
         for value in integer_fields.values()
     ):
         raise ProtocolTransitionError("transaction integer fields must be non-negative")
-    if transaction.gas_limit < config.intrinsic_gas:
+    required_gas = transaction_intrinsic_gas(config, transaction)
+    transaction_encoded_size(config, transaction)
+    if transaction.gas_limit < required_gas:
         raise ProtocolTransitionError("transaction gas_limit is below intrinsic gas")
     if transaction.gas_limit > config.block_gas_limit:
         raise ProtocolTransitionError("transaction gas_limit exceeds block gas limit")
@@ -322,10 +401,6 @@ def _validate_transaction(
         raise ProtocolTransitionError("max_fee_per_gas is below block base fee")
     if transaction.max_priority_fee_per_gas > transaction.max_fee_per_gas:
         raise ProtocolTransitionError("priority fee exceeds max fee")
-    if not isinstance(transaction.data, bytes) or len(transaction.data) > config.max_transaction_data_bytes:
-        raise ProtocolTransitionError("transaction data exceeds the protocol boundary")
-    if not isinstance(transaction.signature, bytes) or not transaction.signature:
-        raise ProtocolTransitionError("transaction signature is required")
 
 
 def _address(value: str, field: str) -> str:
