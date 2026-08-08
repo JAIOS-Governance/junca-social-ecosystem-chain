@@ -1,0 +1,85 @@
+name: Render Renewed Foundation Workflow
+
+on:
+  pull_request:
+    paths:
+      - ".github/patches/render_renewed_foundation_workflow.py"
+      - ".github/workflows/render-renewed-foundation-workflow.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout controller source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/renew-expired-foundation-epoch
+          path: target
+          fetch-depth: 0
+
+      - name: Render exact workflow file
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            controller/.github/patches/render_renewed_foundation_workflow.py
+          python controller/.github/patches/render_renewed_foundation_workflow.py \
+            target/.github/workflows/junca-validator-foundation-release.yml
+          grep -Fq 'renew_expired_epoch:' \
+            target/.github/workflows/junca-validator-foundation-release.yml
+          grep -Fq 'RENEW_EXPIRED_QUIESCED_EPOCH' \
+            target/.github/workflows/junca-validator-foundation-release.yml
+          grep -Fq 'VALIDATOR_BOOTSTRAP_SLOT_EPOCHS_JSON' \
+            target/.github/workflows/junca-validator-foundation-release.yml
+
+      - name: Preserve rendered workflow as regular Git data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target
+        run: |
+          set -euo pipefail
+          mkdir -p recovery/rendered
+          cp .github/workflows/junca-validator-foundation-release.yml \
+            recovery/rendered/junca-validator-foundation-release.yml
+          parent_sha="$(git rev-parse HEAD)"
+          base_tree_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/commits/${parent_sha}" \
+              --jq .tree.sha
+          )"
+          jq -n \
+            --arg parent_sha "$parent_sha" \
+            --arg base_tree_sha "$base_tree_sha" '{
+              parent_sha: $parent_sha,
+              base_tree_sha: $base_tree_sha,
+              workflow_path:
+                ".github/workflows/junca-validator-foundation-release.yml",
+              rendered_path:
+                "recovery/rendered/junca-validator-foundation-release.yml",
+              branch_ref_updated: false,
+              mainnet_changed: false,
+              assets_moved: false,
+              bridge_activated: false
+            }' > recovery/rendered/workflow-base.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add recovery/rendered/
+          git commit -m "Preserve rendered Foundation workflow for governed ref update"
+          git push origin HEAD:fix/renew-expired-foundation-epoch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: renewed-foundation-workflow-${{ github.run_id }}
+          path: target/recovery/rendered/
+          if-no-files-found: error
+          retention-days: 7
